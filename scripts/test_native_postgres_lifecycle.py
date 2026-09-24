@@ -31,7 +31,7 @@ from serverware.native_postgres_inventory import SUITES
 from serverware.native_postgres_results import NativePostgresRunner
 
 
-SOURCE = tuple("sha256:" + format(index + 1, "064x") for index in range(14))
+SOURCE = tuple("sha256:" + format(index + 1, "064x") for index in range(15))
 
 
 def canonical(value):
@@ -140,7 +140,7 @@ class FakeProcessSet:
         elif argv == runtime.postgres_argv():
             phase = "server"
         else:
-            matching = [index for index in range(14) if argv == prepared_fixture_argv(index)]
+            matching = [index for index in range(15) if argv == prepared_fixture_argv(index)]
             if len(matching) != 1:
                 raise AssertionError("lifecycle attempted non-fixed command")
             phase = matching[0]
@@ -197,7 +197,7 @@ class LifecycleHarness:
         self.events = []
         self.directories = []
         self.published = {}
-        self.reports = {index: canonical(report(index)) for index in range(14)}
+        self.reports = {index: canonical(report(index)) for index in range(15)}
         self.processes = FakeProcessSet(self)
         self.probe = runtime.NativePostgresProbe(160004, "987654321")
         self.verifications = 0
@@ -252,7 +252,7 @@ class LifecycleHarness:
     def query(self, *args):
         self.probes += 1
         self.events.append(("probe", self.probes))
-        if self.options.get("server_dies_after_last_probe") and self.probes == 14:
+        if self.options.get("server_dies_after_last_probe") and self.probes == 15:
             server = next(child for child in self.processes.children if child.phase == "server")
             server.returncode, server.eof = 0, True
         if self.options.get("changed_cluster"):
@@ -270,24 +270,24 @@ class NativePostgresLifecycleTests(unittest.TestCase):
     def test_ten_fixed_suites_sequential_real_consumer_and_all_logs_before_local_completion(self):
         with LifecycleHarness() as harness:
             result = harness.run()
-        self.assertEqual(harness.phases(), ["init", "server", *range(14)])
+        self.assertEqual(harness.phases(), ["init", "server", *range(15)])
         self.assertEqual(result["runtimeStatus"], "COMPLETE")
         self.assertEqual((result["tests"]["tests_status"], result["tests"]["expected_tests"],
-                          result["tests"]["stopped_tests"]), ("PASS", 289, 289))
+                          result["tests"]["stopped_tests"]), ("PASS", 311, 311))
         self.assertEqual(result["fixtureProcesses"], [
             {"script": suite.script, "termination": "exited", "exitCode": 0} for suite in SUITES])
         self.assertEqual([item["path"] for item in result["processLogs"]],
-                         ["logs/initdb.log", *(f"logs/{index:02d}.log" for index in range(14)), "logs/postgres.log"])
+                         ["logs/initdb.log", *(f"logs/{index:02d}.log" for index in range(15)), "logs/postgres.log"])
         for item in result["processLogs"]:
             raw = harness.published[(runtime.OUTPUT_ROOT + "/logs", item["path"].split("/")[1])]
             self.assertEqual((item["sha256"], item["bytes"], item["complete"]), (digest(raw), len(raw), True))
         waits = [event for event in harness.events if event[0] == "wait" and type(event[1]) is int]
-        self.assertEqual(len(waits), 14)
-        for event, expected in zip(waits, (300, 300, 300, 300, 300, 300, 900, 300, 300, 300, 300, 300, 300, 300)):
+        self.assertEqual(len(waits), 15)
+        for event, expected in zip(waits, (300, 300, 300, 300, 300, 300, 900, 300, 300, 300, 300, 300, 300, 300, 300)):
             self.assertAlmostEqual(event[2] - event[3], expected, places=8)
         self.assertTrue(all(event[4] == "server" for event in waits))
         self.assertEqual(harness.verifications, 2)
-        self.assertEqual(harness.probes, 14)
+        self.assertEqual(harness.probes, 15)
         self.assertTrue(result["externalDestructionRequired"])
         self.assertTrue(result["postmasterCleanStopObserved"])
         self.assertTrue(result["directChildrenReaped"])
@@ -376,7 +376,7 @@ class NativePostgresLifecycleTests(unittest.TestCase):
     def test_post_source_drift_preserves_process_observations_but_denies_completion(self):
         with LifecycleHarness(post_source_drift=True) as harness:
             result = harness.run()
-        self.assertEqual(harness.phases(), ["init", "server", *range(14)])
+        self.assertEqual(harness.phases(), ["init", "server", *range(15)])
         self.assertEqual(result["runtimeStatus"], "INCOMPLETE")
         self.assertFalse(result["sourceUnchanged"])
         self.assertIsNone(result["tests"])
@@ -447,7 +447,7 @@ class NativePostgresPreparedInputTests(unittest.TestCase):
                 with self.assertRaises(runtime.NativePostgresRuntimeError):
                     runtime.execute_native_postgres(source_sha256=value)
                 preflight.assert_not_called()
-        content = tuple(("source:" + str(index)).encode() for index in range(14))
+        content = tuple(("source:" + str(index)).encode() for index in range(15))
         expected = tuple(digest(raw) for raw in content)
         with mock.patch.object(runtime, "_prepared_file", side_effect=content) as read:
             self.assertIsNone(runtime._verify_sources(expected))

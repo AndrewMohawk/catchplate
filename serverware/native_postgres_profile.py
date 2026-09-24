@@ -20,9 +20,9 @@ SOCKET_ROOT = "/run/serverware-native-postgres"
 OUTPUT_ROOT = "/opt/serverware/output/native-postgres"
 USER = "serverware_fixture_admin"
 UID = GID = 10001
-# 4,800 suite seconds + 120/60/60 lifecycle seconds + the existing 360 slack.
+# 5,100 suite seconds + 120/60/60 lifecycle seconds + the existing 360 slack.
 # This source-only sub-job bound does not amend a signed controller deadline.
-TOTAL_SECONDS = 5400
+TOTAL_SECONDS = 5700
 INIT_SECONDS = 120
 STARTUP_SECONDS = 60
 SHUTDOWN_SECONDS = 60

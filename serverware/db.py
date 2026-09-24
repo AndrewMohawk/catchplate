@@ -45,6 +45,7 @@ from serverware.authority_store import (
 )
 from serverware.authority_store import schema as _authority_schema
 from serverware.authority_store import v9_schema_source as _authority_v9_schema_source
+from serverware.authority_store import planner_writer_sql as _authority_planner_writer_sql
 from serverware.authority_store import verifier_read_sql as _authority_verifier_read_sql
 from serverware.authority_store.authority_dispatch import (
     _POLICY_AUTHORITY_CONTROLLED_WRITER_HANDLERS,
@@ -1890,30 +1891,8 @@ _POLICY_AUTHORITY_OWNER_BUSINESS_WRITE_TABLES = frozenset(
     }
 )
 _POLICY_AUTHORITY_CONTROLLED_WRITER_TABLES = frozenset()
-_POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES = MappingProxyType(
-    {
-        "policy_authority_authorization_dependency_manifests":
-            frozenset({"SELECT"}),
-        "policy_authority_authorization_projections":
-            frozenset({"SELECT", "INSERT"}),
-        "policy_authority_execution_envelopes":
-            frozenset({"SELECT", "INSERT", "UPDATE"}),
-        "policy_authority_fence_heads": frozenset({"SELECT"}),
-        "policy_authority_operation_mutation_templates":
-            frozenset({"SELECT"}),
-        "policy_authority_planner_transactions":
-            frozenset({"SELECT", "INSERT", "UPDATE"}),
-        "policy_authority_revocation_retained_plans":
-            frozenset({"SELECT", "INSERT"}),
-        "policy_authority_query_dependency_manifests":
-            frozenset({"SELECT"}),
-        "policy_authority_authenticated_table_roots":
-            frozenset({"SELECT"}),
-        "policy_authority_webauthn_assertion_evidence":
-            frozenset({"SELECT", "INSERT"}),
-        "policy_authority_writer_capabilities":
-            frozenset({"SELECT", "UPDATE"}),
-    }
+_POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES = (
+    _authority_planner_writer_sql.PLANNER_WRITER_TABLE_PRIVILEGES
 )
 _POLICY_AUTHORITY_VERIFIER_READ_TABLES = authority_contract.VERIFIER_READ_TABLES
 _POLICY_CANARY_TRANSITIONS = {
@@ -3653,6 +3632,16 @@ def _seal_postgres_schema_acl(
     planner_writer_role_name = _policy_candidate_authority_identifier(
         planner_writer_role
     )
+    if planner_writer_role not in {
+        runtime_role, executor_role, verifier_role, capability_issuer_role,
+    } and (
+        authority_planner_writer_table_privileges
+        != _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES
+        or type(authority_planner_writer_function_signatures) is not tuple
+        or authority_planner_writer_function_signatures
+        != AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
+    ):
+        raise error_type("planner writer privilege closure is not source exact")
     expected_owner_role = authority_owner_role or ""
     privileges = ", ".join(table_privileges)
     with conn.cursor() as cur:
@@ -4976,6 +4965,18 @@ def _seal_postgres_schema_acl(
             raise error_type(
                 "PostgreSQL object owner or ACL contains unexpected authority"
             )
+        if planner_writer_role not in {
+            runtime_role, executor_role, verifier_role, capability_issuer_role,
+        }:
+            planner_writer_privilege_violation = cur.execute(
+                *_authority_planner_writer_sql.planner_writer_privilege_check(
+                    role=planner_writer_role, namespace=schema,
+                )
+            ).fetchone()
+            if planner_writer_privilege_violation is not None:
+                raise error_type(
+                    "PostgreSQL planner writer effective privileges are not source exact"
+                )
         if verifier_role not in {runtime_role, executor_role}:
             verifier_privilege_violation = cur.execute(
                 *_authority_verifier_read_sql.verifier_read_privilege_check(
@@ -20060,6 +20061,22 @@ def _policy_authority_owner_verification_profile_digest(
     verifier_spki_digest: str,
     verifier_measurement_digest: str,
 ) -> str:
+    planner_writer_privilege_contract = {
+        "plannerWriterRole": _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE,
+        "plannerWriterTablePrivileges": {
+            table: sorted(privileges)
+            for table, privileges in sorted(
+                _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES.items()
+            )
+        },
+        "plannerWriterFunctionSignatures": {
+            name: list(argument_types)
+            for name, argument_types
+            in _authority_planner_writer_sql.PLANNER_WRITER_FUNCTION_SIGNATURES
+        },
+        "plannerWriterPrivilegeSqlDigest":
+            _authority_planner_writer_sql.PLANNER_WRITER_PRIVILEGE_SQL_DIGEST,
+    }
     verifier_session_contract = {
         "attestationReceiptDigest": os.environ.get(
             "SERVERWARE_POLICY_AUTHORITY_VERIFIER_ATTESTATION_RECEIPT_SHA256",
@@ -20176,6 +20193,7 @@ def _policy_authority_owner_verification_profile_digest(
                 "cached-measured-manifest-and-recorded-owner-contract",
             "fullClosureVerification":
                 "offline-bootstrap-and-explicit-authority-audit",
+            "plannerWriterPrivilegeContract": planner_writer_privilege_contract,
             "verifierSessionContract": verifier_session_contract,
             "verifierMeasurementDigest": verifier_measurement_digest,
             "verifierProcessModes": [

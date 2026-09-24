@@ -18,8 +18,8 @@ import time
 from dataclasses import dataclass, field
 
 
-# One initdb, one foreground postmaster, and fourteen sequential fixture children.
-MAX_CHILDREN = 16
+# One initdb, one foreground postmaster, and fifteen sequential fixture children.
+MAX_CHILDREN = 17
 MAX_LOG_BYTES = 8 * 1024 * 1024
 MAX_COMMAND_BYTES = 65536
 MAX_DEADLINE_SECONDS = 7200.0
@@ -118,7 +118,7 @@ class Child:
 
 
 class ProcessSet:
-    """At most sixteen total direct children and 128 MiB of retained log prefixes.
+    """At most seventeen total direct children and 136 MiB of retained log prefixes.
 
     ``stop`` reports only direct-child reaping, not clean database shutdown or
     descendants. ``forced_kill`` and every incompleteness flag are sticky.

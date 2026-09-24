@@ -110,7 +110,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertIs(type(authority_contract.VERIFIER_READ_TABLES), frozenset)
         self.assertEqual(authority_contract.VERIFIER_READ_TABLES, TABLES)
         self.assertEqual(authority_contract.SOURCE_REVISION,
-                         "serverware.policyCandidateAuthoritySource/2026-07-30.57")
+                         "serverware.policyCandidateAuthoritySource/2026-07-30.58")
         self.assertTrue(all(type(table) is str for table in authority_contract.VERIFIER_READ_TABLES))
 
     def test_real_helper_returns_fixed_sql_and_exact_separate_parameters(self):
@@ -427,7 +427,9 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertEqual(len(blocks), 1)
         self.assertIs(blocks[0].body[-1], holders[0])
         earlier = raising_guard(self.seal, "PostgreSQL object owner or ACL contains unexpected authority")
-        self.assertIs(blocks[0].body[-2], earlier)
+        self.assertIs(blocks[0].body[-3], earlier)
+        self.assert_shape(blocks[0].body[-2].test,
+            "planner_writer_role not in {runtime_role, executor_role, verifier_role, capability_issuer_role}")
         self.assertLess(earlier.end_lineno, checked.lineno)
         self.assertLess(checked.lineno, denied.lineno)
 

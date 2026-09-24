@@ -26,6 +26,7 @@ SHELL := /bin/sh
 .PHONY: render-policy-custody-assets verify-policy-custody-host-ready
 .PHONY: verify-production-proxy-ingress-materials
 .PHONY: verify-provider-policy-parity verify-webauthn-trust-projection verify-authority-row-mutations
+.PHONY: verify-authority-verifier-read verify-authority-planner-writer
 .PHONY: production-source-capture production-release-build production-release-publish production-release-sign production-release-deploy
 .NOTPARALLEL: production-release-build production-release-publish production-release-sign production-release-deploy production-release-proof
 
@@ -694,6 +695,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_issuer_source.py \
 	scripts/test_authority_witness_transport_source.py \
 	scripts/test_authority_verifier_read_source.py \
+	scripts/test_authority_planner_writer_source.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
 	scripts/test_webauthn_credential_trust.py \
@@ -800,6 +802,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_authority_audit_initialization_store_postgres.py \
 	scripts/test_authority_global_audit_capacity_postgres.py \
 	scripts/test_authority_verifier_read_postgres.py \
+	scripts/test_authority_planner_writer_postgres.py \
 	scripts/test_authority_wire_json_postgres.py \
 	scripts/test_authority_counted_hash_postgres.py \
 	scripts/test_authority_counted_projection_postgres.py \
@@ -921,6 +924,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/metadata_schema_source.py \
 	serverware/authority_store/mutation_sql.py \
 	serverware/authority_store/planner_connection.py \
+	serverware/authority_store/planner_writer_sql.py \
 	serverware/authority_store/postgres_trigger_manifest.py \
 	serverware/authority_store/primary_tree_sql.py \
 	serverware/authority_store/revocation_capability.py \
@@ -7566,6 +7570,13 @@ verify-authority-verifier-read:
 	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
 	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
 	python3 scripts/test_authority_verifier_read_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN" --disposable-cluster
+
+# Catalog-only component fixture; no production DDL or TLS-admission claim.
+# The prepared external runner owns the disposable, rolled-back test cluster.
+verify-authority-planner-writer:
+	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
+	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	python3 scripts/test_authority_planner_writer_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN" --disposable-cluster
 
 verify-nitro-nsm-attest:
 	python3 scripts/test_nitro_nsm_attest.py

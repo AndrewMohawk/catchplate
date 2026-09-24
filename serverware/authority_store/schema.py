@@ -14,6 +14,7 @@ from serverware.authority_store import counted_installation
 from serverware.authority_store import metadata_schema_source
 from serverware.authority_store import postgres_trigger_manifest
 from serverware.authority_store import v9_schema_source
+from serverware.authority_store.planner_writer_sql import PLANNER_WRITER_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store.verifier_read_sql import VERIFIER_READ_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store.completed_v9_schema_source import (
     COMPLETED_V9_RECEIPT_TABLE as _COMPLETED_V9_RECEIPT_TABLE,
@@ -203,6 +204,14 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "objectOwnershipContract":
                 "serverware.policyAuthorityObjectOwnership/v1",
             "authorityOwnerRole": _METADATA_STORE_AUTHORITY_OWNER_ROLE,
+            "plannerWriterRole": _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE,
+            "plannerWriterTablePrivileges": {
+                table: sorted(privileges)
+                for table, privileges in sorted(
+                    _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES.items()
+                )
+            },
+            "plannerWriterPrivilegeSqlDigest": PLANNER_WRITER_PRIVILEGE_SQL_DIGEST,
             "verifierReadContract": authority_contract.VERIFIER_READ_CONTRACT,
             "verifierReadRole": _METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
             "verifierReadTables": sorted(authority_contract.VERIFIER_READ_TABLES),

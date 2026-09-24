@@ -10,7 +10,7 @@ The source now also includes a fixed, cooperative PostgreSQL cluster runner,
 described below. It has not been executed, does not install a PG16 test image,
 and is not wired to the controller's native output consumer. None of these
 source checkpoints provides native execution evidence.
-The current source remains unbuilt and unexecuted. The fourteen suites remain in
+The current source remains unbuilt and unexecuted. The fifteen suites remain in
 `CODER_EXCLUDED_TEST_SCRIPTS`; their standalone entrypoints and result files do
 not remove that exclusion or satisfy changed-test coverage admission.
 
@@ -24,13 +24,13 @@ supply independent approval, installed controller identity or cleanup proof.
 ## Closed source inventory
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
-defines `serverware.nativePostgresInventory/v1`, fourteen ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 289`. Each record contains an
+defines `serverware.nativePostgresInventory/v1`, fifteen ordered frozen
+`NativePostgresSuite` records and `TOTAL_TESTS = 311`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 289 native SQL tests.
+methods contained in these fixtures; it is not a count of 311 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
@@ -48,6 +48,18 @@ methods contained in these fixtures; it is not a count of 289 native SQL tests.
 | 11 | `test_authority_counted_projection_postgres.py` | 16 | 300 s | No |
 | 12 | `test_authority_counted_store_postgres.py` | 10 | 300 s | No |
 | 13 | `test_authority_counted_maintenance_postgres.py` | 32 | 300 s | No |
+| 14 | `test_authority_planner_writer_postgres.py` | 22 | 300 s | Yes |
+
+The appended planner-writer suite runs the actual fixed privilege query against
+eleven minimal tables and five trivial functions. These are catalog fixtures,
+not production function bodies. Exact grants admit; missing/excess privileges,
+column/PUBLIC access, grant options, membership, relation/function kinds and
+function metadata drift deny by returning a violation, never by treating a SQL
+error as success. Each variant restores its valid baseline and every test's
+outer transaction rolls back. All 289 previous IDs and fourteen suite indices
+remain unchanged. The new authored inventory has fifteen suites, seventeen
+direct children and 311 methods; none has run for this tree. The descriptions
+below retain the counts associated with their earlier source checkpoints.
 
 Three issuer transaction components extract the real connector's first
 application SQL statement without importing its facade. Different initial
@@ -166,7 +178,7 @@ the counted dispatcher a second time. All previous 244 method IDs remain;
 fourteen suites, sixteen child processes and deadlines are unchanged. These
 eight methods are authored, not executed or passing evidence.
 
-All fourteen require a prepared disposable local environment. A `False`
+All fifteen require a prepared disposable local environment. A `False`
 `disposable_cluster` field means that the particular fixture has no extra
 `--disposable-cluster` switch; it does not permit a production or shared
 database. The frozen records are data, not capabilities. The no-argument
@@ -216,7 +228,7 @@ behavior, currentness or production writer admission. These cases remain unrun.
 ## Fixed future invocation profile
 
 [native_postgres_batch.py](../serverware/native_postgres_batch.py) constructs
-only the fourteen source-fixed command tuples. `prepared_fixture_argv(index)` rejects
+only the fifteen source-fixed command tuples. `prepared_fixture_argv(index)` rejects
 non-integer, boolean and out-of-range indices; it accepts no caller-selected
 script, selector, DSN or executable. Its fixed profile is:
 
@@ -245,11 +257,11 @@ source-owned script, its actual `__main__` file/classes, exact loaded method
 inventory and the remaining `-v` argument. It records method and subtest
 callbacks, bounded fixture/protocol errors and normal runner completion in a
 canonical ASCII `serverware.nativePostgresFixtureResult/v1` document, bounded
-to 256 KiB. The actual fourteen fixture CLIs expose `--prepared-result`; the helper
+to 256 KiB. The actual fifteen fixture CLIs expose `--prepared-result`; the helper
 does not create a database or grant fixture permission to access one.
 
 The pure `reconcile_native_postgres_batch(observations, *, source_sha256)`
-consumer joins exactly fourteen ordered reports to separately supplied prepared
+consumer joins exactly fifteen ordered reports to separately supplied prepared
 script digests and process/log observations. `PASS` means complete successful
 test accounting; `FAIL` means a completed negative result; `INCOMPLETE` covers
 missing/interrupted accounting, protocol failures or inconsistent process
@@ -315,11 +327,11 @@ inspection profile; it is not implicitly compatible.
 The entrypoint reads the fixed read-only artifact
 `/opt/serverware/artifacts/native-postgres-sources-v1.json`. Its exact canonical
 ASCII JSON object has only `schema: serverware.nativePostgresPreparedSources/v1`
-and `scripts`, with fourteen ordered objects containing only `path` and `sha256`.
+and `scripts`, with fifteen ordered objects containing only `path` and `sha256`.
 Paths follow the inventory above and hashes are canonical `sha256:` strings.
 The independently admitted artifact CAS must bind these prepared expectations
 and the entire transitive source/runtime closure. Generating this small JSON
-from the current checkout is not source approval. All fourteen fixture files are
+from the current checkout is not source approval. All fifteen fixture files are
 remeasured against the supplied expectations before and after execution.
 
 The lifecycle:
@@ -341,7 +353,7 @@ The lifecycle:
    PG16, UTF8, actual current/session admin identity, direct superuser, Unix
    transport, no recovery, the exact configuration and observed cluster system
    identifier. This is not independent server or image authentication.
-5. Starts exactly the fourteen fixed fixtures sequentially. Every child has an
+5. Starts exactly the fifteen fixed fixtures sequentially. Every child has an
    independent deadline and live-bounded combined stdout/stderr capture.
    Reconciliation uses actual retained exit state, bounded report bytes and
    complete log hashes. Failure, timeout, log loss, unexpected server exit,
@@ -356,8 +368,8 @@ The lifecycle:
    acquisition fails immediately after spawn.
 
 [native_postgres_process.py](../serverware/native_postgres_process.py) retains
-at most sixteen direct children and 8 MiB of combined log bytes per child
-(128 MiB aggregate in-memory prefixes). An overflow prefix is preserved but
+at most seventeen direct children and 8 MiB of combined log bytes per child
+(136 MiB aggregate in-memory prefixes). An overflow prefix is preserved but
 cannot qualify as a complete log. Missing pipe EOF has a finite drain window;
 cleanup continues after cancellation or selector failure. The component does
 not use Docker's rotating log as complete fixture evidence.
@@ -419,11 +431,12 @@ ports, healthcheck, shell or volumes can cause the closed inspect guard to
 deny them. Future component tests on tmpfs must not claim physical power-loss
 durability.
 
-The fourteen fixed per-suite ceilings sum to 4,800 seconds, before
+The fifteen fixed per-suite ceilings sum to 5,100 seconds, before
 startup and cleanup, whereas the current Unit deadline profile is 900 seconds.
-The source-only native sub-job proposes a 5,400-second ceiling with 120 seconds
+The source-only native sub-job proposes a 5,700-second ceiling with 120 seconds
 for initialization, 60 for readiness, 60 for shutdown and additional bounded
-overhead. This explicit 300-second increase and one additional direct-child slot
+overhead. This explicit 300-second increase from the previous native component's
+5,400 seconds, and one additional direct-child slot,
 retain the old 360-second slack and all prior per-suite limits; they do not
 authorize a controller deadline change. It reserves cleanup time before
 scheduling a fixture and never shortens the declared fixture ceilings. This is not an override of the signed
@@ -445,7 +458,7 @@ source/artifact destinations, environment, resources, timeout and result
 consumer. A Makefile phase name or a locally authored manifest is not that
 signed invocation. No such external input was created or reissued here.
 
-Keep all fourteen exclusions and all mandatory prerequisite gates until the real
+Keep all fifteen exclusions and all mandatory prerequisite gates until the real
 prepared lane is implemented, independently admitted and reviewed. Even a
 future successful native component batch would establish only its exact
 component behavior, not production installation, external authority enrollment,

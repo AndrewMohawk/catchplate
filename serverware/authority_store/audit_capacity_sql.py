@@ -18,6 +18,10 @@ from serverware import authority_contract
 from serverware.audit_outbox_contract import MAX_PENDING
 from serverware.authority_primary_contract import PRIMARY_KEY_COLUMNS
 from serverware.authority_store.mutation_sql import _schema_name
+from serverware.authority_store.planner_writer_sql import (
+    AUDIT_CAPACITY_FUNCTION_NAME,
+    PLANNER_WRITER_FUNCTION_SIGNATURES,
+)
 from serverware.authority_store.wire_json_sql import WIRE_JSON_MAX_DEPTH, WIRE_JSON_MAX_NODES
 
 
@@ -35,17 +39,10 @@ _SELECTED_FIELDS = ("table", "key", "keyDigest", "present", "row", "contractSele
 _MUTATION_FIELDS = ("table", "key", "keyDigest", "operation", "expectedRow", "row", "templateId")
 _I64_MAX = 9_223_372_036_854_775_807
 MAX_COUNTER_BYTES = 4096
-AUDIT_CAPACITY_FUNCTION_NAME = "serverware_policy_authority_assert_audit_capacity"
 # The assertion is invoker-rights. Its only non-catalog callees are these
 # source-installed, read-only serializer/digest functions; the planner role
 # needs exactly this EXECUTE closure, never any business-table write privilege.
-AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES = (
-    (AUDIT_CAPACITY_FUNCTION_NAME, ("text", "jsonb", "jsonb", "bigint")),
-    ("serverware_policy_authority_domain_digest", ("text", "text[]")),
-    ("serverware_policy_authority_wire_json", ("jsonb",)),
-    ("serverware_policy_authority_wire_string", ("text", "boolean", "bigint")),
-    ("serverware_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
-)
+AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES = PLANNER_WRITER_FUNCTION_SIGNATURES
 
 
 def _literal(value: str) -> str:

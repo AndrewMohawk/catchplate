@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 289
+TOTAL_TESTS = 311
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,12 +410,41 @@ SUITES: tuple[NativePostgresSuite, ...] = (
         disposable_cluster=False,
         timeout_seconds=300,
     ),
+    NativePostgresSuite(
+        script="scripts/test_authority_planner_writer_postgres.py",
+        test_ids=(
+            "AuthorityPlannerWriterPostgresTests.test_column_grants_cannot_replace_required_table_privileges",
+            "AuthorityPlannerWriterPostgresTests.test_database_create_and_temporary_deny",
+            "AuthorityPlannerWriterPostgresTests.test_each_excess_table_and_column_privilege_denies",
+            "AuthorityPlannerWriterPostgresTests.test_each_function_search_path_is_exact",
+            "AuthorityPlannerWriterPostgresTests.test_each_function_security_language_strictness_and_volatility_is_exact",
+            "AuthorityPlannerWriterPostgresTests.test_each_required_function_and_execute_is_mandatory",
+            "AuthorityPlannerWriterPostgresTests.test_each_required_table_and_privilege_is_mandatory",
+            "AuthorityPlannerWriterPostgresTests.test_each_sequence_privilege_denies",
+            "AuthorityPlannerWriterPostgresTests.test_exact_eleven_tables_and_five_invoker_functions_admit",
+            "AuthorityPlannerWriterPostgresTests.test_function_overloads_cannot_replace_or_expand_exact_execute_closure",
+            "AuthorityPlannerWriterPostgresTests.test_login_and_elevated_role_flags_deny",
+            "AuthorityPlannerWriterPostgresTests.test_membership_in_either_direction_denies",
+            "AuthorityPlannerWriterPostgresTests.test_missing_role_or_namespace_denies",
+            "AuthorityPlannerWriterPostgresTests.test_public_relation_and_column_privileges_deny",
+            "AuthorityPlannerWriterPostgresTests.test_public_schema_function_and_sequence_privileges_deny",
+            "AuthorityPlannerWriterPostgresTests.test_required_function_kind_is_not_a_procedure",
+            "AuthorityPlannerWriterPostgresTests.test_required_object_owners_match_namespace_owner",
+            "AuthorityPlannerWriterPostgresTests.test_required_table_name_cannot_be_a_view",
+            "AuthorityPlannerWriterPostgresTests.test_schema_usage_create_and_ownership_deny",
+            "AuthorityPlannerWriterPostgresTests.test_table_column_schema_and_function_grant_options_deny",
+            "AuthorityPlannerWriterPostgresTests.test_unlisted_function_execute_denies",
+            "AuthorityPlannerWriterPostgresTests.test_unlisted_relation_and_column_privileges_deny",
+        ),
+        disposable_cluster=True,
+        timeout_seconds=300,
+    ),
 )
 
 
 # The order is the closed batch order, not lexical filename order. The booleans
 # encode an extra fixture CLI acknowledgement; False never permits a real or
-# shared database. All fourteen suites require a prepared disposable local cluster.
+# shared database. All fifteen suites require a prepared disposable local cluster.
 _SUITE_SHAPES = (
     ("scripts/test_webauthn_trust_projection_postgres.py", 12, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
@@ -431,6 +460,7 @@ _SUITE_SHAPES = (
     ("scripts/test_authority_counted_projection_postgres.py", 16, False, 300),
     ("scripts/test_authority_counted_store_postgres.py", 10, False, 300),
     ("scripts/test_authority_counted_maintenance_postgres.py", 32, False, 300),
+    ("scripts/test_authority_planner_writer_postgres.py", 22, True, 300),
 )
 _TEST_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*\.test_[a-z][a-z0-9_]*", re.ASCII)
 
@@ -442,8 +472,8 @@ def validate_inventory() -> None:
     source digest binding and complete observed results are separate checks.
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
-            or type(SUITES) is not tuple or len(SUITES) != 14
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 289):
+            or type(SUITES) is not tuple or len(SUITES) != 15
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 311):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

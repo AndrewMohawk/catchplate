@@ -158,7 +158,10 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         executed = call(reader, "cursor.execute")
         captured = call(reader, "authority_query_reads._capture_query_read")
         bounded = call(reader, "authority_query_reads._validate_read_budget")
-        validated = call(reader, "authority_query_reads._validate_query_reads")
+        validations = sorted(calls(reader, "authority_query_reads._validate_query_reads"),
+                             key=lambda node: node.lineno)
+        self.assertEqual(len(validations), 2)
+        validated = validations[0]
         self.assertLess(snapshotted.lineno, staged.lineno)
         self.assertLess(staged.lineno, resolved.lineno)
         self.assertLess(resolved.lineno, executed.lineno)
@@ -169,7 +172,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         rendered = ast.unparse(reader)
         self.assertIn("for predicate in resolved_query.predicates", rendered)
         self.assertIn("parameters.append(predicate.value)", rendered)
-        self.assertIn("resolved_absent_key = resolved_query.absent_key", rendered)
+        self.assertIn("resolved_absent_key = None if is_complete else resolved_query.absent_key", rendered)
         self.assertIn("canonical_bytes(previous) != canonical_bytes(entry)", rendered)
         self.assertIn("for entry in staged_rows", rendered)
         overlaps = [node for node in ast.walk(reader) if isinstance(node, ast.If)
@@ -248,9 +251,13 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         reader = definition(self.tree, "_read_bounded_transition_rows")
         pinned = call(reader, "query_sources._require_query_work")
         self.assertEqual([ast.unparse(value) for value in pinned.args], ["query_work"])
-        for name in ("_snapshot_queries", "_resolve_query", "_capture_query_read", "_validate_read_budget",
-                     "_validate_query_reads"):
+        for name in ("_snapshot_queries", "_resolve_query", "_capture_query_read", "_validate_read_budget"):
             actual = call(reader, "authority_query_reads." + name)
+            self.assertEqual(keywords(actual)["work"], "query_work")
+            self.assertLess(pinned.lineno, actual.lineno)
+        validations = calls(reader, "authority_query_reads._validate_query_reads")
+        self.assertEqual(len(validations), 2)
+        for actual in validations:
             self.assertEqual(keywords(actual)["work"], "query_work")
             self.assertLess(pinned.lineno, actual.lineno)
         self.assertEqual(keywords(call(producer, "authority_query_reads._validate_query_reads"))["work"], "query_work")
@@ -272,6 +279,19 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertFalse(calls(handlers[0], "_ValidationWork"))
         reader = definition(self.tree, "_read_bounded_transition_rows")
         self.assertFalse(any(isinstance(node, ast.ExceptHandler) for node in ast.walk(reader)))
+        imports = [node for node in self.tree.body if isinstance(node, ast.ImportFrom)
+                   and node.module == "serverware.authority_index_contract"]
+        self.assertEqual(len(imports), 1)
+        self.assertIn(("IndexRangeError", None), [(item.name, item.asname) for item in imports[0].names])
+        handler, = [node for node in ast.walk(self.method("read_inputs"))
+                    if isinstance(node, ast.ExceptHandler) and node.type is not None
+                    and "IndexRangeError" in ast.unparse(node.type)]
+        self.assertIsInstance(handler.type, ast.Tuple)
+        self.assertIn("IndexRangeError", [ast.unparse(item) for item in handler.type.elts])
+        self.assertNotIn("authority_index_reader.IndexReadError", ast.unparse(handler.type))
+        self.assertEqual(len(handler.body), 1)
+        self.assertIsInstance(handler.body[0], ast.Raise)
+        self.assertIn("typed transition query program denied the request", ast.unparse(handler.body[0]))
 
     def test_transition_work_uses_finalized_batch_and_explicit_shared_accounting(self):
         method = self.method("__call__")
@@ -411,6 +431,132 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertTrue(any(isinstance(node, ast.ExceptHandler)
                                 and isinstance(node.type, ast.Name) and node.type.id == "AuditTraceError"
                                 for node in ast.walk(method)))
+
+    def test_private_complete_rows_do_not_fall_through_to_ordinary_predicate_or_absence_sql(self):
+        reader = definition(self.tree, "_read_bounded_transition_rows")
+        branches = [node for node in ast.walk(reader) if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "is_complete"
+                    and calls(node, "complete_acquisition.read_rows")]
+        self.assertEqual(len(branches), 1)
+        branch = branches[0]
+        complete_call = call(branch, "complete_acquisition.read_rows")
+        self.assertEqual([ast.unparse(value) for value in complete_call.args], ["resolved_query"])
+        self.assertFalse(any(calls(node, "cursor.execute") for node in branch.body))
+        self.assertFalse(any(calls(node, "_query_trace_key") for node in branch.body))
+        ordinary = ast.Module(body=branch.orelse, type_ignores=[])
+        executed = call(ordinary, "cursor.execute")
+        self.assertEqual(ast.unparse(executed.args[1]), "(*parameters, query.maximum_rows + 1)")
+        self.assertLess(call(ordinary, "_query_trace_key").lineno, executed.lineno)
+        rendered = ast.unparse(ordinary)
+        for fragment in ("for predicate in resolved_query.predicates", "parameters.append(predicate.value)",
+                         "len(rows) > query.maximum_rows", "query.require_absence and rows",
+                         "typed transition query exceeded its manifest bound",
+                         "typed transition exact-absence query found a row"):
+            self.assertIn(fragment, rendered)
+        self.assertIn("resolved_absent_key = None if is_complete else resolved_query.absent_key",
+                      ast.unparse(reader))
+        self.assertLess(complete_call.lineno, call(reader, "authority_query_reads._capture_query_read").lineno)
+        self.assertFalse(calls(reader, "_ValidationWork"))
+
+    def test_private_complete_reader_finishes_real_proofs_and_rechecks_owned_rows_before_return(self):
+        reader = definition(self.tree, "_read_bounded_transition_rows")
+        validations = sorted(calls(reader, "authority_query_reads._validate_query_reads"),
+                             key=lambda node: node.lineno)
+        self.assertEqual(len(validations), 2)
+        finished = call(reader, "complete_acquisition.finish_reads")
+        pending = call(reader, "query_sources.unproved_rows")
+        roots = call(reader, "complete_acquisition.roots_for_proofs")
+        acquired = call(reader, "_derive_multiproofs")
+        merged = call(reader, "query_sources.merge_proofs")
+        verified = call(reader, "complete_acquisition.verify")
+        ordered = (validations[0], finished, pending, acquired, merged, verified, validations[1])
+        for before, after in zip(ordered, ordered[1:]):
+            self.assertLess(before.lineno, after.lineno)
+        self.assertEqual([ast.unparse(item) for item in pending.args], ["selected_rows"])
+        self.assertEqual(keywords(acquired), {
+            "selected_rows": "pending", "roots": ast.unparse(roots), "trace": "trace",
+        })
+        self.assertEqual(keywords(merged), {
+            "selected_rows": "selected_rows", "remaining_proofs": "proofs",
+        })
+        self.assertEqual(keywords(verified), {"selected_rows": "selected_rows", "before_proofs": "proofs"})
+        owned, = [node for node in ast.walk(reader) if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "selected_rows" for target in node.targets)
+            and ast.unparse(node.value) == "verified.selected_rows"]
+        self.assertLess(verified.lineno, owned.lineno)
+        self.assertLess(owned.lineno, validations[1].lineno)
+        self.assertEqual(keywords(validations[1]), {
+            "queries": "queries", "query_reads": "checked_reads", "selected_rows": "selected_rows",
+            "work": "query_work",
+        })
+        returns = [node for node in ast.walk(reader) if isinstance(node, ast.Return)]
+        self.assertEqual(len(returns), 1)
+        self.assertLess(validations[1].lineno, returns[0].lineno)
+        self.assertEqual(ast.unparse(returns[0].value), "(selected_rows, queries, checked_reads)")
+        _, collector_tree = source("serverware/authority_complete_acquisition.py")
+        collector = definition(collector_tree, "verify", "_CompleteQueryAcquisition")
+        genuine = call(collector, "batch._verify_complete_query_batch")
+        self.assertEqual(keywords(genuine)["work"], "self._work")
+        self.assertEqual(keywords(genuine)["selected_rows"], "selected_rows")
+        self.assertEqual(keywords(genuine)["before_proofs"], "before_proofs")
+        self.assertFalse(calls(collector, "batch.verify_complete_query_batch"))
+        self.assertFalse(calls(collector, "_ValidationWork"))
+        _, batch_tree = source("serverware/authority_complete_query_batch.py")
+        actual = definition(batch_tree, "_verify")
+        primary = call(actual, "primary.evaluate_primary_radix_memberships")
+        joined = call(actual, "join.join_index_range")
+        self.assertLess(primary.lineno, joined.lineno)
+
+    def test_public_v3_never_constructs_or_passes_complete_context_or_emits_its_evidence(self):
+        forwarding = definition(self.tree, "_read_planning_inputs")
+        self.assertNotIn("complete_acquisition", keywords(call(forwarding, "program.read_inputs")))
+        self.assertFalse(calls(self.tree, "authority_complete_acquisition._CompleteQueryAcquisition"))
+        producer = self.method("derive", "MeasuredPlanner")
+        self.assertNotIn("_complete_queries", keywords(call(producer, "PlannerTrace")))
+        method = self.method("read_inputs")
+        defaults = dict(zip((arg.arg for arg in method.args.kwonlyargs), method.args.kw_defaults))
+        self.assertEqual(ast.unparse(defaults["complete_acquisition"]), "None")
+        self.assertEqual(keywords(call(method, "_read_bounded_transition_rows"))["complete_acquisition"],
+                         "complete_acquisition")
+        state = call(method, "PlanningState")
+        self.assertEqual(keywords(state)["complete_query_evidence"],
+            "None if complete_acquisition is None else complete_acquisition.retained_evidence()")
+        self.assertLess(call(method, "_read_bounded_transition_rows").lineno,
+                        call(method, "complete_acquisition.retained_evidence").lineno)
+        kernel = self.method("__call__")
+        denial, = [node for node in kernel.body if isinstance(node, ast.If)
+                   and ast.unparse(node.test) == "state.complete_query_evidence is not None"]
+        self.assertEqual(len(denial.body), 1)
+        self.assertIsInstance(denial.body[0], ast.Raise)
+        self.assertIn("successor retained-evidence protocol", ast.unparse(denial.body[0]))
+        self.assertLess(denial.lineno, call(kernel, "authority_transition_core.KernelContext").lineno)
+        self.assertLess(denial.lineno, call(kernel, "self.kernel.transition").lineno)
+
+    def test_private_complete_trace_uses_source_markers_and_existing_global_budget_only(self):
+        init = self.method("__init__", "PlannerTrace")
+        defaults = dict(zip((arg.arg for arg in init.args.kwonlyargs), init.args.kw_defaults))
+        self.assertEqual(ast.unparse(defaults["_complete_queries"]), "False")
+        self.assertIn("type(_complete_queries) is not bool", ast.unparse(init))
+        self.assertIn("_complete_queries and operation != authority_complete_query.OPERATION", ast.unparse(init))
+        assigned = {node.targets[0].attr: node.value for node in init.body if isinstance(node, ast.Assign)
+                    and isinstance(node.targets[0], ast.Attribute)}
+        allowed = ast.unparse(assigned["allowed_reads"])
+        for name in ("authority_index_heads.HEAD_TABLE", "authority_index_reader.LEAF_TABLE",
+                     "authority_index_reader.NODE_TABLE", "if _complete_queries else set()"):
+            self.assertIn(name, allowed)
+        self.assertNotIn("_complete_queries", ast.unparse(assigned["allowed_writes"]))
+        self.assertEqual([ast.unparse(item) for item in call(init, "AuditTraceBudget").args], ["operation"])
+        self.assertEqual(len(calls(self.tree, "AuditTraceBudget")), 2)
+        read = self.method("read", "PlannerTrace")
+        checked = call(read, "authority_index_trace.validate_complete_read_trace")
+        self.assertEqual([ast.unparse(item) for item in checked.args], ["self.operation", "table", "key"])
+        self.assertLess(checked.lineno, call(read, "self._append").lineno)
+        self.assertIn("if not self._complete_queries:", ast.unparse(read))
+        self.assertIn("authority_index_trace.PRIMARY_READ_PROFILE", ast.unparse(read))
+        self.assertIn("complete trace profile has no current planner admission", ast.unparse(read))
+        self.assertIn("raise AuthorityPlannerError('complete trace read is not source closed') from exc", ast.unparse(read))
+        append = self.method("_append", "PlannerTrace")
+        self.assertLess(call(append, "self._budget.append").lineno, call(append, "self._entries.append").lineno)
 
 
 if __name__ == "__main__":

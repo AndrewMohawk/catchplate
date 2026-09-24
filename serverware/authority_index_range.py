@@ -11,10 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from serverware.authority_index_contract import (
-    PROFILE, KEY_NIBBLES, CountedNode, IndexLeaf, IndexProfile, IndexRangeError,
+    PROFILE, EMPTY_DOMAIN, LEAF_DOMAIN, NODE_DOMAIN, KEY_NIBBLES,
+    CountedNode, IndexLeaf, IndexProfile, IndexRangeError,
     KeyInterval, OpaqueSubtree, branch_node, leaf_node, validate_counted_node,
     validate_interval, validate_leaf, validate_opaque_subtree, validate_profile,
 )
+from serverware.authority_query_read_work import _ValidationWork
 
 
 _NIBBLES = "0123456789abcdef"
@@ -75,8 +77,9 @@ def _limits_snapshot(value: IndexRangeLimits) -> IndexRangeLimits:
 
 
 class _Budget:
-    def __init__(self, limits: IndexRangeLimits) -> None:
+    def __init__(self, limits: IndexRangeLimits, work: _ValidationWork | None = None) -> None:
         self.limits = limits
+        self.work = work
         self.input_bytes = 0
         self.hashes = 0
 
@@ -88,12 +91,60 @@ class _Budget:
             size = 8 + len(value)
             if size > self.limits.max_input_bytes - self.input_bytes:
                 raise IndexRangeError("index range framed input exceeds its byte budget")
+            if self.work is not None:
+                self.work.charge(input_bytes=size)
             self.input_bytes += size
 
     def hash_work(self, amount: int) -> None:
         if amount > self.limits.max_hashes - self.hashes:
             raise IndexRangeError("index range reconstruction exceeds its hash budget")
+        if self.work is not None:
+            self.work.charge(hashes=amount)
         self.hashes += amount
+
+
+def _prepare_hash_frames(profile: IndexProfile, domain: str, tail: tuple[str, ...],
+                         work: _ValidationWork) -> None:
+    """Reserve genuine counted-hash scalar encodings and length frames.
+
+    Every value is already bounded ASCII. Each raw UTF-8 measurement/encoding
+    costs 2U bytes and two scalar nodes; the actual length prefix costs eight
+    bytes. This is declared encoding work, not allocator or SHA block work.
+    """
+    for value in (domain, PROFILE, profile.index_id, profile.table,
+                  profile.projection_digest, str(KEY_NIBBLES), *tail):
+        work.prepare_utf8(value)
+        work.charge(input_bytes=8)
+
+
+def _prepare_empty_work(profile: IndexProfile, prefix: str, work: _ValidationWork) -> None:
+    """Prepare one actual empty_node call on an already admitted context."""
+    if type(work) is not _ValidationWork:
+        raise IndexRangeError("index range work has an unexpected exact type")
+    work.charge(hashes=1)
+    _prepare_hash_frames(profile, EMPTY_DOMAIN, (str(len(prefix)), prefix, "0"), work)
+
+
+def _prepare_branch_encoding(profile: IndexProfile, prefix: str,
+                             children: tuple[CountedNode | None, ...],
+                             work: _ValidationWork) -> None:
+    count = sum(child.count for child in children if child is not None)
+    if not count:
+        _prepare_hash_frames(profile, EMPTY_DOMAIN, (str(len(prefix)), prefix, "0"), work)
+        return
+    # The real branch constructor encodes each missing child's real digest
+    # after computing it. Its exact canonical length is source-fixed at71;
+    # measuring that length does not compute or substitute a digest.
+    tail = [str(len(prefix)), prefix, str(count)]
+    for ordinal, child in enumerate(children):
+        if child is None:
+            child_prefix = prefix + _NIBBLES[ordinal]
+            _prepare_hash_frames(profile, EMPTY_DOMAIN,
+                                 (str(len(child_prefix)), child_prefix, "0"), work)
+            tail.extend(("0" * 71, "0"))
+        else:
+            tail.extend((child.digest, str(child.count)))
+    _prepare_hash_frames(profile, NODE_DOMAIN, tuple(tail), work)
 
 
 def _intersects(prefix: str, lower: int, upper: int) -> bool:
@@ -178,13 +229,32 @@ def reconstruct_complete_index_range(
     joins are deliberately absent from this result. Combining queries must
     charge their total work separately; this API does not authorize pagination.
     """
+    return _reconstruct_complete_index_range(
+        profile=profile, expected_root=expected_root, interval=interval,
+        frontier=frontier, limits=limits, work=None,
+    )
+
+
+def _reconstruct_complete_index_range(
+    *, profile: IndexProfile, expected_root: CountedNode, interval: KeyInterval,
+    frontier: tuple[IndexLeaf | OpaqueSubtree, ...], limits: IndexRangeLimits,
+    work: _ValidationWork | None = None,
+) -> IndexRangeObservation:
+    """Actual range body with optional caller-owned cumulative encoding work.
+
+    Local observation metrics retain their historical scalar-input/hash scope.
+    Shared work additionally spends repeated real hash-frame encodings; it is
+    not a network, database, whole-process allocation or general CPU meter.
+    """
+    if work is not None and type(work) is not _ValidationWork:
+        raise IndexRangeError("index range work has an unexpected exact type")
     limits = _limits_snapshot(limits)
     profile = validate_profile(profile)
     expected_root = validate_counted_node(expected_root)
     interval = validate_interval(interval)
     if type(frontier) is not tuple or len(frontier) > limits.max_entries:
         raise IndexRangeError("index range frontier is not a bounded exact tuple")
-    budget = _Budget(limits)
+    budget = _Budget(limits, work)
     budget.fields(_INPUT_DOMAIN, PROFILE, profile.index_id, profile.table,
                   profile.projection_digest, str(KEY_NIBBLES),
                   expected_root.digest, str(expected_root.count), interval.lower,
@@ -197,6 +267,10 @@ def reconstruct_complete_index_range(
     for record in frontier:
         if type(record) is IndexLeaf:
             budget.hash_work(1)
+            if work is not None:
+                _prepare_hash_frames(profile, LEAF_DOMAIN,
+                                     (str(KEY_NIBBLES), record.key, "1",
+                                      record.primary_key_digest, record.primary_row_digest), work)
             nodes[record.key] = leaf_node(profile, record)
         else:
             nodes[record.prefix] = CountedNode(record.digest, record.count)
@@ -206,6 +280,8 @@ def reconstruct_complete_index_range(
         children = tuple(nodes.get(prefix + nibble) for nibble in _NIBBLES)
         nonempty = sum(child is not None for child in children)
         budget.hash_work(1 if nonempty == 0 else 17 - nonempty)
+        if work is not None:
+            _prepare_branch_encoding(profile, prefix, children, work)
         nodes[prefix] = branch_node(profile, prefix, children)
     root = nodes[""]
     if root != expected_root:

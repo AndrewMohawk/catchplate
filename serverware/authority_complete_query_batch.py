@@ -28,6 +28,7 @@ from serverware.authority_index_contract import (
 from serverware.authority_index_frontier import MAX_OUTSIDE_PREFIXES
 from serverware.authority_index_range import IndexRangeLimits
 from serverware.authority_primary_contract import primary_table_contracts
+from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from serverware.authority_transition_core import TransitionKernelError, canonical_bytes
 
 
@@ -99,6 +100,7 @@ class _Ledger:
 
     def __init__(self) -> None:
         self.hashes = self.input_bytes = self.json_nodes = 0
+        self.maximum_json_nodes = MAX_TOTAL_JSON_NODES
 
     def charge(self, *, hashes: int = 0, input_bytes: int = 0, json_nodes: int = 0) -> None:
         if (hashes < 0 or input_bytes < 0 or json_nodes < 0
@@ -115,6 +117,52 @@ class _Ledger:
                   MAX_TOTAL_JSON_NODES - self.json_nodes)
         if min(values) < 1:
             raise CompleteQueryBatchError("complete query batch has no remaining phase budget")
+        return values
+
+
+class _SharedLedger:
+    """Invocation-relative view of one caller-owned cumulative work object.
+
+    This adapter allocates no work allowance. Result metrics describe this
+    invocation only; all charges and phase clamps use the original work object,
+    including its previously consumed work. A failed proof phase aborts the
+    enclosing invocation: partial child-engine work is not a retry allowance.
+    """
+
+    def __init__(self, work: _ValidationWork) -> None:
+        if type(work) is not _ValidationWork or type(work.limits) is not QueryReadValidationLimits:
+            raise CompleteQueryBatchError("complete query batch requires an exact shared work object")
+        limits = QueryReadValidationLimits(
+            work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes)
+        counters = (work.hash_work, work.input_bytes, work.json_nodes)
+        maxima = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+        if any(type(value) is not int or not 0 <= value <= maximum
+               for value, maximum in zip(counters, maxima)):
+            raise CompleteQueryBatchError("complete query shared work counters are invalid")
+        self.work, self._before = work, counters
+        self.maximum_json_nodes = limits.max_json_nodes - work.json_nodes
+
+    @property
+    def hashes(self) -> int:
+        return self.work.hash_work - self._before[0]
+
+    @property
+    def input_bytes(self) -> int:
+        return self.work.input_bytes - self._before[1]
+
+    @property
+    def json_nodes(self) -> int:
+        return self.work.json_nodes - self._before[2]
+
+    def charge(self, *, hashes: int = 0, input_bytes: int = 0, json_nodes: int = 0) -> None:
+        self.work.charge(hashes=hashes, input_bytes=input_bytes, json_nodes=json_nodes)
+
+    def remaining(self) -> tuple[int, int, int]:
+        values = (self.work.limits.max_hashes - self.work.hash_work,
+                  self.work.limits.max_input_bytes - self.work.input_bytes,
+                  self.work.limits.max_json_nodes - self.work.json_nodes)
+        if min(values) < 1:
+            raise CompleteQueryBatchError("complete query batch has no remaining shared phase budget")
         return values
 
 
@@ -174,7 +222,8 @@ class _JSONCapture:
         if id(value) in ancestors:
             raise CompleteQueryBatchError("complete query JSON is cyclic")
         minimum_nodes = len(value) * (2 if kind is dict else 1)
-        if minimum_nodes > MAX_TOTAL_JSON_NODES - self.ledger.json_nodes:
+        maximum_nodes = getattr(self.ledger, "maximum_json_nodes", MAX_TOTAL_JSON_NODES)
+        if minimum_nodes > maximum_nodes - self.ledger.json_nodes:
             raise CompleteQueryBatchError("complete query JSON exceeds its node bound")
         self._bytes(2 + max(0, len(value) - 1) + (len(value) if kind is dict else 0))
         branch = ancestors | {id(value)}
@@ -284,6 +333,10 @@ def _selected_envelopes(owned: dict[str, Any], ledger: _Ledger) -> tuple[int, in
         if (type(item) is not dict or len(item) != len(_SELECTED_FIELDS)
                 or set(item) != _SELECTED_FIELDS or item["contractSelector"] is not None):
             raise CompleteQueryBatchError("complete query global selection wrapper or selector tag is invalid")
+        # The sole admitted operation has no scalar contract selectors. Both
+        # its real planner's global wrappers and the local joins require None.
+        # Do not erase a tag here: any future complete-query family with source
+        # selectors needs an explicit global/local metadata admission contract.
         # Budget classification only. Actual key/digest/row membership follows
         # in the primary engine. A missing or absent counter is not initialized
         # or admitted by this query-only component.
@@ -510,3 +563,40 @@ def verify_complete_query_batch(
         if isinstance(exc, CompleteQueryBatchError):
             raise
         raise CompleteQueryBatchError("complete query batch raw evidence verification failed") from exc
+
+
+def _verify_complete_query_batch(
+    *, operation: str, arguments: dict[str, Any], cutoff_us: int,
+    queries: tuple[complete.CompleteIndexQuery, ...],
+    business_before_roots: Any, authorization_before_roots: Any,
+    selected_rows: tuple[dict[str, Any], ...], before_proofs: tuple[dict[str, Any], ...],
+    read_heads: tuple[CompleteQueryHead, ...], query_frontiers: tuple[CompleteQueryFrontier, ...],
+    work: _ValidationWork,
+) -> CompleteQueryBatchInputs:
+    """Capture and reverify raw proof inputs on the caller's existing meter.
+
+    This private planner seam runs the same ownership, global membership and
+    five genuine joins as the public entry. No successful proof/result input
+    or replacement work allowance is accepted. Returned batch totals are this
+    call's deltas; ``work`` retains every prior and newly charged unit. As with
+    the existing proof composers, any phase failure aborts the enclosing call:
+    callers must not catch it and retry a partially evaluated proof allowance.
+
+    The currently admitted revocation contract has no scalar selectors, so
+    its global and query-local wrappers all require contractSelector=None.
+    Source hints do not turn a caller tag into selector or predicate authority.
+    """
+    try:
+        ledger = _SharedLedger(work)
+        owned = _capture(
+            ledger=ledger, operation=operation, arguments=arguments, cutoff_us=cutoff_us,
+            queries=queries, business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
+            before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
+        )
+        return _verify(owned, ledger, ledger.input_bytes, ledger.json_nodes)
+    except (AttributeError, TypeError, ValueError, OverflowError, RecursionError,
+            TransitionKernelError) as exc:
+        if isinstance(exc, CompleteQueryBatchError):
+            raise
+        raise CompleteQueryBatchError("shared complete query batch raw evidence verification failed") from exc

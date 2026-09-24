@@ -621,6 +621,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_index_range.py \
 	scripts/test_authority_index_join.py \
 	scripts/test_authority_index_frontier.py \
+	scripts/test_authority_index_heads.py \
+	scripts/test_authority_index_trace.py \
 	scripts/test_authority_index_mutation.py \
 	scripts/test_authority_indexed_mutation.py \
 	scripts/test_authority_index_mutation_reader.py \
@@ -632,6 +634,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_query_program.py \
 	scripts/test_authority_revocation_query_work.py \
 	scripts/test_authority_complete_query_batch.py \
+	scripts/test_authority_complete_acquisition.py \
 	scripts/test_authority_complete_read_write.py \
 	scripts/test_authority_revocation_read_write.py \
 	scripts/test_authority_revocation_proof_bundle.py \
@@ -2498,6 +2501,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_counted_root_transition.py \
 				serverware/authority_store/counted_installation.py \
 				serverware/authority_complete_query_batch.py \
+				serverware/authority_complete_acquisition.py \
+				serverware/authority_index_heads.py \
+				serverware/authority_index_trace.py \
 				serverware/authority_complete_read_write.py \
 				serverware/authority_revocation_read_write.py \
 				serverware/authority_revocation_proof_bundle.py \

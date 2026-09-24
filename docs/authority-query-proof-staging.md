@@ -111,6 +111,13 @@ nine-frame Snapshot/v3 contract are unchanged. No staged cache or query record
 is promoted into new signed completeness evidence. A later complete-index
 protocol still requires coordinated versioned producer and Python/SQL admission.
 
+The [private complete-acquisition path](authority-complete-acquisition.md) now
+uses this actual staged collector when merging global primary proofs, then
+performs the global primary check and all five real range/row joins on its shared
+query/acquisition meter. Staged proof and cache-stamp budgets remain separate.
+Its raw evidence cannot cross the current typed pre-kernel protocol gate; public
+v3 complete queries still deny before business/proof SQL.
+
 ## Remaining production boundaries
 
 Membership is relative to the supplied captured database roots. Those roots,

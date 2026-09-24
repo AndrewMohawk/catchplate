@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -843,11 +844,13 @@ class RecoveryWitnessIndependenceTests(unittest.TestCase):
 
 
 class TypedRequestPlannerIntegrationTests(unittest.TestCase):
-    """Real public facade checks; no substitute for registry/startup closure.
+    """Real planner facade/reader checks; registry/startup closure is required.
 
     These assertions were split from component arithmetic under the reviewed
     authority-request-commitment coverage transition. Imports must succeed
     genuinely: there is no registry patch, skip or expected-failure fallback.
+    Private counted-marker checks do not enable a v3 evidence producer or
+    establish a maintained population, authenticated clock or current roots.
     """
 
     def setUp(self) -> None:
@@ -963,6 +966,181 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertIsInstance(denied.exception.__cause__, QueryReadWorkError)
         cursor.execute.assert_not_called()
         self.assertEqual(work.json_nodes, work.limits.max_json_nodes)
+
+    def test_default_v3_trace_rejects_counted_head_range_and_complete_primary_markers(self) -> None:
+        import test_authority_index_trace as markers
+
+        cases = ((markers.HEAD_TABLE, markers.head_marker()),
+                 (markers.LEAF_TABLE, markers.leaf_marker()),
+                 (markers.NODE_TABLE, markers.node_marker()),
+                 (markers.ROLES[2][1], markers.primary_marker()))
+        for table, key in cases:
+            with self.subTest(table=table):
+                trace = self.planner.PlannerTrace(operation=markers.OPERATION)
+                with self.assertRaises(self.planner.AuthorityPlannerError):
+                    trace.read(table, key)
+                self.assertEqual(trace._entries, [])
+                self.assertEqual((trace._budget.business_entries, trace._budget.framework_entries), (0, 0))
+        # Ordinary exact business-key reads retain their existing admission;
+        # their table being readable does not admit the complete-read marker.
+        trace = self.planner.PlannerTrace(operation=markers.OPERATION)
+        trace.read(markers.ROLES[2][1], {"id": "ordinary-member"})
+        self.assertEqual(trace._entries, [{"ordinal": 0, "access": "read",
+            "table": markers.ROLES[2][1], "key": {"id": "ordinary-member"}}])
+
+    def test_private_revoke_trace_accepts_exact_source_markers_without_write_expansion(self) -> None:
+        from serverware import authority_audit_trace, authority_transition_registry
+        import test_authority_index_trace as markers
+
+        self.assertIs(self.planner.authority_transition_registry, authority_transition_registry)
+        trace = self.planner.PlannerTrace(operation=markers.OPERATION, _complete_queries=True)
+        ordinary = self.planner.PlannerTrace(operation=markers.OPERATION)
+        self.assertIs(type(trace._budget), authority_audit_trace.AuditTraceBudget)
+        self.assertEqual(trace.allowed_reads - ordinary.allowed_reads,
+                         {markers.HEAD_TABLE, markers.LEAF_TABLE, markers.NODE_TABLE})
+        self.assertEqual(trace.allowed_writes, ordinary.allowed_writes)
+        entries = [(markers.HEAD_TABLE, markers.head_marker())]
+        for role in markers.ROLES:
+            entries.extend(((markers.LEAF_TABLE, markers.leaf_marker(role)),
+                            (markers.NODE_TABLE, markers.node_marker(role)),
+                            (role[1], markers.primary_marker(role))))
+        for table, key in entries:
+            trace.read(table, key)
+        expected = [{"ordinal": ordinal, "access": "read", "table": table,
+                     "key": copy.deepcopy(key)} for ordinal, (table, key) in enumerate(entries)]
+        self.assertEqual(trace._entries, expected)
+        self.assertEqual((trace._budget.business_entries, trace._budget.framework_entries), (16, 0))
+        for table in (markers.HEAD_TABLE, markers.LEAF_TABLE, markers.NODE_TABLE):
+            with self.subTest(write_table=table), self.assertRaises(self.planner.AuthorityPlannerError):
+                trace.write(table, {"indexId": markers.HEAD_IDS[0]})
+        self.assertEqual(trace._entries, expected)
+
+    def test_private_complete_trace_rejects_other_operations_flags_and_nonclosed_markers(self) -> None:
+        import test_authority_index_trace as markers
+
+        for operation in ("webauthn.counter.cas", "webauthn.challenge.create", "jit.consume", "unknown"):
+            with self.subTest(operation=operation), self.assertRaises(self.planner.AuthorityPlannerError):
+                self.planner.PlannerTrace(operation=operation, _complete_queries=True)
+        for flag in (1, 0, "true", None, {}):
+            with self.subTest(flag=flag), self.assertRaises(self.planner.AuthorityPlannerError):
+                self.planner.PlannerTrace(operation=markers.OPERATION, _complete_queries=flag)
+        cases = (
+            (markers.HEAD_TABLE, {**markers.head_marker(), "indexIds": list(markers.HEAD_IDS[:-1])}),
+            (markers.LEAF_TABLE, {**markers.leaf_marker(), "extra": True}),
+            (markers.LEAF_TABLE, {**markers.leaf_marker(), "indexId": "webauthn_publication_status"}),
+            (markers.NODE_TABLE, {**markers.node_marker(), "limit": 2}),
+            (markers.NODE_TABLE, {**markers.node_marker(), "prefixes": [{"depth": 1, "pathPrefix": "ff"}]}),
+            (markers.ROLES[2][1], {**markers.primary_marker(), "limit": 3}),
+            (markers.ROLES[0][1], markers.primary_marker()),
+            (markers.HEAD_TABLE, types.MappingProxyType(markers.head_marker())),
+        )
+        for table, key in cases:
+            with self.subTest(table=table, key=key):
+                trace = self.planner.PlannerTrace(operation=markers.OPERATION, _complete_queries=True)
+                with self.assertRaisesRegex(self.planner.AuthorityPlannerError, "not source closed"):
+                    trace.read(table, key)
+                self.assertEqual(trace._entries, [])
+                self.assertEqual((trace._budget.business_entries, trace._budget.framework_entries), (0, 0))
+
+    def test_complete_markers_use_unchanged_business_trace_budget_not_framework_bonus(self) -> None:
+        from serverware import authority_audit_capacity, authority_audit_trace
+        import test_authority_index_trace as markers
+
+        self.assertEqual((authority_audit_trace.MAX_TRACE_ENTRIES,
+                          authority_audit_trace.MAX_AUDIT_CAPACITY_TRACE_ENTRIES,
+                          authority_audit_trace.MAX_PLAN_TRACE_ENTRIES), (4096, 69, 4165))
+        trace = self.planner.PlannerTrace(operation=markers.OPERATION, _complete_queries=True)
+        original_budget = trace._budget
+        direct_budget = authority_audit_trace.AuditTraceBudget(markers.OPERATION)
+        cases = ((markers.HEAD_TABLE, markers.head_marker()),
+                 (markers.LEAF_TABLE, markers.leaf_marker()),
+                 (markers.NODE_TABLE, markers.node_marker()),
+                 (markers.ROLES[2][1], markers.primary_marker()))
+        for ordinal in range(4096):
+            table, key = cases[ordinal % len(cases)]
+            trace.read(table, key)
+            direct_budget.append({"ordinal": ordinal, "access": "read", "table": table, "key": key})
+        self.assertIs(trace._budget, original_budget)
+        self.assertEqual((trace._budget.business_entries, trace._budget.framework_entries), (4096, 0))
+        self.assertEqual((direct_budget.business_entries, direct_budget.framework_entries), (4096, 0))
+        # The genuine framework scan remains separately classified. No trace
+        # close/currentness assertion is made without its full primary proof.
+        scan = authority_audit_trace.audit_capacity_scan_key()
+        trace.read(authority_audit_capacity.AGGREGATE_TABLE, scan)
+        self.assertEqual((trace._budget.business_entries, trace._budget.framework_entries), (4096, 1))
+        self.assertEqual(len(trace._entries), 4097)
+        with self.assertRaisesRegex(self.planner.AuthorityPlannerError, "trace bound"):
+            trace.read(markers.HEAD_TABLE, markers.head_marker())
+        with self.assertRaises(authority_audit_trace.AuditTraceError):
+            direct_budget.append({"ordinal": 4096, "access": "read",
+                "table": markers.HEAD_TABLE, "key": markers.head_marker()})
+        self.assertEqual(len(trace._entries), 4097)
+
+    def test_real_cascade_complete_inventory_denies_before_sql_without_private_acquisition(self) -> None:
+        from serverware import authority_complete_query, authority_primary_contract
+        from serverware import authority_query_staging, authority_transition_core, authority_transition_webauthn
+        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+        import test_authority_complete_query as declarations
+        import test_authority_root_transition as roots
+
+        operation = "webauthn.credential.revoke"
+        arguments = authority_transition_webauthn.prepare_revocation_input(declarations.arguments())
+        queries = authority_transition_webauthn.cascade_queries_at_cutoff(
+            operation=operation, values=arguments, cutoff_us=1_000_007,
+            request_digest="sha256:" + "a" * 64)
+        self.assertIs(type(queries[0]), authority_transition_core.BoundedQuery)
+        self.assertEqual(sum(type(query) is authority_complete_query.CompleteIndexQuery for query in queries), 5)
+        inputs, _ = roots.input_fixture(operation, {})
+        manifest = tuple({"table": contract.table, "keyColumns": list(contract.key_columns)}
+                         for contract in authority_primary_contract.primary_table_contracts(operation))
+        for trace_opt_in in (False, True):
+            with self.subTest(trace_opt_in=trace_opt_in):
+                work = _ValidationWork(QueryReadValidationLimits())
+                sources = authority_query_staging.StagedQueryProofs(operation=operation,
+                    business_before_roots=inputs["business_before_roots"],
+                    authorization_before_roots=inputs["authorization_before_roots"], query_work=work)
+                trace = self.planner.PlannerTrace(operation=operation, _complete_queries=trace_opt_in)
+                cursor = MagicMock()
+                cursor.execute.side_effect = AssertionError("default complete-query gate reached SQL")
+                with self.assertRaisesRegex(self.planner.AuthorityPlannerError,
+                                            "complete index query acquisition is not available"):
+                    self.planner._read_bounded_transition_rows(cursor, operation=operation,
+                        request={"arguments": arguments}, queries=queries, manifest=manifest,
+                        trace=trace, query_sources=sources, query_work=work)
+                cursor.execute.assert_not_called()
+                self.assertEqual(trace._entries, [])
+                self.assertIs(sources._query_work, work)
+                self.assertGreater(work.hash_work, 0)
+                self.assertGreater(work.input_bytes, 0)
+
+    def test_raw_complete_evidence_is_denied_before_real_kernel_context_or_transition(self) -> None:
+        from datetime import datetime, timezone
+        from serverware import authority_complete_acquisition, authority_transition_core
+        from serverware import authority_transition_registry, authority_transition_webauthn
+
+        kernels = (authority_transition_registry.KERNELS["webauthn.counter.cas"],
+                   authority_transition_webauthn.WebAuthnCredentialRevokeKernel())
+        # This freely constructible raw DTO is deliberately not claimed to
+        # contain verified observations. Neither it nor a real candidate
+        # object may bypass the missing retained-evidence protocol gate.
+        raw = authority_complete_acquisition.CompleteAcquisitionEvidence(
+            cutoff_us=1_000_007, heads=(), frontiers=())
+        for kernel in kernels:
+            with self.subTest(operation=kernel.operation):
+                program = self.planner.TypedTransitionPlanningProgram(
+                    operation=kernel.operation, handler=kernel.handler, kernel=kernel)
+                state = self.planner.PlanningState(
+                    database_now=datetime(1970, 1, 1, 0, 0, 1, 7, tzinfo=timezone.utc),
+                    complete_query_evidence=raw)
+                request = self.oracle.request_fixture(operation=kernel.operation)
+                with patch.object(authority_transition_core, "KernelContext",
+                                  wraps=authority_transition_core.KernelContext) as context, \
+                        patch.object(type(kernel), "transition", wraps=kernel.transition) as transition:
+                    with self.assertRaisesRegex(self.planner.AuthorityPlannerError,
+                            "^complete planning requires the successor retained-evidence protocol$"):
+                        program(operation=kernel.operation, handler=kernel.handler, request=request,
+                                manifest=(), selected_rows=(), state=state)
+                self.assertEqual((context.call_count, transition.call_count), (0, 0))
 
 
 if __name__ == "__main__":

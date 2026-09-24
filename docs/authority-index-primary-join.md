@@ -202,9 +202,10 @@ guard is supplied by this slice.
 
 The [planner retention and pre-kernel verification](authority-query-read-retention.md)
 now preserves query IDs, ordered member addresses and empty observations, and
-verifies actual primary membership before invoking the transition. It does not
-yet acquire or verify indexed-query frontiers. Integration must verify joined
-complete-query evidence before the kernel consumes it. The typed reader now
+verifies actual primary membership before invoking an admitted transition. The
+[private complete-acquisition path](authority-complete-acquisition.md) now acquires
+indexed frontiers and runs genuine joined verification, but its retained-evidence
+gate still stops before kernel execution. The typed reader also
 [stages primary proofs for deferred sources](authority-query-proof-staging.md)
 before dependent SQL; independently admitted roots remain required. Query-local null
 `contractSelector` metadata must remain
@@ -217,7 +218,7 @@ combined component byte allowance does not raise it.
 
 The [source-bound complete-query contract](authority-complete-query-contract.md)
 now fixes the explicit-revocation candidate's five index roles under a distinct
-query kind. Its reader deliberately rejects acquisition until the actual
-producer is available. The [storage integration contract](authority-index-storage-integration.md)
-records that producer and the all-writer/head-effect requirements; neither is
-an installed index or admitted checkpoint.
+query kind. Public v3 deliberately retains its pre-SQL rejection despite the
+private producer. The [storage integration contract](authority-index-storage-integration.md)
+records the source producer and all-writer/head-effect requirements; neither
+source wiring nor supplied roots establishes an installed, admitted checkpoint.

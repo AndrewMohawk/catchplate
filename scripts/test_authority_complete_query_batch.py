@@ -30,6 +30,9 @@ from serverware import authority_index_join as joined
 from serverware import authority_index_projection as projection
 from serverware import authority_primary_contract as primary_contract
 from serverware import authority_radix_mutation as primary
+from serverware.authority_query_read_work import (
+    QueryReadValidationLimits, _ValidationWork,
+)
 import test_authority_complete_query as declaration_oracle
 import test_authority_index_join as join_oracle
 import test_authority_index_range as range_oracle
@@ -199,6 +202,40 @@ class BatchFixture:
             "projection_hashes": 2 + 2 * len(members), "context_bytes": context_bytes,
             "total_hashes": primary_values["hash_work"] + index_values["hashes"] + 71 + 2 * len(members),
             "total_input_bytes": primary_values["input_bytes"] + index_values["input_bytes"] + context_bytes}
+
+
+def independent_batch_metrics(fixture):
+    """Literal ownership/envelope work plus independent genuine engine units."""
+    ownership = fixture.ownership_document()
+    business = [item for item in fixture.selected if not (
+        item["table"] == capacity.AGGREGATE_TABLE
+        and item["key"] == {"aggregate_id": capacity.AGGREGATE_ID})]
+    envelopes = (business, list(fixture.selected))
+    primary_values = fixture.primary_metrics()
+    queries = tuple((query.query_id, fixture.join_metrics(query.role)) for query in fixture.queries)
+    ownership_bytes = len(primary_oracle.wire_json(ownership))
+    ownership_nodes = join_oracle.graph_nodes(ownership)
+    envelope_bytes = sum(len(primary_oracle.wire_json(value)) for value in envelopes)
+    envelope_nodes = sum(join_oracle.graph_nodes(value) for value in envelopes)
+    return {
+        "ownership_bytes": ownership_bytes, "ownership_nodes": ownership_nodes,
+        "selected_envelope_bytes": envelope_bytes, "selected_envelope_nodes": envelope_nodes,
+        "context_hashes": 95, "primary": primary_values, "queries": queries,
+        "total_hashes": 95 + primary_values["hash_work"]
+            + sum(item["total_hashes"] for _, item in queries),
+        "total_input_bytes": ownership_bytes + envelope_bytes + primary_values["input_bytes"]
+            + sum(item["total_input_bytes"] for _, item in queries),
+        "total_json_nodes": ownership_nodes + envelope_nodes + primary_values["json_nodes"]
+            + sum(item["primary"]["json_nodes"] for _, item in queries),
+    }
+
+
+def work_totals(work):
+    return work.hash_work, work.input_bytes, work.json_nodes
+
+
+def expected_totals(metrics):
+    return metrics["total_hashes"], metrics["total_input_bytes"], metrics["total_json_nodes"]
 
 
 class CompleteQueryBatchTests(unittest.TestCase):
@@ -665,6 +702,278 @@ class CompleteQueryBatchTests(unittest.TestCase):
                 ledger.charge(**{dimension: 1})
             with self.assertRaises(batch.CompleteQueryBatchError):
                 ledger.remaining()
+
+    def test_shared_worker_runs_same_capture_global_engine_and_five_joins_without_new_meter(self):
+        expected = self.verify()
+        inputs = self.fixture.arguments()
+        work = _ValidationWork(QueryReadValidationLimits())
+        original_capture, original_verify = batch._capture, batch._verify
+        captures, verifications = [], []
+        def capture(**arguments):
+            owned = original_capture(**arguments)
+            captures.append((arguments["ledger"], owned))
+            return owned
+        def verify(owned, ledger, ownership_bytes, ownership_nodes):
+            result = original_verify(owned, ledger, ownership_bytes, ownership_nodes)
+            verifications.append((owned, ledger, result))
+            return result
+        with mock.patch.object(batch, "_capture", side_effect=capture), \
+                mock.patch.object(batch, "_verify", side_effect=verify), \
+                mock.patch.object(batch, "_Ledger", wraps=batch._Ledger) as fresh_ledger, \
+                mock.patch.object(_ValidationWork, "__init__", side_effect=AssertionError("fresh meter")), \
+                mock.patch.object(primary, "evaluate_primary_radix_memberships",
+                                  wraps=primary.evaluate_primary_radix_memberships) as memberships, \
+                mock.patch.object(joined, "join_index_range", wraps=joined.join_index_range) as joins:
+            result = batch._verify_complete_query_batch(**inputs, work=work)
+        self.assertEqual((len(captures), len(verifications), fresh_ledger.call_count), (1, 1, 0))
+        self.assertIs(captures[0][0].work, work)
+        self.assertIs(verifications[0][0], captures[0][1])
+        self.assertIs(verifications[0][1], captures[0][0])
+        self.assertIs(verifications[0][2], result)
+        self.assertEqual((memberships.call_count, joins.call_count), (6, 5))
+        self.assertEqual(result, expected)
+        self.assertEqual(work_totals(work), (result.metrics.total_hashes,
+            result.metrics.total_input_bytes, result.metrics.total_json_nodes))
+        with self.assertRaises(TypeError):
+            batch._verify_complete_query_batch(**inputs, work=work, verified_result=result)
+
+    def test_shared_exact_remaining_limits_use_independent_totals_and_real_phase_clamps(self):
+        expected = independent_batch_metrics(self.fixture)
+        totals = expected_totals(expected)
+        prefix = (7, 101, 13)  # Explicit previously charged source work, not a proof token.
+        limits = QueryReadValidationLimits(*(left + right for left, right in zip(prefix, totals)))
+        work = _ValidationWork(limits)
+        work.charge(hashes=prefix[0], input_bytes=prefix[1], json_nodes=prefix[2])
+        actual_membership, actual_join = primary.evaluate_primary_radix_memberships, joined.join_index_range
+        memberships, joins = [], []
+        def membership(**inputs):
+            result = actual_membership(**inputs)
+            memberships.append((inputs, result))
+            return result
+        def join(**inputs):
+            result = actual_join(**inputs)
+            joins.append((inputs, result))
+            return result
+        with mock.patch.object(primary, "evaluate_primary_radix_memberships", side_effect=membership), \
+                mock.patch.object(joined, "join_index_range", side_effect=join):
+            result = batch._verify_complete_query_batch(**self.fixture.arguments(), work=work)
+        self.assert_observation(self.fixture, result)
+        self.assertEqual((result.metrics.total_hashes, result.metrics.total_input_bytes,
+                          result.metrics.total_json_nodes), totals)
+        self.assertEqual(work_totals(work), tuple(a + b for a, b in zip(prefix, totals)))
+        self.assertEqual((result.metrics.ownership_bytes, result.metrics.ownership_nodes),
+                         (expected["ownership_bytes"], expected["ownership_nodes"]))
+        consumed = [95, expected["ownership_bytes"] + expected["selected_envelope_bytes"],
+                    expected["ownership_nodes"] + expected["selected_envelope_nodes"]]
+        global_limits = memberships[0][0]["limits"]
+        self.assertEqual((global_limits.max_hashes, global_limits.max_input_bytes,
+                          global_limits.max_json_nodes),
+            (min(66 + 70 * 193, totals[0] - consumed[0]),
+             totals[1] - consumed[1], totals[2] - consumed[2]))
+        for index, value in enumerate((expected["primary"]["hash_work"],
+                expected["primary"]["input_bytes"], expected["primary"]["json_nodes"])):
+            consumed[index] += value
+        for ordinal, (query, (_, oracle), (inputs, observed)) in enumerate(
+                zip(self.fixture.queries, expected["queries"], joins)):
+            with self.subTest(role=query.role):
+                remaining = tuple(total - spent for total, spent in zip(totals, consumed))
+                outer = inputs["limits"]
+                self.assertEqual((outer.max_total_hashes, outer.max_total_input_bytes),
+                                 (min(joined.MAX_TOTAL_HASHES, remaining[0]),
+                                  min(joined.MAX_TOTAL_INPUT_BYTES, remaining[1])))
+                self.assertEqual((outer.primary.max_hashes, outer.primary.max_input_bytes,
+                                  outer.primary.max_json_nodes),
+                    (min(66 + 70 * query.maximum_rows, remaining[0]), remaining[1], remaining[2]))
+                inner = memberships[ordinal + 1][0]["limits"]
+                self.assertEqual(inner.max_hashes, min(outer.primary.max_hashes,
+                    outer.max_total_hashes - 71 - oracle["index"]["hashes"]
+                    - 2 * len(observed.leaves)))
+                self.assertEqual(inner.max_input_bytes, min(outer.primary.max_input_bytes,
+                    outer.max_total_input_bytes - oracle["context_bytes"] - oracle["index"]["input_bytes"]))
+                self.assertEqual(inner.max_json_nodes, remaining[2])
+                for index, value in enumerate((oracle["total_hashes"], oracle["total_input_bytes"],
+                                               oracle["primary"]["json_nodes"])):
+                    consumed[index] += value
+        self.assertEqual(tuple(consumed), totals)
+
+    def test_shared_independent_minus_one_quotas_and_two_calls_do_not_reset_prior_work(self):
+        totals = expected_totals(independent_batch_metrics(self.fixture))
+        inputs = self.fixture.arguments()
+        prefix = (11, 103, 17)
+        for dimension in range(3):
+            caps = [a + b for a, b in zip(prefix, totals)]
+            caps[dimension] -= 1
+            work = _ValidationWork(QueryReadValidationLimits(*caps))
+            work.charge(hashes=prefix[0], input_bytes=prefix[1], json_nodes=prefix[2])
+            with self.subTest(dimension=dimension), self.assertRaises(batch.CompleteQueryBatchError):
+                batch._verify_complete_query_batch(**inputs, work=work)
+            self.assertTrue(all(before <= spent <= cap
+                for before, spent, cap in zip(prefix, work_totals(work), caps)))
+        caps = tuple(before + 2 * amount for before, amount in zip(prefix, totals))
+        work = _ValidationWork(QueryReadValidationLimits(*caps))
+        work.charge(hashes=prefix[0], input_bytes=prefix[1], json_nodes=prefix[2])
+        first = batch._verify_complete_query_batch(**inputs, work=work)
+        self.assertEqual(work_totals(work), tuple(a + b for a, b in zip(prefix, totals)))
+        second = batch._verify_complete_query_batch(**inputs, work=work)
+        self.assertEqual(first, second)
+        self.assertEqual(work_totals(work), caps)
+        with mock.patch.object(projection, "_framed_hash", wraps=projection._framed_hash) as hashes:
+            with self.assertRaises(batch.CompleteQueryBatchError):
+                batch._verify_complete_query_batch(**inputs, work=work)
+        self.assertEqual(hashes.call_count, 0)
+        self.assertEqual(work_totals(work), caps)
+
+    def test_shared_capture_and_context_reject_before_unbudgeted_hash_or_primary_work(self):
+        oracle = independent_batch_metrics(self.fixture)
+        inputs = self.fixture.arguments()
+        cases = (
+            QueryReadValidationLimits(max_json_nodes=20),  # Root plus twenty immediate children needs 21.
+            QueryReadValidationLimits(max_input_bytes=oracle["ownership_bytes"] - 1),
+            QueryReadValidationLimits(max_hashes=94),  # All 95 outer source hashes are reserved together.
+        )
+        for limits in cases:
+            work = _ValidationWork(limits)
+            with self.subTest(limits=limits), \
+                    mock.patch.object(projection, "_framed_hash", wraps=projection._framed_hash) as hashes, \
+                    mock.patch.object(primary, "evaluate_primary_radix_memberships",
+                                      wraps=primary.evaluate_primary_radix_memberships) as membership:
+                with self.assertRaises(batch.CompleteQueryBatchError):
+                    batch._verify_complete_query_batch(**inputs, work=work)
+            self.assertEqual((hashes.call_count, membership.call_count), (0, 0))
+            self.assertEqual(work.hash_work, 0)
+            if limits.max_json_nodes == 20:
+                self.assertEqual((work.input_bytes, work.json_nodes), (0, 1))
+            if limits.max_hashes == 94:
+                self.assertEqual((work.input_bytes, work.json_nodes),
+                    (oracle["ownership_bytes"] + oracle["selected_envelope_bytes"],
+                     oracle["ownership_nodes"] + oracle["selected_envelope_nodes"]))
+
+    def test_shared_work_requires_exact_bounded_limits_and_nonnegative_exact_counters(self):
+        class WorkSubclass(_ValidationWork):
+            pass
+        malformed = [None, object(), WorkSubclass(QueryReadValidationLimits()),
+                     object.__new__(_ValidationWork)]
+        for limits in (None, object.__new__(QueryReadValidationLimits),
+                       forged(QueryReadValidationLimits(), max_hashes=True),
+                       forged(QueryReadValidationLimits(), max_input_bytes=64 * 1024 * 1024 + 1)):
+            work = _ValidationWork(QueryReadValidationLimits())
+            work.limits = limits
+            malformed.append(work)
+        for field, value in (("hash_work", -1), ("hash_work", True),
+                             ("input_bytes", 64 * 1024 * 1024 + 1), ("json_nodes", None)):
+            work = _ValidationWork(QueryReadValidationLimits())
+            setattr(work, field, value)
+            malformed.append(work)
+        inputs = self.fixture.arguments()
+        for ordinal, work in enumerate(malformed):
+            with self.subTest(case=ordinal), \
+                    mock.patch.object(batch, "_capture", wraps=batch._capture) as capture, \
+                    mock.patch.object(projection, "_framed_hash", wraps=projection._framed_hash) as hashes:
+                with self.assertRaises(batch.CompleteQueryBatchError):
+                    batch._verify_complete_query_batch(**inputs, work=work)
+            self.assertEqual((capture.call_count, hashes.call_count), (0, 0))
+
+    def test_shared_capture_detaches_all_raw_graphs_before_first_source_hash(self):
+        expected = independent_batch_metrics(self.fixture)
+        inputs = self.fixture.arguments()
+        work = _ValidationWork(QueryReadValidationLimits())
+        work.charge(hashes=3, input_bytes=71, json_nodes=5)
+        original_visit, original_hash = batch._JSONCapture.visit, projection._framed_hash
+        captures, hash_entries = [], []
+        def visit(copier, value, depth=0, ancestors=frozenset()):
+            result = original_visit(copier, value, depth, ancestors)
+            if not ancestors and copier.retain:
+                captures.append((copier.ledger.work, result))
+            return result
+        def hashing(*arguments):
+            if not hash_entries:
+                hash_entries.append(work_totals(work))
+                self.assertEqual(len(captures), 1)
+                inputs["arguments"]["record_id"] = "changed-after-capture"
+                inputs["selected_rows"][0]["row"]["changed_after_capture"] = True
+                inputs["before_proofs"][-1]["rowDigest"] = "sha256:" + "f" * 64
+                inputs["business_before_roots"][-1]["rootRevision"] += 100
+                object.__setattr__(inputs["read_heads"][-1], "index_revision", 1000)
+                later = next(item for item in inputs["query_frontiers"][-1].frontier
+                             if type(item) is counted.IndexLeaf)
+                object.__setattr__(later, "primary_row_digest", "sha256:" + "e" * 64)
+            return original_hash(*arguments)
+        with mock.patch.object(batch._JSONCapture, "visit", new=visit), \
+                mock.patch.object(projection, "_framed_hash", side_effect=hashing):
+            result = batch._verify_complete_query_batch(**inputs, work=work)
+        self.assertEqual(len(captures), 1)
+        self.assertIs(captures[0][0], work)
+        self.assertEqual(hash_entries, [(98,
+            71 + expected["ownership_bytes"] + expected["selected_envelope_bytes"],
+            5 + expected["ownership_nodes"] + expected["selected_envelope_nodes"])])
+        self.assert_observation(self.fixture, result)
+        self.assertEqual(work_totals(work), tuple(a + b for a, b in
+            zip((3, 71, 5), expected_totals(expected))))
+
+    def test_shared_revocation_source_has_no_scalar_selector_tags_to_clear_or_preserve(self):
+        # Do not synthesize a different operation contract to make a tag pass.
+        # The currently genuine planner tags every revocation global row None;
+        # other complete families need an explicit future admission contract.
+        self.assertEqual(dict(authority_contract.operation_spec(OPERATION)["selectors"]), {})
+        self.assertEqual(authority_contract.extract_selectors(OPERATION,
+            {"arguments": self.fixture.intent}), {})
+        observed = []
+        original = primary.evaluate_primary_radix_memberships
+        def membership(**inputs):
+            result = original(**inputs)
+            observed.append((inputs, result))
+            return result
+        with mock.patch.object(primary, "evaluate_primary_radix_memberships", side_effect=membership):
+            result = batch._verify_complete_query_batch(**self.fixture.arguments(),
+                work=_ValidationWork(QueryReadValidationLimits()))
+        self.assertEqual(len(observed), 6)
+        self.assertEqual(result.selected_rows, self.fixture.selected)
+        self.assertTrue(all(item["contractSelector"] is None
+            for inputs, _ in observed for item in inputs["selected_rows"]))
+        member = self.fixture.joins[ROLES[0]].selected[0]
+        point = next(item for item in self.fixture.selected if item["table"] == "webauthn_credentials")
+        for selected_row in (member, point):
+            for tag in (selected_row["key"]["id"], "caller-selector", 1, True, {}):
+                inputs = self.fixture.arguments()
+                row = next(item for item in inputs["selected_rows"] if
+                    (item["table"], item["keyDigest"]) == (selected_row["table"], selected_row["keyDigest"]))
+                row["contractSelector"] = tag
+                with self.subTest(table=selected_row["table"], tag=tag), \
+                        mock.patch.object(projection, "_framed_hash", wraps=projection._framed_hash) as hashes, \
+                        mock.patch.object(primary, "evaluate_primary_radix_memberships", wraps=original) as primary_call:
+                    with self.assertRaises(batch.CompleteQueryBatchError):
+                        batch._verify_complete_query_batch(**inputs,
+                            work=_ValidationWork(QueryReadValidationLimits()))
+                self.assertEqual((hashes.call_count, primary_call.call_count), (0, 0))
+
+    def test_shared_worker_still_denies_corrupt_primary_and_late_range_in_real_engines(self):
+        primary_bad = self.fixture.arguments()
+        vector = primary_bad["before_proofs"][0]["siblings"][0]
+        sibling = (int(vector["selectedNibble"], 16) + 1) % 16
+        vector["childDigests"][sibling] = "sha256:" + "e" * 64
+        primary_oracle.refresh_proof_digest(primary_bad["before_proofs"][0])
+        range_bad = self.fixture.arguments()
+        last = range_bad["query_frontiers"][-1]
+        member = next(item for item in last.frontier if type(item) is counted.IndexLeaf)
+        range_bad["query_frontiers"] = (*range_bad["query_frontiers"][:-1],
+            replace(last, frontier=tuple(replace(item, primary_row_digest="sha256:" + "d" * 64)
+                if item is member else item for item in last.frontier)))
+        for label, inputs, counts in (("primary", primary_bad, (1, 0)),
+                                      ("last-range", range_bad, (5, 5))):
+            work = _ValidationWork(QueryReadValidationLimits())
+            work.charge(hashes=7, input_bytes=101, json_nodes=13)
+            with self.subTest(case=label), \
+                    mock.patch.object(primary, "evaluate_primary_radix_memberships",
+                                      wraps=primary.evaluate_primary_radix_memberships) as memberships, \
+                    mock.patch.object(joined, "join_index_range", wraps=joined.join_index_range) as joins:
+                with self.assertRaises(batch.CompleteQueryBatchError):
+                    batch._verify_complete_query_batch(**inputs, work=work)
+            self.assertEqual((memberships.call_count, joins.call_count), counts)
+            self.assertGreaterEqual(work.hash_work, 7 + 95)
+            self.assertGreater(work.input_bytes, 101)
+            self.assertGreater(work.json_nodes, 13)
+            # A failed child phase aborts this invocation; it is not retried
+            # against uncharged partial child work or converted into a token.
 
 
 if __name__ == "__main__":

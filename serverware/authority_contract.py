@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.30"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.31"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -78,6 +78,41 @@ PLANNER_QUERY_BOOKKEEPING_CONTRACT = MappingProxyType({
     "excludedWork": (
         "sql-acquisition", "primary-proof-verification", "staging-cache-stamps",
         "kernel", "range-and-mutation-proofs", "whole-plan",
+    ),
+})
+# This private acquisition worker shares the caller's existing work object;
+# it does not extend public v3 transport, registry or root/time authority.
+# Literal profile names avoid importing head/reader/trace modules back into
+# their own contract dependency. Source fixtures pin them to the real modules.
+PLANNER_COMPLETE_ACQUISITION_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityPlannerCompleteAcquisition/v1",
+    "admission": "private-worker-only",
+    "publicV3Enabled": False,
+    "operation": "webauthn.credential.revoke",
+    "headTraceProfile": "serverware.policyAuthorityCountedHeadRead/v1",
+    "rangeTraceProfile": "serverware.policyAuthorityCountedIndexRead/v1",
+    "primaryTraceProfile": "serverware.policyAuthorityCompletePrimaryRead/v1",
+    "maxSqlReads": 4096,
+    "maxParameterBytes": 4 * 1024 * 1024,
+    "maxReturnedFrameBytes": 4 * 1024 * 1024,
+    "maxPrimaryRowBytes": 1024 * 1024,
+    "maxRangeSqlReads": 20,
+    "maxSharedHashes": 8_000_000,
+    "maxSharedInputBytes": 64 * 1024 * 1024,
+    "maxSharedJsonNodes": 1_000_000,
+    "maxBusinessTraceEntries": 4096,
+    "maxFrameworkTraceEntries": 69,
+    "includedPhases": (
+        "source-role-and-cutoff-binding", "counted-head-capture",
+        "range-acquisition-and-reconstruction", "exact-primary-row-fetch",
+        "raw-evidence-retention", "global-primary-and-range-row-reverification",
+        "shared-query-bookkeeping",
+    ),
+    "excludedWork": (
+        "sql-execution", "driver-allocation", "process-allocation",
+        "staged-proof-work", "primary-proof-acquisition", "trace-serialization",
+        "fixed-metadata-scaffolding", "kernel", "write-mutations",
+        "retained-protocol", "whole-plan",
     ),
 })
 # Current measured verifier evidence reads, not planner/business query closure
@@ -2258,6 +2293,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "maxPlanWorkUnits": MAX_PLAN_WORK_UNITS,
         "maxPlanSelectedBytes": MAX_PLAN_SELECTED_BYTES,
         "plannerQueryBookkeeping": dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT),
+        "plannerCompleteAcquisition": dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT),
         "auditCapacityQueryWorkUnits": AUDIT_CAPACITY_QUERY_WORK_UNITS,
         "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
         "phase2StoreTables": list(PHASE2_STORE_TABLES),

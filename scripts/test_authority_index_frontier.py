@@ -28,6 +28,7 @@ from serverware import authority_index_contract as contract
 from serverware import authority_index_frontier as frontier
 from serverware import authority_index_range as ranges
 from serverware import authority_index_reader as reader
+from serverware import authority_query_read_work as measured
 import test_authority_index_join as join_oracle
 import test_authority_index_range as tree_oracle
 
@@ -139,6 +140,102 @@ def business_key(table, primary_id):
         digest.update(len(frame).to_bytes(8, "big"))
         digest.update(frame)
     return "sha256:" + digest.hexdigest()
+
+
+class ReaderWorkOracle:
+    """Independent declared units; never calls a production work preparer."""
+    def __init__(self):
+        self.hashes = self.bytes = self.nodes = 0
+
+    def json(self, value, *, ascii=True):
+        def nodes(item):
+            if type(item) is dict:
+                return 1 + len(item) + sum(nodes(child) for child in item.values())
+            if type(item) in (list, tuple):
+                return 1 + sum(nodes(child) for child in item)
+            return 1
+        encoded = json.dumps(value, ensure_ascii=ascii, allow_nan=False,
+                             sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.bytes += 2 * len(encoded)
+        self.nodes += 2 * nodes(value)
+
+    def utf8(self, value):
+        self.bytes += 2 * len(value.encode("utf-8"))
+        self.nodes += 2
+
+    def frames(self, values):
+        result = 0
+        for value in values:
+            value = str(value) if type(value) is int else value
+            self.utf8(value)
+            self.bytes += 8
+            result += 8 + len(value.encode("utf-8"))
+        return result
+
+    @property
+    def total(self):
+        return self.hashes, self.bytes, self.nodes
+
+
+def reader_work_oracle(store):
+    query, profile = store.query, store.tree.profile
+    selector = dict(query.selector_items)
+    descriptor = join_oracle.descriptor(profile.index_id)
+    work = ReaderWorkOracle()
+    # One real constructor, explicit profile, and interval's own profile.
+    for _ in range(3):
+        work.json(descriptor, ascii=False)
+    work.hashes += 4
+    for name, value in query.selector_items:
+        if type(value) is str:
+            work.utf8(value)
+            if name != "status":
+                work.utf8(value)
+    for _ in range(3):
+        work.json(query.selector_items)
+    work.json(selector)
+    for value in selector.values():
+        if type(value) is str:
+            work.utf8(value)
+    partition = {name: selector[name] for name in descriptor["partitionFields"]}
+    work.json(partition)
+    work.json(partition, ascii=False)
+    for value in ("serverware.policyAuthorityIndexPartition/v1", contract.PROFILE,
+                  profile.index_id, profile.table, profile.projection_digest):
+        work.utf8(value)
+    work.bytes += 8 * 6
+    bounds = store.fixture.interval
+    prefixes = complement_oracle(bounds)
+    parameters = (profile.index_id, bounds.lower)
+    if bounds.upper is not None:
+        parameters += (bounds.upper,)
+    parameter_bytes = work.frames((*parameters, query.maximum_rows + 1))
+    for offset in range(0, len(prefixes), 256):
+        batch = prefixes[offset:offset + 256]
+        parameters = (*(value for prefix in batch for value in (len(prefix), prefix)),
+                      profile.index_id, len(batch) + 1)
+        parameter_bytes += work.frames(parameters)
+    records = [("leaf", store.leaves[item.key]) for item in store.tree.matches(bounds)]
+    records.extend(("node", store.nodes[(len(prefix), prefix)])
+                   for prefix in prefixes if (len(prefix), prefix) in store.nodes)
+    transport_bytes = 0
+    for kind, row in records:
+        fields = LEAF_FIELDS if kind == "leaf" else NODE_FIELDS
+        work.json(row)
+        for name in ("index_id", "projection_digest", "primary_id" if kind == "leaf" else "path_prefix"):
+            work.utf8(row[name])
+        transport_bytes += work.frames((kind, *(row[name] for name in fields)))
+        if kind == "leaf":
+            work.utf8(profile.table)
+            work.json({"id": row["primary_id"]})
+            work.bytes += 16
+            work.hashes += 1
+    proof = store.tree.frontier(bounds)
+    hashes, size, nodes = tree_oracle.shared_work_oracle(profile, store.tree.root, bounds, proof)
+    work.hashes += hashes
+    work.bytes += size
+    work.nodes += nodes
+    return work.total, (1 + (len(prefixes) + 255) // 256, parameter_bytes, transport_bytes)
 
 
 class RecordingTrace:
@@ -837,6 +934,237 @@ class IndexReaderTests(unittest.TestCase):
             self.assertEqual(statement.split(" FROM ", 1)[0], "SELECT " + ", ".join(expected_node))
         # This pins emitted SQL source spelling; the responder does not parse
         # SQL or establish PostgreSQL CASE/type/collation/index behavior.
+
+    def shared_acquire(self, store, work, acquisition, cursor, trace):
+        return reader._read_complete_frontier(cursor, query=store.query,
+            expected_root=store.tree.root, index_revision=store.revision,
+            trace=trace, work=work, acquisition=acquisition)
+
+    def test_shared_reader_independent_full_work_and_real_sha_preserve_public_observation(self):
+        expected, acquisition_expected = reader_work_oracle(self.store)
+        legacy = self.acquire()
+        work = measured._ValidationWork(measured.QueryReadValidationLimits())
+        cursor, trace = StoredIndexCursor(self.store), RecordingTrace()
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+        actual_sha = hashlib.sha256
+        actual_range = ranges._reconstruct_complete_index_range
+        with mock.patch.object(hashlib, "sha256", wraps=actual_sha) as hashes, \
+                mock.patch.object(ranges, "_reconstruct_complete_index_range", wraps=actual_range) as fold:
+            result = self.shared_acquire(self.store, work, acquisition, cursor, trace)
+        self.assertEqual(result, legacy)
+        self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), expected)
+        self.assertEqual(hashes.call_count, expected[0])
+        self.assertEqual(expected[0], result.metrics.hashes)
+        self.assertEqual((acquisition.sql_reads, acquisition.parameter_bytes, acquisition.transport_bytes),
+                         acquisition_expected)
+        self.assertIs(fold.call_args.kwargs["work"], work)
+        self.assertFalse(acquisition.active or acquisition.failed)
+
+    def test_shared_reader_independent_exact_and_each_minus_one_work_quota(self):
+        expected, _ = reader_work_oracle(self.store)
+        for dimension in (None, 0, 1, 2):
+            limits = list(expected)
+            if dimension is not None:
+                limits[dimension] -= 1
+            work = measured._ValidationWork(measured.QueryReadValidationLimits(*limits))
+            cursor, trace = StoredIndexCursor(self.store), RecordingTrace()
+            acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+            if dimension is None:
+                self.assertEqual(self.shared_acquire(self.store, work, acquisition, cursor, trace).root,
+                                 self.store.tree.root)
+            else:
+                with self.subTest(dimension=dimension), self.assertRaises(measured.QueryReadWorkError):
+                    self.shared_acquire(self.store, work, acquisition, cursor, trace)
+                self.assertTrue(acquisition.failed)
+                before = len(cursor.calls)
+                with self.assertRaises(reader.IndexReadError):
+                    self.shared_acquire(self.store, work, acquisition, cursor, trace)
+                self.assertEqual(len(cursor.calls), before)
+
+    def test_shared_reader_prior_work_and_two_real_calls_are_cumulative_without_metric_leakage(self):
+        expected, sql_expected = reader_work_oracle(self.store)
+        prior = (7, 101, 13)
+        limits = tuple(before + 2 * delta for before, delta in zip(prior, expected))
+        work = measured._ValidationWork(measured.QueryReadValidationLimits(*limits))
+        work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+        cursor, trace = StoredIndexCursor(self.store), RecordingTrace()
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work,
+            limits=reader._ReadAcquisitionLimits(*(2 * value for value in sql_expected)))
+        first = self.shared_acquire(self.store, work, acquisition, cursor, trace)
+        second = self.shared_acquire(self.store, work, acquisition, cursor, trace)
+        self.assertEqual(first, second)
+        self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), limits)
+        self.assertEqual((acquisition.sql_reads, acquisition.parameter_bytes, acquisition.transport_bytes),
+                         tuple(2 * value for value in sql_expected))
+
+    def test_five_actual_roles_reuse_one_work_cursor_trace_and_acquisition_without_new_allowances(self):
+        stores = [IndependentStoredIndex([], query=bound_query(role), revision=0) for role in complete.ROLES]
+        expected = [reader_work_oracle(store) for store in stores]
+        work = measured._ValidationWork(measured.QueryReadValidationLimits())
+        cursor, trace = StoredIndexCursor(stores[0]), RecordingTrace()
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+        with mock.patch.object(measured._ValidationWork, "__init__",
+                               side_effect=AssertionError("replacement work allowance")):
+            for store in stores:
+                cursor.store = store
+                result = self.shared_acquire(store, work, acquisition, cursor, trace)
+                self.assertEqual(result.frontier, ())
+                self.assertEqual(result.metrics.range_metrics.hashes, 1)
+        self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes),
+                         tuple(sum(value[0][index] for value in expected) for index in range(3)))
+        self.assertEqual((acquisition.sql_reads, acquisition.parameter_bytes, acquisition.transport_bytes),
+                         tuple(sum(value[1][index] for value in expected) for index in range(3)))
+        self.assertEqual(work.hash_work, 25)
+
+    def test_cumulative_physical_parameter_and_transport_caps_reject_without_fresh_role_budget(self):
+        _, expected = reader_work_oracle(self.store)
+        for dimension in (0, 1, 2):
+            limits = list(expected)
+            limits[dimension] -= 1
+            work = measured._ValidationWork(measured.QueryReadValidationLimits())
+            cursor, trace = StoredIndexCursor(self.store), RecordingTrace()
+            acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work,
+                limits=reader._ReadAcquisitionLimits(*limits))
+            with self.subTest(dimension=dimension), self.assertRaises(reader.IndexReadError):
+                self.shared_acquire(self.store, work, acquisition, cursor, trace)
+            self.assertTrue(acquisition.failed)
+            if dimension == 0:
+                self.assertEqual(len(cursor.calls), limits[0])
+        work = measured._ValidationWork(measured.QueryReadValidationLimits())
+        cursor, trace = StoredIndexCursor(self.store), RecordingTrace()
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work,
+            limits=reader._ReadAcquisitionLimits(max_parameter_bytes=1))
+        with self.assertRaises(reader.IndexReadError):
+            self.shared_acquire(self.store, work, acquisition, cursor, trace)
+        self.assertEqual((cursor.calls, trace.reads), ([], []))
+
+    def test_caught_nested_reader_poison_is_checked_before_sql_and_never_returns_success(self):
+        work = measured._ValidationWork(measured.QueryReadValidationLimits())
+        cursor, trace = StoredIndexCursor(self.store), RecordingTrace()
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+        original_read = trace.read
+        nested_failures = []
+        def nested(table, key):
+            original_read(table, key)
+            try:
+                self.shared_acquire(self.store, work, acquisition, cursor, trace)
+            except reader.IndexReadError as exc:
+                nested_failures.append(exc)
+        with mock.patch.object(trace, "read", side_effect=nested):
+            with self.assertRaisesRegex(reader.IndexReadError, "poisoned"):
+                self.shared_acquire(self.store, work, acquisition, cursor, trace)
+        self.assertEqual(len(nested_failures), 1)
+        self.assertEqual(cursor.calls, [])
+        self.assertTrue(acquisition.failed)
+        # The physical-read method also rejects a callback that bypasses the
+        # component entrypoint and attempts to reenter that very same read.
+        work = measured._ValidationWork(measured.QueryReadValidationLimits())
+        cursor, trace = StoredIndexCursor(self.store), RecordingTrace()
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+        def direct_nested(table, key):
+            try:
+                acquisition.read(table, key, "never executed", (), 1)
+            except reader.IndexReadError:
+                pass
+        with mock.patch.object(trace, "read", side_effect=direct_nested):
+            with self.assertRaises(reader.IndexReadError):
+                self.shared_acquire(self.store, work, acquisition, cursor, trace)
+        self.assertEqual(cursor.calls, [])
+        self.assertTrue(acquisition.failed)
+
+    def test_shared_context_exact_identity_and_limits_cannot_be_replaced_or_reset(self):
+        class ForeignWork(measured._ValidationWork):
+            pass
+        with self.assertRaises(reader.IndexReadError):
+            reader._ReadAcquisitionBudget(object(), object(),
+                work=ForeignWork(measured.QueryReadValidationLimits()))
+        for limits in (object(), object.__new__(reader._ReadAcquisitionLimits)):
+            with self.assertRaises(reader.IndexReadError):
+                reader._ReadAcquisitionBudget(object(), object(),
+                    work=measured._ValidationWork(measured.QueryReadValidationLimits()), limits=limits)
+        for field, maximum in (("max_sql_reads", 4096), ("max_parameter_bytes", 4194304),
+                               ("max_transport_bytes", 4194304)):
+            for value in (True, 0, -1, maximum + 1):
+                with self.assertRaises(reader.IndexReadError):
+                    reader._ReadAcquisitionLimits(**{field: value})
+        for changed in ("cursor", "trace", "work"):
+            work = measured._ValidationWork(measured.QueryReadValidationLimits())
+            cursor, trace = StoredIndexCursor(self.store), RecordingTrace()
+            acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+            actual = {"cursor": cursor, "trace": trace, "work": work}
+            actual[changed] = (measured._ValidationWork(measured.QueryReadValidationLimits())
+                               if changed == "work" else object())
+            with self.assertRaises(reader.IndexReadError):
+                self.shared_acquire(self.store, actual["work"], acquisition,
+                                    actual["cursor"], actual["trace"])
+            self.assertTrue(acquisition.failed)
+            self.assertEqual(cursor.calls, [])
+
+    def test_shared_root_is_owned_before_first_real_profile_hash_and_public_route_stays_none(self):
+        store = IndependentStoredIndex(self.rows)
+        expected_root = store.tree.root
+        root_copy = contract.CountedNode(expected_root.digest, expected_root.count)
+        work = measured._ValidationWork(measured.QueryReadValidationLimits())
+        cursor, trace = StoredIndexCursor(store), RecordingTrace()
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+        actual_sha = hashlib.sha256
+        called = False
+        def mutate(*args, **kwargs):
+            nonlocal called
+            if not called:
+                called = True
+                object.__setattr__(root_copy, "count", root_copy.count + 1)
+            return actual_sha(*args, **kwargs)
+        with mock.patch.object(hashlib, "sha256", side_effect=mutate):
+            result = reader._read_complete_frontier(cursor, query=store.query,
+                expected_root=root_copy, index_revision=store.revision,
+                trace=trace, work=work, acquisition=acquisition)
+        self.assertTrue(called)
+        self.assertEqual(result.root, expected_root)
+        actual = reader._read_complete_frontier
+        with mock.patch.object(reader, "_read_complete_frontier", wraps=actual) as worker:
+            self.acquire()
+        self.assertEqual(worker.call_count, 1)
+        self.assertIsNone(worker.call_args.kwargs["work"])
+        self.assertIsNone(worker.call_args.kwargs["acquisition"])
+
+    def test_primary_row_frame_reuses_preencoded_bytes_and_cumulative_transport_without_parsing(self):
+        raw = {"id": "full-row", "payload": "x" * 8192}
+        encoded = json.dumps(raw, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+        work = measured._ValidationWork(measured.QueryReadValidationLimits())
+        cursor, trace = object(), object()
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work,
+            limits=reader._ReadAcquisitionLimits(max_transport_bytes=8 + len(encoded)))
+        with acquisition.scope(cursor, trace, work):
+            wire = work.wire(raw)
+            before = work.metrics
+            with mock.patch.object(json, "loads", side_effect=AssertionError("unexpected decoder")), \
+                    mock.patch.object(json, "dumps", side_effect=AssertionError("unexpected re-encoder")):
+                acquisition.charge_primary_row(wire)
+            self.assertEqual(work.input_bytes - before.input_bytes, 8 + len(encoded))
+            self.assertEqual((work.hash_work, work.json_nodes), (before.hash_work, before.json_nodes))
+        self.assertEqual(acquisition.transport_bytes, 8 + len(encoded))
+        with self.assertRaises(reader.IndexReadError):
+            with acquisition.scope(cursor, trace, work):
+                acquisition.charge_primary_row(b"{}")
+        self.assertTrue(acquisition.failed)
+        for wire in (bytearray(b"{}"), "{}", b"x" * (1024 * 1024 + 1)):
+            work = measured._ValidationWork(measured.QueryReadValidationLimits())
+            acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+            with self.assertRaises(reader.IndexReadError):
+                with acquisition.scope(cursor, trace, work):
+                    acquisition.charge_primary_row(wire)
+            self.assertEqual(acquisition.transport_bytes, 0)
+        self.assertEqual(reader.MAX_PRIMARY_ROW_BYTES, 1024 * 1024)
+        work = measured._ValidationWork(measured.QueryReadValidationLimits())
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+        with self.assertRaisesRegex(reader.IndexReadError, "poisoned"):
+            with acquisition.scope(cursor, trace, work):
+                try:
+                    acquisition.charge_primary_row("not bytes")
+                except reader.IndexReadError:
+                    pass
+        self.assertTrue(acquisition.failed)
 
 
 if __name__ == "__main__":

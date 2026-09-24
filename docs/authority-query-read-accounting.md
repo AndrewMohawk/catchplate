@@ -110,7 +110,7 @@ bindings; it does not activate this path in the planner.
 Raw transport capture, retained-bundle encoding and hashing, compact transition
 packaging, kernel/audit-capacity admission, SQL acquisition and the coordinated
 versioned planner/executor protocol remain separate work. Snapshot/v3 and its
-nine frames are unchanged; the complete-query planner gate remains closed.
+nine frames are unchanged; the public complete-query planner gate remains closed.
 
 ## Actual planner bookkeeping integration
 
@@ -140,12 +140,16 @@ or reentered collector cannot return success even when a nested rejection was
 caught by an observer. That does not interrupt a currently running bounded proof
 producer or establish a whole-process execution bound.
 
-This ledger excludes source query generation, full-row conflict comparisons,
-SQL/transport, primary proof construction and verification, cache stamps, kernel
-execution, range/mutation proofs, and final payload packaging. Integrating those
-phases under coordinated remaining-work limits is still required. Query records
-remain observations, not complete or current authority; complete-index queries
-still reject before business/proof SQL and the registry remains closed.
+The `.30` bookkeeping contract excludes source query generation, full-row
+conflict comparisons, SQL/transport, primary proof construction and verification, cache stamps, kernel
+execution, range/mutation proofs, and final payload packaging. Source `.31` adds
+a separate [private complete-acquisition contract](authority-complete-acquisition.md):
+its actual head/range/exact-row and global/join workers share this same work
+object, with explicitly broader component charges and unchanged source ceilings.
+It does not redefine the bookkeeping descriptor or provide whole-plan accounting.
+Query records remain observations, not complete or current authority; public v3
+complete queries still reject before business/proof SQL and the registry remains
+closed.
 
 ## Authored coverage
 
@@ -168,10 +172,11 @@ planner-worker cases are retained in the startup-dependent suite; they cannot
 run successfully until its real registry imports, and even then their empty SQL
 responder is not native PostgreSQL evidence.
 
-All prior method IDs are preserved. The related staging fixture has 27 methods,
-planner/capacity source linkage has 16, table/source-contract linkage has 19,
-and the startup suite has 32. These are authored inventories, not test results;
-the existing native inventory remains 252 methods across fourteen suites.
+All prior method IDs are preserved. The `.30` bookkeeping slice retained 27
+staging methods, 16 planner/capacity source-linkage methods, 19 table/source-contract
+methods and 32 startup methods. Later private-acquisition additions are recorded
+in the linked acquisition document; these counts are authored inventories, not
+test results. The native inventory remains 252 methods across fourteen suites.
 
 These tests have not run. No runtime, database, startup or production claim is
 established by their source or registration. Native-suite counts, verification

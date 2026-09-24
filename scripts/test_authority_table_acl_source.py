@@ -392,7 +392,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.30")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.31")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -441,6 +441,90 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         source_fields = {key.value: value for key, value in zip(serialized.keys, serialized.values)
                          if isinstance(key, ast.Constant) and type(key.value) is str}
         self.assert_shape(source_fields["operationContractDigest"], "authority_contract.OPERATION_MANIFEST_DIGEST")
+        self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
+        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+        self.assertEqual(authority_contract.MAX_PLAN_WORK_UNITS, 16386)
+
+    def test_private_complete_acquisition_contract_binds_actual_limits_and_excludes_public_v3(self):
+        contract = authority_contract.PLANNER_COMPLETE_ACQUISITION_CONTRACT
+        self.assertIs(type(contract), MappingProxyType)
+        self.assertEqual(dict(contract), {
+            "schema": "serverware.policyAuthorityPlannerCompleteAcquisition/v1",
+            "admission": "private-worker-only", "publicV3Enabled": False,
+            "operation": "webauthn.credential.revoke",
+            "headTraceProfile": "serverware.policyAuthorityCountedHeadRead/v1",
+            "rangeTraceProfile": "serverware.policyAuthorityCountedIndexRead/v1",
+            "primaryTraceProfile": "serverware.policyAuthorityCompletePrimaryRead/v1",
+            "maxSqlReads": 4096, "maxParameterBytes": 4 * 1024 * 1024,
+            "maxReturnedFrameBytes": 4 * 1024 * 1024,
+            "maxPrimaryRowBytes": 1024 * 1024, "maxRangeSqlReads": 20,
+            "maxSharedHashes": 8_000_000, "maxSharedInputBytes": 64 * 1024 * 1024,
+            "maxSharedJsonNodes": 1_000_000,
+            "maxBusinessTraceEntries": 4096, "maxFrameworkTraceEntries": 69,
+            "includedPhases": (
+                "source-role-and-cutoff-binding", "counted-head-capture",
+                "range-acquisition-and-reconstruction", "exact-primary-row-fetch",
+                "raw-evidence-retention", "global-primary-and-range-row-reverification",
+                "shared-query-bookkeeping",
+            ),
+            "excludedWork": (
+                "sql-execution", "driver-allocation", "process-allocation",
+                "staged-proof-work", "primary-proof-acquisition", "trace-serialization",
+                "fixed-metadata-scaffolding", "kernel", "write-mutations",
+                "retained-protocol", "whole-plan",
+            ),
+        })
+        self.assertIs(contract["publicV3Enabled"], False)
+        with self.assertRaises(TypeError):
+            contract["publicV3Enabled"] = True
+        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        material = named_assignment(tree, "OPERATION_MANIFEST_DIGEST").value.args[1]
+        fields = {key.value: value for key, value in zip(material.keys, material.values)}
+        self.assert_shape(fields["plannerCompleteAcquisition"], "dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT)")
+        # Keep the contract importable below the actual reader/head/trace
+        # modules. Their literal profiles are bound by source below, not eager
+        # imports back into their own contract dependency.
+        imports = {alias.name for node in tree.body if isinstance(node, ast.ImportFrom)
+                   and node.module == "serverware" for alias in node.names}
+        self.assertTrue({"authority_index_heads", "authority_index_reader", "authority_index_trace",
+                         "authority_complete_acquisition"}.isdisjoint(imports))
+        sources = {}
+        for name in ("authority_index_heads", "authority_index_reader", "authority_index_trace",
+                     "authority_complete_query", "authority_audit_trace", "authority_complete_acquisition"):
+            _, sources[name] = read_source(f"serverware/{name}.py", 256 * 1024)
+        for module, constant, field in (
+            ("authority_index_heads", "READ_PROFILE", "headTraceProfile"),
+            ("authority_index_reader", "READ_PROFILE", "rangeTraceProfile"),
+            ("authority_index_trace", "PRIMARY_READ_PROFILE", "primaryTraceProfile"),
+            ("authority_complete_query", "OPERATION", "operation"),
+            ("authority_audit_trace", "MAX_TRACE_ENTRIES", "maxBusinessTraceEntries"),
+            ("authority_audit_trace", "MAX_AUDIT_CAPACITY_TRACE_ENTRIES", "maxFrameworkTraceEntries"),
+        ):
+            self.assert_shape(named_assignment(sources[module], constant).value, repr(contract[field]))
+        reader = sources["authority_index_reader"]
+        for constant, expression in (
+            ("MAX_CUMULATIVE_SQL_READS", "4096"), ("MAX_PARAMETER_BYTES", "4 * 1024 * 1024"),
+            ("MAX_TRANSPORT_BYTES", "4 * 1024 * 1024"), ("MAX_PRIMARY_ROW_BYTES", "1024 * 1024"),
+            ("MAX_NODE_IDENTITIES", "256"),
+            ("MAX_SQL_READS", "1 + (MAX_OUTSIDE_PREFIXES + MAX_NODE_IDENTITIES - 1) // MAX_NODE_IDENTITIES"),
+        ):
+            self.assert_shape(named_assignment(reader, constant).value, expression)
+        _, frontier = read_source("serverware/authority_index_frontier.py", 128 * 1024)
+        self.assert_shape(named_assignment(frontier, "MAX_OUTSIDE_PREFIXES").value,
+                          "2 * KEY_NIBBLES * 15")
+        self.assertEqual(contract["maxRangeSqlReads"], 1 + (4800 + 255) // 256)
+        limits = authority_query_read_work.QueryReadValidationLimits()
+        self.assertEqual((contract["maxSharedHashes"], contract["maxSharedInputBytes"], contract["maxSharedJsonNodes"]),
+                         (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes))
+        self.assert_shape(named_assignment(sources["authority_audit_trace"], "MAX_PLAN_TRACE_ENTRIES").value,
+                          "MAX_TRACE_ENTRIES + MAX_AUDIT_CAPACITY_TRACE_ENTRIES")
+        collector_calls = {node.func.attr for node in ast.walk(sources["authority_complete_acquisition"])
+                           if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+        self.assertTrue({"read_operation_index_heads", "_read_complete_frontier", "charge_primary_row",
+                         "_verify_complete_query_batch"}.issubset(collector_calls))
+        # These are source linkage assertions, not executed SQL/proof or a new
+        # measured envelope. Schema9, operation-contract/v3 and business units
+        # are unchanged; the old bookkeeping descriptor has its own full pin.
         self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
         self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
         self.assertEqual(authority_contract.MAX_PLAN_WORK_UNITS, 16386)

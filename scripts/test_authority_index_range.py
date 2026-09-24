@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from serverware import authority_index_contract as contract
 from serverware import authority_index_range as ranges
+from serverware import authority_query_read_work as measured
 
 
 PROFILE = "serverware.policyAuthorityCountedIndex/v1"
@@ -160,6 +161,38 @@ def metric_oracle(profile, root, interval, frontier):
     return {"entries": len(frontier), "leaves": members, "opened_nodes": len(opened),
             "child_slots": 16 * len(opened), "hashes": hashes + members,
             "input_bytes": sum(8 + len(value.encode("ascii")) for value in values)}
+
+
+def shared_work_oracle(profile, root, interval, frontier):
+    """Literal real hash-frame schedule, independent of production work hooks."""
+    frames = []
+    terminals = {}
+    for record in frontier:
+        if type(record) is contract.IndexLeaf:
+            frames.append((LEAF, *common(profile), str(WIDTH), record.key, "1",
+                           record.primary_key_digest, record.primary_row_digest))
+            terminals[record.key] = member(profile, record)
+        else:
+            terminals[record.prefix] = record.digest, record.count
+    nodes, opened, _ = assembled(profile, terminals)
+    for prefix in sorted(opened, key=lambda value: (-len(value), value)):
+        children = [nodes.get(prefix + digit) for digit in NIBBLES]
+        count = sum(child[1] for child in children if child is not None)
+        if not count:
+            frames.append((EMPTY, *common(profile), str(len(prefix)), prefix, "0"))
+            continue
+        encoded = [str(len(prefix)), prefix, str(count)]
+        for digit, child in zip(NIBBLES, children):
+            if child is None:
+                path = prefix + digit
+                frames.append((EMPTY, *common(profile), str(len(path)), path, "0"))
+                child = empty(profile, path)
+            encoded.extend((child[0], str(child[1])))
+        frames.append((BRANCH, *common(profile), *encoded))
+    framing = metric_oracle(profile, root, interval, frontier)["input_bytes"]
+    return (len(frames), framing + sum(2 * len(value.encode("ascii")) + 8
+                                     for row in frames for value in row),
+            2 * sum(len(row) for row in frames))
 
 
 def projection(value):
@@ -523,6 +556,93 @@ class AuthorityIndexRangeTests(unittest.TestCase):
         self.assertNotEqual(result.root, self.tree.root)
         with self.assertRaises(contract.IndexRangeError):
             self.verify(tree=alternative, root=self.tree.root)
+
+    def test_shared_work_exact_hash_frame_oracle_preserves_real_range_results(self):
+        for tree, bounds in ((IndependentIndex([]), self.all), (self.tree, self.all),
+                             (self.tree, contract.KeyInterval(key("1"), key("2"))),
+                             (self.tree, contract.KeyInterval(key("8"), key("8")))):
+            proof = tree.frontier(bounds)
+            expected = shared_work_oracle(tree.profile, tree.root, bounds, proof)
+            legacy = self.verify(tree=tree, interval=bounds, frontier=proof)
+            work = measured._ValidationWork(measured.QueryReadValidationLimits())
+            actual_sha = hashlib.sha256
+            with mock.patch.object(hashlib, "sha256", wraps=actual_sha) as hashes:
+                observed = ranges._reconstruct_complete_index_range(
+                    profile=tree.profile, expected_root=tree.root, interval=bounds,
+                    frontier=proof, limits=ranges.IndexRangeLimits(), work=work)
+            self.assertEqual(observed, legacy)
+            self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), expected)
+            self.assertEqual(hashes.call_count, expected[0])
+            self.assertEqual(observed.metrics.hashes, expected[0])
+
+    def test_shared_range_independent_exact_and_each_minus_one_quota(self):
+        tree = IndependentIndex([leaf(key("a"))])
+        proof = tree.frontier(self.all)
+        expected = shared_work_oracle(tree.profile, tree.root, self.all, proof)
+        for dimension in (None, 0, 1, 2):
+            values = list(expected)
+            if dimension is not None:
+                values[dimension] -= 1
+            work = measured._ValidationWork(measured.QueryReadValidationLimits(*values))
+            arguments = dict(profile=tree.profile, expected_root=tree.root, interval=self.all,
+                             frontier=proof, limits=ranges.IndexRangeLimits(), work=work)
+            if dimension is None:
+                self.assertEqual(ranges._reconstruct_complete_index_range(**arguments).root, tree.root)
+                self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), expected)
+            else:
+                with self.subTest(dimension=dimension), self.assertRaises(measured.QueryReadWorkError):
+                    ranges._reconstruct_complete_index_range(**arguments)
+
+    def test_shared_range_preconsumed_work_and_real_repeats_have_no_refund(self):
+        tree = IndependentIndex([leaf(key("b"))])
+        proof = tree.frontier(self.all)
+        expected = shared_work_oracle(tree.profile, tree.root, self.all, proof)
+        prior = (7, 101, 13)
+        limits = tuple(before + 2 * delta for before, delta in zip(prior, expected))
+        work = measured._ValidationWork(measured.QueryReadValidationLimits(*limits))
+        work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+        for number in (1, 2):
+            result = ranges._reconstruct_complete_index_range(
+                profile=tree.profile, expected_root=tree.root, interval=self.all,
+                frontier=proof, limits=ranges.IndexRangeLimits(), work=work)
+            self.assertEqual(result.root, tree.root)
+            self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes),
+                             tuple(before + number * delta for before, delta in zip(prior, expected)))
+        with self.assertRaises(measured.QueryReadWorkError):
+            ranges._reconstruct_complete_index_range(profile=tree.profile, expected_root=tree.root,
+                interval=self.all, frontier=proof, limits=ranges.IndexRangeLimits(), work=work)
+
+    def test_shared_range_encoding_reservation_precedes_real_hash_and_no_work_preserves_facade(self):
+        tree = IndependentIndex([])
+        input_bytes = metric_oracle(tree.profile, tree.root, self.all, ())["input_bytes"]
+        work = measured._ValidationWork(measured.QueryReadValidationLimits(
+            max_input_bytes=input_bytes + 1))
+        with mock.patch.object(hashlib, "sha256", side_effect=AssertionError("unreserved SHA")):
+            with self.assertRaises(measured.QueryReadWorkError):
+                ranges._reconstruct_complete_index_range(profile=tree.profile, expected_root=tree.root,
+                    interval=self.all, frontier=(), limits=ranges.IndexRangeLimits(), work=work)
+        actual = ranges._reconstruct_complete_index_range
+        with mock.patch.object(ranges, "_reconstruct_complete_index_range", wraps=actual) as worker:
+            self.verify(tree=tree)
+        self.assertEqual(worker.call_count, 1)
+        self.assertIsNone(worker.call_args.kwargs["work"])
+
+    def test_shared_range_work_exact_type_and_empty_helper_real_hash_agree(self):
+        class ForeignWork(measured._ValidationWork):
+            pass
+        for value in (object(), ForeignWork(measured.QueryReadValidationLimits())):
+            with self.assertRaises(contract.IndexRangeError):
+                ranges._reconstruct_complete_index_range(profile=self.tree.profile,
+                    expected_root=self.tree.root, interval=self.all, frontier=(),
+                    limits=ranges.IndexRangeLimits(), work=value)
+        expected_frames = (EMPTY, *common(self.tree.profile), "0", "", "0")
+        expected = (1, sum(2 * len(value) + 8 for value in expected_frames),
+                    2 * len(expected_frames))
+        work = measured._ValidationWork(measured.QueryReadValidationLimits(*expected))
+        ranges._prepare_empty_work(self.tree.profile, "", work)
+        self.assertEqual(contract.empty_node(self.tree.profile, ""),
+                         contract.CountedNode(*empty(self.tree.profile, "")))
+        self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), expected)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,12 @@ from serverware.authority_audit_trace import (
 )
 from serverware import authority_contract
 from serverware import authority_complete_query
+from serverware import authority_complete_acquisition
+from serverware import authority_complete_query_batch
+from serverware.authority_index_contract import IndexRangeError
+from serverware import authority_index_trace
+from serverware import authority_index_heads
+from serverware import authority_index_reader
 from serverware import authority_primary_contract
 from serverware import authority_query_reads
 from serverware.authority_query_read_work import (
@@ -430,6 +436,7 @@ class PlanningState:
     verified_webauthn_evidence: Mapping[str, Any] | None = None
     query_program: tuple[authority_transition_core.Query, ...] = ()
     query_reads: tuple[authority_query_reads.QueryRead, ...] = ()
+    complete_query_evidence: authority_complete_acquisition.CompleteAcquisitionEvidence | None = None
 
 
 class PlanningProgram(Protocol):
@@ -471,9 +478,13 @@ def _query_trace_key(
 
 
 class PlannerTrace:
-    def __init__(self, *, operation: str) -> None:
+    def __init__(self, *, operation: str, _complete_queries: bool = False) -> None:
+        if (type(_complete_queries) is not bool
+                or _complete_queries and operation != authority_complete_query.OPERATION):
+            raise AuthorityPlannerError("complete trace scope is not source admitted")
         spec = authority_contract.operation_spec(operation)
         self.operation = operation
+        self._complete_queries = _complete_queries
         self.business_reads = frozenset(
             set(spec["businessReads"]) | set(spec["businessWrites"])
         )
@@ -486,6 +497,8 @@ class PlannerTrace:
             | set(spec["authorizationReads"])
             | set(spec["frameworkPreconditions"])
             | set(spec["frameworkWrites"])
+            | ({authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
+                authority_index_reader.NODE_TABLE} if _complete_queries else set())
         )
         self.allowed_writes = frozenset(
             set(spec["businessWrites"]) | set(spec["frameworkWrites"])
@@ -498,6 +511,15 @@ class PlannerTrace:
             raise AuthorityPlannerError(
                 "planner read escaped the generated operation manifest"
             )
+        if (table in {authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
+                      authority_index_reader.NODE_TABLE}
+                or isinstance(key, Mapping) and key.get("profile") == authority_index_trace.PRIMARY_READ_PROFILE):
+            if not self._complete_queries:
+                raise AuthorityPlannerError("complete trace profile has no current planner admission")
+            try:
+                authority_index_trace.validate_complete_read_trace(self.operation, table, key)
+            except authority_index_trace.IndexTraceError as exc:
+                raise AuthorityPlannerError("complete trace read is not source closed") from exc
         self._append("read", table, key)
 
     def write(self, table: str, key: Mapping[str, Any]) -> None:
@@ -575,6 +597,7 @@ class TypedTransitionPlanningProgram:
         trace: PlannerTrace,
         query_sources: authority_query_staging.StagedQueryProofs,
         query_work: _ValidationWork,
+        complete_acquisition: authority_complete_acquisition._CompleteQueryAcquisition | None = None,
         verified_webauthn_evidence: Mapping[str, Any] | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
         if (
@@ -645,10 +668,14 @@ class TypedTransitionPlanningProgram:
                 trace=trace,
                 query_sources=query_sources,
                 query_work=query_work,
+                complete_acquisition=complete_acquisition,
             )
         except (authority_transition_core.TransitionKernelError,
                 authority_complete_query.CompleteQueryError,
                 authority_query_reads.QueryReadError,
+                authority_complete_acquisition.CompleteAcquisitionError,
+                authority_complete_query_batch.CompleteQueryBatchError,
+                IndexRangeError,
                 QueryReadWorkError,
                 authority_query_staging.QueryStagingError) as exc:
             raise AuthorityPlannerError(
@@ -660,6 +687,8 @@ class TypedTransitionPlanningProgram:
             verified_webauthn_evidence=verified_webauthn_evidence,
             query_program=queries,
             query_reads=query_reads,
+            complete_query_evidence=(None if complete_acquisition is None
+                                     else complete_acquisition.retained_evidence()),
         )
 
     def __call__(
@@ -673,6 +702,8 @@ class TypedTransitionPlanningProgram:
         state: PlanningState,
     ) -> PlannedTransition:
         del manifest
+        if state.complete_query_evidence is not None:
+            raise AuthorityPlannerError("complete planning requires the successor retained-evidence protocol")
         if (
             operation != self.operation
             or handler != self.handler
@@ -1496,6 +1527,7 @@ def _read_bounded_transition_rows(
     trace: PlannerTrace,
     query_sources: authority_query_staging.StagedQueryProofs,
     query_work: _ValidationWork,
+    complete_acquisition: authority_complete_acquisition._CompleteQueryAcquisition | None = None,
 ) -> tuple[tuple[dict[str, Any], ...],
            tuple[authority_transition_core.Query, ...],
            tuple[authority_query_reads.QueryRead, ...]]:
@@ -1506,8 +1538,17 @@ def _read_bounded_transition_rows(
     # Reject the whole inventory before even the first business/proof read.
     # A complete declaration must never fall through to ordinary SQL LIMIT+1.
     # The earlier database-clock read is not independent time authority.
-    if any(type(query) is authority_complete_query.CompleteIndexQuery for query in queries):
-        raise AuthorityPlannerError("complete index query acquisition is not available")
+    has_complete = any(type(query) is authority_complete_query.CompleteIndexQuery for query in queries)
+    if has_complete:
+        # Only the private successor acquisition worker may enter this branch.
+        # No current public v3 producer constructs or passes it, and v3 payload
+        # admission still has no representation for its raw evidence.
+        if type(complete_acquisition) is not authority_complete_acquisition._CompleteQueryAcquisition:
+            raise AuthorityPlannerError("complete index query acquisition is not available")
+        complete_acquisition.begin(cursor, operation=operation, arguments=request.get("arguments"),
+            queries=queries, trace=trace, work=query_work)
+    elif complete_acquisition is not None:
+        raise AuthorityPlannerError("complete acquisition is outside its source query family")
     manifest_by_table = {
         str(entry["table"]): entry for entry in manifest
     }
@@ -1548,56 +1589,43 @@ def _read_bounded_transition_rows(
             operation, query, prior_reads=tuple(query_reads),
             selected_rows=tuple(selected.values()), work=query_work,
         )
-        clauses: list[str] = []
-        parameters: list[Any] = []
-        for predicate in resolved_query.predicates:
-            if predicate.operator == "is-null":
-                clauses.append(
-                    f"target.{predicate.column} IS NULL"
-                )
-            elif predicate.operator == "not-null":
-                clauses.append(
-                    f"target.{predicate.column} IS NOT NULL"
-                )
-            else:
-                sql_operator = {
-                    "eq": "IS NOT DISTINCT FROM",
-                    "ne": "IS DISTINCT FROM",
-                    "lt": "<",
-                    "lte": "<=",
-                    "gt": ">",
-                    "gte": ">=",
-                }[predicate.operator]
-                clauses.append(
-                    f"target.{predicate.column} {sql_operator} %s"
-                )
-                parameters.append(predicate.value)
-        order = resolved_query.order_by
-        ordering = ", ".join(
-            f"target.{item.column} "
-            + ("DESC" if item.descending else "ASC")
-            for item in order
-        )
-        trace.read(query.table, _query_trace_key(operation, query))
-        rows = cursor.execute(
-            "SELECT pg_catalog.to_jsonb(target) AS row_value "
-            f"FROM serverware_metadata.{query.table} AS target "
-            + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
-            + f"ORDER BY {ordering} LIMIT %s",
-            (*parameters, query.maximum_rows + 1),
-        ).fetchall()
-        if len(rows) > query.maximum_rows:
-            raise AuthorityPlannerError(
-                "typed transition query exceeded its manifest bound"
-            )
-        if query.require_absence and rows:
-            raise AuthorityPlannerError(
-                "typed transition exact-absence query found a row"
-            )
+        is_complete = type(query) is authority_complete_query.CompleteIndexQuery
+        if is_complete:
+            rows = tuple({"row_value": row} for row in complete_acquisition.read_rows(resolved_query))
+        else:
+            clauses: list[str] = []
+            parameters: list[Any] = []
+            for predicate in resolved_query.predicates:
+                if predicate.operator == "is-null":
+                    clauses.append(f"target.{predicate.column} IS NULL")
+                elif predicate.operator == "not-null":
+                    clauses.append(f"target.{predicate.column} IS NOT NULL")
+                else:
+                    sql_operator = {
+                        "eq": "IS NOT DISTINCT FROM", "ne": "IS DISTINCT FROM",
+                        "lt": "<", "lte": "<=", "gt": ">", "gte": ">=",
+                    }[predicate.operator]
+                    clauses.append(f"target.{predicate.column} {sql_operator} %s")
+                    parameters.append(predicate.value)
+            ordering = ", ".join(
+                f"target.{item.column} " + ("DESC" if item.descending else "ASC")
+                for item in resolved_query.order_by)
+            trace.read(query.table, _query_trace_key(operation, query))
+            rows = cursor.execute(
+                "SELECT pg_catalog.to_jsonb(target) AS row_value "
+                f"FROM serverware_metadata.{query.table} AS target "
+                + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
+                + f"ORDER BY {ordering} LIMIT %s",
+                (*parameters, query.maximum_rows + 1),
+            ).fetchall()
+            if len(rows) > query.maximum_rows:
+                raise AuthorityPlannerError("typed transition query exceeded its manifest bound")
+            if query.require_absence and rows:
+                raise AuthorityPlannerError("typed transition exact-absence query found a row")
         query_rows = tuple(
             row["row_value"] for row in rows
         )
-        resolved_absent_key = resolved_query.absent_key
+        resolved_absent_key = None if is_complete else resolved_query.absent_key
         if resolved_absent_key is not None and not query_rows:
             query_rows = (None,)
         ordered_selected = []
@@ -1618,12 +1646,20 @@ def _read_bounded_transition_rows(
                 raise AuthorityPlannerError(
                     "typed transition query row has no exact primary key"
                 )
+            if is_complete:
+                query_work.prepare_encoding(key)
             identity = (query.table, canonical_bytes(key))
             contract_selector = None
             if len(key_columns) == 1:
                 candidate = str(key[key_columns[0]])
                 if candidate in extracted.get(query.table, ()):
                     contract_selector = candidate
+            if is_complete:
+                query_work.prepare_copy(key)
+                query_work.prepare_encoding(key)
+                query_work.prepare_copy(row_value)
+                query_work.prepare_utf8(query.table)
+                query_work.charge(hashes=1, input_bytes=16)
             entry = _selected_business_row(
                 table=query.table,
                 key=key,
@@ -1631,6 +1667,9 @@ def _read_bounded_transition_rows(
                 contract_selector=contract_selector,
             )
             previous = selected.get(identity)
+            if is_complete and previous is not None:
+                query_work.prepare_encoding(previous)
+                query_work.prepare_encoding(entry)
             if previous is not None and canonical_bytes(previous) != canonical_bytes(entry):
                 raise AuthorityPlannerError(
                     "typed transition queries disagree on one row"
@@ -1662,6 +1701,19 @@ def _read_bounded_transition_rows(
         operation, queries=queries, query_reads=tuple(query_reads), selected_rows=selected_rows,
         work=query_work,
     )
+    if complete_acquisition is not None:
+        complete_acquisition.finish_reads()
+        pending = query_sources.unproved_rows(selected_rows)
+        proofs = _derive_multiproofs(cursor, selected_rows=pending,
+            roots=complete_acquisition.roots_for_proofs(), trace=trace)
+        proofs = query_sources.merge_proofs(selected_rows=selected_rows, remaining_proofs=proofs)
+        verified = complete_acquisition.verify(selected_rows=selected_rows, before_proofs=proofs)
+        selected_rows = verified.selected_rows
+        # Recheck actual observations against the genuine engine's owned rows,
+        # with the same allowance, before returning to any planning program.
+        _, checked_reads = authority_query_reads._validate_query_reads(
+            operation, queries=queries, query_reads=checked_reads, selected_rows=selected_rows,
+            work=query_work)
     return selected_rows, queries, checked_reads
 
 

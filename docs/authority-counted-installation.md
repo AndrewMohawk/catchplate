@@ -58,13 +58,17 @@ the existing owner closure and full expected-schema comparison remain mandatory.
 The installed-source contract explicitly distinguishes per-profile/event limits
 from whole-operation accounting. There are at most three profiles per normalized
 event; the existing v3 business work count is not a measurement of SQL hash work.
-Shared planning/acquisition/commit budgets and root-vector protocols remain due.
+The [private acquisition path](authority-complete-acquisition.md) now shares
+defined head/range/row and proof work with query bookkeeping. SQL maintenance,
+commit and whole-operation accounting are not covered by that meter; independent
+root-vector protocols remain due.
 
-The planner still rejects complete-index queries before business/proof SQL.
+The public v3 planner still rejects complete-index queries before business/proof SQL.
 Its current v3 payload, signature, persisted replay and SQL Snapshot/v3 cannot
-silently acquire extra counted evidence fields. Genuine primary/range joins,
-retained complete read/write proofs, independent roots and time, and a coordinated
-versioned replay/commit contract are required before that rejection can change.
+silently acquire extra counted evidence fields. The private collector now runs
+genuine primary/range joins, but typed execution then rejects before the kernel.
+Retained complete read/write evidence, independent roots and time, and a
+coordinated versioned replay/commit contract are required before activation.
 The four WebAuthn startup gaps remain open.
 
 The 14 isolated installation controls, five added ACL source controls and eight

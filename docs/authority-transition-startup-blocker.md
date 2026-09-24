@@ -48,15 +48,23 @@ It does not itself produce signed authority evidence or fill a missing kernel.
 The [counted-storage installation](authority-counted-installation.md) now wires
 fresh-empty PostgreSQL preparation, exact existing-head checks, schema/ACL
 inventories and real primary-trigger maintenance in source `.29`. It remains
-unexecuted. Complete-query planner acquisition, independently admitted roots,
-shared operation budgets and versioned retained evidence are still required;
-this wiring neither enables counted queries nor registers a missing kernel.
+unexecuted. Independently admitted roots, shared operation budgets and versioned
+retained evidence are still required; this wiring neither enables counted queries
+nor registers a missing kernel.
 
 Source `.30` now threads one [query-bookkeeping ledger](authority-query-read-accounting.md)
 through actual typed planning and staged reference resolution, including both
 final observation validations. This bounds that repeated bookkeeping only;
 SQL/proof/kernel and whole-operation accounting remain separate. The complete
 query gate, v3 retained-evidence limitations and four startup gaps remain unchanged.
+
+Source `.31` adds a [private complete-acquisition path](authority-complete-acquisition.md)
+through actual head/range/exact-row reads, global primary verification and all
+five joined ranges on the same work ledger. Public v3 still rejects before
+business/proof SQL; even the private acquired state is rejected by the typed
+program before its kernel until the successor retained-evidence protocol exists.
+No independent current-root/time producer, new wire protocol or registry
+activation is supplied by this source-only integration.
 
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the

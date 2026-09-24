@@ -588,17 +588,36 @@ class CompleteQueryTests(unittest.TestCase):
                     and ast.unparse(item.func) == name]
         snapshot, = calls(reader, "authority_query_reads._snapshot_queries")
         self.assertEqual({item.arg: ast.unparse(item.value) for item in snapshot.keywords}, {"work": "query_work"})
-        guards = [node for node in reader.body if isinstance(node, ast.If)
-                  and ast.unparse(node.test) ==
-                  "any(type(query) is authority_complete_query.CompleteIndexQuery for query in queries)"]
-        self.assertEqual(len(guards), 1)
-        guard = guards[0]
-        self.assertEqual(len(guard.body), 1)
-        self.assertIsInstance(guard.body[0], ast.Raise)
-        self.assertEqual(ast.unparse(guard.body[0].exc),
+        inventory, = [node for node in reader.body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "has_complete"
+                              for target in node.targets)]
+        self.assertEqual(ast.unparse(inventory.value),
+            "any(type(query) is authority_complete_query.CompleteIndexQuery for query in queries)")
+        guard, = [node for node in reader.body if isinstance(node, ast.If)
+                  and ast.unparse(node.test) == "has_complete"
+                  and calls(node, "complete_acquisition.begin")]
+        denial = guard.body[0]
+        self.assertIsInstance(denial, ast.If)
+        self.assertEqual(ast.unparse(denial.test),
+            "type(complete_acquisition) is not authority_complete_acquisition._CompleteQueryAcquisition")
+        self.assertEqual(len(denial.body), 1)
+        self.assertIsInstance(denial.body[0], ast.Raise)
+        self.assertEqual(ast.unparse(denial.body[0].exc),
             "AuthorityPlannerError('complete index query acquisition is not available')")
-        self.assertFalse(guard.orelse)
-        self.assertLess(snapshot.lineno, guard.lineno)
+        self.assertFalse(denial.orelse)
+        begin, = calls(guard, "complete_acquisition.begin")
+        self.assertLess(denial.end_lineno, begin.lineno)
+        self.assertEqual({item.arg: ast.unparse(item.value) for item in begin.keywords},
+            {"operation": "operation", "arguments": "request.get('arguments')", "queries": "queries",
+             "trace": "trace", "work": "query_work"})
+        self.assertEqual([ast.unparse(item) for item in begin.args], ["cursor"])
+        self.assertEqual(len(guard.orelse), 1)
+        self.assertEqual(ast.unparse(guard.orelse[0].test), "complete_acquisition is not None")
+        self.assertIsInstance(guard.orelse[0].body[0], ast.Raise)
+        optional = dict(zip((item.arg for item in reader.args.kwonlyargs), reader.args.kw_defaults))
+        self.assertEqual(ast.unparse(optional["complete_acquisition"]), "None")
+        self.assertLess(snapshot.lineno, inventory.lineno)
+        self.assertLess(inventory.lineno, guard.lineno)
         loop, = [node for node in reader.body if isinstance(node, ast.For)]
         self.assertLess(guard.end_lineno, loop.lineno)
         for name in ("query_sources.authenticate_references", "authority_query_reads._resolve_query", "cursor.execute"):
@@ -612,6 +631,15 @@ class CompleteQueryTests(unittest.TestCase):
         bind, = calls(method, "authority_complete_query.validate_bindings")
         capacity_call, = calls(method, "authority_audit_capacity.add_capacity_query")
         read, = calls(method, "_read_bounded_transition_rows")
+        self.assertEqual({item.arg: ast.unparse(item.value) for item in read.keywords}["complete_acquisition"],
+                         "complete_acquisition")
+        optional = dict(zip((item.arg for item in method.args.kwonlyargs), method.args.kw_defaults))
+        self.assertEqual(ast.unparse(optional["complete_acquisition"]), "None")
+        forwarding, = [node for node in module.body if isinstance(node, ast.FunctionDef)
+                       and node.name == "_read_planning_inputs"]
+        public_read, = calls(forwarding, "program.read_inputs")
+        self.assertNotIn("complete_acquisition", {item.arg for item in public_read.keywords})
+        self.assertFalse(calls(module, "authority_complete_acquisition._CompleteQueryAcquisition"))
         self.assertLess(bind.lineno, capacity_call.lineno)
         self.assertLess(capacity_call.lineno, read.lineno)
         self.assertEqual({item.arg: ast.unparse(item.value) for item in bind.keywords},

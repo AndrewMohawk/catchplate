@@ -5,7 +5,9 @@
 This document describes the implemented source-only batch contract in
 [`authority_complete_query_batch.py`](../serverware/authority_complete_query_batch.py).
 It is unbuilt and unexecuted. No build, test or SQL execution is claimed, and
-the planner's complete-query gate remains closed.
+the public planner's complete-query gate remains closed. The
+[private acquisition path](authority-complete-acquisition.md) now calls the same
+proof body with its existing meter; it does not enable a retained protocol.
 
 The batch covers the five source-declared roles for explicit
 `webauthn.credential.revoke`. It connects
@@ -105,12 +107,21 @@ transfer, backend plans, deadlines, total memory or kernel work units.
 
 ## Remaining production composition
 
+The private `_verify_complete_query_batch` accepts the same raw proof inputs and
+an exact caller-owned `_ValidationWork`. It performs the genuine bounded capture
+and verification without starting a fresh allowance or accepting prior success.
+Each engine receives the actual remaining limits; returned metrics are the
+invocation delta while the supplied meter retains cumulative spending. The
+existing public API, local limits and null-selector admission remain unchanged.
+
 [`test_authority_complete_query_batch.py`](../scripts/test_authority_complete_query_batch.py)
-contains 20 authored, unexecuted methods with independent primary/counted tree,
-manifest and accounting oracles. Controls cover real global membership and all
+contains 28 authored, unexecuted methods, preserving its original 20, with
+independent primary/counted tree, manifest and accounting oracles. Controls cover real global membership and all
 five joins, empty results, shared heads, the 32/33-session union boundary,
 genuine proof/frontier corruption, caller mutation after the pre-hash snapshot,
-the 192-plus-one exact framework slot and selected-envelope bounds. Exact
+the 192-plus-one exact framework slot and selected-envelope bounds. Eight added
+controls cover the actual shared worker, independent cumulative accounting,
+prior spending, exact/minus-one limits and public compatibility. Exact
 private-ledger limits are not proof that a valid full batch reaches every
 maximum. Native-suite counts and execution deadlines are unchanged.
 
@@ -122,8 +133,9 @@ of read heads and every fixed profile of written tables; queried-only after
 heads remain unchanged. It does not accept this observation as prior proof,
 produce a retained transition wire or activate the planner.
 
-Retained query transport, mutation-frontier acquisition, schema/ACL and all-writer
-maintenance, authenticated population, trusted cutoff/intent, audit-capacity and
-kernel admission, Snapshot/v4, SQL before/after checks, receipts and independent
+Real read/write acquisition and schema/ACL/all-writer wiring now have separate
+source implementations, not execution evidence. Retained service/SQL transport,
+authenticated population, trusted cutoff/intent, audit-capacity and kernel
+admission, coordinated successor snapshot/commit checks, receipts and independent
 current-root authority remain required. The existing primary transition and
-nine-frame Snapshot/v3 contracts are not changed by this component.
+nine-frame Snapshot/v3 contracts are unchanged.

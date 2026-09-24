@@ -12,15 +12,17 @@ The [installation and all-writer integration](authority-counted-installation.md)
 now connects real bootstrap, expected-schema replay and primary-trigger events
 in source. No runtime installation, authenticated population or independently
 admitted current index/primary root pair has been established. The
-planner still rejects complete-index queries before business/proof SQL. Existing
+public v3 planner still rejects complete-index queries before business/proof SQL. Existing
 startup and verification gates remain closed.
 
 The [operation-bound complete-query batch](authority-complete-query-batch.md)
 now owns the raw inputs before hashing and genuinely verifies all five declared
 explicit-revocation roles against four shared read heads and the complete
-operation-declared primary-root inventory. Its shared limits and real joins do
-not yet compose write effects, install SQL acquisition or grant root/operation
-authority.
+operation-declared primary-root inventory. The
+[private complete-acquisition path](authority-complete-acquisition.md) now invokes
+that genuine body after same-cursor head/range/exact-row reads on one shared
+ledger. Its raw evidence is still blocked before the typed kernel; it grants no
+root/operation authority or retained protocol admission.
 
 The separate [complete read/write composition](authority-complete-read-write.md)
 now combines those genuine query phases with the actual indexed writer from one

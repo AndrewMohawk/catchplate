@@ -5,10 +5,11 @@
 This is unexecuted source implementation, not installed indexes or a working
 WebAuthn operation. It gives the unregistered explicit-revocation candidate a
 distinct complete-query declaration and removes its reliance on ordinary page
-metadata. The planner rejects this query kind before any business or proof read
-until frontier acquisition is integrated with maintained storage, admitted
-roots and versioned evidence. A standalone bounded SQL reader now reconstructs
-its frontier against a supplied root; it does not satisfy those integration gates.
+metadata. The public v3 planner rejects this query kind before any business or
+proof read. A [private acquisition path](authority-complete-acquisition.md) now
+connects head/range/full-row reads to genuine joined verification on one shared
+meter, but stops before the kernel without the successor evidence protocol.
+Admitted roots and coordinated versioned consumers remain required.
 The earlier database-clock read still occurs; it is not trusted time authority.
 
 ## Distinct query kind
@@ -54,7 +55,8 @@ must enforce it on actual verified members. Individual declaration bounds do
 not prove whole-program row/work admission or any result's completeness.
 The declaration's one work unit preserves the existing query-program ledger;
 it is not a claim that range acquisition or reconstruction costs one unit.
-Those phases still need their own cumulative source limits before activation.
+The private acquisition path now shares defined cumulative source-work limits;
+those limits are not whole-operation admission or public activation.
 
 Expiry uses exact signed 64-bit microseconds. Conversion of a supplied aware
 datetime uses integer UTC timedelta arithmetic, never a floating timestamp or
@@ -79,10 +81,12 @@ business/framework ceilings, and reject duplicate identities. The planner
 rebinds all five roles to its actual arguments and supplied database time, then
 uses the returned owned snapshots. Cheap tuple/count checks precede processing.
 
-The reader rejects a complete declaration anywhere in the entire inventory
-before starting its loop. Even a complete query placed after ordinary exact
-queries cannot cause those earlier business/proof reads. There is no fallback
-to `LIMIT + 1`, no constructed successful receipt, and no registry activation.
+Without the exact private collector, the reader rejects a complete declaration
+anywhere in the inventory before starting its loop. Public v3 supplies no such
+collector: even a complete query after ordinary exact queries cannot cause those
+earlier business/proof reads. The private branch uses real range reconstruction,
+not a `LIMIT + 1` completeness substitute. There is no constructed successful
+receipt or registry activation.
 
 Query-read bookkeeping can snapshot, retain and compare the distinct closed
 declaration without synthesizing legacy primary-key ordering. These first five
@@ -143,10 +147,10 @@ This shared recipe does not activate that consumer, the planner or a kernel.
 ## Remaining implementation and verification
 
 The [storage integration contract](authority-index-storage-integration.md)
-defines the next coordinated work: fixed storage/hash/projection admission,
-integration of the standalone inside-leaf/outside-frontier reader with real
-joined verification, all-writer full-row maintenance, exactly-once primary
-effects of index heads, and authenticated bidirectional initial population.
+records fixed storage/hash/projection admission and source all-writer maintenance.
+The private acquisition path now joins the real readers and proof engines;
+installed execution, authenticated bidirectional initial population and
+coordinated retained evidence remain unestablished.
 Independent root pairs, trusted time, witness/fence authority and receipt
 reconciliation remain required.
 

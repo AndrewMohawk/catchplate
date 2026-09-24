@@ -19,6 +19,9 @@ Source `.53` adds an [independently observed planning successor](authority-revoc
 it compares the full verifier inventory before selecting the actual signed
 subset, then retains the same independent context through persistence. The
 exact-context API described below remains available.
+Source `.54` adds private [verifier-side handoff admission](authority-revocation-handoff.md),
+using the existing v4 signature to authenticate the cutoff before genuine
+retained replay against independently owned request/context/root values.
 These implementations are **unbuilt and
 unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
 deployed release.

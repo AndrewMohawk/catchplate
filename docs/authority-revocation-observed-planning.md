@@ -81,11 +81,16 @@ aborts the invocation; consumed work is not refunded.
 
 ## Still required
 
-Serving integration, authenticated custody of the original planner cutoff,
-durable original invocation retries, execution reservation/issuance ordering,
-post-plan witness binding, current-root one-use execution and atomic terminal
+Source `.54` adds private [original-byte handoff admission](authority-revocation-handoff.md):
+it authenticates the existing planner signature before admitting its cutoff,
+projects values from receiver-owned roots and genuinely replays the retained
+record. This is not a service route or proof of physical clock acquisition.
+
+Serving integration, durable original invocation retries, execution
+reservation/issuance ordering, post-plan witness binding, current-root one-use
+execution and atomic terminal
 publication remain incomplete. A local UTC cutoff and independently owned
-root graph are not authenticated cross-role provenance.
+root graph alone are not authenticated cross-role provenance.
 
 The four unfinished WebAuthn kernels, externally provisioned production
 Nitro/KMS/signing/witness services and approved sealed verification

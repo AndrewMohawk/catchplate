@@ -208,8 +208,12 @@ operation gate is activated.
 Source `.37` implements private original-byte storage and historical replay.
 Public verifier-response admission and service persistence still require
 coordinated v4 admission and consumer changes. They need
-independently admitted roots and the original evaluation cutoff; replay cannot
-derive those expectations from its retained envelope or sample a new cutoff.
+independently admitted roots and the original evaluation cutoff. The private
+[`.54` handoff admission](authority-revocation-handoff.md) authenticates the
+existing v4 planner signature before admitting its signed cutoff claim and
+passing it into the unchanged retained verifier. It never derives independent
+root values or other caller expectations from that envelope or samples a new
+cutoff.
 Database Snapshot/persistence, one-use consumption, executor and terminal
 witness semantics must move together before activation. Registry admission and
 the other three missing WebAuthn kernels remain outstanding.

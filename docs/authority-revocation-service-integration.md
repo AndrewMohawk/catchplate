@@ -95,12 +95,17 @@ alternate opener can replace that private composition.
 The helpers and private process method are callable components, not a complete
 network handler. Enabling dispatch still requires coordinated original-byte
 ingress, serving integration of the [independently observed planning path](authority-revocation-observed-planning.md)
-and authenticated planner-cutoff custody,
+and its [original-byte verifier handoff](authority-revocation-handoff.md),
 durable original invocation retention, and the successor order: retain plan,
 reserve execution, produce capability, sign/send invocation, issue capability.
 Post-plan witness binding, current-root one-use execution and atomic terminal
 publication remain incomplete. The four unfinished WebAuthn authority kernels
 must not be bypassed to make the registry import or tests succeed.
+
+The private combined coordinator needs planner read and writer persistence
+credentials. Actual service-role admission separates those credentials, so
+serving integration must preserve a distinct authenticated planner-writer RPC;
+the combined owner is not a drop-in planner process implementation.
 
 Immutable dependency/coverage approvals, sealed verification prerequisites
 and independently operated production Nitro/KMS, signing and witness services

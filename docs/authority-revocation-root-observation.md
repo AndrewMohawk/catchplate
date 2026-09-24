@@ -100,7 +100,12 @@ plan production, configured persistence and the coordinator's result.
 Expectations are not recovered from signed or stored output. This subsequent
 source change is also unbuilt and unexecuted; it does not enable serving.
 
-Authenticated cutoff custody, original invocation retention, execution
+Source `.54` adds private [original-byte cutoff admission](authority-revocation-handoff.md)
+using the existing planner signature followed by genuine retained replay. It
+selects root values from the receiver's inventory, not from the signed plan.
+It is not physical clock evidence or a deployed cross-role exchange.
+
+Serving integration of authenticated cutoff custody, original invocation retention, execution
 reservation/order, witness binding, current-root one-use execution and atomic
 terminal publication remain incomplete. The
 [service integration status](authority-revocation-service-integration.md) and [goal workflow](../goal.md)

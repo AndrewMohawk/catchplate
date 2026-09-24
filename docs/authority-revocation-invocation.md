@@ -97,7 +97,10 @@ execution envelope; the successor must reserve that envelope before genuine
 capability production and issuance.
 
 The sender also needs independently admitted complete root inventory and an
-authenticated planner-cutoff handoff. A business-only root reader, a root list
+authenticated planner-cutoff handoff. Private [original-byte admission](authority-revocation-handoff.md)
+now authenticates that cutoff claim using the existing v4 signature and replays
+the retained evidence; serving integration remains required. A business-only
+root reader, a root list
 copied from a signed plan, or matching database observations do not establish
 that authority.
 

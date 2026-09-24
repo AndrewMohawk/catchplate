@@ -12,6 +12,13 @@ and verification on the same invocation work. Source `.38` returns the private
 producer's original encoded context alongside its signed output. Public service,
 mixed-root SQL, one-use execution and terminal witness activation remain outstanding.
 
+Source `.54` adds an upstream [handoff admission helper](authority-revocation-handoff.md).
+It authenticates the original v4 planner signature before admitting the signed
+cutoff claim, then calls this unchanged retained verifier with independent
+request/context/root values and the same original bytes. It does not infer
+database persistence from a valid record or replace historical replay with
+an authentication-result object.
+
 Source `.39` also binds the producer's actual business/authorization root-table
 reads to independent expected vectors before its one original database-clock
 sample. This repairs a missing framework root-read trace entry, not retained

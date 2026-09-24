@@ -33,7 +33,7 @@ EXPECTED_SUITES = (
     ("scripts/test_webauthn_trust_projection_postgres.py", 12, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
     ("scripts/test_authority_mutation_postgres.py", 14, False, 300),
-    ("scripts/test_authority_root_transition_postgres.py", 21, False, 300),
+    ("scripts/test_authority_root_transition_postgres.py", 27, False, 300),
     ("scripts/test_authority_primary_tree_postgres.py", 9, False, 300),
     ("scripts/test_authority_audit_initialization_postgres.py", 31, False, 300),
     ("scripts/test_authority_audit_initialization_store_postgres.py", 36, True, 900),
@@ -119,8 +119,8 @@ class NativePostgresInventoryTests(unittest.TestCase):
         self.assertEqual(tuple((suite.script, len(suite.test_ids), suite.disposable_cluster,
                                 suite.timeout_seconds) for suite in inventory.SUITES), EXPECTED_SUITES)
         self.assertIs(type(inventory.TOTAL_TESTS), int)
-        self.assertEqual(inventory.TOTAL_TESTS, 256)
-        self.assertEqual(sum(shape[1] for shape in EXPECTED_SUITES), 256)
+        self.assertEqual(inventory.TOTAL_TESTS, 262)
+        self.assertEqual(sum(shape[1] for shape in EXPECTED_SUITES), 262)
         all_ids = tuple(test_id for suite in inventory.SUITES for test_id in suite.test_ids)
         self.assertEqual(len(all_ids), len(set(all_ids)))
 
@@ -164,7 +164,7 @@ class NativePostgresInventoryTests(unittest.TestCase):
             with self.subTest(suites=suites), mock.patch.object(inventory, "SUITES", suites):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()
-        for total in (True, 252, 255, 256.0, "256"):
+        for total in (True, 252, 256, 261, 262.0, "262"):
             with self.subTest(total=total), mock.patch.object(inventory, "TOTAL_TESTS", total):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()

@@ -8,6 +8,11 @@ rows and opaque root heads. These are NOT valid full planner or witness inputs.
 The exact production SQL guards, and the production canonical/digest functions,
 run against a real engine; data/root/publication rollback is observed directly.
 Pure radix calculation and signature admission have separate test boundaries.
+
+The separate retention class installs the actual v9 custody schema and guards
+inside a rollback-owned namespace. Its small opaque byte strings are structural
+storage inputs, not signed plans. Deferred constraints are forced explicitly;
+these cases do not claim top-level commit, role/ACL or replay verification.
 """
 from __future__ import annotations
 
@@ -47,6 +52,10 @@ from serverware.authority_store.root_transition_sql import (
     root_transition_declarations_sql,
 )
 from serverware.authority_store.wire_json_sql import wire_json_function_sql
+from serverware.authority_store.v9_schema_source import (
+    authority_v9_schema_source,
+    planner_retention_guard_sql,
+)
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 
 
@@ -141,6 +150,52 @@ def production_digest_functions(namespace: str) -> list[str]:
     if len(statements) != 2:
         raise ValueError("database digest support functions are not exact")
     return statements
+
+
+def production_retained_immutable_sql() -> tuple[str, str]:
+    """Extract the real immutable function and attachment, without db imports."""
+    path = ROOT / "serverware/db.py"
+    if path.stat().st_size > 16 * 1024 * 1024:
+        raise ValueError("database source exceeds component fixture bound")
+    source = path.read_text(encoding="utf-8")
+    inventory_start = source.index("_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES = (\n")
+    inventory_end = source.index("\n)\n", inventory_start) + 2
+    declaration = ast.parse(source[inventory_start:inventory_end]).body
+    if (len(declaration) != 1 or not isinstance(declaration[0], ast.Assign)
+            or "policy_authority_revocation_retained_plans"
+            not in ast.literal_eval(declaration[0].value)):
+        raise ValueError("retained sidecar is not in the actual immutable inventory")
+    marker = ('        conn.execute(\n            """\n'
+              '            CREATE OR REPLACE FUNCTION serverware_reject_policy_authority_mutation()')
+    start = source.index(marker)
+    end = source.index('            """\n        )', start) + len('            """\n        )')
+    function = ast.parse(textwrap.dedent(source[start:end])).body[0].value
+    loop = source.index("        for table in _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES:")
+    start = source.index("            conn.execute(\n", loop)
+    end = source.index("\n            )", start) + len("\n            )")
+    attachment = ast.parse(textwrap.dedent(source[start:end])).body[0].value
+    for call in (function, attachment):
+        if (not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute)
+                or not isinstance(call.func.value, ast.Name) or call.func.value.id != "conn"
+                or call.func.attr != "execute" or len(call.args) != 1 or call.keywords):
+            raise ValueError("immutable guard SQL literal boundary changed")
+    if not isinstance(function.args[0], ast.Constant) or type(function.args[0].value) is not str:
+        raise ValueError("immutable guard function is not the actual static SQL")
+    if not isinstance(attachment.args[0], ast.JoinedStr):
+        raise ValueError("immutable guard attachment is not the actual source template")
+    bindings = {"table": "policy_authority_revocation_retained_plans",
+                "trigger": "fixture_retained_immutable"}
+    fragments = []
+    for fragment in attachment.args[0].values:
+        if isinstance(fragment, ast.Constant) and type(fragment.value) is str:
+            fragments.append(fragment.value)
+        elif (isinstance(fragment, ast.FormattedValue) and isinstance(fragment.value, ast.Name)
+                and fragment.value.id in bindings and fragment.conversion == -1
+                and fragment.format_spec is None):
+            fragments.append(bindings[fragment.value.id])
+        else:
+            raise ValueError("immutable guard attachment interpolation changed")
+    return function.args[0].value, "".join(fragments)
 
 
 def fixture_payload() -> dict:
@@ -691,6 +746,327 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         self.assertLess(protocol_guard, loaded.index("IF planner.exact_plan_base64url IS NULL"))
         self.assertLess(protocol_guard, loaded.index("rt_plan_bytes := pg_catalog.decode("))
         self.assertLess(protocol_guard, loaded.index("rt_payload_json := rt_plan_text::pg_catalog.json"))
+
+
+class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
+    """Real structural custody, not cryptographic admission or role authority."""
+
+    PARENT = "policy_authority_planner_transactions"
+    CHILD = "policy_authority_revocation_retained_plans"
+    RESERVATION = (
+        "planner_transaction_id", "plan_protocol", "operation", "operation_id", "request_digest",
+        "capability_id", "operation_contract_digest", "query_manifest_digest",
+        "selected_business_rows_json", "selected_business_rows_digest", "mutation_plan_json",
+        "mutation_plan_digest", "work_units", "authority_root_set_before_digest",
+        "planner_session_identity_digest", "planner_measurement_digest",
+        "planner_attestation_receipt_digest", "deadline_monotonic_ns", "deadline_epoch_ns",
+        "fence", "reserved_at_epoch_ns", "source_revision",
+    )
+    PAYLOAD = (
+        "authorization_projection_digest", "authority_snapshot_digest", "exact_plan_base64url",
+        "exact_plan_bytes_digest", "exact_plan_byte_count", "planned_at_epoch_ns", "retained_record_digest",
+    )
+    TERMINAL = (
+        "status", "exact_response_base64url", "exact_response_bytes_digest", "exact_response_byte_count",
+        "terminal_receipt_json", "terminal_receipt_digest", "terminal_at_epoch_ns",
+    )
+
+    def setUp(self):
+        self.connection = AuthorityRootTransitionPostgresTests.connection()
+        self.addCleanup(self.connection.close)
+        self.assertEqual(self.connection.execute("SELECT inet_server_addr()").fetchone(), (None,))
+        self.schema = "serverware_retained_" + uuid.uuid4().hex
+        self.namespace = '"' + self.schema + '"'
+        self.connection.execute("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        self.addCleanup(self.rollback_owned_schema)
+        # Plain CREATE refuses a collision. No production namespace or SQL
+        # rewriting is involved; even the fixture DDL is rolled back at cleanup.
+        self.connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
+        self.connection.execute(sql.SQL("SET LOCAL search_path TO {}, pg_catalog").format(
+            sql.Identifier(self.schema)))
+        self.connection.execute(authority_v9_schema_source())
+        self.connection.execute(planner_retention_guard_sql(self.namespace))
+        for statement in production_retained_immutable_sql():
+            self.connection.execute(statement)
+
+    def rollback_owned_schema(self):
+        self.connection.rollback()
+        self.assertEqual(self.connection.execute(
+            "SELECT pg_catalog.to_regnamespace(%s)", (self.schema,)).fetchone(), (None,))
+
+    def rows(self, table):
+        return tuple(row[0] for row in self.connection.execute(sql.SQL(
+            'SELECT pg_catalog.to_jsonb(t) FROM {} AS t '
+            'ORDER BY planner_transaction_id COLLATE "C"').format(
+                sql.Identifier(self.schema, table))).fetchall())
+
+    def snapshot(self):
+        return self.rows(self.PARENT), self.rows(self.CHILD)
+
+    def insert(self, table, row):
+        self.connection.execute(sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+            sql.Identifier(self.schema, table),
+            sql.SQL(", ").join(sql.Identifier(name) for name in row),
+            sql.SQL(", ").join(sql.Placeholder() for _ in row)), tuple(row.values()))
+
+    def update(self, table, transaction_id, values):
+        self.connection.execute(sql.SQL("UPDATE {} SET {} WHERE planner_transaction_id = %s").format(
+            sql.Identifier(self.schema, table),
+            sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(name)) for name in values)),
+            (*values.values(), transaction_id))
+
+    def records(self, label="one"):
+        """Independent full rows; opaque bytes explicitly are not signed plans."""
+        payload = b'{"opaque":"payload"}'
+        envelope = b'{"opaque":"original-envelope"}'
+        context = b'{"opaque":"original-context"}'
+        raw_digest = lambda value: "sha256:" + hashlib.sha256(value).hexdigest()
+        encoded = lambda value: base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+        parent = {
+            "planner_transaction_id": "transaction-" + label, "plan_protocol": "revocation-v4",
+            "retained_record_digest": None, "operation": "webauthn.credential.revoke",
+            "operation_id": "operation-" + label, "request_digest": token("request-" + label),
+            "capability_id": "capability-" + label, "operation_contract_digest": token("operation-contract"),
+            "query_manifest_digest": token("query-manifest"), "selected_business_rows_json": "[]",
+            "selected_business_rows_digest": raw_digest(b"[]"), "mutation_plan_json": "[]",
+            "mutation_plan_digest": raw_digest(b"[]"), "work_units": 1,
+            "authority_root_set_before_digest": token("before-roots"),
+            "authorization_projection_digest": None, "authority_snapshot_digest": None,
+            "planner_session_identity_digest": token("session"), "planner_measurement_digest": token("measurement"),
+            "planner_attestation_receipt_digest": token("attestation"), "deadline_monotonic_ns": 200,
+            "deadline_epoch_ns": 2000, "fence": 1, "status": "reserved",
+            "exact_plan_base64url": None, "exact_plan_bytes_digest": None, "exact_plan_byte_count": None,
+            "exact_response_base64url": None, "exact_response_bytes_digest": None,
+            "exact_response_byte_count": None, "terminal_receipt_json": None,
+            "terminal_receipt_digest": None, "reserved_at_epoch_ns": 1000,
+            "planned_at_epoch_ns": None, "terminal_at_epoch_ns": None,
+            "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        planned = {
+            **parent, "status": "planned", "retained_record_digest": token("record-" + label),
+            "authorization_projection_digest": token("projection"), "authority_snapshot_digest": token("snapshot"),
+            "exact_plan_base64url": encoded(payload), "exact_plan_bytes_digest": raw_digest(payload),
+            "exact_plan_byte_count": len(payload), "planned_at_epoch_ns": 1100,
+        }
+        child = {
+            "planner_transaction_id": parent["planner_transaction_id"], "plan_protocol": "revocation-v4",
+            "exact_envelope_base64url": encoded(envelope), "exact_envelope_bytes_digest": raw_digest(envelope),
+            "exact_envelope_byte_count": len(envelope), "evaluation_context_base64url": encoded(context),
+            "evaluation_context_bytes_digest": raw_digest(context), "evaluation_context_byte_count": len(context),
+            "planner_key_digest": token("planner-key"), "verifier_key_digest": token("verifier-key"),
+            "retained_record_digest": planned["retained_record_digest"],
+            "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        return parent, planned, child
+
+    def complete_pair(self, label="one"):
+        parent, planned, child = self.records(label)
+        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+        self.insert(self.PARENT, parent)
+        self.insert(self.CHILD, child)
+        self.update(self.PARENT, parent["planner_transaction_id"],
+                    {name: planned[name] for name in (*self.PAYLOAD, "status")})
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        return planned, child
+
+    @staticmethod
+    def changed(value):
+        if type(value) is int:
+            return value + 1
+        return "changed" if value is None else value + "-changed"
+
+    @staticmethod
+    def terminal(parent, status):
+        value = {**parent, "status": status, "exact_response_base64url": "e30",
+                 "exact_response_bytes_digest": token("response"), "exact_response_byte_count": 2,
+                 "terminal_at_epoch_ns": 1200}
+        if status == "consumed":
+            value.update(terminal_receipt_json="{}", terminal_receipt_digest=token("terminal"))
+        return value
+
+    def test_deferred_cycle_accepts_original_sidecar_before_parent_completion(self):
+        constraints = self.connection.execute(
+            "SELECT conname, condeferrable, condeferred, confupdtype, confdeltype "
+            "FROM pg_catalog.pg_constraint WHERE conrelid IN (%s::regclass, %s::regclass) "
+            "AND contype = 'f' ORDER BY conname",
+            (self.namespace + "." + self.PARENT, self.namespace + "." + self.CHILD)).fetchall()
+        self.assertEqual(constraints, [
+            ("serverware_planner_retained_record_fk", True, True, "a", "a"),
+            ("serverware_revocation_retained_parent_fk", True, True, "a", "a"),
+        ])
+        reserved, planned, child = self.records()
+        self.insert(self.PARENT, reserved)
+        self.insert(self.CHILD, child)
+        self.assertEqual(self.snapshot(), ((reserved,), (child,)))
+        self.update(self.PARENT, reserved["planner_transaction_id"],
+                    {name: planned[name] for name in (*self.PAYLOAD, "status")})
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.snapshot(), ((planned,), (child,)))
+        self.assertNotEqual(planned["exact_plan_base64url"], child["exact_envelope_base64url"])
+        # The reverse ordering is legal only when both references close before
+        # the explicit boundary. No row is committed by this fixture.
+        _, second, second_child = self.records("two")
+        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+        self.insert(self.PARENT, second)
+        self.insert(self.CHILD, second_child)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.snapshot(), ((planned, second), (child, second_child)))
+
+    def test_incomplete_or_mismatched_pairs_roll_back_at_deferred_boundary(self):
+        all_names = {"serverware_planner_retained_record_fk", "serverware_revocation_retained_parent_fk"}
+        for case, names in (
+                ("parent-only", {"serverware_planner_retained_record_fk"}),
+                ("child-only", {"serverware_revocation_retained_parent_fk"}),
+                ("reserved-parent", {"serverware_revocation_retained_parent_fk"}),
+                ("wrong-digest", all_names), ("wrong-id", all_names),
+                ("legacy-parent", {"serverware_revocation_retained_parent_fk"})):
+            with self.subTest(case=case):
+                reserved, planned, child = self.records(case)
+                with self.assertRaises(psycopg.errors.ForeignKeyViolation) as caught:
+                    with self.connection.transaction():
+                        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+                        if case != "child-only":
+                            parent = reserved if case in ("reserved-parent", "legacy-parent") else planned
+                            if case == "legacy-parent":
+                                parent = {**parent, "plan_protocol": "v3"}
+                            self.insert(self.PARENT, parent)
+                        if case != "parent-only":
+                            if case == "wrong-digest":
+                                child = {**child, "retained_record_digest": token("other-record")}
+                            if case == "wrong-id":
+                                child = {**child, "planner_transaction_id": "other-transaction"}
+                            self.insert(self.CHILD, child)
+                        self.assertEqual(len(self.rows(self.PARENT)), int(case != "child-only"))
+                        self.assertEqual(len(self.rows(self.CHILD)), int(case != "parent-only"))
+                        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+                self.assertEqual(caught.exception.sqlstate, "23503")
+                self.assertIn(caught.exception.diag.constraint_name, names)
+                self.assertEqual(self.snapshot(), ((), ()))
+
+    def test_parent_protocol_status_and_sidecar_shapes_are_closed(self):
+        reserved, planned, child = self.records()
+        legacy = {**reserved, "planner_transaction_id": "legacy", "capability_id": "legacy-capability"}
+        del legacy["plan_protocol"]
+        self.insert(self.PARENT, legacy)
+        self.assertEqual(self.rows(self.PARENT)[0], {**legacy, "plan_protocol": "v3"})
+        baseline = self.snapshot()
+        bad_parents = (
+            {**reserved, "plan_protocol": "future"},
+            {**reserved, "plan_protocol": "v3", "retained_record_digest": token("unexpected")},
+            {**reserved, "operation": "webauthn.counter.cas"},
+            {**reserved, "status": "planned"},
+            {**planned, "retained_record_digest": None},
+            {**planned, "exact_plan_byte_count": None},
+            {**planned, "status": "reserved"},
+            {**planned, "status": "consumed"},
+            {**reserved, "status": "failed"},
+            {**self.terminal(reserved, "failed"), "exact_plan_base64url": "e30"},
+        )
+        for index, value in enumerate(bad_parents):
+            with self.subTest(parent=index), self.assertRaises(psycopg.errors.CheckViolation) as caught:
+                with self.connection.transaction():
+                    self.insert(self.PARENT, value)
+            self.assertEqual(caught.exception.sqlstate, "23514")
+            self.assertEqual(self.snapshot(), baseline)
+        with self.assertRaises(psycopg.errors.NotNullViolation) as caught:
+            with self.connection.transaction():
+                self.insert(self.PARENT, {**reserved, "plan_protocol": None})
+        self.assertEqual((caught.exception.sqlstate, caught.exception.diag.column_name), ("23502", "plan_protocol"))
+        for name, value in (
+                ("plan_protocol", "v3"), ("source_revision", "old"),
+                ("exact_envelope_byte_count", 1), ("evaluation_context_byte_count", 524289),
+                ("exact_envelope_base64url", child["exact_envelope_base64url"] + "="),
+                ("evaluation_context_base64url", "!" * len(child["evaluation_context_base64url"])),
+                ("planner_key_digest", "not-a-digest"), ("retained_record_digest", "sha256:" + "A" * 64)):
+            with self.subTest(child=name), self.assertRaises(psycopg.errors.CheckViolation) as caught:
+                with self.connection.transaction():
+                    self.insert(self.CHILD, {**child, name: value})
+            self.assertEqual(caught.exception.sqlstate, "23514")
+            self.assertEqual(self.snapshot(), baseline)
+
+    def test_sidecar_update_delete_and_duplicate_insert_preserve_original(self):
+        planned, child = self.complete_pair()
+        baseline = self.snapshot()
+        for name in child:
+            with self.subTest(column=name), self.assertRaisesRegex(
+                    psycopg.errors.RaiseException, "candidate-authority history is immutable") as caught:
+                with self.connection.transaction():
+                    self.update(self.CHILD, child["planner_transaction_id"], {name: self.changed(child[name])})
+            self.assertEqual(caught.exception.sqlstate, "P0001")
+            self.assertEqual(self.snapshot(), baseline)
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "history is immutable"):
+            with self.connection.transaction():
+                self.update(self.CHILD, child["planner_transaction_id"], child)
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "history is immutable") as caught:
+            with self.connection.transaction():
+                self.connection.execute(sql.SQL("DELETE FROM {} WHERE planner_transaction_id = %s").format(
+                    sql.Identifier(self.schema, self.CHILD)), (child["planner_transaction_id"],))
+        self.assertEqual(caught.exception.sqlstate, "P0001")
+        with self.assertRaises(psycopg.errors.UniqueViolation) as caught:
+            with self.connection.transaction():
+                self.insert(self.CHILD, child)
+        self.assertEqual(caught.exception.sqlstate, "23505")
+        self.assertEqual(caught.exception.diag.constraint_name, self.CHILD + "_pkey")
+        with self.assertRaises(psycopg.errors.ForeignKeyViolation) as caught:
+            with self.connection.transaction():
+                self.connection.execute(sql.SQL("DELETE FROM {} WHERE planner_transaction_id = %s").format(
+                    sql.Identifier(self.schema, self.PARENT)), (planned["planner_transaction_id"],))
+        self.assertEqual(caught.exception.diag.constraint_name, "serverware_revocation_retained_parent_fk")
+        self.assertEqual(self.snapshot(), baseline)
+
+    def test_planned_parent_reservation_and_payload_fields_are_immutable(self):
+        planned, _ = self.complete_pair()
+        baseline = self.snapshot()
+        self.assertEqual(len(self.RESERVATION), 22)
+        self.assertEqual(len(self.PAYLOAD), 7)
+        for name in (*self.RESERVATION, *self.PAYLOAD):
+            with self.subTest(column=name), self.assertRaisesRegex(
+                    psycopg.errors.RaiseException, "planner reservation and retained evidence are immutable") as caught:
+                with self.connection.transaction():
+                    self.update(self.PARENT, planned["planner_transaction_id"], {name: self.changed(planned[name])})
+            self.assertEqual(caught.exception.sqlstate, "P0001")
+            self.assertEqual(self.snapshot(), baseline)
+        # Equality is permitted by the real guard; timestamps and original
+        # payload bytes are not silently replaced by retry metadata.
+        self.update(self.PARENT, planned["planner_transaction_id"], planned)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.snapshot(), baseline)
+
+    def test_reservation_and_terminal_transitions_preserve_pair_custody(self):
+        reserved, planned, child = self.records("skip")
+        self.insert(self.PARENT, reserved)
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "retained evidence are immutable") as caught:
+            with self.connection.transaction():
+                consumed = self.terminal(planned, "consumed")
+                self.update(self.PARENT, reserved["planner_transaction_id"], consumed)
+        self.assertEqual(caught.exception.sqlstate, "P0001")
+        self.assertEqual(self.snapshot(), ((reserved,), ()))
+        failed = self.terminal(reserved, "failed")
+        self.update(self.PARENT, reserved["planner_transaction_id"], failed)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.snapshot(), ((failed,), ()))
+        terminal_parents = [failed]
+        for status in ("consumed", "failed"):
+            actual, actual_child = self.complete_pair(status)
+            terminal = self.terminal(actual, status)
+            self.update(self.PARENT, actual["planner_transaction_id"], terminal)
+            self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            self.assertIn(terminal, self.rows(self.PARENT))
+            self.assertIn(actual_child, self.rows(self.CHILD))
+            terminal_parents.append(terminal)
+        baseline = self.snapshot()
+        for terminal in terminal_parents:
+            for name in self.TERMINAL:
+                with self.subTest(status=terminal["status"], column=name), self.assertRaisesRegex(
+                        psycopg.errors.RaiseException, "retained evidence are immutable") as caught:
+                    with self.connection.transaction():
+                        self.update(self.PARENT, terminal["planner_transaction_id"], {name: self.changed(terminal[name])})
+                self.assertEqual(caught.exception.sqlstate, "P0001")
+                self.assertEqual(self.snapshot(), baseline)
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "retained evidence are immutable"):
+            with self.connection.transaction():
+                self.update(self.PARENT, failed["planner_transaction_id"], reserved)
+        self.assertEqual(self.snapshot(), baseline)
 
 
 if __name__ == "__main__":

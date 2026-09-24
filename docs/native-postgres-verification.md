@@ -25,19 +25,19 @@ supply independent approval, installed controller identity or cleanup proof.
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
 defines `serverware.nativePostgresInventory/v1`, fourteen ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 256`. Each record contains an
+`NativePostgresSuite` records and `TOTAL_TESTS = 262`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 256 native SQL tests.
+methods contained in these fixtures; it is not a count of 262 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
 | 00 | `test_webauthn_trust_projection_postgres.py` | 12 | 300 s | No |
 | 01 | `test_postgres_trigger_manifest.py` | 5 | 300 s | No |
 | 02 | `test_authority_mutation_postgres.py` | 14 | 300 s | No |
-| 03 | `test_authority_root_transition_postgres.py` | 21 | 300 s | No |
+| 03 | `test_authority_root_transition_postgres.py` | 27 | 300 s | No |
 | 04 | `test_authority_primary_tree_postgres.py` | 9 | 300 s | No |
 | 05 | `test_authority_audit_initialization_postgres.py` | 31 | 300 s | No |
 | 06 | `test_authority_audit_initialization_store_postgres.py` | 36 | 900 s | Yes |
@@ -48,6 +48,17 @@ methods contained in these fixtures; it is not a count of 256 native SQL tests.
 | 11 | `test_authority_counted_projection_postgres.py` | 16 | 300 s | No |
 | 12 | `test_authority_counted_store_postgres.py` | 10 | 300 s | No |
 | 13 | `test_authority_counted_maintenance_postgres.py` | 32 | 300 s | No |
+
+Six added retained-record custody methods use the full production v9 DDL,
+post-table retention guard and actual immutable-row function/trigger in a
+random, rollback-owned PostgreSQL schema. They exercise the versioned
+parent/sidecar constraints and immutable reservation/retained fields. Deferred
+foreign-key failures are forced with `SET CONSTRAINTS ALL IMMEDIATE` inside
+savepoints, not observed at a real commit. These are constraint components,
+not original-envelope/signature verification, installed ACLs, migration,
+coordinator/service integration or execution authority. All 256 previous IDs
+remain; fourteen suites, sixteen children and every timeout are unchanged.
+The six methods are authored and unexecuted.
 
 Four added credential-policy methods use the fixed expression interpolated into
 the active v9 executor, the actual wire serializer and domain-digest function,
@@ -203,6 +214,12 @@ and nonsymlink checks, not a separate per-dependency digest protocol. The whole
 approved frozen archive still binds their bytes;
 `serverware.nativePostgresPreparedSources/v1` remains the unchanged script-digest
 object below.
+
+The retained-record additions reuse that existing closure: the real v9 schema
+and retention-guard renderer are in `v9_schema_source.py`, and the immutable
+function/trigger are read from bounded `db.py` source without importing its
+runtime facade or the blocked registry. No extra runtime dependency or lane
+timeout is introduced.
 
 ## Fixed cluster lifecycle source
 

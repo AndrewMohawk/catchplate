@@ -999,6 +999,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_assertion.py \
 	serverware/authority_webauthn_evidence.py \
 	serverware/authority_webauthn_registration_production.py \
+	serverware/authority_webauthn_registration_admission.py \
+	serverware/authority_webauthn_installation_admission.py \
 	serverware/authority_webauthn_trust_candidate.py \
 	serverware/authority_webauthn_installation_production.py \
 	serverware/authority_webauthn_trust.py \
@@ -2740,6 +2742,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_registration_production.py \
+				serverware/authority_webauthn_registration_admission.py \
+				serverware/authority_webauthn_installation_admission.py \
 				serverware/authority_webauthn_trust_candidate.py \
 				serverware/authority_webauthn_installation_production.py \
 				serverware/webauthn_attestation_core.py \

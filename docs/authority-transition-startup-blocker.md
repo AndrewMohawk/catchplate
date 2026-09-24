@@ -62,6 +62,11 @@ reads, independent root/head comparisons, genuine evidence-consuming effects,
 capacity finalization and indexed write proofs. Its three publication heads
 are write-only admission, not a new complete-query family. Signed-plan/executor
 and registry activation remain missing; all four startup gaps remain.
+Source `.80` adds purpose-specific registration/installation admission
+composers. They recompute semantic claims and verify original signatures before
+proposing an exact evidence-row insertion or unused-identical no-op. They do
+not grant INSERT privileges, authenticate the selected absence or implement
+durable operation/executor admission; the four startup gaps remain.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from

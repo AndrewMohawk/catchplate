@@ -188,11 +188,20 @@ def _prepare_result(claims, arguments, identity, signer_pin, now_ns, expires, wo
     return size
 
 
-def _produce_on_work(*, client_data_json, attestation_object, credential_id, transports,
+def _claims_on_work(*, client_data_json, attestation_object, credential_id, transports,
         scope, verification_context, challenge_row, expected_authorization, high_water_row,
-        published_row, oidc_session_row, sibling_challenge_ids, private_key, public_key,
-        signer_identity, signer_spki_digest, maximum_age_ns, work):
-    """Return (actual signed original envelope, final registration arguments)."""
+        published_row, oidc_session_row, sibling_challenge_ids, signer_identity,
+        maximum_age_ns, work):
+    """Reverify originals and derive ordinary claims, arguments and timing.
+
+    Every consumer invokes this worker itself with the actual originals and
+    independently admitted ceremony, rows, trust context and signer identity.
+    The returned tuple is not attestation, row, key or custody authority and is
+    never accepted as successful evidence by another entry point. Arguments
+    omit both original-envelope fields and businessIntent; no signature or
+    evidence placeholder is constructed here. The returned time is the held
+    context's verification time, not a newly sampled receipt or custody time.
+    """
     ledger = capture._SharedLedger(work)
     for raw, maximum in ((client_data_json, attestation.MAX_CLIENT_DATA_JSON_BYTES),
             (attestation_object, attestation.MAX_ATTESTATION_OBJECT_BYTES)):
@@ -202,6 +211,7 @@ def _produce_on_work(*, client_data_json, attestation_object, credential_id, tra
         _fail("registration producer transports are not a bounded exact tuple")
     if type(sibling_challenge_ids) is not list or len(sibling_challenge_ids) > registration.MAX_SIBLINGS:
         _fail("registration producer sibling inventory is not a bounded exact list")
+    registration._integer(maximum_age_ns, "producer evidence lifetime", 1, authority.VERIFIER_RESPONSE_MAX_AGE_NS)
     scope_fields, context_fields, roots = _hold_context(scope, verification_context, work)
     work.prepare_copy(transports)
     owned = capture._JSONCapture(ledger).visit({"challenge": challenge_row,
@@ -209,7 +219,6 @@ def _produce_on_work(*, client_data_json, attestation_object, credential_id, tra
         "session": oidc_session_row, "siblings": sibling_challenge_ids, "identity": signer_identity,
         "credentialId": credential_id, "transports": list(transports)})
     evidence._identity(owned["identity"])
-    registration._digest(signer_spki_digest)
     # No caller graph is read after the first native parsing/key callback.
     scope = attestation.CeremonyScope(*scope_fields, _work=work)
     owned_roots = tuple(attestation.TrustRootSnapshot(*fields, _work=work) for fields in roots)
@@ -254,9 +263,26 @@ def _produce_on_work(*, client_data_json, attestation_object, credential_id, tra
     arguments = {"semantic_intent": intent, "credential": credential, "challenge": scope.challenge,
         "verified_at_epoch_ns": now_ns, "oidc_session_id": session_id,
         "sibling_challenge_ids": owned["siblings"]}
-    size = _prepare_result(claims, arguments, owned["identity"], signer_spki_digest, now_ns, expires, work)
+    return claims, arguments, owned["identity"], now_ns, expires
+
+
+def _produce_on_work(*, client_data_json, attestation_object, credential_id, transports,
+        scope, verification_context, challenge_row, expected_authorization, high_water_row,
+        published_row, oidc_session_row, sibling_challenge_ids, private_key, public_key,
+        signer_identity, signer_spki_digest, maximum_age_ns, work):
+    """Return (actual signed original envelope, final registration arguments)."""
+    registration._digest(signer_spki_digest)
+    claims, arguments, identity, now_ns, expires = _claims_on_work(
+        client_data_json=client_data_json, attestation_object=attestation_object,
+        credential_id=credential_id, transports=transports, scope=scope,
+        verification_context=verification_context, challenge_row=challenge_row,
+        expected_authorization=expected_authorization, high_water_row=high_water_row,
+        published_row=published_row, oidc_session_row=oidc_session_row,
+        sibling_challenge_ids=sibling_challenge_ids, signer_identity=signer_identity,
+        maximum_age_ns=maximum_age_ns, work=work)
+    size = _prepare_result(claims, arguments, identity, signer_spki_digest, now_ns, expires, work)
     original = evidence._produce_on_work(purpose="registration-attestation", claims=claims,
-        private_key=private_key, public_key=public_key, signer_identity=owned["identity"],
+        private_key=private_key, public_key=public_key, signer_identity=identity,
         signer_spki_digest=signer_spki_digest, issued_at_epoch_ns=now_ns,
         expires_at_epoch_ns=expires, work=work)
     if type(original) is not bytes or len(original) != size:

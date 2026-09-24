@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.79`, implementation only. These helpers do not register the
+Status: source `.80`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -38,6 +38,22 @@ physical install/readback, independently admitted committed stage and current
 rows, target, observation time and signing configuration. Supplied file bytes
 are not proof of installation, fsync or runtime activation. Producing evidence
 does not persist it or authorize publication.
+
+The separate registration and installation admission composers now derive
+their expected claims through those actual semantic workers and verify the
+original signed envelope before proposing a custody row. Registration reruns
+the real ceremony parser and attestation verifier; neither composer accepts
+caller-supplied claims or a successful-verification result. They preserve the
+original verification/observation instant and exact producer expiry, including
+challenge/OIDC clipping, while checking freshness at a separate admission time.
+
+Their shared row comparison recomputes the exact evidence business primary-key
+digest (not the authenticated-tree path digest). An absent selection produces
+an ordinary proposed insertion pair. A present selection must equal all 17
+unused verified fields to produce a no-op; consumed, revoked or conflicting
+rows fail, and every duplicate still goes through genuine verification. These
+helpers do not prove the selection or persist it. They are prerequisites for
+the fixed admission operations, not registered operations or write authority.
 
 The v2 custody projection uses the existing
 `policy_authority_external_evidence_receipts` table's exact **17 fields**. Its

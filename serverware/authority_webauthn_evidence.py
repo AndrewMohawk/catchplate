@@ -271,6 +271,67 @@ def _verified_row_on_work(*, envelope_bytes, purpose, expected_claims, public_ke
         raise WebAuthnEvidenceError("v2 WebAuthn evidence row projection failed") from exc
 
 
+def _admission_effect_on_work(selected, verified_row, work):
+    """Compare an exact custody PK and return ordinary insertion/no-op data.
+
+    This helper performs no signature, purpose-semantic or root verification.
+    Fixed purpose composers must themselves run the genuine semantic worker
+    and _verified_row_on_work before calling it; no entry point accepts this
+    result as a proof token. A supplied absence is not an authenticated absence.
+    The future operation owner must prove the selection and atomically render
+    the INSERT under its own explicit source template and root authority.
+
+    None means only that the whole unused verified row already matches. It is
+    not execution replay, completion, permission to reset consumption or a
+    durable receipt. No UPDATE is proposed for any existing row.
+    """
+    ledger = capture._SharedLedger(work)
+    owned = capture._JSONCapture(ledger).visit({"selected": selected, "row": verified_row})
+    selected, row = owned["selected"], owned["row"]
+    plan.contract._object(selected, capture._SELECTED_FIELDS, "WebAuthn admission selection")
+    plan.contract._object(row, EVIDENCE_ROW_FIELDS, "WebAuthn admission row")
+    for field in ("evidence_digest", "statement_digest", "verifier_identity_digest",
+            "verifier_measurement_digest", "verifier_attestation_receipt_digest",
+            "signature_digest", "binding_digest"):
+        plan.contract._digest(row[field])
+    if (type(row["evidence_type"]) is not str
+            or row["evidence_type"] not in tuple(item[0] for item in _CUSTODY_PURPOSES.values())):
+        raise WebAuthnEvidenceError("WebAuthn admission row is not a supported v2 purpose")
+    plan.contract._literal(row["source_revision"], authority.SOURCE_REVISION)
+    plan.contract._literal(row["signature_algorithm"], "Ed25519")
+    plan.contract._literal(row["status"], "verified")
+    plan.contract._base64url(row["signature_base64url"], signature=True)
+    if row["consumed_operation_id"] is not None or row["consumed_at_epoch_ns"] is not None:
+        raise WebAuthnEvidenceError("WebAuthn admission cannot restore consumed evidence")
+    for field in ("verified_at_epoch_ns", "expires_at_epoch_ns"):
+        plan.contract._integer(row[field], minimum=1)
+    if not 0 < row["expires_at_epoch_ns"] - row["verified_at_epoch_ns"] <= authority.VERIFIER_RESPONSE_MAX_AGE_NS:
+        raise WebAuthnEvidenceError("WebAuthn admission row has an invalid signed interval")
+    statement = row["statement_json"]
+    if type(statement) is not str or not 2 <= len(statement) <= MAX_EVIDENCE_BYTES:
+        raise WebAuthnEvidenceError("WebAuthn admission requires the bounded original statement")
+    work.prepare_scan(statement)
+    if not statement.isascii():
+        raise WebAuthnEvidenceError("WebAuthn admission statement is not original canonical ASCII")
+    if (type(selected["present"]) is not bool or selected["contractSelector"] is not None
+            or selected["present"] and type(selected["row"]) is not dict
+            or not selected["present"] and selected["row"] is not None):
+        raise WebAuthnEvidenceError("WebAuthn admission selection is not exact PK presence/absence")
+    expected_key = {"evidence_digest": row["evidence_digest"]}
+    key_bytes = capability._wire(expected_key, ledger, MAX_EVIDENCE_BYTES, MAX_EVIDENCE_NODES)
+    key_digest = plan._frame("serverware.policyAuthorityBusinessKey/v1",
+        (plan._ascii(EVIDENCE_TABLE, work), key_bytes), work)
+    plan._same((selected["table"], selected["key"], selected["keyDigest"]),
+        (EVIDENCE_TABLE, expected_key, key_digest), work,
+        "WebAuthn admission selection differs from the original evidence primary key")
+    if selected["present"]:
+        plan.contract._object(selected["row"], EVIDENCE_ROW_FIELDS, "retained WebAuthn admission row")
+        plan._same(selected["row"], row, work,
+            "WebAuthn admission conflicts with retained or already consumed evidence")
+        return selected, None
+    return selected, row
+
+
 def _consume_on_work(context, *, envelope_bytes, purpose, expected_claims, public_key,
         expected_signer_identity, expected_signer_spki_digest, now_epoch_ns,
         maximum_age_ns, maximum_clock_skew_ns, work):

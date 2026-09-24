@@ -72,7 +72,13 @@ class AuthorityWitnessTransportSourceTests(unittest.TestCase):
         cls.transport_wrapper = named(cls.tree, ast.FunctionDef, "_socket_request_bytes")
         cls.transport = named(cls.tree, ast.FunctionDef, "_socket_request_bytes_with_response")
         cls.receiver = named(cls.tree, ast.FunctionDef, "_recv_message_with_bytes")
-        cls.sender = named(cls.tree, ast.FunctionDef, "_send_encoded_message")
+        cls.service_sender = named(cls.tree, ast.FunctionDef, "_send_encoded_message")
+        framing = ROOT / "serverware/authority_transport.py"
+        if framing.stat().st_size > 64 * 1024:
+            raise AssertionError("authority framing exceeds the bounded source fixture")
+        cls.framing = ast.parse(framing.read_text(encoding="utf-8"))
+        cls.sender = named(cls.framing, ast.FunctionDef, "_send_encoded_message")
+        cls.frame_receiver = named(cls.framing, ast.FunctionDef, "_recv_message_bytes")
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual),
@@ -83,8 +89,11 @@ class AuthorityWitnessTransportSourceTests(unittest.TestCase):
         self.assertEqual(len(legacy.body), 2)
         self.shape(assignment(legacy, "encoded").value, "_canonical(dict(value))")
         self.shape(legacy.body[1].value, "_send_encoded_message(connection, encoded)")
+        delegated = calls(self.service_sender, "authority_transport._send_encoded_message")
+        self.assertEqual(len(delegated), 1)
+        self.shape(delegated[0], "authority_transport._send_encoded_message(connection, encoded, maximum_bytes=MAX_MESSAGE_BYTES)")
         guard = rejecting(self.sender, "authority response size is invalid")
-        self.shape(guard.test, "type(encoded) is not bytes or not 2 <= len(encoded) <= MAX_MESSAGE_BYTES")
+        self.shape(guard.test, "type(encoded) is not bytes or not 2 <= len(encoded) <= maximum_bytes")
         sent = calls(self.sender, "connection.sendall")
         self.assertEqual(len(sent), 1)
         self.shape(sent[0], "connection.sendall(len(encoded).to_bytes(8, 'big') + encoded)")
@@ -132,12 +141,19 @@ class AuthorityWitnessTransportSourceTests(unittest.TestCase):
 
     def test_shared_response_parser_still_requires_bounded_canonical_object(self):
         receiver = self.receiver
-        self.shape(assignment(receiver, "size").value, "int.from_bytes(_recv_exact(connection, 8), 'big')")
-        guard = rejecting(receiver, "authority message size is invalid")
-        self.shape(guard.test, "not 2 <= size <= MAX_MESSAGE_BYTES")
+        framing = self.frame_receiver
+        self.shape(assignment(framing, "size").value, "int.from_bytes(_recv_exact(connection, 8), 'big')")
+        guard = rejecting(framing, "authority message size is invalid")
+        self.shape(guard.test, "not 2 <= size <= maximum_bytes")
+        self.assertLess(guard.end_lineno, framing.body[-1].lineno)
+        self.shape(framing.body[-1].value, "_recv_exact(connection, size)")
         encoded = assignment(receiver, "encoded")
-        self.shape(encoded.value, "_recv_exact(connection, size)")
-        self.assertLess(guard.end_lineno, encoded.lineno)
+        self.shape(encoded.value, "_recv_message_bytes(connection)")
+        wrapper = named(self.tree, ast.FunctionDef, "_recv_message_bytes")
+        self.assertEqual([argument.arg for argument in wrapper.args.kwonlyargs], ["maximum_bytes"])
+        self.shape(wrapper.args.kw_defaults[0], "MAX_MESSAGE_BYTES")
+        self.shape(calls(wrapper, "authority_transport._recv_message_bytes")[0],
+            "authority_transport._recv_message_bytes(connection, maximum_bytes=maximum_bytes)")
         self.shape(assignment(receiver, "value").value, "json.loads(encoded)")
         closed = rejecting(receiver, "authority message is not canonical")
         self.shape(closed.test, "not isinstance(value, dict) or _canonical(value) != encoded")
@@ -299,7 +315,7 @@ class AuthorityWitnessTransportSourceTests(unittest.TestCase):
     def test_original_response_is_received_before_parse_and_never_rebuilt_for_publication(self):
         received = assignment(self.receiver, "encoded")
         parsed = assignment(self.receiver, "value")
-        self.shape(received.value, "_recv_exact(connection, size)")
+        self.shape(received.value, "_recv_message_bytes(connection)")
         self.assertLess(received.end_lineno, parsed.lineno)
         self.shape(parsed.value, "json.loads(encoded)")
         self.assertEqual(len(calls(self.receiver, "json.loads")), 1)
@@ -324,7 +340,7 @@ class AuthorityWitnessTransportSourceTests(unittest.TestCase):
         self.shape(self.worker.body[-1].value, "(request_bytes, response_bytes, dict(response))")
 
     def test_truncated_invalid_or_noncanonical_frames_cannot_publish_original_bytes(self):
-        exact = named(self.tree, ast.FunctionDef, "_recv_exact")
+        exact = named(self.framing, ast.FunctionDef, "_recv_exact")
         loop = [node for node in exact.body if isinstance(node, ast.While)]
         self.assertEqual(len(loop), 1)
         closed = rejecting(exact, "authority socket closed early")
@@ -332,8 +348,11 @@ class AuthorityWitnessTransportSourceTests(unittest.TestCase):
         appended = calls(exact, "chunks.append")
         self.assertEqual(len(appended), 1)
         self.assertLess(closed.end_lineno, appended[0].lineno)
-        size = rejecting(self.receiver, "authority message size is invalid")
-        self.assertLess(size.end_lineno, assignment(self.receiver, "encoded").lineno)
+        delegated = named(self.tree, ast.FunctionDef, "_recv_exact")
+        self.shape(calls(delegated, "authority_transport._recv_exact")[0],
+            "authority_transport._recv_exact(connection, count)")
+        size = rejecting(self.frame_receiver, "authority message size is invalid")
+        self.assertLess(size.end_lineno, self.frame_receiver.body[-1].lineno)
         parsers = [node for node in self.receiver.body if isinstance(node, ast.Try)]
         self.assertEqual(len(parsers), 1)
         parser = parsers[0]

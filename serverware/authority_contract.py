@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.50"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.51"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -51,6 +51,11 @@ MAX_SELECTORS_PER_OPERATION = 128
 MAX_PROOF_NODES = TREE_DEPTH * MAX_SELECTORS_PER_OPERATION * (TREE_RADIX - 1)
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 64 * 1024 * 1024
+# Shared source policy; the database verifier keeps aliases to these exact
+# existing values. Revocation issuer construction may tighten the age using
+# measured internal policy, but never derives either bound from a request.
+VERIFIER_RESPONSE_MAX_AGE_NS = 30 * 1_000_000_000
+VERIFIER_MAX_CLOCK_SKEW_NS = 5 * 1_000_000_000
 MAX_MUTATIONS = 512
 MAX_WORK_UNITS = 16384
 # Original business bounds above remain unchanged. Only the exact framework

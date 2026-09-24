@@ -103,9 +103,16 @@ class RevocationInvocationSourceTests(unittest.TestCase):
         self.assertFalse(calls(run, "_ValidationWork"))
 
     def test_successor_purpose_is_not_added_to_actual_legacy_dispatch_or_registry(self):
-        self.assertNotIn("issue-revocation-capability", self.service_source)
-        self.assertNotIn("issue_authenticated", self.service_source)
-        self.assertNotIn("authority_revocation_invocation", self.service_source)
+        # Private original-byte composition is permitted; neither public
+        # dispatcher may route around the existing registry or legacy gates.
+        process = definition(self.service, "AuthorityProcess")
+        server = definition(self.service, "AuthorityServer")
+        for dispatcher in (definition(process, "handle"), definition(server, "_serve_connection")):
+            source = ast.unparse(dispatcher)
+            for private in ("issue-revocation-capability", "issue_authenticated",
+                    "authority_revocation_invocation", "_issue_revocation_invocation_bytes",
+                    "_revocation_capability_issuer", "_recv_revocation_invocation_bytes"):
+                self.assertNotIn(private, source)
         imports = [node for node in self.tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
         self.assertFalse(any("authority_service" in ast.unparse(node) or "authority_transition_registry" in ast.unparse(node)
             or "serverware import db" in ast.unparse(node) for node in imports))

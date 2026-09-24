@@ -8,6 +8,10 @@ is **unbuilt and unexecuted**. No public service purpose or kernel is registered
 and no successful PostgreSQL admission, socket exchange or committed issuance
 is claimed.
 
+Source `.51` adds [private raw transport and configured service construction](authority-revocation-service-integration.md).
+Public dispatch remains closed; these components do not establish end-to-end
+serving or production verification.
+
 An independently pinned verifier key authenticates the sender's historical
 claims. Its signature does not prove root currentness, the physical origin of
 a database clock, independent witness operation, or permission to execute a

@@ -8,7 +8,6 @@ import os
 import resource
 import socket
 import stat
-import struct
 import sys
 import threading
 import time
@@ -50,6 +49,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from serverware import authority_contract
 from serverware import authority_planner
 from serverware import authority_transition_registry
+from serverware import authority_transport
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
     verifier_read_privilege_check,
@@ -1708,28 +1708,35 @@ class MeasuredConfiguration:
 
 
 def _peer_identity(connection: socket.socket) -> tuple[int, int, int | None]:
-    if hasattr(socket, "SO_PEERCRED"):
-        value = connection.getsockopt(
-            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
-        )
-        pid, uid, gid = struct.unpack("3i", value)
-        return uid, gid, pid
-    if hasattr(connection, "getpeereid"):
-        uid, gid = connection.getpeereid()
-        return uid, gid, None
-    raise AuthorityServiceError("Unix peer credentials are unavailable")
+    try:
+        return authority_transport._peer_identity(connection)
+    except authority_transport.AuthorityTransportError as exc:
+        raise AuthorityServiceError(str(exc)) from exc
 
 
 def _recv_exact(connection: socket.socket, count: int) -> bytes:
-    chunks: list[bytes] = []
-    remaining = count
-    while remaining:
-        chunk = connection.recv(min(remaining, 1024 * 1024))
-        if not chunk:
-            raise AuthorityServiceError("authority socket closed early")
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
+    try:
+        return authority_transport._recv_exact(connection, count)
+    except authority_transport.AuthorityTransportError as exc:
+        raise AuthorityServiceError(str(exc)) from exc
+
+
+def _recv_message_bytes(
+    connection: socket.socket, *, maximum_bytes: int = MAX_MESSAGE_BYTES,
+) -> bytes:
+    try:
+        return authority_transport._recv_message_bytes(
+            connection, maximum_bytes=maximum_bytes,
+        )
+    except authority_transport.AuthorityTransportError as exc:
+        raise AuthorityServiceError(str(exc)) from exc
+
+
+def _recv_revocation_invocation_bytes(connection: socket.socket) -> bytes:
+    try:
+        return authority_transport._recv_revocation_invocation_bytes(connection)
+    except authority_transport.AuthorityTransportError as exc:
+        raise AuthorityServiceError(str(exc)) from exc
 
 
 def _recv_message(connection: socket.socket) -> dict[str, Any]:
@@ -1746,10 +1753,7 @@ def _recv_message_with_bytes(
     object. They are not reconstructed from the parsed value and establish no
     protocol or signature authority on their own.
     """
-    size = int.from_bytes(_recv_exact(connection, 8), "big")
-    if not 2 <= size <= MAX_MESSAGE_BYTES:
-        raise AuthorityServiceError("authority message size is invalid")
-    encoded = _recv_exact(connection, size)
+    encoded = _recv_message_bytes(connection)
     try:
         value = json.loads(encoded)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1765,9 +1769,12 @@ def _send_message(connection: socket.socket, value: Mapping[str, Any]) -> None:
 
 
 def _send_encoded_message(connection: socket.socket, encoded: bytes) -> None:
-    if type(encoded) is not bytes or not 2 <= len(encoded) <= MAX_MESSAGE_BYTES:
-        raise AuthorityServiceError("authority response size is invalid")
-    connection.sendall(len(encoded).to_bytes(8, "big") + encoded)
+    try:
+        authority_transport._send_encoded_message(
+            connection, encoded, maximum_bytes=MAX_MESSAGE_BYTES,
+        )
+    except authority_transport.AuthorityTransportError as exc:
+        raise AuthorityServiceError(str(exc)) from exc
 
 
 def _activated_listener(
@@ -1899,6 +1906,25 @@ def _socket_request_bytes_with_response(
         return _recv_message_with_bytes(connection)
     finally:
         connection.close()
+
+
+def _socket_request_revocation_bytes(
+    path: str,
+    encoded: bytes,
+    *,
+    timeout_seconds: float,
+    expected_peer_uid: int,
+    expected_peer_gid: int,
+) -> bytes:
+    """Private raw adapter; public dispatch and authentication are separate."""
+    try:
+        return authority_transport._socket_request_revocation_bytes(
+            path, encoded, timeout_seconds=timeout_seconds,
+            expected_peer_uid=expected_peer_uid,
+            expected_peer_gid=expected_peer_gid,
+        )
+    except authority_transport.AuthorityTransportError as exc:
+        raise AuthorityServiceError(str(exc)) from exc
 
 
 @lru_cache(maxsize=TREE_DEPTH + 1)
@@ -3620,6 +3646,36 @@ class AuthorityProcess:
                 return self._handle_record_witness_receipt(envelope)
             return self._handle_issue(envelope)
         return self._handle_execute(envelope, purpose=purpose)
+
+    def _revocation_capability_issuer(self, *, work):
+        """Construct the private successor only from this admitted issuer.
+
+        The actual main loads root-signed measured configuration before this
+        process is constructed. A dataclass or arbitrary mapping supplied to
+        the pure mapper is not equivalent to that admission. This factory is
+        not wired into legacy dispatch and does not relax its kernel gates.
+        """
+        if (self.role_name != "issuer"
+                or self.process_mode != "policy-authority-issuer"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation issuer process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        authority_launch_guard.require_active("issuer")
+        generation = dict(authority_launch_guard.generation())
+        from serverware import authority_revocation_configuration
+
+        return authority_revocation_configuration._issuer_from_configuration_on_work(
+            payload=payload, configuration_digest=configuration_digest,
+            generation=generation, work=work)
+
+    def _issue_revocation_invocation_bytes(self, *, envelope_bytes, work):
+        """Private original-byte composition, not an enabled service purpose."""
+        if (type(envelope_bytes) is not bytes
+                or not 2 <= len(envelope_bytes) <= authority_contract.MAX_REQUEST_BYTES):
+            raise AuthorityServiceError("revocation invocation is not bounded original bytes")
+        issuer = self._revocation_capability_issuer(work=work)
+        return issuer.issue_authenticated(envelope_bytes=envelope_bytes, work=work)
 
     def _sign_internal(
         self,

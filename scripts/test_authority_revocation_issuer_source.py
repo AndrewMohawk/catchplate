@@ -371,11 +371,21 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertIs(method.body[-1].value, delegated[0])
         for forbidden in ("open_issuer", "self.issue", "_run_on_configuration", "issuance._issue_on_connection"):
             self.assertFalse(calls(method, forbidden))
-        for module in ("serverware/authority_service.py", "serverware/authority_store/executor_v9.py"):
-            source, _tree = read(module, 2 * 1024 * 1024)
-            self.assertNotIn("RevocationCapabilityIssuer", source)
-            self.assertNotIn("authority_revocation_issuance", source)
-            self.assertNotIn("issue_authenticated", source)
+        _source, service = read("serverware/authority_service.py", 2 * 1024 * 1024)
+        process = definition(service, "AuthorityProcess")
+        private = definition(process, "_issue_revocation_invocation_bytes")
+        invoked = calls(private, "issuer.issue_authenticated")
+        self.assertEqual(len(invoked), 1)
+        self.assert_shape(invoked[0], "issuer.issue_authenticated(envelope_bytes=envelope_bytes, work=work)")
+        self.assertEqual(calls(service, "issuer.issue_authenticated"), invoked)
+        for dispatcher in (definition(process, "handle"),
+                definition(definition(service, "AuthorityServer"), "_serve_connection")):
+            for name in ("issue_authenticated", "_issue_revocation_invocation_bytes", "_revocation_capability_issuer"):
+                self.assertNotIn(name, ast.unparse(dispatcher))
+        source, _tree = read("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
+        self.assertNotIn("RevocationCapabilityIssuer", source)
+        self.assertNotIn("authority_revocation_issuance", source)
+        self.assertNotIn("issue_authenticated", source)
 
 
 if __name__ == "__main__":

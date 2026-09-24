@@ -1,7 +1,9 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.85`, implementation only. These helpers do not register the
-missing kernels or repair service startup. They are unbuilt and unexecuted.
+Status: source `.86`, implementation only. Separate signed evidence-admission
+plans now compose genuine exact-PK proof and original-input semantic replay.
+These helpers do not register missing kernels or repair service startup. They
+are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
 ## Evidence without circular dependencies
@@ -83,8 +85,9 @@ and `proposed-insert` or `already-retained`, never a committed receipt.
 
 Neither operation changes challenges, credentials, sessions, trust publication
 or audit-outbox/capacity rows. The executor's framework audit remains required.
-Configured independent input/root owners, signed-plan replay and atomic
-execution remain missing. Private proof acquisition is described below.
+Configured read-only ownership, private proof acquisition and signed-plan
+replay are described below. Independent request/root admission, serving and
+authorized atomic execution remain unfinished.
 The adapters do not register configured kernels or supply the two required
 callable database handlers. All six missing-kernel closure failures remain;
 operator-role admission stays denied. This source does not repair startup.
@@ -222,9 +225,58 @@ signer/configuration history must be independently admitted; copying a digest
 from untrusted storage supplies none of that authority. A current configured
 owner alone cannot resolve historical keys or policy. These methods do not
 verify selected-row/root proofs, grant current execution, sign, persist or open
-SQL. A versioned signed-plan binding, durable original-input custody, independent
-proof replay and executor/recovery integration still need implementation. V3
-cannot silently acquire these fields, and revocation-only v4 remains unchanged.
+SQL. The separate signed-plan composition below adds actual proof replay around
+these semantic workers. Durable original-input custody and executor/recovery
+integration remain missing. V3 cannot silently acquire these fields, and
+revocation-only v4 remains unchanged.
+
+## Separate signed admission plans and proof replay
+
+Source `.86` adds `webauthn-evidence-admission-v1`, with closed plan schema
+`serverware.policyAuthorityWebAuthnEvidenceAdmissionPlan/v1` and its separate
+signed envelope. It binds the typed request, source/operation/query manifests,
+configuration and planner identity/SPKI, historical database cutoff, detached
+original-input digest, exact selected rows, primary proofs, query observations,
+before/after roots and complete proposed transition. It is neither a v3 plan
+extension nor a revocation-v4 plan.
+
+The fixed producer in `authority_webauthn_evidence_plan.py` genuinely replays
+the raw inputs before signing; a supplied acquisition or payload is not a proof
+token. Its private acquisition adapter holds actual request, query, original
+input, effect and root observations, constructs the closed payload and invokes
+that same full replay before returning the original envelope and detached input
+bytes. The real acquisition/planner import gate is retained.
+Verification checks the original canonical envelope and independently
+pinned planner signature, then runs the same actual replay. The original-input
+bytes remain detached and must match their independently held commitment.
+Request, root, configuration, evidence-key, purpose and historical-time
+expectations cannot be enrolled from the plan itself.
+
+`authority_webauthn_evidence_proofs.py` first verifies real primary memberships
+and absences, then joins every actual query observation to the regenerated
+exact-PK recipe and proved selected union. Registration uses four or five
+queries; installation uses three. Every query has one present or exact-absence
+address and every selection has its own primary proof. Both full source root
+classes are required, including the OIDC business root in ordinary registration.
+The original semantic worker then reruns ceremony/installation and evidence
+verification and compares the proposed effects. Finally, genuine primary write
+evaluation derives and checks both after-root classes from those actual effects.
+
+The sole writable table has no counted profiles. The real indexed-primary
+engine therefore receives an empty counted inventory without skipping primary
+verification or its framing work, including on an identical-retained no-op.
+All ownership, query restoration, proof phases, semantic replay and signatures
+spend the same existing work allowance. The 64 MiB / one-million-node plan
+ceiling is not a replacement allowance or a guarantee that combined maxima fit.
+Shared key and signature callbacks check allowance preservation on both success
+and exceptional return. The signer reserves final output work and remeasures
+the actual payload after its callback before canonical serialization.
+
+These are source-implemented signing and replay mechanics, not durable plan or
+original-input custody, current-root authority, execution permission, reservation,
+terminal witnessing or recovery. Historical trust/configuration admission,
+configured serving and the durable protocol integration still remain separate;
+no database-schema, privilege, registry or execution-loader activation is supplied here.
 
 ## Retained evidence and consumption
 
@@ -422,9 +474,9 @@ and existing input/resource ceilings are unchanged.
 
 ## Admission and execution still required
 
-Admission has a configured read-only owner, but no purpose-scoped measured
-configuration mapper or durable evidence INSERT owner. Final registration still
-needs its configured acquisition owner. Caller-supplied current roots, signer
+Admission has a configured read-only owner and purpose-scoped measured
+configuration mapper, but no durable evidence INSERT owner. Final registration
+still needs its configured acquisition owner. Caller-supplied current roots, signer
 pins and request authority remain independent prerequisites, not values
 authenticated by copying.
 Trust staging still needs its independently configured request/candidate-key
@@ -436,8 +488,8 @@ witnessing and recovery remain pending. The generic evidence signer and ordinary
 row/acquisition results cannot fill those gaps or repair service startup.
 
 The evidence-storage integration must connect the private authenticated
-acquisitions to signed-plan retention/replay and an authorized atomic commit
-through authenticated root maintenance. The identical
+acquisitions and genuine signed-plan replay to durable retention and an
+authorized atomic commit through authenticated root maintenance. The identical
 unused verified-row no-op requires an explicit empty-mutation policy when its
 configured kernel is eventually registered. No placeholder handler, keyless
 kernel, new ACL or disabled closure check supplies this remaining integration.
@@ -448,9 +500,10 @@ Although v3 can represent the primary INSERT/no-op delta, its closed payload and
 kernel interface do not retain or reverify the original ceremony/installation
 bytes, historical context and independent purpose pins. Its assertion-evidence
 slot cannot carry these different purposes, and re-signing a stored payload is
-not genuine semantic replay. Coordinated original-input/context retention,
-signed-plan replay and executor admission are required before these outputs can
-authorize a write; the revocation-only v4 protocol is not interchangeable either.
+not genuine semantic replay. Durable original-input/context and signed-plan
+custody, historically admitted recovery and executor admission are required
+before these outputs can authorize a write; the revocation-only v4 protocol is
+not interchangeable either.
 
 Broad fixtures and full verification remain deferred to the consolidated frozen
 build. Production acceptance additionally requires independently operated

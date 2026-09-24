@@ -66,12 +66,13 @@ class _ProducedCapability:
 def _callback(work, callback):
     limits, metrics = work.limits, work.metrics
     values = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
-    result = callback()
-    capability.capture._SharedLedger(work)
-    if (work.limits is not limits or work.metrics != metrics
-            or (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes) != values):
-        raise capability.RevocationCapabilityError("revocation capability production work changed during key callback")
-    return result
+    try:
+        return callback()
+    finally:
+        capability.capture._SharedLedger(work)
+        if (work.limits is not limits or work.metrics != metrics
+                or (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes) != values):
+            raise capability.RevocationCapabilityError("revocation capability production work changed during key callback")
 
 
 def _key_binding(private_key, public_key, witness_key, work):

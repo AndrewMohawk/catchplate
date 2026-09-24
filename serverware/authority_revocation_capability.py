@@ -157,11 +157,13 @@ def _signature(key, encoded, domain, unsigned, ledger):
     message = plan._ascii(plan._frame(domain, (unsigned,), work), work)
     limits, metrics = work.limits, work.metrics
     values = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
-    key.verify(signature, message)
-    capture._SharedLedger(work)
-    if (work.limits is not limits or work.metrics != metrics
-            or (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes) != values):
-        raise RevocationCapabilityError("revocation capability work changed during signature verification")
+    try:
+        key.verify(signature, message)
+    finally:
+        capture._SharedLedger(work)
+        if (work.limits is not limits or work.metrics != metrics
+                or (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes) != values):
+            raise RevocationCapabilityError("revocation capability work changed during signature verification")
 
 
 def _witness_shape(value, *, request):

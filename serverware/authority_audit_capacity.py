@@ -16,6 +16,7 @@ from serverware import authority_complete_query
 from serverware import authority_transition_core as core
 from serverware.audit_outbox_contract import MAX_PENDING
 from serverware.authority_primary_contract import PRIMARY_KEY_COLUMNS
+from serverware.authority_query_read_work import QueryReadWorkError, _ValidationWork
 
 
 AGGREGATE_TABLE = "policy_authority_bounded_aggregate_states"
@@ -59,9 +60,18 @@ def _fail(message: str) -> None:
     raise AuditCapacityError(message)
 
 
-def _canonical(value: Any) -> bytes:
+def _require_work(work: _ValidationWork | None) -> None:
+    if work is not None and type(work) is not _ValidationWork:
+        _fail("audit capacity work is not the exact shared meter")
+
+
+def _canonical_parts(value: Any, *, work: _ValidationWork | None) -> tuple[bytes, int]:
     # The surrounding primary-root profile has the same depth/node limits.
     # Validate before serialization; never accept lossy float/Decimal coercion.
+    # With work, this existing walk is the measurement pass, not a second
+    # uncharged walk after work.measure. Fixed traversal scaffolding is not a
+    # Python allocation metric; canonical bytes and keys/values are charged.
+    _require_work(work)
     stack = [(value, 0)]
     nodes = byte_count = 0
     while stack:
@@ -69,56 +79,112 @@ def _canonical(value: Any) -> bytes:
         nodes += 1
         if depth > 128 or nodes > 1_000_000:
             _fail("audit capacity JSON exceeds its structural bound")
+        if work is not None:
+            work.charge(json_nodes=1)
+        previous_bytes = byte_count
         if item is None:
             byte_count += 4
         elif type(item) is bool:
             byte_count += 4 if item else 5
         elif type(item) is int:
+            if work is not None:
+                # A necessary decimal-length bound, not a new integer cap.
+                # log10(2) > 0.3, so a failing bound cannot reject a fitting
+                # encoding. Preserve the legacy str/encoder integer behavior.
+                minimum = max(1, (item.bit_length() - 1) * 3 // 10 + 1) + int(item < 0)
+                if minimum > work.limits.max_input_bytes - work.input_bytes:
+                    raise QueryReadWorkError("audit capacity JSON integer exceeds remaining work")
             try:
                 byte_count += len(str(item))
             except ValueError as exc:
                 raise AuditCapacityError("audit capacity JSON integer exceeds its bound") from exc
         elif type(item) is str:
+            if work is not None and len(item) + 2 > work.limits.max_input_bytes - work.input_bytes:
+                raise QueryReadWorkError("audit capacity JSON string exceeds remaining work")
             byte_count += 2
+            if work is not None:
+                work.charge(input_bytes=2)
             for character in item:
                 scalar = ord(character)
                 # PostgreSQL text/JSONB cannot retain NUL; accepting it here
                 # would produce a plan that cannot reach the SQL validator.
                 if scalar == 0 or 0xD800 <= scalar <= 0xDFFF:
                     _fail("audit capacity JSON is not lossless")
-                byte_count += (
+                size = (
                     2 if character in '"\\\b\f\n\r\t' else
                     12 if scalar > 0xFFFF else
                     6 if scalar < 32 or scalar >= 127 else 1
                 )
+                byte_count += size
+                if work is not None:
+                    work.charge(input_bytes=size)
                 if byte_count > authority_contract.MAX_RESULT_BYTES:
                     _fail("audit capacity JSON exceeds its byte bound")
         elif type(item) is list:
             if len(item) > 1_000_000 - nodes - len(stack):
                 _fail("audit capacity JSON exceeds its structural bound")
+            if (work is not None
+                    and len(item) > work.limits.max_json_nodes - work.json_nodes - len(stack)):
+                raise QueryReadWorkError("audit capacity JSON exceeds remaining structure work")
             byte_count += 2 + max(0, len(item) - 1)
+            if work is not None:
+                work.charge(input_bytes=byte_count - previous_bytes)
             stack.extend((child, depth + 1) for child in item)
         elif type(item) is dict:
-            if (len(item) > (1_000_000 - nodes - len(stack)) // 2
-                    or any(type(key) is not str for key in item)):
+            if len(item) > (1_000_000 - nodes - len(stack)) // 2:
+                _fail("audit capacity JSON is not lossless")
+            if (work is not None
+                    and len(item) > (work.limits.max_json_nodes - work.json_nodes - len(stack)) // 2):
+                raise QueryReadWorkError("audit capacity JSON exceeds remaining structure work")
+            if any(type(key) is not str for key in item):
                 _fail("audit capacity JSON is not lossless")
             byte_count += 2 + max(0, len(item) - 1) + len(item)
+            if work is not None:
+                work.charge(input_bytes=byte_count - previous_bytes)
             stack.extend((child, depth + 1) for pair in item.items() for child in pair)
         else:
             _fail("audit capacity JSON is not lossless")
         if byte_count > authority_contract.MAX_RESULT_BYTES:
             _fail("audit capacity JSON exceeds its byte bound")
+        if work is not None and type(item) not in (str, list, dict):
+            work.charge(input_bytes=byte_count - previous_bytes)
+    if work is not None:
+        work.charge(input_bytes=byte_count, json_nodes=nodes)
     try:
         result = core.canonical_bytes(value)
     except (core.TransitionKernelError, RecursionError) as exc:
         raise AuditCapacityError("audit capacity JSON is not lossless") from exc
     if len(result) != byte_count:
         _fail("audit capacity JSON byte measurement changed")
-    return result
+    return result, nodes
 
 
-def _copy(value: Any) -> Any:
-    return json.loads(_canonical(value))
+def _canonical(value: Any, *, work: _ValidationWork | None = None) -> bytes:
+    return _canonical_parts(value, work=work)[0]
+
+
+def _copy(value: Any, *, work: _ValidationWork | None = None) -> Any:
+    if work is None:
+        return json.loads(_canonical(value))
+    encoded, nodes = _canonical_parts(value, work=work)
+    # json.loads(bytes) actually decodes before parsing: L/0 plus L/N,
+    # in addition to the existing measurement and encoder's 2L/2N.
+    work.charge(input_bytes=2 * len(encoded), json_nodes=nodes)
+    return json.loads(encoded)
+
+
+def _canonical_equal(left: Any, right: Any, *, work: _ValidationWork | None) -> bool:
+    left_bytes = _canonical(left, work=work)
+    right_bytes = _canonical(right, work=work)
+    if work is not None:
+        work.charge(input_bytes=len(left_bytes) + len(right_bytes))
+    return left_bytes == right_bytes
+
+
+def _decode_state(encoded: bytes, *, work: _ValidationWork | None) -> str:
+    if work is not None:
+        work.charge(input_bytes=len(encoded))
+    return encoded.decode("ascii")
 
 
 def canonical_audit_json(value: Any) -> bytes:
@@ -207,20 +273,30 @@ def add_capacity_query(
     return core.close_queries(operation, (*queries, capacity_query))
 
 
-def _key(table: str, key: Any) -> bytes:
+def _key(table: str, key: Any, *, work: _ValidationWork | None = None) -> bytes:
     columns = PRIMARY_KEY_COLUMNS.get(table)
-    if (columns is None or type(key) is not dict or set(key) != set(columns)
+    if (columns is None or type(key) is not dict or len(key) != len(columns) or set(key) != set(columns)
             or any(type(value) not in (str, int, bool) for value in key.values())):
         _fail("audit capacity mutation key is not exact")
+    if work is not None and table == OUTBOX_TABLE and type(key["id"]) is str:
+        if not 1 <= len(key["id"]) <= 256:
+            _fail("audit capacity outbox identity is not a bounded string")
+        work.prepare_utf8(key["id"])
     if table == OUTBOX_TABLE and (
             type(key["id"]) is not str or not 1 <= len(key["id"].encode("utf-8")) <= 256):
         _fail("audit capacity outbox identity is not a bounded string")
-    return _canonical(key)
+    return _canonical(key, work=work)
 
 
-def _row_key(row: Any, key: Mapping[str, Any]) -> None:
-    if (type(row) is not dict or any(column not in row for column in key)
-            or _canonical({column: row[column] for column in key}) != _canonical(dict(key))):
+def _row_key(row: Any, key: Mapping[str, Any], *, work: _ValidationWork | None = None) -> None:
+    if type(row) is not dict or any(column not in row for column in key):
+        _fail("audit capacity mutation moved its original key")
+    if work is not None:
+        # Conservative full-row units cover the actual key projection without
+        # constructing a separate uncharged projected graph for the meter.
+        work.prepare_copy(row)
+        work.prepare_copy(key)
+    if not _canonical_equal({column: row[column] for column in key}, dict(key), work=work):
         _fail("audit capacity mutation moved its original key")
 
 
@@ -241,45 +317,64 @@ def _exact_counter_address(value: Any) -> bool:
 
 
 def _inventory(
-    operation: str, selected_rows: Any, mutations: Any
+    operation: str, selected_rows: Any, mutations: Any, *, work: _ValidationWork | None = None,
 ) -> tuple[Mapping[str, Any], dict[tuple[str, bytes], dict[str, Any]], tuple[dict[str, Any], ...]]:
+    if work is not None and (type(operation) is not str or not 1 <= len(operation) <= 128):
+        _fail("audit capacity operation is not source declared")
     spec = _spec(operation)
     if (type(selected_rows) not in (list, tuple) or type(mutations) not in (list, tuple)
             or len(selected_rows) > spec["maximumQueryRows"]
             or len(mutations) > spec["maximumMutations"]):
         _fail("audit capacity inventory exceeds its operation bound")
-    _canonical([list(selected_rows), list(mutations)])
+    if work is not None:
+        work.prepare_copy(selected_rows)
+        work.prepare_copy(mutations)
+    _canonical([list(selected_rows), list(mutations)], work=work)
     # Extra space belongs only to the exact framework address. The row's
     # presence/profile/commitment are checked separately below; aliases never
     # earn a business allowance merely by carrying a matching kind or partition.
+    if work is not None:
+        work.prepare_copy(selected_rows)
+        work.prepare_copy(mutations)
     business_selected = [item for item in selected_rows if not _exact_counter_address(item)]
     business_mutations = [item for item in mutations if not _exact_counter_address(item)]
     if (len(business_selected) > spec["maximumBusinessQueryRows"]
             or len(business_mutations) > spec["maximumBusinessMutations"]
-            or len(_canonical(business_selected)) > authority_contract.MAX_REQUEST_BYTES
-            or len(_canonical(list(selected_rows))) > authority_contract.MAX_PLAN_SELECTED_BYTES):
+            or len(_canonical(business_selected, work=work)) > authority_contract.MAX_REQUEST_BYTES):
+        _fail("audit capacity inventory exceeds its business bound")
+    if work is not None:
+        work.prepare_copy(selected_rows)
+    if len(_canonical(list(selected_rows), work=work)) > authority_contract.MAX_PLAN_SELECTED_BYTES:
         _fail("audit capacity inventory exceeds its business bound")
     allowed_reads = set(spec["businessReads"]) | set(spec["businessWrites"]) | set(spec["authorizationReads"])
     selected: dict[tuple[str, bytes], dict[str, Any]] = {}
     for item in selected_rows:
-        if (type(item) is not dict or set(item) != _SELECTED_FIELDS
+        if (type(item) is not dict or len(item) != len(_SELECTED_FIELDS) or set(item) != _SELECTED_FIELDS
                 or type(item["table"]) is not str or item["table"] not in allowed_reads
                 or type(item["present"]) is not bool
                 or (item["present"] and type(item["row"]) is not dict)
                 or (not item["present"] and item["row"] is not None)
                 or (item["contractSelector"] is not None and type(item["contractSelector"]) is not str)):
             _fail("audit capacity selected row is not closed")
-        key_bytes = _key(item["table"], item["key"])
+        key_bytes = _key(item["table"], item["key"], work=work)
         address = (item["table"], key_bytes)
-        if (address in selected or item["keyDigest"] != core.framed_digest(
-                "serverware.policyAuthorityBusinessKey/v1", item["table"].encode("ascii"), key_bytes)):
+        if address in selected:
+            _fail("audit capacity selected identity is duplicated or changed")
+        if work is not None:
+            work.prepare_utf8(item["table"])
+            work.charge(hashes=1)
+        key_digest = core.framed_digest(
+            "serverware.policyAuthorityBusinessKey/v1", item["table"].encode("ascii"), key_bytes)
+        if work is not None:
+            work.prepare_comparison(item["keyDigest"], key_digest)
+        if item["keyDigest"] != key_digest:
             _fail("audit capacity selected identity is duplicated or changed")
         if item["present"]:
-            _row_key(item["row"], item["key"])
+            _row_key(item["row"], item["key"], work=work)
         selected[address] = item
     seen = set()
     for item in mutations:
-        if (type(item) is not dict or set(item) != _MUTATION_FIELDS
+        if (type(item) is not dict or len(item) != len(_MUTATION_FIELDS) or set(item) != _MUTATION_FIELDS
                 or type(item["table"]) is not str or item["table"] not in spec["businessWrites"]
                 or type(item["operation"]) is not str or item["operation"] not in {"INSERT", "UPDATE", "DELETE"}
                 or type(item["templateId"]) is not str):
@@ -292,21 +387,27 @@ def _inventory(
                 or template["predicate"] != "exact-primary-key-and-full-row-cas-v1"
                 or template["cardinality"] != 1):
             _fail("audit capacity mutation template changed")
-        address = (item["table"], _key(item["table"], item["key"]))
+        address = (item["table"], _key(item["table"], item["key"], work=work))
         before = selected.get(address)
-        if address in seen or before is None or item["keyDigest"] != before["keyDigest"]:
+        if address in seen or before is None:
+            _fail("audit capacity mutation has no unique selected identity")
+        if work is not None:
+            work.prepare_comparison(item["keyDigest"], before["keyDigest"])
+        if item["keyDigest"] != before["keyDigest"]:
             _fail("audit capacity mutation has no unique selected identity")
         seen.add(address)
         inserting, deleting = item["operation"] == "INSERT", item["operation"] == "DELETE"
         if (before["present"] is inserting
                 or (inserting and item["expectedRow"] is not None)
                 or (not inserting and type(item["expectedRow"]) is not dict)
-                or _canonical(item["expectedRow"]) != _canonical(before["row"])
+                or not _canonical_equal(item["expectedRow"], before["row"], work=work)
                 or (deleting and item["row"] is not None)
                 or (not deleting and type(item["row"]) is not dict)):
             _fail("audit capacity mutation before or after image changed")
         if not deleting:
-            _row_key(item["row"], item["key"])
+            _row_key(item["row"], item["key"], work=work)
+    if work is not None and type(mutations) is list:
+        work.prepare_copy(mutations)
     return spec, selected, tuple(mutations)
 
 
@@ -326,7 +427,7 @@ def _integer(value: Any, minimum: int = 0) -> bool:
     return type(value) is int and minimum <= value <= MAX_INTEGER
 
 
-def _counter(selected: Mapping[tuple[str, bytes], dict[str, Any]]) -> dict[str, Any]:
+def _counter(selected: Mapping[tuple[str, bytes], dict[str, Any]], *, work: _ValidationWork | None = None) -> dict[str, Any]:
     candidates = [item for item in selected.values()
                   if item["table"] == AGGREGATE_TABLE and _global_identity(item)]
     if len(candidates) != 1:
@@ -335,9 +436,9 @@ def _counter(selected: Mapping[tuple[str, bytes], dict[str, Any]]) -> dict[str, 
     row = item["row"]
     if (item["key"] != {"aggregate_id": AGGREGATE_ID} or item["present"] is not True
             or item["contractSelector"] is not None
-            or len(_canonical(item)) > authority_contract.MAX_PLAN_SELECTED_BYTES - authority_contract.MAX_REQUEST_BYTES
-            or type(row) is not dict or set(row) != _AGGREGATE_FIELDS
-            or len(_canonical(row)) > MAX_COUNTER_BYTES):
+            or len(_canonical(item, work=work)) > authority_contract.MAX_PLAN_SELECTED_BYTES - authority_contract.MAX_REQUEST_BYTES
+            or type(row) is not dict or len(row) != len(_AGGREGATE_FIELDS) or set(row) != _AGGREGATE_FIELDS
+            or len(_canonical(row, work=work)) > MAX_COUNTER_BYTES):
         _fail("global audit capacity before row is not exact")
     if (row["aggregate_id"] != AGGREGATE_ID or row["aggregate_kind"] != AGGREGATE_KIND
             or row["partition_digest"] != PARTITION_DIGEST
@@ -352,9 +453,18 @@ def _counter(selected: Mapping[tuple[str, bytes], dict[str, Any]]) -> dict[str, 
             or not _integer(row["updated_at_epoch_ns"])
             or row["source_revision"] != authority_contract.SOURCE_REVISION):
         _fail("global audit capacity before state violates its compact profile")
-    state_bytes = _canonical(_state(row))
-    if (row["state_json"] != state_bytes.decode("ascii")
-            or row["state_digest"] != core.framed_digest(STATE_DOMAIN, state_bytes)):
+    state_bytes = _canonical(_state(row), work=work)
+    state_json = _decode_state(state_bytes, work=work)
+    if work is not None:
+        work.prepare_comparison(row["state_json"], state_json)
+    if row["state_json"] != state_json:
+        _fail("global audit capacity before commitment changed")
+    if work is not None:
+        work.charge(hashes=1)
+    state_digest = core.framed_digest(STATE_DOMAIN, state_bytes)
+    if work is not None:
+        work.prepare_comparison(row["state_digest"], state_digest)
+    if row["state_digest"] != state_digest:
         _fail("global audit capacity before commitment changed")
     return row
 
@@ -382,21 +492,25 @@ def _delta(mutations: tuple[dict[str, Any], ...]) -> tuple[int, int]:
     return delta, inserted
 
 
-def _after(before: dict[str, Any], delta: int, inserted: int, timestamp: Any) -> dict[str, Any]:
+def _after(before: dict[str, Any], delta: int, inserted: int, timestamp: Any, *, work: _ValidationWork | None = None) -> dict[str, Any]:
     if not _integer(timestamp) or timestamp < before["updated_at_epoch_ns"]:
         _fail("global audit capacity update time is invalid")
     count = before["live_count"] + delta
     if (not 0 <= count <= MAX_PENDING or before["revision"] == MAX_INTEGER
             or before["next_sequence"] + inserted > MAX_INTEGER):
         _fail("global audit capacity transition exceeds its bound")
+    if work is not None:
+        work.prepare_copy(before)
     row = {**before, "revision": before["revision"] + 1,
            "live_count": count, "active_count": count,
            "next_sequence": before["next_sequence"] + inserted,
            "updated_at_epoch_ns": timestamp}
-    state_bytes = _canonical(_state(row))
-    row.update(state_json=state_bytes.decode("ascii"),
-               state_digest=core.framed_digest(STATE_DOMAIN, state_bytes))
-    if len(_canonical(row)) > MAX_COUNTER_BYTES:
+    state_bytes = _canonical(_state(row), work=work)
+    state_json = _decode_state(state_bytes, work=work)
+    if work is not None:
+        work.charge(hashes=1)
+    row.update(state_json=state_json, state_digest=core.framed_digest(STATE_DOMAIN, state_bytes))
+    if len(_canonical(row, work=work)) > MAX_COUNTER_BYTES:
         _fail("global audit capacity row exceeds its byte bound")
     return row
 
@@ -409,11 +523,12 @@ def _parts(mutations: tuple[dict[str, Any], ...]) -> tuple[tuple[dict[str, Any],
 
 
 def _before_for_operation(
-    spec: Mapping[str, Any], selected: Mapping[tuple[str, bytes], dict[str, Any]]
+    spec: Mapping[str, Any], selected: Mapping[tuple[str, bytes], dict[str, Any]],
+    *, work: _ValidationWork | None = None,
 ) -> dict[str, Any] | None:
     if _participates(spec):
         _require_counter_permission(spec)
-        return _counter(selected)
+        return _counter(selected, work=work)
     if any(item["table"] == AGGREGATE_TABLE and _global_identity(item)
            for item in selected.values()):
         _fail("global audit capacity selection is outside its source operation")
@@ -422,13 +537,36 @@ def _before_for_operation(
 
 def finalize_capacity(context: core.KernelContext, mutations: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
     """Append the framework-owned counter CAS before root derivation/signing."""
-    spec, selected, entries = _inventory(context.operation, context.selected_rows, mutations)
-    before = _before_for_operation(spec, selected)
+    return _finalize_capacity(context, mutations, work=None)
+
+
+def _copied_entries(entries: tuple[dict[str, Any], ...], *, work: _ValidationWork | None) -> tuple[dict[str, Any], ...]:
+    if work is not None:
+        work.prepare_copy(entries)
+    copied = _copy(list(entries), work=work)
+    if work is not None:
+        work.prepare_copy(copied)
+    return tuple(copied)
+
+
+def _finalize_capacity(
+    context: core.KernelContext, mutations: tuple[dict[str, Any], ...], *, work: _ValidationWork | None,
+) -> tuple[dict[str, Any], ...]:
+    """Actual finalizer with optional cumulative accounting, not input ownership.
+
+    A measured composer must first own the context/row/mutation graphs and pass
+    its one shared exact work object. Shared-meter validation and exhaustion
+    propagate unchanged; capacity-contract failures remain AuditCapacityError.
+    No counter is initialized here, and a measured result is not an admission token.
+    """
+    _require_work(work)
+    spec, selected, entries = _inventory(context.operation, context.selected_rows, mutations, work=work)
+    before = _before_for_operation(spec, selected, work=work)
     outbox, supplied = _parts(entries)
     if supplied:
         _fail("global audit capacity mutation is kernel supplied")
     if not outbox:
-        return tuple(_copy(list(entries)))
+        return _copied_entries(entries, work=work)
     if before is None:
         _fail("global audit capacity mutation is outside its source operation")
     instant = context.database_now
@@ -436,13 +574,28 @@ def finalize_capacity(context: core.KernelContext, mutations: tuple[dict[str, An
         _fail("global audit capacity producer time is not explicit")
     elapsed = instant.astimezone(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.utc)
     timestamp = (elapsed.days * 86400 + elapsed.seconds) * 1_000_000_000 + elapsed.microseconds * 1000
-    row = _after(before, *_delta(outbox), timestamp)
+    row = _after(before, *_delta(outbox), timestamp, work=work)
     if len(entries) >= spec["maximumMutations"]:
         _fail("audit capacity inventory exceeds its operation bound")
-    capacity_selected = selected[(AGGREGATE_TABLE, _canonical({"aggregate_id": AGGREGATE_ID}))]
+    capacity_selected = selected[(AGGREGATE_TABLE, _canonical({"aggregate_id": AGGREGATE_ID}, work=work))]
+    if work is not None:
+        # These are the three actual dict copies in core.mutation; retain its
+        # real source-template body rather than synthesize a second recipe.
+        work.prepare_copy(capacity_selected["key"])
+        work.prepare_copy(capacity_selected["row"])
+        work.prepare_copy(row)
     counter_mutation = core.mutation(operation=context.operation, selected=capacity_selected, row=row)
-    result = (*tuple(_copy(list(entries))), counter_mutation)
-    validate_capacity_transition(operation=context.operation, selected_rows=context.selected_rows, mutations=result)
+    business_entries = _copied_entries(entries, work=work)
+    if work is not None:
+        work.prepare_copy(business_entries)
+        work.prepare_copy(counter_mutation)
+    result = (*business_entries, counter_mutation)
+    if work is None:
+        # Preserve the public named observer route for existing callers.
+        validate_capacity_transition(operation=context.operation, selected_rows=context.selected_rows, mutations=result)
+    else:
+        _validate_capacity_transition(operation=context.operation, selected_rows=context.selected_rows,
+                                      mutations=result, work=work)
     return result
 
 
@@ -491,8 +644,17 @@ def transition_work_units(
 
 def validate_capacity_transition(*, operation: str, selected_rows: Any, mutations: Any) -> None:
     """Independently rederive the exact counter CAS; supplied time is not trusted time."""
-    spec, selected, entries = _inventory(operation, selected_rows, mutations)
-    before = _before_for_operation(spec, selected)
+    return _validate_capacity_transition(operation=operation, selected_rows=selected_rows,
+                                         mutations=mutations, work=None)
+
+
+def _validate_capacity_transition(
+    *, operation: str, selected_rows: Any, mutations: Any, work: _ValidationWork | None,
+) -> None:
+    """The genuine validator; measured callers retain ownership responsibility."""
+    _require_work(work)
+    spec, selected, entries = _inventory(operation, selected_rows, mutations, work=work)
+    before = _before_for_operation(spec, selected, work=work)
     outbox, counters = _parts(entries)
     if not outbox:
         if counters:
@@ -506,6 +668,6 @@ def validate_capacity_transition(*, operation: str, selected_rows: Any, mutation
     if (counter["operation"] != "UPDATE" or counter["key"] != {"aggregate_id": AGGREGATE_ID}
             or type(counter["row"]) is not dict):
         _fail("global audit capacity mutation identity changed")
-    expected = _after(before, *_delta(outbox), counter["row"].get("updated_at_epoch_ns"))
-    if _canonical(counter["row"]) != _canonical(expected):
+    expected = _after(before, *_delta(outbox), counter["row"].get("updated_at_epoch_ns"), work=work)
+    if not _canonical_equal(counter["row"], expected, work=work):
         _fail("global audit capacity mutation differs from the complete outbox delta")

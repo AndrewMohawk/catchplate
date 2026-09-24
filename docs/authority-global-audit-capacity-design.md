@@ -129,7 +129,7 @@ would escape the signed predicted transition.
 
 Source revision `.25` introduced primary-root work profile `/v2` and these
 allowances; `.26` closed the [authority table permissions](authority-table-permissions.md).
-Current `.27` additionally binds the [verifier read permissions](authority-verifier-read-permissions.md).
+Revision `.27` additionally binds the [verifier read permissions](authority-verifier-read-permissions.md).
 The original business ceilings remain 256 rows, 512 mutations and
 16,384 work units; twelve reviewed operations reclaim one old query/mutation
 slot. Final-plan ceilings are 257/513/16,386, but only the exact counter address
@@ -151,6 +151,11 @@ identities: scan, row, leaf, 64 contiguous proof-node reads, a write when presen
 and a root read only for the four source-declared new aggregate dependencies.
 Shared-prefix reads for other proofs remain business-charged. The absolute
 trace ceiling is 4165; no-op and shared-root cases receive less allowance.
+
+The separate [shared-work accounting seam](authority-audit-capacity-work.md)
+meters the actual Python finalizer and its repeated validator for a future
+bounded semantic composer. Hash/byte/node counters do not replace these signed
+operation work units or change the public planner/executor entry points.
 
 The integration has these concrete seams:
 

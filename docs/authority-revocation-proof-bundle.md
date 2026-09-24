@@ -177,3 +177,7 @@ revocation. Independently verified assertion/request/time, authenticated index
 population and currentness, all-writer SQL maintenance, coordinated protocol
 upgrade, durable retention/replay and independently provisioned release and
 verification services remain mandatory. Existing startup gates stay closed.
+
+The separate [measured capacity worker](authority-audit-capacity-work.md) now
+provides genuine shared-body accounting for that future semantic stage. This
+retained-proof API does not invoke it or relax its initialized-counter checks.

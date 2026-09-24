@@ -640,6 +640,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_wire_json_source.py \
 	scripts/test_authority_primary_tree_source.py \
 	scripts/test_authority_audit_capacity.py \
+	scripts/test_authority_audit_capacity_work.py \
 	scripts/test_authority_global_audit_capacity.py \
 	scripts/test_authority_global_audit_capacity_sql_source.py \
 	scripts/test_authority_global_audit_capacity_integration_source.py \

@@ -668,6 +668,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_verifier_source.py \
 	scripts/test_authority_revocation_planning.py \
 	scripts/test_authority_revocation_planning_source.py \
+	scripts/test_authority_revocation_planning_transport.py \
 	scripts/test_authority_revocation_planner_configuration.py \
 	scripts/test_authority_revocation_planner_configuration_source.py \
 	scripts/test_authority_revocation_coordinator_source.py \
@@ -922,6 +923,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_revocation_handoff.py \
 	serverware/authority_revocation_verifier.py \
 	serverware/authority_revocation_planning.py \
+	serverware/authority_revocation_planning_request.py \
+	serverware/authority_revocation_planning_transport.py \
+	serverware/authority_revocation_planning_client.py \
+	serverware/authority_revocation_planning_receiver.py \
 	serverware/authority_revocation_planner_configuration.py \
 	serverware/authority_revocation_invocation.py \
 	serverware/authority_revocation_issuance.py \
@@ -2670,6 +2675,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_handoff.py \
 				serverware/authority_revocation_verifier.py \
 				serverware/authority_revocation_planning.py \
+				serverware/authority_revocation_planning_request.py \
+				serverware/authority_revocation_planning_transport.py \
+				serverware/authority_revocation_planning_client.py \
+				serverware/authority_revocation_planning_receiver.py \
 				serverware/authority_revocation_planner_configuration.py \
 				serverware/authority_transport.py \
 				serverware/authority_revocation_invocation.py \

@@ -43,8 +43,13 @@ class RevocationWriterTransportSourceTests(unittest.TestCase):
         self.shape(allowance, "_ValidationWork(QueryReadValidationLimits())")
         self.assertLess(guard.end_lineno, receive.lineno)
         self.assertLess(receive.lineno, allowance.lineno)
-        self.assertEqual(len(calls(self.server, "_ValidationWork")), 1)
-        self.assertEqual(len(calls(self.server, "QueryReadValidationLimits")), 1)
+        planning_ingress = definition(self.server, "_serve_revocation_planning")
+        self.assertEqual(calls(self.ingress, "_ValidationWork"), [allowance])
+        self.assertEqual(calls(self.server, "_ValidationWork"),
+                         [allowance, call(planning_ingress, "_ValidationWork")])
+        self.assertEqual(calls(self.server, "QueryReadValidationLimits"),
+                         [call(self.ingress, "QueryReadValidationLimits"),
+                          call(planning_ingress, "QueryReadValidationLimits")])
 
     def test_original_five_and_same_work_reach_real_composition_before_exact_ack_send(self):
         operation = call(self.ingress, "process._persist_and_reserve_revocation_commitments")
@@ -83,12 +88,13 @@ class RevocationWriterTransportSourceTests(unittest.TestCase):
                        and any(isinstance(target, ast.Name) and target.id == "detached" for target in node.targets)]
         self.assertEqual(len(assignments), 2)
         self.shape(assignments[0].value, "False")
-        self.shape(assignments[1].value, "prefix == writer_transport.REQUEST_MAGIC")
+        self.shape(assignments[1].value,
+                   "prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC)")
         routed = call(self.served, "self._serve_revocation_writer")
         self.shape(routed, "self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)")
         branch, = [node for node in ast.walk(self.served) if isinstance(node, ast.If)
                    and any(child is routed for child in ast.walk(node))]
-        self.shape(branch.test, "detached")
+        self.shape(branch.test, "prefix == writer_transport.REQUEST_MAGIC")
         self.assertEqual(len(branch.body), 2)
         self.assertIsInstance(branch.body[-1], ast.Return)
         self.assertEqual([peer.lineno, guard.lineno, prefix.lineno, routed.lineno],

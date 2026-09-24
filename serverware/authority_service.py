@@ -50,6 +50,7 @@ from serverware import authority_contract
 from serverware import authority_planner
 from serverware import authority_transition_registry
 from serverware import authority_transport
+from serverware import authority_revocation_planning_transport as planning_transport
 from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
@@ -3886,6 +3887,110 @@ class AuthorityProcess:
         return planner.produce_observed(request=owned["request"], evidence=owned["evidence"],
             context=owned["context"], root_inventory=inventory, work=work)
 
+    def _request_revocation_observed_plan(self, *, request, evidence, context, work):
+        """Acquire independent roots and authenticate one planner exchange.
+
+        Request/evidence and the original reservation context must come from
+        genuine upstream admission. This adapter accepts no root inventory,
+        public key, current clock, prior proof or response expectation. Hold
+        service settings and own call graphs before launch/driver callbacks;
+        read and close the real verifier inventory before final generation
+        capture. The fixed client verifies the original returned plan/context
+        against those same independent inputs. No public dispatcher is enabled.
+        """
+        if (self.role_name != "verifier"
+                or self.process_mode != "policy-authority-verifier"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation planning client process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        verifier_private_key = self.signing_key
+        if not isinstance(verifier_private_key, Ed25519PrivateKey):
+            raise AuthorityServiceError("revocation planning verifier signer is unavailable")
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_observed
+        from serverware import authority_revocation_planning_client
+        from serverware import authority_revocation_planning_request
+        from serverware import authority_revocation_root_reader
+
+        owned = authority_revocation_planning_request._capture_call_graphs(
+            request=request, evidence=evidence, context=context, work=work)
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation planning verifier configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        role = owned_payload["roles"]["verifier"]
+        try:
+            timeout = role["databaseConnectTimeoutSeconds"]
+            if type(timeout) not in (int, float) or not 2 <= timeout <= 300:
+                raise AuthorityServiceError("revocation planning verifier read timeout is not bounded")
+            pins = (int(timeout), role["databaseRole"], role["tlsClientDn"],
+                role["tlsClientSerial"], role["tlsIssuerDn"], owned_payload["queryManifestDigest"])
+        except KeyError as exc:
+            raise AuthorityServiceError("revocation planning verifier read configuration is incomplete") from exc
+        authority_revocation_root_reader._validate_pins(pins)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("verifier"))
+        dsn = authority_revocation_configuration.production._callback(
+            work, lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"))
+        reader = authority_revocation_root_reader.RevocationRootReader(
+            dsn=dsn, connect_timeout_seconds=pins[0], database_role=pins[1],
+            tls_client_dn=pins[2], tls_client_serial=pins[3], tls_issuer_dn=pins[4],
+            query_manifest_digest=pins[5])
+        observed_inventory = reader.read(work=work)
+        inventory = authority_revocation_observed._capture_root_inventory(observed_inventory, work=work)
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return authority_revocation_planning_client._request_on_configuration(
+            payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
+            request=owned["request"], evidence=owned["evidence"], context=owned["context"],
+            root_inventory=inventory, verifier_private_key=verifier_private_key, work=work)
+
+    def _produce_revocation_plan_from_request(self, *, control_bytes, request_bytes,
+            evidence_bytes, context_bytes, root_inventory_bytes, work):
+        """Authenticate detached originals before the genuine read-only planner.
+
+        Main's measured configuration and active planner launch are mandatory.
+        Own configuration and signer once; the read-only descriptor and final
+        generation snapshot feed one fixed worker, never a mutable self-method
+        chain. Original request authentication precedes opening the read DB.
+        Registry closure remains enforced by the actual planner import.
+        """
+        if (self.role_name != "planner"
+                or self.process_mode != "policy-authority-planner"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation planning receiver process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        planner_private_key = self.signing_key
+        if not isinstance(planner_private_key, Ed25519PrivateKey):
+            raise AuthorityServiceError("revocation planning receiver signer is unavailable")
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_planning_receiver
+
+        authority_revocation_planning_receiver._validate_originals(
+            control_bytes=control_bytes, request_bytes=request_bytes, evidence_bytes=evidence_bytes,
+            context_bytes=context_bytes, root_inventory_bytes=root_inventory_bytes)
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation planning receiver configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("planner"))
+        read_dsn = authority_revocation_configuration.production._callback(
+            work, lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"))
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return authority_revocation_planning_receiver._produce_on_configuration(
+            payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
+            control_bytes=control_bytes, request_bytes=request_bytes, evidence_bytes=evidence_bytes,
+            context_bytes=context_bytes, root_inventory_bytes=root_inventory_bytes,
+            read_dsn=read_dsn, planner_private_key=planner_private_key, work=work)
+
     def _produce_revocation_writer_intent(self, *, envelope_bytes, evaluation_context_bytes,
             expected_request, context, planned_at_epoch_ns, envelope_id,
             planner_transaction_id, work):
@@ -7666,6 +7771,33 @@ class AuthorityServer:
         writer_transport._check_deadline(deadline_ns)
         writer_transport._send_ack(connection, acknowledgment_bytes, deadline_ns=deadline_ns)
 
+    def _serve_revocation_planning(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Peer-checked raw planning ingress, never a registry shortcut.
+
+        The complete bounded request and EOF precede work allocation or real
+        planning. One source-capped allowance follows authentication and the
+        actual read owner. No response byte is released until all read scopes
+        exit normally and both historical and transport deadlines remain live.
+        """
+        process = self.process
+        if (type(process) is not AuthorityProcess
+                or process.role_name != "planner"
+                or process.process_mode != "policy-authority-planner"):
+            raise AuthorityServiceError("detached planning transfer has the wrong service role")
+        originals = planning_transport._recv_request(
+            connection, deadline_ns=deadline_ns, prefix=prefix)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        planning_transport._check_deadline(deadline_ns)
+        envelope_bytes, evaluation_context_bytes = process._produce_revocation_plan_from_request(
+            control_bytes=originals[0], request_bytes=originals[1], evidence_bytes=originals[2],
+            context_bytes=originals[3], root_inventory_bytes=originals[4], work=work)
+        planning_transport._check_deadline(deadline_ns)
+        planning_transport._send_response(connection, envelope_bytes, evaluation_context_bytes,
+            deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -7676,9 +7808,12 @@ class AuthorityServer:
                     "authority socket peer identity is not allowed"
                 )
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
-            detached = prefix == writer_transport.REQUEST_MAGIC
-            if detached:
+            detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC)
+            if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix == planning_transport.REQUEST_MAGIC:
+                self._serve_revocation_planning(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

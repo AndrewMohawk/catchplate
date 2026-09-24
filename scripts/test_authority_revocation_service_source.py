@@ -184,29 +184,50 @@ class RevocationServiceSourceTests(unittest.TestCase):
     def test_factory_owns_original_config_and_launch_pins_with_configuration_only_float_support(self):
         _source, module = read("serverware/authority_revocation_configuration.py")
         factory = definition(module, "_issuer_from_configuration_on_work")
+        prefix = definition(module, "_capture_configuration_on_work")
         self.assertEqual([argument.arg for argument in factory.args.kwonlyargs],
             ["payload", "configuration_digest", "generation", "work"])
         self.assertIsNone(factory.args.kwarg)
+        self.assertEqual([argument.arg for argument in prefix.args.kwonlyargs],
+            ["payload", "configuration_digest", "generation", "work"])
+        self.assertIsNone(prefix.args.kwarg)
+        delegated = calls(factory, "_capture_configuration_on_work")
+        self.assertEqual(len(delegated), 1)
+        self.shape(delegated[0], """_capture_configuration_on_work(payload=payload,
+            configuration_digest=configuration_digest, generation=generation, work=work)""")
         self.assertEqual(ast.literal_eval(assigned(module, "_GENERATION_FIELDS")),
             ("schema", "sequence", "digest", "predecessorDigest", "minimumRollbackSequence",
              "operationManifestDigest", "configurationDigests"))
         self.assertEqual(ast.literal_eval(assigned(module, "MAX_CONFIGURATION_DIGESTS")), 4096)
-        bounded = calls(factory, "capability.shape._bounded_object")
+        bounded = calls(prefix, "capability.shape._bounded_object")
         self.assertEqual(len(bounded), 1)
         self.shape(bounded[0], 'capability.shape._bounded_object(generation, 20, "issuer launch context")')
-        self.shape(assigned(factory, "owned"), "_ConfigurationCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)")
-        self.shape(assigned(factory, "launch"), """capability.capture._JSONCapture(ledger,
+        self.shape(assigned(prefix, "owned"), "_ConfigurationCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)")
+        self.shape(assigned(prefix, "launch"), """capability.capture._JSONCapture(ledger,
             maximum_bytes=authority.MAX_REQUEST_BYTES).visit({name: generation[name] for name in _GENERATION_FIELDS})""")
-        self.assertLess(bounded[0].lineno, assigned(factory, "launch").lineno)
+        self.assertLess(bounded[0].lineno, assigned(prefix, "launch").lineno)
         keys = calls(factory, "_key")
         self.assertEqual(len(keys), 3)
         self.shape(keys[0], '_key(planner["signingPublicKeyBase64Url"], work, expected_spki=planner["signingSpkiDigest"])')
         self.shape(keys[1], '_key(verifier["signingPublicKeyBase64Url"], work, expected_spki=verifier["signingSpkiDigest"])')
         self.shape(keys[2], '_key(witness["signingPublicKeyBase64Url"], work)')
-        self.assertLess(assigned(factory, "owned").lineno, keys[0].lineno)
-        self.assertLess(assigned(factory, "launch").lineno, keys[0].lineno)
-        self.shape(assigned(factory, "encoded"), "_configuration_wire(owned, ledger)")
-        self.shape(assigned(factory, "computed"), "capability.plan._frame(CONFIG_SCHEMA, (encoded,), work)")
+        self.assertLess(assigned(prefix, "owned").lineno, prefix.body[-1].lineno)
+        self.assertLess(assigned(prefix, "launch").lineno, prefix.body[-1].lineno)
+        self.shape(prefix.body[-1].value, "(owned, launch)")
+        self.assertLess(delegated[0].lineno, keys[0].lineno)
+        self.shape(assigned(prefix, "encoded"), "_configuration_wire(owned, ledger)")
+        self.shape(assigned(prefix, "computed"), "capability.plan._frame(CONFIG_SCHEMA, (encoded,), work)")
+        commitment = calls(prefix, "capability.plan._same")
+        binding = calls(prefix, "_generation_binding")
+        self.assertEqual((len(commitment), len(binding)), (1, 1))
+        self.shape(commitment[0], '''capability.plan._same(computed, configuration_digest,
+            work, "issuer configuration commitment changed")''')
+        self.shape(binding[0], "_generation_binding(owned, launch, configuration_digest, work)")
+        self.assertLess(assigned(prefix, "launch").lineno, assigned(prefix, "encoded").lineno)
+        self.assertLess(assigned(prefix, "encoded").lineno, assigned(prefix, "computed").lineno)
+        self.assertLess(assigned(prefix, "computed").lineno, commitment[0].lineno)
+        self.assertLess(commitment[0].lineno, binding[0].lineno)
+        self.assertLess(binding[0].lineno, prefix.body[-1].lineno)
         self.shape(assigned(factory, "verifier_session"), '''_frame_text(_VERIFIER_SESSION,
             (configuration_digest, verifier["measurementDigest"], verifier["attestationReceiptDigest"]), work)''')
         self.shape(assigned(factory, "issuer_session"), '''_frame_text(_ISSUER_SESSION,

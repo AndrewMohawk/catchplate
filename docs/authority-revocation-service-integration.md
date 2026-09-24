@@ -9,6 +9,13 @@ an enabled serving route: `AuthorityServer._serve_connection`, the public
 unchanged. No socket exchange, measured launch, PostgreSQL admission or
 committed issuance has been verified for this source.
 
+Source `.55` adds a private configured verifier method for the
+[authenticated planner handoff](authority-revocation-handoff.md#configured-verifier-ownership).
+It owns caller inputs and full measured configuration before guarded launch
+callbacks, checks configuration/key/policy bindings, and invokes actual
+original-byte replay. It does not enable a serving purpose or combine planner
+and planner-writer credentials.
+
 The [authenticated invocation](authority-revocation-invocation.md) and
 [issuer custody](authority-revocation-issuance.md) contracts still apply.
 
@@ -46,6 +53,10 @@ canonical configuration commitment, requires membership in the launch's
 sorted unique configuration list, and joins generation, predecessor, rollback
 floor and operation manifest. This successor requires a positive generation;
 the general service's generation-zero behavior is not changed.
+
+The issuer and verifier mappers share that exact pre-key capture/commitment
+body. The issuer retains its original five-hash schedule; the verifier maps
+only its own two public keys, identities and historical age/skew policy.
 
 | Issuer setting | Configured source and check |
 | --- | --- |

@@ -1,11 +1,12 @@
-"""Private configured-issuer construction from admitted service commitments.
+"""Shared measured-configuration capture and private issuer construction.
 
-This mapper owns configuration values and checks their consistency with the
-separately supplied configuration digest and launch bindings. It does not
-enroll a root key, verify a launch or turn arbitrary dictionaries into measured
-configuration. The actual service supplies its root-admitted configuration and
-active launch context. Database role/TLS admission remains in the real issuer
-connector. No database import, clock, private key or public route exists here.
+The shared capture prefix owns configuration values and checks their consistency
+with the separately supplied configuration digest and launch bindings for the
+private issuer and handoff-verifier mappers. It does not enroll a root key,
+verify a launch or turn arbitrary dictionaries into measured configuration.
+The actual service supplies its root-admitted configuration and active launch
+context. Database role/TLS admission remains in the real issuer connector. No
+database import, clock, private key or public route exists here.
 """
 from __future__ import annotations
 
@@ -135,6 +136,32 @@ def _generation_binding(payload, generation, configuration_digest, work):
         raise RevocationConfigurationError("issuer configuration is not in the active launch generation")
 
 
+def _capture_configuration_on_work(*, payload, configuration_digest, generation, work):
+    """Own the actual configuration and seven launch bindings on existing work.
+
+    This shared consistency check is not root-key or launch admission. Its
+    caller must supply the separately admitted configuration commitment and
+    active launch values. Capturing them never manufactures that provenance.
+    """
+    ledger = capability.capture._SharedLedger(work)
+    capability.shape._digest(configuration_digest)
+    if type(payload) is not dict or type(generation) is not dict:
+        raise RevocationConfigurationError("issuer configuration requires exact local JSON objects")
+    # Validate exact keys before fixed lookups can encounter a foreign
+    # string subclass. The real launch-context/v1 has twenty fields.
+    capability.shape._bounded_object(generation, 20, "issuer launch context")
+    owned = _ConfigurationCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
+    launch = capability.capture._JSONCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(
+        {name: generation[name] for name in _GENERATION_FIELDS})
+    capability.shape._literal(owned["schema"], CONFIG_SCHEMA)
+    capability.shape._literal(owned["sourceRevision"], authority.SOURCE_REVISION)
+    encoded = _configuration_wire(owned, ledger)
+    computed = capability.plan._frame(CONFIG_SCHEMA, (encoded,), work)
+    capability.plan._same(computed, configuration_digest, work, "issuer configuration commitment changed")
+    _generation_binding(owned, launch, configuration_digest, work)
+    return owned, launch
+
+
 def _issuer_from_configuration_on_work(*, payload, configuration_digest, generation, work):
     """Map an owned configuration on the existing remaining work allowance.
 
@@ -146,22 +173,8 @@ def _issuer_from_configuration_on_work(*, payload, configuration_digest, generat
     to that same source policy. A stricter measured age is never widened.
     """
     try:
-        ledger = capability.capture._SharedLedger(work)
-        capability.shape._digest(configuration_digest)
-        if type(payload) is not dict or type(generation) is not dict:
-            raise RevocationConfigurationError("issuer configuration requires exact local JSON objects")
-        # Validate exact keys before fixed lookups can encounter a foreign
-        # string subclass. The real launch-context/v1 has twenty fields.
-        capability.shape._bounded_object(generation, 20, "issuer launch context")
-        owned = _ConfigurationCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
-        launch = capability.capture._JSONCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(
-            {name: generation[name] for name in _GENERATION_FIELDS})
-        capability.shape._literal(owned["schema"], CONFIG_SCHEMA)
-        capability.shape._literal(owned["sourceRevision"], authority.SOURCE_REVISION)
-        encoded = _configuration_wire(owned, ledger)
-        computed = capability.plan._frame(CONFIG_SCHEMA, (encoded,), work)
-        capability.plan._same(computed, configuration_digest, work, "issuer configuration commitment changed")
-        _generation_binding(owned, launch, configuration_digest, work)
+        owned, launch = _capture_configuration_on_work(payload=payload,
+            configuration_digest=configuration_digest, generation=generation, work=work)
 
         roles = owned["roles"]
         if type(roles) is not dict:

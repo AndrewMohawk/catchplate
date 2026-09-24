@@ -3688,6 +3688,45 @@ class AuthorityProcess:
             query_manifest_digest=pins[5])
         return reader.read(work=work)
 
+    def _verify_revocation_plan_handoff(self, *, envelope_bytes, evaluation_context_bytes,
+            expected_request, context, root_inventory, work):
+        """Private measured-verifier composition, not a serving purpose.
+
+        Main's root-signed configuration load and the active launch establish
+        admission. A constructed dataclass or caller-owned inventory is not
+        that admission. Capture invocation inputs and the full configuration
+        before launch or key callbacks; role identity and age policy come only
+        from the captured measured configuration. No DSN or signing key is used.
+        """
+        if (self.role_name != "verifier"
+                or self.process_mode != "policy-authority-verifier"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation plan verifier process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_verifier
+
+        owned_request, owned_context, inventory = authority_revocation_verifier._capture_handoff_inputs(
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            expected_request=expected_request, context=context, root_inventory=root_inventory, work=work)
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation plan verifier configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("verifier"))
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        verifier = authority_revocation_verifier._verifier_from_configuration_on_work(
+            payload=owned_payload, configuration_digest=configuration_digest,
+            generation=generation, work=work)
+        return verifier.verify_handoff(envelope_bytes=envelope_bytes,
+            evaluation_context_bytes=evaluation_context_bytes, expected_request=owned_request,
+            context=owned_context, root_inventory=inventory, work=work)
+
     def _revocation_capability_issuer(self, *, work):
         """Construct the private successor only from this admitted issuer.
 

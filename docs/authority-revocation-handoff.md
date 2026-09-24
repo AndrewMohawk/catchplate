@@ -11,6 +11,10 @@ The existing planner signature already covers both database-cutoff fields.
 This helper uses that signature; it introduces no new envelope, signature
 format or response purpose.
 
+Source `.55` adds configured verifier ownership and the private
+`AuthorityProcess._verify_revocation_plan_handoff` composition described below.
+It remains unbuilt, unexecuted and separate from network dispatch.
+
 ## Authenticate first, then replay
 
 The caller supplies its independently admitted planner/verifier public keys,
@@ -71,8 +75,9 @@ current-root checks and one-use execution remain separate requirements.
 
 ## Still required
 
-Measured verifier configuration and serving integration must call this helper
-with independently owned inputs. The existing combined planning coordinator
+The private configured composition now calls this helper with independently
+owned inputs; original-byte serving integration is still required. The existing
+combined planning coordinator
 cannot simply be installed in the planner role: it requires both a planner
 read DSN and writer persistence, while actual process admission deliberately
 separates planner and planner-writer credentials. Preserve that separation in
@@ -85,3 +90,42 @@ immutable dependency/coverage approvals, sealed verification prerequisites
 and independent production Nitro/KMS/signing/witness services remain required.
 Follow the frozen-source preparation and sequential no-build workflow in
 [goal.md](../goal.md); authored fixtures and source review are not runtime proof.
+
+## Configured verifier ownership
+
+The `.55` process method requires the verifier role/process mode, the actual
+root-admitted measured configuration and an active verifier launch. It captures
+the original request, caller context and full inventory, then owns the entire
+configuration before launch or key callbacks. A constructed dataclass or a
+synthetic configuration fixture does not establish that admission chain.
+
+The mapper recomputes the complete configuration commitment and checks the
+launch generation, predecessor, rollback floor, operation manifest and sorted
+configuration membership. It checks the source query manifest, both raw public
+keys against their SPKI and response-signing pins, and derives the verifier
+session identity from the configuration digest and measured role identity.
+It neither reuses the issuer factory nor obtains database or private keys.
+
+| Context boundary | Fields supplied here |
+| --- | --- |
+| Caller: 9 fields | Original request-associated IDs, fence, reservation/evaluation clocks, deadlines and approver-policy digest |
+| Configured owner: adds 5 | Planner/verifier identities, assertion age, plan age and clock skew |
+| Genuine handoff: adds 1 | Expected root subset, with values only from the independent inventory |
+
+Assertion age is exactly the measured WebAuthn challenge-age policy, including
+windows longer than thirty seconds. Plan age is the minimum of the verifier's
+measured internal-message age and the source thirty-second bound; clock skew
+is the source five-second value. Callers cannot supply or override these five
+configured fields. No current clock is sampled or substituted for history.
+
+One exact ten-field settings tuple is held for each invocation. Its config and
+generation pins describe the admitted mapper input; they are not new fields
+in the signed v4 plan. The plan is joined through its existing identity/source
+bindings and genuine replay, not a fabricated explicit generation claim.
+
+The factory performs four charged hashes: full configuration, two SPKIs and the
+verifier session. The process, configured owner and handoff each perform their
+real ownership boundary on the same remaining allowance. The existing issuer
+uses the shared configuration-capture prefix with its original five-hash
+schedule unchanged. Fixed settings/source metadata, native crypto internals
+and existing launch-guard internals are not whole-process H/B/N accounting.

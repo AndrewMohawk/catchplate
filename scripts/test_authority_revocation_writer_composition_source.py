@@ -39,13 +39,14 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.assertEqual([item.arg for item in self.worker.args.args], ["configuration"])
         self.assertEqual([item.arg for item in self.worker.args.kwonlyargs], ORIGINALS + [
             "owned_payload", "configuration_digest", "generation_sequence", "generation_digest",
-            "maximum_age_ns", "work"])
+            "maximum_age_ns", "writer_private_key", "launch_public_key", "work"])
         for function in (self.adapter, self.worker):
             self.assertIsNone(function.args.vararg)
             self.assertIsNone(function.args.kwarg)
             self.assertTrue(all(value is None for value in function.args.kw_defaults))
         # This inert composition neither imports an active role nor accepts a
-        # successful receiver DTO, operation, opener, clock, signer or new limit.
+        # successful receiver DTO, operation, opener, clock or new limit. Only
+        # its fixed service caller supplies the two held cryptographic handles.
         for forbidden in ("authority_service", "authority_transition_registry", "from serverware import db",
                 "import psycopg", "Ed25519PrivateKey", "_ValidationWork(", "_PackagingLedger(",
                 "_ProducedIntent", "_ProducedRelay", "_AuthenticatedCommitments("):
@@ -54,11 +55,17 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
     def test_service_owns_complete_measured_payload_and_scalar_pins_before_any_launch_or_key_callback(self):
         adapter = self.adapter
         guards = [node for node in adapter.body if isinstance(node, ast.If)]
-        self.assertEqual(len(guards), 3)
+        self.assertEqual(len(guards), 6)
         self.shape(guards[0].test, '''self.role_name != "planner-writer"
             or self.process_mode != "policy-authority-planner-writer"
             or type(self.configuration) is not MeasuredConfiguration''')
         self.shape(assigned(adapter, "configuration"), "self.configuration")
+        private = assigned(adapter, "writer_private_key")
+        launch_private = assigned(adapter, "launch_private_key")
+        self.shape(private, "self.writer_response_signing_key")
+        self.shape(launch_private, "self.launch_identity_key")
+        self.shape(guards[1].test, '''not isinstance(writer_private_key, Ed25519PrivateKey)
+            or not isinstance(launch_private_key, Ed25519PrivateKey)''')
         payload_pin, = [node for node in adapter.body if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Tuple) and [ast.unparse(item) for item in target.elts]
                     == ["payload", "configuration_digest"] for target in node.targets)]
@@ -70,11 +77,11 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             historical_expectations_bytes=historical_expectations_bytes)''')
         ledger = call(adapter, "authority_revocation_configuration.capability.capture._SharedLedger")
         self.shape(ledger, "authority_revocation_configuration.capability.capture._SharedLedger(work)")
-        self.shape(guards[1].test, "type(payload) is not dict")
+        self.shape(guards[2].test, "type(payload) is not dict")
         owned = assigned(adapter, "owned_payload")
         self.shape(owned, '''authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)''')
-        self.shape(guards[2].test, '''type(owned_payload.get("roles")) is not dict
+        self.shape(guards[3].test, '''type(owned_payload.get("roles")) is not dict
             or type(owned_payload["roles"].get("planner-writer")) is not dict''')
         sequence = assigned(adapter, "generation_sequence")
         generation = assigned(adapter, "generation_digest")
@@ -82,6 +89,26 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(sequence, 'owned_payload["generationSequence"]')
         self.shape(generation, 'owned_payload["generationDigest"]')
         self.shape(age, 'owned_payload["roles"]["planner-writer"]["maximumInternalAgeNs"]')
+        writer_pin = assigned(adapter, "writer_response_spki_digest")
+        others = assigned(adapter, "other_response_spki_digests")
+        self.shape(writer_pin, 'owned_payload["roles"]["planner-writer"]["responseSigningSpkiDigest"]')
+        self.shape(others, '''tuple(owned_payload["roles"][name]["responseSigningSpkiDigest"]
+            for name in ("verifier", "planner", "issuer", "executor"))''')
+        self.shape(guards[4].test, "writer_response_spki_digest in other_response_spki_digests")
+        pin_loop, = [node for node in adapter.body if isinstance(node, ast.For)]
+        self.shape(pin_loop.iter, "other_response_spki_digests")
+        self.shape(pin_loop.body[0].value, "authority_revocation_configuration.capability.shape._digest(pin)")
+        self.assertEqual([ast.unparse(node) for node in calls(adapter,
+            "authority_revocation_configuration.capability.shape._digest")], [
+                "authority_revocation_configuration.capability.shape._digest(configuration_digest)",
+                "authority_revocation_configuration.capability.shape._digest(generation_digest)",
+                "authority_revocation_configuration.capability.shape._digest(writer_response_spki_digest)",
+                "authority_revocation_configuration.capability.shape._digest(pin)"])
+        launch = assigned(adapter, "launch_public_key")
+        self.shape(launch, '''authority_revocation_configuration.production._callback(
+            work, lambda: launch_private_key.public_key())''')
+        self.assertEqual(len(calls(adapter, "authority_revocation_configuration.production._callback")), 1)
+        self.shape(guards[5].test, "not isinstance(launch_public_key, Ed25519PublicKey)")
         self.assertEqual([ast.unparse(node) for node in calls(adapter,
             "authority_revocation_configuration.capability.shape._integer")], [
                 "authority_revocation_configuration.capability.shape._integer(generation_sequence, minimum=1)",
@@ -97,9 +124,12 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes, owned_payload=owned_payload,
             configuration_digest=configuration_digest, generation_sequence=generation_sequence,
-            generation_digest=generation_digest, maximum_age_ns=maximum_age_ns, work=work)''')
+            generation_digest=generation_digest, maximum_age_ns=maximum_age_ns,
+            writer_private_key=writer_private_key, launch_public_key=launch_public_key, work=work)''')
         self.assertIs(adapter.body[-1].value, delegated)
-        ordered = (payload_pin, originals, ledger, owned, sequence, generation, age, factory, snapshot, delegated)
+        ordered = (private, launch_private, payload_pin, originals, ledger, owned,
+                   sequence, generation, age, writer_pin, others, pin_loop, guards[4],
+                   launch, guards[5], factory, snapshot, delegated)
         self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
         self.assertEqual(len(calls(adapter, "persistence._snapshot_configuration")), 1)
         self.assertFalse(calls(adapter, "min"))
@@ -178,13 +208,24 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(owned, '''configuration_capture._ConfigurationCapture(
             ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(owned_payload)''')
         self.assertEqual(len(calls(worker, "configuration_capture._ConfigurationCapture")), 1)
+        writer_pin = assigned(worker, "writer_response_spki_digest")
+        others = assigned(worker, "other_response_spki_digests")
+        self.shape(writer_pin, 'payload["roles"]["planner-writer"]["responseSigningSpkiDigest"]')
+        self.shape(others, '''tuple(payload["roles"][name]["responseSigningSpkiDigest"]
+            for name in ("verifier", "planner", "issuer", "executor"))''')
+        binder = call(worker, "acknowledgment._bind_signer_on_work")
+        self.assertIs(assigned(worker, "writer_public_key"), binder)
+        self.shape(binder, '''acknowledgment._bind_signer_on_work(
+            writer_private_key=writer_private_key, launch_public_key=launch_public_key,
+            expected_writer_spki_digest=writer_response_spki_digest,
+            other_response_spki_digests=other_response_spki_digests, work=work)''')
         keys, = [node for node in worker.body if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Tuple) and [ast.unparse(item) for item in target.elts]
                     == ["planner_key", "verifier_key"] for target in node.targets)]
         self.shape(keys.value, "configuration[2:4]")
         clock = assigned(worker, "now_monotonic_ns")
-        self.assertEqual([node.lineno for node in (originals, guard, owned, keys, clock)],
-                         sorted(node.lineno for node in (originals, guard, owned, keys, clock)))
+        ordered = (originals, guard, owned, writer_pin, others, binder, keys, clock)
+        self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
         self.assertFalse(any(isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
             and node.id in {"configuration", "work"} for node in ast.walk(worker)))
         for forbidden in ("persistence._snapshot_configuration", "configuration_capture._capture_configuration_on_work",
@@ -234,9 +275,12 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             historical_expectations_bytes=historical_expectations_bytes,
             configuration_digest=configuration_digest, generation_sequence=generation_sequence,
             generation_digest=generation_digest,
+            writer_private_key=writer_private_key, writer_public_key=writer_public_key,
+            writer_response_spki_digest=writer_response_spki_digest,
             **received.arguments, work=work, **received.expectations)''')
         self.assertIs(worker.body[-1].value, atomic)
-        ordered = (assigned(worker, "payload"), *callbacks, receiver, policy, atomic)
+        ordered = (assigned(worker, "payload"), assigned(worker, "writer_public_key"),
+                   *callbacks, receiver, policy, atomic)
         self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
         self.assertFalse(any(isinstance(node, (ast.Subscript, ast.Attribute)) and isinstance(node.ctx, ast.Store)
             for node in ast.walk(worker)))
@@ -299,7 +343,17 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         retain = call(inner, "store.persist_revocation_planner_record")
         reserve = call(inner, "revocation_execution.reserve_revocation_execution_envelope")
         self.assertLess(retain.lineno, reserve.lineno)
-        self.shape(operation.body[-1].value, "(retained_receipt, execution_reservation)")
+        self.shape(operation.body[-1].value, "(retained_receipt, execution_reservation, acknowledgment_bytes)")
+        ack = call(common, "ack_store._persist")
+        self.shape(ack, '''ack_store._persist(cursor, request_row,
+            writer_private_key=writer_private_key, writer_public_key=writer_public_key,
+            writer_response_spki_digest=writer_response_spki_digest, work=work)''')
+        request = call(common, "request_store._persist")
+        self.assertIs(assigned(common, "request_row"), request)
+        self.assertIs(assigned(common, "acknowledgment_bytes"), ack)
+        self.assertLess(call(common, "_retain_and_reserve_in_common").lineno, request.lineno)
+        self.assertLess(request.lineno, ack.lineno)
+        self.assertLess(common.end_lineno, operation.body[-1].lineno)
         _, store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
         stored_replay = definition(store, "_read_revocation_record_on_work")
         self.shape(call(definition(store, "persist_revocation_planner_record"), "retention._verify_record_on_work"),

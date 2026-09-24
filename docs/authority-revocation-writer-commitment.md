@@ -32,7 +32,9 @@ Source `.64` supplies that last arrow through the private
 with one held key/configuration tuple, current clocks and genuine atomic replay.
 It remains unexecuted and is not an enabled service path.
 Source `.65` adds [immutable request storage](authority-revocation-writer-request-storage.md)
-to that fixed composition; signed acknowledgment custody and transport remain open.
+to that fixed composition; `.67` adds the separate
+[signed ACK child](authority-revocation-writer-acknowledgment.md). Transport and
+authenticated historical recovery remain open.
 No API accepts a previously authenticated result in place of original bytes.
 
 ## Two signed controls, three detached bodies
@@ -131,7 +133,7 @@ allowances. No replacement work object or proof-success shortcut is introduced.
 Native cryptographic internals remain outside the existing defined byte/JSON
 work metric; the explicit signature transport and message work remain charged.
 
-## Durable integration still required
+## Durable integration and remaining recovery
 
 The `.65` immutable request record preserves original intent, relay and history
 bytes, linked exactly to the existing retained-plan and reserved-execution
@@ -143,13 +145,13 @@ timestamp requirement applies to first attachment to an older retained plan.
 Planned-parent and reserved-execution terminal fields remain null; neither
 they nor the consumed-execution ledger is used as a request journal.
 
-Signed acknowledgment custody is still missing. A separately specified immutable
-acknowledgment must bind the retained request and the genuine writer response
-signer. Its transaction and recovery protocol must be explicit; simply storing
-an acknowledgment after today's atomic owner returns cannot claim to share its
-transaction, because that owner has already committed. Exact stored acknowledgment bytes
-may be released only after normal transaction and connection exit. Exit
-uncertainty requires historical reconciliation, not an assumption of rollback.
+Source `.67` adds [signed acknowledgment custody](authority-revocation-writer-acknowledgment.md).
+The dedicated response signer binds the complete request scalar commitment;
+the immutable child is signed, inserted and genuinely verified from readback
+inside the same common transaction scope, after both actual replays. Existing
+ACKs are verified and returned byte-for-byte without re-signing. Exact stored
+bytes escape only after normal transaction and connection exit. Exit uncertainty
+still requires historical reconciliation, not an assumption of rollback.
 
 Historical acknowledgment lookup needs a separate explicit contract; it cannot
 masquerade as a fresh authorization or skip current action checks.
@@ -157,9 +159,10 @@ masquerade as a fresh authorization or skip current action checks.
 Source `.66` adds a dedicated writer-only descriptor and separate startup key
 slot, with actual Ed25519 parsing, measured response-SPKI binding and rejection
 of other-role or launch-key reuse. See [writer response signer](authority-revocation-writer-signer.md).
-It neither provisions a production key nor signs an ACK. A measured SPKI digest
-alone is still only a pin; descriptor loading is not hardware custody, and the
-future ACK path needs its own operation-bound signer/recovery contract.
+Startup loading itself neither provisions a production key nor signs an ACK.
+A measured SPKI digest alone is still only a pin; descriptor loading is not
+hardware custody. The `.67` request path separately meters actual key binding
+and operation-bound signing; authenticated historical recovery remains absent.
 
 Component and source-linkage fixtures are authored but unexecuted. Their
 synthetic clocks, keys and driver observations are not production admission.

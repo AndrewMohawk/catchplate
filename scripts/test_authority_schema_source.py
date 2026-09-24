@@ -670,14 +670,17 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
 
     def test_sqlite_retained_protocol_is_denied_while_v3_identity_stays_immutable(self):
         sql = planner_retention_sqlite_guards_sql()
-        self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 4)
+        self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 5)
         for name in ("serverware_planner_retention_insert_guard", "serverware_planner_retention_guard",
-                     "serverware_retained_sqlite_insert_guard", "serverware_writer_request_sqlite_insert_guard"):
+                     "serverware_retained_sqlite_insert_guard", "serverware_writer_request_sqlite_insert_guard",
+                     "serverware_writer_ack_sqlite_insert_guard"):
             self.assertIn(name, sql)
         self.assertIn("NEW.plan_protocol <> 'v3' OR NEW.retained_record_digest IS NOT NULL", sql)
         self.assertIn("BEFORE INSERT ON policy_authority_revocation_retained_plans", sql)
         self.assertIn("BEFORE INSERT ON policy_authority_revocation_writer_requests", sql)
         self.assertIn("SQLite writer request custody is disabled", sql)
+        self.assertIn("BEFORE INSERT ON policy_authority_revocation_writer_acknowledgments", sql)
+        self.assertIn("SQLite writer acknowledgment custody is disabled", sql)
         for field in (*authority_contract.PLANNER_RESERVATION_IMMUTABLE_COLUMNS,
                       *authority_contract.PLANNER_PAYLOAD_IMMUTABLE_COLUMNS,
                       *authority_contract.PLANNER_TERMINAL_IMMUTABLE_COLUMNS):

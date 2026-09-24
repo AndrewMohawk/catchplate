@@ -3937,15 +3937,22 @@ class AuthorityProcess:
         The worker authenticates both original controls with this same owner's
         keys, checks historical policy against captured configuration and uses
         the same fixed owner tuple for genuine atomic custody. Neither returned
-        claims nor constructed owners are admission tokens. Exact original
-        control/history custody shares its atomic scope; transport, ACKs and
-        public dispatch remain unimplemented.
+        claims nor constructed owners are admission tokens. The held dedicated
+        response key signs only within exact request/ACK custody's atomic scope;
+        original ACK bytes return only after normal owner exits. This does not
+        establish execution or current-root authority, and transport and public
+        dispatch remain unimplemented.
         """
         if (self.role_name != "planner-writer"
                 or self.process_mode != "policy-authority-planner-writer"
                 or type(self.configuration) is not MeasuredConfiguration):
             raise AuthorityServiceError("revocation writer process is not configured")
         configuration = self.configuration
+        writer_private_key = self.writer_response_signing_key
+        launch_private_key = self.launch_identity_key
+        if (not isinstance(writer_private_key, Ed25519PrivateKey)
+                or not isinstance(launch_private_key, Ed25519PrivateKey)):
+            raise AuthorityServiceError("revocation writer response or launch key is not configured")
         payload, configuration_digest = configuration.payload, configuration.digest
         from serverware import authority_revocation_configuration
         from serverware import authority_revocation_writer_composition
@@ -3966,9 +3973,21 @@ class AuthorityProcess:
         generation_sequence = owned_payload["generationSequence"]
         generation_digest = owned_payload["generationDigest"]
         maximum_age_ns = owned_payload["roles"]["planner-writer"]["maximumInternalAgeNs"]
+        writer_response_spki_digest = owned_payload["roles"]["planner-writer"]["responseSigningSpkiDigest"]
+        other_response_spki_digests = tuple(owned_payload["roles"][name]["responseSigningSpkiDigest"]
+            for name in ("verifier", "planner", "issuer", "executor"))
         authority_revocation_configuration.capability.shape._integer(generation_sequence, minimum=1)
         authority_revocation_configuration.capability.shape._digest(generation_digest)
         authority_revocation_configuration.capability.shape._integer(maximum_age_ns, minimum=1)
+        authority_revocation_configuration.capability.shape._digest(writer_response_spki_digest)
+        for pin in other_response_spki_digests:
+            authority_revocation_configuration.capability.shape._digest(pin)
+        if writer_response_spki_digest in other_response_spki_digests:
+            raise AuthorityServiceError("revocation writer response key reuses another role pin")
+        launch_public_key = authority_revocation_configuration.production._callback(
+            work, lambda: launch_private_key.public_key())
+        if not isinstance(launch_public_key, Ed25519PublicKey):
+            raise AuthorityServiceError("revocation writer launch key did not derive Ed25519")
         persistence = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
             configuration_digest=configuration_digest, work=work)
         configuration_snapshot = persistence._snapshot_configuration()
@@ -3978,7 +3997,8 @@ class AuthorityProcess:
             historical_expectations_bytes=historical_expectations_bytes,
             owned_payload=owned_payload, configuration_digest=configuration_digest,
             generation_sequence=generation_sequence, generation_digest=generation_digest,
-            maximum_age_ns=maximum_age_ns, work=work)
+            maximum_age_ns=maximum_age_ns, writer_private_key=writer_private_key,
+            launch_public_key=launch_public_key, work=work)
 
     def _revocation_capability_issuer(self, *, work):
         """Construct the private successor only from this admitted issuer.

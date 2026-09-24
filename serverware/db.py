@@ -1513,6 +1513,7 @@ _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES = (
     "policy_authority_authorization_projections",
     "policy_authority_revocation_retained_plans",
     "policy_authority_revocation_writer_requests",
+    "policy_authority_revocation_writer_acknowledgments",
     "policy_authority_revocation_retained_capabilities",
     "policy_authority_webauthn_assertion_receipts",
     "policy_authority_external_witness_receipts",
@@ -6496,6 +6497,10 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "writer request custody requires a separately reviewed migration"
                 )
+            if _metadata_table_exists(conn, authority_contract.REVOCATION_WRITER_ACK_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "writer acknowledgment custody requires a separately reviewed migration"
+                )
             for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
                 if _metadata_table_exists(conn, table):
                     conn.execute(
@@ -6854,6 +6859,10 @@ def _prepare_policy_candidate_authority_schema(
     if _metadata_table_exists(conn, authority_contract.REVOCATION_WRITER_REQUEST_TABLE):
         raise PolicyCandidateAuthorityError(
             "writer request custody requires a separately reviewed migration"
+        )
+    if _metadata_table_exists(conn, authority_contract.REVOCATION_WRITER_ACK_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "writer acknowledgment custody requires a separately reviewed migration"
         )
     for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
         if _metadata_table_exists(conn, table):

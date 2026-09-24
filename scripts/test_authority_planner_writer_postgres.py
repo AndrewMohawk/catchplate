@@ -50,6 +50,7 @@ REQUIRED_PRIVILEGES = {
     "policy_authority_planner_transactions": ("SELECT", "INSERT", "UPDATE"),
     "policy_authority_revocation_retained_plans": ("SELECT", "INSERT"),
     "policy_authority_revocation_writer_requests": ("SELECT", "INSERT"),
+    "policy_authority_revocation_writer_acknowledgments": ("SELECT", "INSERT"),
     "policy_authority_query_dependency_manifests": ("SELECT",),
     "policy_authority_authenticated_table_roots": ("SELECT",),
     "policy_authority_webauthn_assertion_evidence": ("SELECT", "INSERT"),
@@ -175,8 +176,8 @@ class AuthorityPlannerWriterPostgresTests(unittest.TestCase):
             self.assert_denied()
 
     def test_exact_eleven_tables_and_five_invoker_functions_admit(self) -> None:
-        # Historical test ID retained; immutable request custody adds table 12.
-        self.assertEqual(len(REQUIRED_PRIVILEGES), 12)
+        # Historical test ID retained; request/ACK custody add tables 12/13.
+        self.assertEqual(len(REQUIRED_PRIVILEGES), 13)
         self.assertEqual({name: frozenset(grants) for name, grants in REQUIRED_PRIVILEGES.items()},
                          PLANNER_WRITER_TABLE_PRIVILEGES)
         self.assertEqual(REQUIRED_FUNCTIONS, AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES)

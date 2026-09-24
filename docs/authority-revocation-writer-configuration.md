@@ -73,9 +73,11 @@ Sources `.63` through `.65` add detached signature commitments, private
 authenticated composition and immutable original-request custody with exact
 retry checks. Source `.66` adds a separate startup-only
 [writer response signer](authority-revocation-writer-signer.md); it does not
-change this mapper's four-hash, two-key schedule or seven-item owner. Signed
-acknowledgment custody, serving integration and the whole-message size contract
-remain unfinished. Legacy writer routes and planner-only peer restrictions are
+change this mapper's four-hash, two-key schedule or seven-item owner. Source
+`.67` adds [signed ACK custody](authority-revocation-writer-acknowledgment.md)
+to the separate authenticated composition. Serving integration, authenticated
+historical recovery and the whole-message size contract remain unfinished.
+Legacy writer routes and planner-only peer restrictions are
 unchanged. Registry closure and four WebAuthn gates are
 still incomplete. Production Nitro/KMS, signing and independent witness
 services are unprovisioned.

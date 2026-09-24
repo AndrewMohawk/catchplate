@@ -11,8 +11,10 @@ authority.
 The actual process stores the key in `writer_response_signing_key`. Its generic
 `signing_key` remains `None` for the writer. Existing internal-envelope signing,
 runtime responses, launch-identity consumption receipts and public writer
-purposes are unchanged. No current path reads the new slot to sign or return a
-response.
+purposes are unchanged. Source `.67` adds one fixed private
+[writer composition](authority-revocation-writer-composition.md) that snapshots
+this slot before callbacks and supplies it to atomic ACK custody. No public
+handler or generic signer consumes it.
 
 ## Measured identity and original key bytes
 
@@ -78,29 +80,36 @@ or production deployment evidence.
 
 The existing writer configuration mapper remains separate: four hashes, two
 planner/verifier public-key decodes and the same seven-item persistence owner.
-Its request APIs, immutable request custody and genuine two-replay atomic
-suffix are unchanged.
+Its seven-item owner and legacy request APIs are unchanged. The private
+authenticated composition adds mandatory held response-key arguments to its
+fixed suffix, without enrolling them in the mapper or replacing either genuine
+proof replay.
 
-## What an acknowledgment still requires
+## Atomic acknowledgment and remaining boundaries
 
 The [immutable request record](authority-revocation-writer-request-storage.md)
-is not an ACK. A future closed acknowledgment must bind that exact request,
+is not itself an ACK. Source `.67` adds a closed acknowledgment binding that exact request,
 retained-plan and reserved-execution identities, historical configuration and
-the dedicated writer response signer. It must attest custody, not execution,
+the dedicated writer response signer. It attests custody, not execution,
 current roots, capability issuance or a witness result.
 
-Its immutable child record, signing boundary and recovery protocol remain to
-be implemented. Creating an ACK after today's atomic owner returns cannot
-claim to share that owner's already-completed transaction. Exact stored ACK
-bytes may be released only after normal transaction and connection exit;
-commit/exit uncertainty requires reconciliation. Exact retries must preserve
-the original signed bytes. A separate historical lookup must not masquerade
-as fresh authorization or bypass the current action's checks.
+The request-time path rebinds the captured key with actual metered DER export,
+hashing and measured-pin comparison, separately from startup loading. Its
+[immutable child](authority-revocation-writer-acknowledgment-storage.md) is created
+or verified inside the same common writer scope after exact request readback
+and both genuine proof replays. It is not attached after commit. An observed
+existing child is verified and returned without re-signing. Uniqueness ensures
+one durable child, not globally one signing attempt across aborted or competing
+transactions. Exact stored ACK bytes may leave the private owner only after
+normal transaction and connection exit; uncertainty returns no ACK and requires
+reconciliation. No commit timestamp or currentness claim is manufactured.
 
 Remote ACK verification also needs an independently pinned public-key and
 historical key/configuration resolution contract. A public key supplied by an
-ACK cannot enroll itself. No ACK payload, purpose, schema, signer operation,
-transport framing or public route is added here.
+ACK cannot enroll itself, and a rotated key must not re-sign stored custody.
+Historical lookup must not masquerade as fresh authorization or bypass the
+current action's checks. Transport framing, remote admission and public routes
+remain unimplemented; the startup helper itself still never signs.
 
 Authored component fixtures use genuine local PEM parsing, key derivation and
 serialization with synthetic keys. Bounded source fixtures inspect the actual

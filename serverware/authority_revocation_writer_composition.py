@@ -10,10 +10,12 @@ second measured-configuration admission or an accepted proof token.
 Original controls and all three bodies are mandatory on every call. Actual
 current clocks, both role signatures, detached commitments and measured
 historical policy precede the existing atomic owner path, whose two genuine
-replays and database/registry admission remain unchanged. No transport, public
-purpose or signed ACK is introduced. The fixed suffix retains exact original
-controls/history with both replayed custody records in one owning transaction.
-Post-commit failures retain the owner's existing uncertainty boundary.
+replays and database/registry admission remain unchanged. The dedicated writer
+signer is rebound to the same measured payload on request work, not enrolled by
+an acknowledgment. The fixed suffix retains exact original controls/history
+and the signed ACK child with both replayed custody records in one owning
+transaction. No public purpose or transport is introduced; post-commit failures
+retain the owner's existing uncertainty boundary.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ import time
 from serverware import authority_contract as authority
 from serverware import authority_revocation_configuration as configuration_capture
 from serverware import authority_revocation_persistence as persistence
+from serverware import authority_revocation_writer_acknowledgment as acknowledgment
 from serverware import authority_revocation_writer_action as action
 from serverware import authority_revocation_writer_commitment as commitment
 
@@ -37,7 +40,8 @@ def _validate_originals(*, intent_bytes, relay_bytes, envelope_bytes,
 def _persist_commitments_on_configuration(configuration, *, intent_bytes,
         relay_bytes, envelope_bytes, evaluation_context_bytes,
         historical_expectations_bytes, owned_payload, configuration_digest,
-        generation_sequence, generation_digest, maximum_age_ns, work):
+        generation_sequence, generation_digest, maximum_age_ns,
+        writer_private_key, launch_public_key, work):
     """Authenticate originals and persist using the same fixed owner tuple.
 
     The caller is the fixed private service adapter, not a configurable action
@@ -53,6 +57,9 @@ def _persist_commitments_on_configuration(configuration, *, intent_bytes,
     Actual policy comparison uses this same captured payload without replacing
     any authenticated historical value. The fixed atomic suffix preserves its
     existing ID comparison, external capture, admission and two replay costs.
+    The held private and launch-public handles come from the service, never
+    signed input. Bind the actual response signer before authentication; only
+    the atomic suffix may sign or verify the request's immutable ACK child.
     """
     persistence._validate_configuration(configuration)
     ledger = commitment.capture._SharedLedger(work)
@@ -65,6 +72,13 @@ def _persist_commitments_on_configuration(configuration, *, intent_bytes,
         raise ValueError("revocation writer composition requires an exact full configuration object")
     payload = configuration_capture._ConfigurationCapture(
         ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(owned_payload)
+    writer_response_spki_digest = payload["roles"]["planner-writer"]["responseSigningSpkiDigest"]
+    other_response_spki_digests = tuple(payload["roles"][name]["responseSigningSpkiDigest"]
+        for name in ("verifier", "planner", "issuer", "executor"))
+    writer_public_key = acknowledgment._bind_signer_on_work(
+        writer_private_key=writer_private_key, launch_public_key=launch_public_key,
+        expected_writer_spki_digest=writer_response_spki_digest,
+        other_response_spki_digests=other_response_spki_digests, work=work)
     planner_key, verifier_key = configuration[2:4]
     now_monotonic_ns = commitment.production._callback(work, time.monotonic_ns)
     now_epoch_ns = commitment.production._callback(work, time.time_ns)
@@ -85,4 +99,6 @@ def _persist_commitments_on_configuration(configuration, *, intent_bytes,
         historical_expectations_bytes=historical_expectations_bytes,
         configuration_digest=configuration_digest, generation_sequence=generation_sequence,
         generation_digest=generation_digest,
+        writer_private_key=writer_private_key, writer_public_key=writer_public_key,
+        writer_response_spki_digest=writer_response_spki_digest,
         **received.arguments, work=work, **received.expectations)

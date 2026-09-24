@@ -389,6 +389,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "policy_authority_planner_transactions": {"SELECT", "INSERT", "UPDATE"},
             "policy_authority_revocation_retained_plans": {"SELECT", "INSERT"},
             "policy_authority_revocation_writer_requests": {"SELECT", "INSERT"},
+            "policy_authority_revocation_writer_acknowledgments": {"SELECT", "INSERT"},
             "policy_authority_query_dependency_manifests": {"SELECT"},
             "policy_authority_authenticated_table_roots": {"SELECT"},
             "policy_authority_webauthn_assertion_evidence": {"SELECT", "INSERT"},
@@ -398,7 +399,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.66")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.67")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -412,8 +413,8 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         literals = [node.value for node in ast.walk(function)
             if isinstance(node, ast.Constant) and type(node.value) is str]
         # Preserve this historical method ID: .37 added the eighteenth check;
-        # .45 adds retained capability's nineteenth; .65 adds request custody's twentieth.
-        self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 20)
+        # .45 adds retained capability's nineteenth; .65/.67 add request/ACK custody.
+        self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 21)
         self.assertFalse(any("serverware.policyCandidateAuthoritySource/2026-07-30.26" in value for value in literals))
 
     def test_planner_query_bookkeeping_contract_binds_narrow_cumulative_limits(self):
@@ -807,7 +808,9 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "postgresOnly": True, "sqliteAdmission": False, "publicExecutionEnabled": False,
             "requestTable": table, "requestColumns": columns,
             "primaryKey": ("intent_envelope_id",),
-            "uniqueKeys": (("relay_envelope_id",), ("execution_envelope_id",)),
+            "uniqueKeys": (("relay_envelope_id",), ("execution_envelope_id",),
+                           ("intent_envelope_id", "configuration_digest", "generation_sequence",
+                            "generation_digest", "source_revision")),
             "identityScope": "global-across-configuration-generation-and-key-rotations",
             "plannerBinding": "deferred-retained-plan-composite-foreign-key",
             "executionBinding": "deferred-execution-and-planner-composite-foreign-key",
@@ -840,6 +843,8 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertIn("FOREIGN KEY (execution_envelope_id, planner_transaction_id) "
             "REFERENCES policy_authority_execution_envelopes (envelope_id, planner_transaction_id)", compact)
         self.assertIn("UNIQUE (envelope_id, planner_transaction_id)", ddl[:start])
+        self.assertIn("UNIQUE (intent_envelope_id, configuration_digest, generation_sequence, "
+                      "generation_digest, source_revision)", compact)
         for field in ("intent_envelope_id", "relay_envelope_id", "execution_envelope_id",
                       "planner_transaction_id", *[name for name in columns if name.endswith("_digest")]):
             self.assertIn("CHECK (" + field + " ~ '^sha256:[0-9a-f]{64}$')", request)
@@ -887,6 +892,92 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["revocationWriterRequestCustody"], "dict(REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT)")
         self.assertIn('"revocationWriterRequestCustody": dict(authority_contract.REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT)', self.schema_source)
+
+    def test_writer_ack_contract_and_ddl_bind_one_global_original_to_exact_request_scope(self):
+        columns = ("ack_envelope_id", "intent_envelope_id", "configuration_digest",
+            "generation_sequence", "generation_digest", "writer_response_spki_digest",
+            "exact_ack_base64url", "exact_ack_bytes_digest", "exact_ack_byte_count", "source_revision")
+        scope = ("intent_envelope_id", "configuration_digest", "generation_sequence",
+                 "generation_digest", "source_revision")
+        table = "policy_authority_revocation_writer_acknowledgments"
+        self.assertEqual(authority_contract.REVOCATION_WRITER_ACK_TABLE, table)
+        self.assertEqual(authority_contract.REVOCATION_WRITER_ACK_COLUMNS, columns)
+        contract = authority_contract.REVOCATION_WRITER_ACK_CUSTODY_CONTRACT
+        self.assertIs(type(contract), MappingProxyType)
+        self.assertEqual(dict(contract), {
+            "schema": "serverware.policyAuthorityRevocationWriterAckCustody/v1",
+            "operation": "webauthn.credential.revoke", "planProtocol": "revocation-v4",
+            "postgresOnly": True, "sqliteAdmission": False, "publicExecutionEnabled": False,
+            "ackTable": table, "ackColumns": columns, "primaryKey": ("ack_envelope_id",),
+            "uniqueKeys": (("intent_envelope_id",),),
+            "identityScope": "global-across-configuration-generation-and-key-rotations",
+            "requestBinding": scope, "requestForeignKey": "deferred-no-action-composite-foreign-key",
+            "maxAckBytes": 16384, "plannerPrivileges": ("SELECT", "INSERT"),
+            "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
+            "authorityExclusions": ("signature-verification", "commit-completion", "key-enrollment",
+                "currentness", "semantic-replay", "execution", "witness", "globally-exactly-once-signing"),
+        })
+        with self.assertRaises(TypeError):
+            contract["publicExecutionEnabled"] = True
+        _, tree = read_source("serverware/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
+        ddl = named_function(tree, "authority_v9_schema_source").body[0].value.value
+        start = ddl.index(table + " (")
+        ack = ddl[start:ddl.index("\n            );", start)]
+        declarations = re.findall(r"^                ([a-z_]+) (TEXT|BIGINT) (.+),$", ack, re.M)
+        self.assertEqual(tuple(name for name, _, _ in declarations), columns)
+        self.assertTrue(all("NOT NULL" in suffix or suffix == "PRIMARY KEY"
+                            for _, _, suffix in declarations))
+        self.assertIn("ack_envelope_id TEXT PRIMARY KEY", ack)
+        self.assertIn("intent_envelope_id TEXT NOT NULL UNIQUE", ack)
+        compact = " ".join(ack.split())
+        key = "(" + ", ".join(scope) + ")"
+        self.assertIn("FOREIGN KEY " + key + " REFERENCES policy_authority_revocation_writer_requests " + key,
+                      compact)
+        self.assertIn("UNIQUE " + key, " ".join(ddl[:start].split()))
+        self.assertEqual(ack.count("DEFERRABLE INITIALLY DEFERRED"), 1)
+        self.assertNotIn("CASCADE", ack)
+        for name in ("ack_envelope_id", "intent_envelope_id", "configuration_digest",
+                     "generation_digest", "writer_response_spki_digest", "exact_ack_bytes_digest"):
+            self.assertIn("CHECK (" + name + " ~ '^sha256:[0-9a-f]{64}$')", ack)
+        for spelling in ("CHECK (generation_sequence > 0)", "CHECK (exact_ack_byte_count BETWEEN 2 AND 16384)",
+                "length(exact_ack_base64url) = (4 * exact_ack_byte_count + 2) / 3",
+                "exact_ack_base64url ~ '^[A-Za-z0-9_-]+$'", "exact_ack_byte_count % 3 = 1",
+                "exact_ack_byte_count % 3 = 2", "CHECK (source_revision = '" + authority_contract.SOURCE_REVISION + "')"):
+            self.assertIn(spelling, ack)
+        self.assertTrue(set(columns).isdisjoint({"status", "terminal_at_epoch_ns", "committed_at_epoch_ns",
+            "exact_envelope_base64url", "evaluation_context_base64url", "historical_expectations_base64url"}))
+
+    def test_writer_ack_storage_is_immutable_framework_only_sqlite_denied_and_not_synthesized(self):
+        table = "policy_authority_revocation_writer_acknowledgments"
+        immutable = named_assignment(self.db_tree, "_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES").value
+        self.assertEqual(sum(node.value == table for node in immutable.elts), 1)
+        for name in ("_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES", "_POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES"):
+            self.assertNotIn(table, [node.value for node in named_assignment(self.db_tree, name).value.elts])
+        self.assertIn(table, authority_contract._FRAMEWORK_CUSTODY_TABLES)
+        for spec in authority_contract.OPERATIONS.values():
+            for name in ("businessReads", "businessWrites", "authorizationReads", "frameworkWrites",
+                         "frameworkReadBeforeWrite", "frameworkPreconditions"):
+                self.assertNotIn(table, spec[name])
+        for grants in authority_contract.SQL_GRANT_MANIFEST.values():
+            self.assertNotIn(table, grants["frameworkSelect"])
+            self.assertNotIn(table, grants["frameworkMutate"])
+        for name in ("_legacy_migrate_policy_candidate_authority_offline", "_prepare_policy_candidate_authority_schema"):
+            body = ast.get_source_segment(self.db_source, named_function(self.db_tree, name))
+            guard = body.index("_metadata_table_exists(conn, authority_contract.REVOCATION_WRITER_ACK_TABLE)")
+            self.assertLess(guard, body.index('"DROP TABLE "', guard))
+        _, migration = read_source("scripts/authority/migrate_v8_to_v9.py", 2 * 1024 * 1024)
+        self.assertIn(table, [node.value for node in named_assignment(migration, "_V9_NEW_TABLES").value.args[0].elts])
+        source, tree = read_source("serverware/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
+        sqlite = ast.get_source_segment(source, named_function(tree, "planner_retention_sqlite_guards_sql"))
+        self.assertIn("BEFORE INSERT ON " + table, sqlite)
+        self.assertIn("SQLite writer acknowledgment custody is disabled", sqlite)
+        self.assertIn('"serverware_writer_ack_sqlite_insert_guard"', self.schema_source)
+        _, contract_tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        material = named_assignment(contract_tree, "OPERATION_MANIFEST_DIGEST").value.args[1]
+        fields = {key.value: value for key, value in zip(material.keys, material.values)}
+        self.assert_shape(fields["revocationWriterAckCustody"], "dict(REVOCATION_WRITER_ACK_CUSTODY_CONTRACT)")
+        self.assertIn('"revocationWriterAckCustody": dict(authority_contract.REVOCATION_WRITER_ACK_CUSTODY_CONTRACT)',
+                      self.schema_source)
 
     def test_capability_custody_contract_closes_original_bytes_and_declared_identity_fields(self):
         columns = ("capability_id", "capability_protocol", "capability_record_digest", "planner_transaction_id",

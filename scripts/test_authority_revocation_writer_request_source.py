@@ -53,7 +53,8 @@ class RevocationWriterRequestSourceTests(unittest.TestCase):
         values = {key.value: value for key, value in zip(descriptor.args[0].keys, descriptor.args[0].values)}
         self.shape(values["requestColumns"], "REVOCATION_WRITER_REQUEST_COLUMNS")
         self.shape(values["primaryKey"], '("intent_envelope_id",)')
-        self.shape(values["uniqueKeys"], '(("relay_envelope_id",), ("execution_envelope_id",))')
+        self.shape(values["uniqueKeys"], '''(("relay_envelope_id",), ("execution_envelope_id",),
+            ("intent_envelope_id", "configuration_digest", "generation_sequence", "generation_digest", "source_revision"))''')
         self.shape(values["identityScope"], '"global-across-configuration-generation-and-key-rotations"')
         self.shape(values["plannedAtBinding"], '"exact-original-stored-plan-time"')
         self.shape(values["plannerPrivileges"], '("SELECT", "INSERT")')
@@ -199,6 +200,8 @@ class RevocationWriterRequestSourceTests(unittest.TestCase):
             historical_expectations_bytes=historical_expectations_bytes,
             configuration_digest=configuration_digest, generation_sequence=generation_sequence,
             generation_digest=generation_digest,
+            writer_private_key=writer_private_key, writer_public_key=writer_public_key,
+            writer_response_spki_digest=writer_response_spki_digest,
             **received.arguments, work=work, **received.expectations)''')
         self.assertEqual([node.lineno for node in (authenticated, policy, suffix)],
                          sorted(node.lineno for node in (authenticated, policy, suffix)))
@@ -208,7 +211,8 @@ class RevocationWriterRequestSourceTests(unittest.TestCase):
         self.assertEqual([item.arg for item in fixed.args.kwonlyargs], [
             "intent_bytes", "relay_bytes", "historical_expectations_bytes", "configuration_digest",
             "generation_sequence", "generation_digest", "envelope_bytes", "evaluation_context_bytes",
-            "planned_at_epoch_ns", "envelope_id", "planner_transaction_id", "work"])
+            "planned_at_epoch_ns", "envelope_id", "planner_transaction_id", "writer_private_key",
+            "writer_public_key", "writer_response_spki_digest", "work"])
         self.assertTrue(all(value is None for value in fixed.args.kw_defaults))
         self.assertEqual(fixed.args.kwarg.arg, "expectations")
         self.assertIsNone(fixed.args.vararg)
@@ -229,7 +233,15 @@ class RevocationWriterRequestSourceTests(unittest.TestCase):
         self.shape(update, '''arguments.update(intent_bytes=intent_bytes, relay_bytes=relay_bytes,
             historical_expectations_bytes=historical_expectations_bytes,
             configuration_digest=configuration_digest, generation_sequence=generation_sequence,
-            generation_digest=generation_digest)''')
+            generation_digest=generation_digest, writer_private_key=writer_private_key,
+            writer_public_key=writer_public_key, writer_response_spki_digest=writer_response_spki_digest)''')
+        key_guard, = [node for node in fixed.body if isinstance(node, ast.If)
+                      and "Ed25519PrivateKey" in ast.unparse(node.test)]
+        self.shape(key_guard.test, '''not isinstance(writer_private_key, Ed25519PrivateKey)
+            or not isinstance(writer_public_key, Ed25519PublicKey)''')
+        self.assertLess(key_guard.lineno, update.lineno)
+        self.shape(call(fixed, "commitment.plan.contract._digest"),
+                   "commitment.plan.contract._digest(writer_response_spki_digest)")
         runner = call(fixed, "_run_on_configuration")
         self.shape(runner, '''_run_on_configuration(configuration, _persist_and_reserve_request_on_connection,
             arguments, expectations, work)''')
@@ -253,7 +265,8 @@ class RevocationWriterRequestSourceTests(unittest.TestCase):
         self.assertEqual([item.arg for item in operation.args.kwonlyargs], [
             "intent_bytes", "relay_bytes", "historical_expectations_bytes", "configuration_digest",
             "generation_sequence", "generation_digest", "envelope_bytes", "evaluation_context_bytes",
-            "planned_at_epoch_ns", "envelope_id", "planner_transaction_id", "connection", "work"])
+            "planned_at_epoch_ns", "envelope_id", "planner_transaction_id", "writer_private_key",
+            "writer_public_key", "writer_response_spki_digest", "connection", "work"])
         self.assertEqual(operation.args.kwarg.arg, "expectations")
         self.assertIsNone(operation.args.vararg)
         facade, = [node for node in calls(operation, "store._callback")
@@ -290,13 +303,22 @@ class RevocationWriterRequestSourceTests(unittest.TestCase):
         journal = call(cursors[1], "request_store._persist")
         self.shape(journal, '''request_store._persist(cursor, prefix, retained_receipt,
             execution_reservation, work, insert=existing is None)''')
+        self.assertIs(assigned(operation, "request_row"), journal)
+        ack = call(cursors[1], "ack_store._persist")
+        self.shape(ack, '''ack_store._persist(cursor, request_row,
+            writer_private_key=writer_private_key, writer_public_key=writer_public_key,
+            writer_response_spki_digest=writer_response_spki_digest, work=work)''')
+        self.assertIs(assigned(operation, "acknowledgment_bytes"), ack)
+        self.assertEqual(len(cursors[1].body), 5)
+        self.assertLess(journal.lineno, ack.lineno)
         self.assertLess(cursors[0].end_lineno, replay.lineno)
         self.assertLess(replay.lineno, cursors[1].lineno)
         continuity = "store._callback(work, revocation_execution._same_connection, connection, raw)"
         for node in (common.body[0], common.body[2], common.body[-1], operation.body[-2],
                      cursors[0].body[0], cursors[0].body[-1], cursors[1].body[0], cursors[1].body[-1]):
             self.shape(node.value, continuity)
-        self.shape(operation.body[-1].value, "(retained_receipt, execution_reservation)")
+        self.shape(cursors[1].body[2].value, continuity)
+        self.shape(operation.body[-1].value, "(retained_receipt, execution_reservation, acknowledgment_bytes)")
         self.assertLess(common.end_lineno, operation.body[-2].lineno)
         self.assertFalse(any(isinstance(node, (ast.If, ast.Try, ast.ExceptHandler)) for node in ast.walk(operation)))
         inner = definition(self.persistence, "_retain_and_reserve_in_common")

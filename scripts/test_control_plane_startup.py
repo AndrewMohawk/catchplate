@@ -2083,7 +2083,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         return {"total": total, "admission": tuple(max(values) for values in zip(*peaks)),
             "prefix": prefix, "persisted": persisted, "reserved": reserved}
 
-    def assert_revocation_atomic_rows(self, fixture, *, request_rows=None):
+    def assert_revocation_atomic_rows(self, fixture, *, request_rows=None, acknowledgment_rows=None):
         import test_authority_revocation_persistence as persistence_oracle
         import test_authority_revocation_reservation as reservation_oracle
 
@@ -2094,7 +2094,11 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             {assertion["assertion_evidence_digest"]: assertion},
             {projection["authorization_projection_digest"]: projection},
             {fixture.arguments["envelope_id"]: row})
-        self.assertEqual(fixture.recorder.snapshot(), expected if request_rows is None else (*expected, request_rows))
+        if request_rows is not None:
+            expected = (*expected, request_rows)
+        if acknowledgment_rows is not None:
+            expected = (*expected, acknowledgment_rows)
+        self.assertEqual(fixture.recorder.snapshot(), expected)
         return row
 
     def revocation_action_fixture(self, *, work=None, recorder=None):
@@ -2155,10 +2159,10 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         the real composition, admission query and both proof workers run.
         """
         import test_authority_revocation_writer_composition as composition_oracle
-        import test_authority_revocation_writer_request as request_oracle
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
 
         fixture = self.revocation_action_fixture(work=work,
-            recorder=request_oracle.Recorder() if recorder is None else recorder)
+            recorder=ack_oracle.Recorder() if recorder is None else recorder)
         fixture.detached = composition_oracle.CompositionFixture()
         fixture.source = fixture.detached.action
         fixture.expected, fixture.fixture = fixture.source.plan, fixture.source.plan.semantic
@@ -2178,10 +2182,11 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             composition.configuration_capture.production._callback(work, lambda: after_preparation(owner, arguments))
         return composition._persist_commitments_on_configuration(fixed, work=work, **arguments)
 
-    def revocation_composition_work(self, fixture, *, retry=False, request_existing=None):
+    def revocation_composition_work(self, fixture, *, retry=False, request_existing=None, ack_existing=None):
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_writer_composition as composition_oracle
         import test_authority_revocation_writer_request as request_oracle
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
 
         observed = composition_oracle.independent_prefix_work(fixture.detached)
         # The actual public atomic factor already contains its ID comparison;
@@ -2190,19 +2195,24 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         atomic = self.revocation_atomic_work(fixture, retry=retry)
         custody = request_oracle.independent_request_work(fixture.detached,
             existing=retry if request_existing is None else request_existing)
+        acknowledgment = ack_oracle.independent_ack_storage_work(fixture.detached,
+            existing=retry if ack_existing is None else ack_existing)
         before_proof = oracle.add(prefix, atomic["prefix"], custody["prefix"])
-        total = oracle.add(prefix, atomic["total"], custody["total"])
+        total = oracle.add(prefix, atomic["total"], custody["total"], acknowledgment["total"])
         peaks = (total, oracle.add(before_proof, atomic["persisted"]["admission"]),
                  oracle.add(before_proof, atomic["persisted"]["total"], atomic["reserved"]["admission"]))
-        return {"prefix": prefix, "atomic": atomic, "custody": custody, "total": total,
+        return {"prefix": prefix, "atomic": atomic, "custody": custody, "acknowledgment": acknowledgment, "total": total,
             "admission": tuple(max(values) for values in zip(*peaks))}
 
     def assert_revocation_composition_rows(self, fixture):
         import test_authority_revocation_writer_request as request_oracle
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
 
         expected = request_oracle.expected_row(fixture.detached)
+        acknowledgment = ack_oracle.expected_row(fixture.detached)
         return self.assert_revocation_atomic_rows(fixture,
-            request_rows={expected["intent_envelope_id"]: expected})
+            request_rows={expected["intent_envelope_id"]: expected},
+            acknowledgment_rows={expected["intent_envelope_id"]: acknowledgment})
 
     def assert_revocation_writer_empty(self, recorder):
         self.assertEqual((recorder.parent, recorder.sidecar), (None, None))
@@ -3613,6 +3623,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
         import test_authority_revocation_writer_request as request_oracle
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
 
         for retry in (False, True):
             fixture = self.revocation_composition_fixture()
@@ -3622,6 +3633,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 fixture.recorder.envelopes[identity] = reservation_oracle.expected_envelope(fixture.expected, identity)
                 request = request_oracle.expected_row(fixture.detached)
                 fixture.recorder.requests[request["intent_envelope_id"]] = request
+                fixture.recorder.acknowledgments[request["intent_envelope_id"]] = ack_oracle.expected_row(fixture.detached)
             expected, meter = self.revocation_composition_work(fixture, retry=retry), fixture.arguments["work"]
             clocks, seen = [], []
             verify = composition.commitment._verify_commitments_on_work
@@ -3641,7 +3653,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                     patch.object(Ed25519PublicKey, "from_public_bytes", wraps=Ed25519PublicKey.from_public_bytes) as keys, \
                     patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
                     patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
-                receipt, row = self.run_revocation_composition_components(fixture)
+                receipt, row, ack_bytes = self.run_revocation_composition_components(fixture)
             self.assertEqual((authentication.call_count, replay.call_count, proof.call_count), (1, 2, 2))
             self.assertEqual(seen[0].metrics.signature_verifications, 2)
             # Reuse the mapper's keys: new custody additionally invokes the
@@ -3649,11 +3661,12 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             # neither. No configured/live-key success result is substituted.
             self.assertEqual(keys.call_count, 2 if retry else 4)
             self.assertEqual(row, self.assert_revocation_composition_rows(fixture))
+            self.assertEqual(ack_bytes, ack_oracle.expected_bytes(fixture.detached))
             self.assertEqual(receipt["exactEnvelopeBytes"], fixture.source.arguments["envelope_bytes"])
             self.assertEqual(receipt["evaluationContextBytes"], fixture.source.arguments["evaluation_context_bytes"])
             self.assertEqual((fixture.recorder.releases, fixture.recorder.rollbacks), (4, 0))
             self.assertEqual(fixture.connected, [fixture.source.configuration.persistence_dsn])
-            self.assertEqual(expected["prefix"][0], 12)
+            self.assertEqual(expected["prefix"][0], 14)
             self.assertEqual(oracle.units(meter.metrics), expected["total"])
             for call in replay.call_args_list:
                 self.assertIs(call.kwargs["work"], meter)
@@ -3680,7 +3693,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                     patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
                 with self.assertRaises(ValueError): self.run_revocation_composition_components(fixture)
             self.assertEqual((fixture.connected, replay.call_count, fixture.recorder.statements), ([], 0, []))
-            self.assertEqual(fixture.recorder.snapshot(), (None, None, {}, {}, {}, {}))
+            self.assertEqual(fixture.recorder.snapshot(), (None, None, {}, {}, {}, {}, {}))
 
         fixture, changed = self.revocation_composition_fixture(), []
         before = fixture.recorder.snapshot()
@@ -3700,7 +3713,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual((len(changed), replay.call_count, proof.call_count), (1, 2, 1))
         recorder_state = fixture.recorder.snapshot()
         self.assertEqual(recorder_state, before)
-        self.assertEqual(recorder_state, (None, None, {}, {}, {}, {}))
+        self.assertEqual(recorder_state, (None, None, {}, {}, {}, {}, {}))
         self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (3, 1))
         self.assertIs(fixture.write.closed, True)
 
@@ -3756,6 +3769,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
         import test_authority_revocation_writer_request as request_oracle
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
 
         for retry in (False, True):
             for prior, axis in (((0, 0, 0), None), ((3, 17, 11), None),
@@ -3767,6 +3781,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                     fixture.recorder.envelopes[identity] = reservation_oracle.expected_envelope(fixture.expected, identity)
                     request = request_oracle.expected_row(fixture.detached)
                     fixture.recorder.requests[request["intent_envelope_id"]] = request
+                    fixture.recorder.acknowledgments[request["intent_envelope_id"]] = ack_oracle.expected_row(fixture.detached)
                 before, expected = fixture.recorder.snapshot(), self.revocation_composition_work(fixture, retry=retry)
                 limits = list(oracle.add(prior, expected["admission"]))
                 if axis is not None: limits[axis] -= 1
@@ -3793,13 +3808,14 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         from serverware import authority_query_read_work as accounting
         from serverware import authority_revocation_retention as retention
         from serverware import authority_revocation_writer_composition as composition
+        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
         import test_authority_revocation_plan as oracle
 
         for axis in (None, 0, 1, 2):
             first = self.revocation_composition_fixture()
             second = self.revocation_composition_fixture(recorder=first.recorder)
             # Repeat all five exact originals and the original planned time.
-            # Request custody supplies no terminal response or signed ACK.
+            # The ACK is unchanged custody evidence, never terminal execution.
             originals = first.detached.originals()
             self.assertEqual(second.detached.originals(), originals)
             self.assertEqual(second.source.arguments["planned_at_epoch_ns"],
@@ -3812,6 +3828,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
             first.arguments["work"] = second.arguments["work"] = work
             with self.subTest(axis=axis), \
+                    patch.object(acknowledgment, "_sign_on_work", wraps=acknowledgment._sign_on_work) as sign, \
                     patch.object(composition.commitment, "_verify_commitments_on_work",
                         wraps=composition.commitment._verify_commitments_on_work) as authenticate, \
                     patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
@@ -3823,6 +3840,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                     else:
                         with self.assertRaises(ValueError): self.run_revocation_composition_components(second)
             self.assertEqual(first.recorder.snapshot(), stored)
+            self.assertEqual(sign.call_count, 1)
             for call in authenticate.call_args_list:
                 for name, value in originals.items(): self.assertEqual(call.kwargs[name], value)
             if axis is None:
@@ -3831,6 +3849,141 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual((first.recorder.rollbacks, first.recorder.releases), (0, 8))
             self.assertTrue(all(call.kwargs["work"] is work for call in replay.call_args_list))
             self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_writer_ack_legacy_request_attachment_still_authenticates_and_replays_both_originals(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_reservation as reservation_oracle
+        import test_authority_revocation_writer_request as request_oracle
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
+
+        fixture = self.revocation_composition_fixture()
+        # Explicit synthetic historical six-row observation, not a migration
+        # result or accepted-receipt token. The fixed action still authenticates
+        # the originals and both stores actually replay before attaching.
+        fixture.recorder.seed(fixture.expected, fixture.expected.now_epoch_ns)
+        identity = fixture.arguments["envelope_id"]
+        fixture.recorder.envelopes[identity] = reservation_oracle.expected_envelope(fixture.expected, identity)
+        request = request_oracle.expected_row(fixture.detached)
+        fixture.recorder.requests[request["intent_envelope_id"]] = request
+        before = fixture.recorder.snapshot()
+        expected = self.revocation_composition_work(fixture, retry=True, ack_existing=False)
+        with self.revocation_owner_scope(fixture), \
+                patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                patch.object(acknowledgment, "_sign_on_work", wraps=acknowledgment._sign_on_work) as sign:
+            _, _, raw = self.run_revocation_composition_components(fixture)
+        self.assertEqual((replay.call_count, sign.call_count), (2, 1))
+        self.assertEqual(fixture.recorder.snapshot()[:6], before[:6])
+        self.assertEqual(raw, ack_oracle.expected_bytes(fixture.detached))
+        self.assert_revocation_composition_rows(fixture)
+        self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
+
+    def test_writer_ack_missing_readback_restores_seven_sets_even_when_caught_inside_outer(self):
+        from serverware import authority_revocation_persistence as persistence
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        from serverware import db
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
+
+        for caught_inside in (False, True):
+            fixture, caught, returned = self.revocation_composition_fixture(), [], []
+            fixture.recorder.missing_ack_readback = True
+            before, runner = fixture.recorder.snapshot(), persistence._run_on_configuration
+
+            def run(configuration, operation, arguments, expectations, work):
+                self.assertIs(operation, persistence._persist_and_reserve_request_on_connection)
+
+                def catch(**supplied):
+                    try: operation(**supplied)
+                    except db.MetadataStoreError as error: caught.append(error)
+                    else: self.fail("missing ACK readback unexpectedly succeeded")
+                    self.assertEqual(fixture.recorder.snapshot(), before)
+                    self.assertEqual(fixture.write.info.transaction_status, 2)
+                    self.assertIs(supplied["connection"].in_transaction, True)
+
+                return runner(configuration, catch if caught_inside else operation, arguments, expectations, work)
+
+            with self.subTest(caught_inside=caught_inside), self.revocation_owner_scope(fixture), \
+                    patch.object(persistence, "_run_on_configuration", side_effect=run), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                    patch.object(acknowledgment, "_sign_on_work", wraps=acknowledgment._sign_on_work) as sign:
+                if caught_inside:
+                    self.assertIsNone(self.run_revocation_composition_components(fixture))
+                else:
+                    with self.assertRaises(db.MetadataStoreError):
+                        returned.append(self.run_revocation_composition_components(fixture))
+            self.assertEqual((replay.call_count, sign.call_count), (2, 1))
+            self.assertEqual((len(caught), returned), (int(caught_inside), []))
+            self.assertTrue(any(sql == ack_oracle.INSERT for sql, _ in fixture.recorder.statements))
+            self.assertEqual(fixture.recorder.snapshot(), before)
+            self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases),
+                (1, 3) if caught_inside else (2, 2))
+            self.assertIs(fixture.write.closed, True)
+
+    def test_writer_ack_is_not_released_on_common_outer_or_connection_exit_uncertainty(self):
+        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
+
+        for failed_event in (None, "write.transaction2.exit", "write.transaction1.exit", "write.connection.exit"):
+            fixture, returned, observed = self.revocation_composition_fixture(), [], []
+            before, failure = fixture.recorder.snapshot(), RuntimeError("actual owner exit failed")
+
+            def observe(event):
+                if event in {"write.transaction2.exit", "write.transaction1.exit", "write.connection.exit"}:
+                    self.assertEqual(returned, [])
+                    if failed_event != "write.transaction2.exit" or event == "write.transaction2.exit":
+                        self.assertTrue(fixture.recorder.acknowledgments)
+                    observed.append(event)
+                if event == failed_event: raise failure
+
+            fixture.write.on_event = observe
+            with self.subTest(event=failed_event), self.revocation_owner_scope(fixture), \
+                    patch.object(acknowledgment, "_sign_on_work", wraps=acknowledgment._sign_on_work) as sign:
+                if failed_event is None:
+                    returned.append(self.run_revocation_composition_components(fixture))
+                else:
+                    with self.assertRaises(RuntimeError) as raised:
+                        returned.append(self.run_revocation_composition_components(fixture))
+                    self.assertIs(raised.exception, failure)
+            self.assertEqual(sign.call_count, 1)
+            self.assertIs(fixture.write.closed, True)
+            if failed_event == "write.transaction2.exit":
+                self.assertEqual(fixture.recorder.snapshot(), before)
+            else:
+                # The synthetic manager released outer custody before these
+                # late hooks. No rollback/delivery certainty is invented.
+                self.assert_revocation_composition_rows(fixture)
+            if failed_event is None:
+                self.assertEqual(observed, ["write.transaction2.exit", "write.transaction1.exit", "write.connection.exit"])
+                self.assertEqual(returned[0][2], ack_oracle.expected_bytes(fixture.detached))
+            else:
+                self.assertEqual(returned, [])
+
+    def test_writer_ack_existing_corrupted_signature_denies_after_both_replays_without_resigning(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
+
+        original = self.revocation_composition_fixture()
+        with self.revocation_owner_scope(original): self.run_revocation_composition_components(original)
+        envelope = json.loads(ack_oracle.expected_bytes(original.detached))
+        envelope["signatureBase64Url"] = "A" * 86
+        corrupt = oracle.wire(envelope)
+        row = next(iter(original.recorder.acknowledgments.values()))
+        row.update(exact_ack_base64url=oracle.encoded(corrupt), exact_ack_bytes_digest=oracle.sha(corrupt),
+            exact_ack_byte_count=len(corrupt))
+        before = original.recorder.snapshot()
+        retry = self.revocation_composition_fixture(recorder=original.recorder)
+        with self.revocation_owner_scope(retry), \
+                patch.object(acknowledgment, "_sign_on_work", side_effect=AssertionError("existing ACK re-signed")), \
+                patch.object(acknowledgment, "_verify_on_work", wraps=acknowledgment._verify_on_work) as verify, \
+                patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                self.assertRaises(ValueError):
+            self.run_revocation_composition_components(retry)
+        self.assertEqual((verify.call_count, replay.call_count), (1, 2))
+        self.assertEqual(original.recorder.snapshot(), before)
 
     def test_writer_request_authentic_same_id_changes_conflict_before_either_replay(self):
         from serverware import authority_revocation_retention as retention
@@ -3896,22 +4049,23 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             legacy = self.revocation_composition_fixture()
             # Obtain the five legacy rows through the real existing public
             # atomic owner, not by treating an independently seeded row as
-            # admitted custody. The opt-in sixth set stays absent.
+            # admitted custody. The opt-in sixth/seventh sets stay absent.
             with self.revocation_owner_scope(legacy): self.run_revocation_action_components(legacy)
             self.assertEqual(legacy.recorder.requests, {})
+            self.assertEqual(legacy.recorder.acknowledgments, {})
             before = legacy.recorder.snapshot()
             attached = self.revocation_composition_fixture(recorder=legacy.recorder)
             if retimed:
                 attached.detached.action.arguments["planned_at_epoch_ns"] += 1
                 attached.detached.rebuild()
-            expected = self.revocation_composition_work(attached, retry=True, request_existing=False)
+            expected = self.revocation_composition_work(attached, retry=True, request_existing=False, ack_existing=False)
             with self.subTest(retimed=retimed), self.revocation_owner_scope(attached), \
                     patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
                     patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
                 if retimed:
                     with self.assertRaises(ValueError): self.run_revocation_composition_components(attached)
                 else:
-                    receipt, _ = self.run_revocation_composition_components(attached)
+                    receipt, _, _ = self.run_revocation_composition_components(attached)
                     self.assertEqual(receipt["plannedAtEpochNs"], legacy.source.arguments["planned_at_epoch_ns"])
             self.assertEqual((replay.call_count, proof.call_count), (2, 2))
             self.assertEqual(attached.recorder.snapshot()[:5], before[:5])

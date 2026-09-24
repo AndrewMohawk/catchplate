@@ -145,8 +145,12 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
             and node.lineno > descriptor.lineno for node in ast.walk(writer)))
         uses = [node for node in ast.walk(self.service) if isinstance(node, ast.Attribute)
                 and node.attr == "writer_response_signing_key"]
-        self.assertEqual(len(uses), 2)
-        self.assertTrue(all(isinstance(node.ctx, ast.Store) for node in uses))
+        self.assertEqual(len(uses), 3)
+        self.assertEqual(sum(isinstance(node.ctx, ast.Store) for node in uses), 2)
+        loaded, = [node for node in uses if isinstance(node.ctx, ast.Load)]
+        adapter = definition(self.process, "_persist_and_reserve_revocation_commitments")
+        self.assertIs(assigned(adapter, "writer_private_key"), loaded)
+        self.assertLess(loaded.lineno, assigned(adapter, "owned_payload").lineno)
 
     def test_real_measured_loader_and_artifact_topology_both_reject_other_role_response_pin_reuse(self):
         measured = definition(self.service, "MeasuredConfiguration")
@@ -252,6 +256,8 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
         self.assertIsInstance(normal.body[1].body[0], ast.Raise)
 
     def test_new_key_has_no_signing_or_ack_path_and_preserves_real_mapper_and_public_gates(self):
+        # Preserve this startup-era ID: only the fixed private .67 composition
+        # may now consume the held slot. Generic and public paths remain closed.
         internal = definition(self.process, "_sign_internal")
         self.shape(internal.body[0].test, "self.signing_key is None")
         self.assertEqual(len(calls(internal, "self.signing_key.sign")), 1)
@@ -266,6 +272,14 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
         self.assertEqual(len(call(mapper, "persistence.RevocationPlannerPersistence").keywords), 7)
         self.assertNotIn("writer_response_signing_key", ast.unparse(mapper))
         self.assertNotIn("authority_revocation_writer_signer", ast.unparse(mapper_tree))
+        adapter = definition(self.process, "_persist_and_reserve_revocation_commitments")
+        self.shape(assigned(adapter, "writer_private_key"), "self.writer_response_signing_key")
+        delegated = call(adapter, "authority_revocation_writer_composition._persist_commitments_on_configuration")
+        private, = [item.value for item in delegated.keywords if item.arg == "writer_private_key"]
+        self.shape(private, "writer_private_key")
+        self.assertFalse(calls(adapter, "authority_revocation_writer_signer._signer_from_pem"))
+        self.assertFalse(any(isinstance(node, ast.Attribute) and node.attr == "sign"
+                             for node in ast.walk(adapter)))
         handle = definition(self.process, "handle")
         writer, = [node for node in ast.walk(handle) if isinstance(node, ast.If)
                    and ast.unparse(node.test) == "self.role_name == 'planner-writer'"]

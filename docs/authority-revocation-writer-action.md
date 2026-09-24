@@ -116,8 +116,10 @@ invokes atomic custody using one held writer-configuration tuple. This action's
 existing independent-input API and policy-before-mapper order remain unchanged.
 Source `.65` adds [immutable original-request custody](authority-revocation-writer-request-storage.md)
 and exact retry comparison to that separate authenticated path. This action's
-public owner still uses the original two-store atomic API. Serving integration,
-signed acknowledgment bytes, operation-bound response signing and detached-body
+public owner still uses the original two-store atomic API. The separate `.67`
+[signed ACK custody](authority-revocation-writer-acknowledgment.md) connects
+operation-bound signing to that authenticated composition, not this action's
+independent-input API. Serving integration, historical recovery and detached-body
 transport remain unfinished. The separate `.66`
 [startup key binding](authority-revocation-writer-signer.md) does not alter this
 action's inputs, work or output.

@@ -8,9 +8,9 @@ production readiness.
 
 The planner writer persists authorized planning records and reserves execution
 envelopes; it is not a general business-data writer. Its source permission
-surface is twelve metadata tables and five invoker functions. Revision `.65`
-added only SELECT/INSERT for immutable writer request custody; `.66` retains
-that permission set unchanged. The
+surface is thirteen metadata tables and five invoker functions. Revision `.65`
+added SELECT/INSERT for immutable writer request custody; `.67` adds only
+SELECT/INSERT for its immutable acknowledgment child. The
 immutable inventory in
 [`planner_writer_sql.py`](../serverware/authority_store/planner_writer_sql.py)
 now supplies both schema grants and a fixed catalog-admission query. Existing
@@ -19,7 +19,7 @@ audit-capacity imports retain their names through aliases to this inventory.
 | Tables | Permitted table privileges |
 | --- | --- |
 | Authorization dependency manifests, fence heads, operation mutation templates, query dependency manifests, authenticated table roots | SELECT |
-| Authorization projections, retained plans, writer requests, WebAuthn assertion evidence | SELECT, INSERT |
+| Authorization projections, retained plans, writer requests, writer acknowledgments, WebAuthn assertion evidence | SELECT, INSERT |
 | Execution envelopes, planner transactions | SELECT, INSERT, UPDATE |
 | Writer capabilities | SELECT, UPDATE |
 
@@ -31,7 +31,7 @@ It does not authenticate function bodies or independently enroll their owner.
 
 The pure query builder accepts only two bounded, exact strings: the role and
 namespace names. Both are bound parameters. Neither caller-supplied grants nor
-identifiers are interpolated into SQL. The twelve-table and five-function
+identifiers are interpolated into SQL. The thirteen-table and five-function
 inventories are embedded from source, and the exact query bytes have a SHA-256
 digest. Any returned violation denies; no row admits only this catalog contract.
 
@@ -57,7 +57,7 @@ Separate audit/recovery and legacy shared-role sealing keep their own policies.
 This is a metadata-namespace check, not an all-database sandbox or continuous
 monitoring against a privileged administrator.
 
-Source revision `.66`, all twenty v9 DDL revision pins, the schema source
+Source revision `.67`, all twenty-one v9 DDL revision pins, the schema source
 contract and the owner verification profile bind this change. The latter two
 include the configured writer role, exact grant inventory, function signatures
 and query digest. Older recorded contracts are not silently accepted.
@@ -67,7 +67,7 @@ and query digest. Older recorded contracts are not silently accepted.
 The source fixture checks immutable inventories, the real pure builder, bounded
 parameters, digest construction and actual sealer/profile linkage. The native
 fixture adds twenty-two authored cases using the real query on an externally
-prepared disposable PostgreSQL 16 cluster. Its twelve minimal tables and five
+prepared disposable PostgreSQL 16 cluster. Its thirteen minimal tables and five
 trivial functions exercise catalog metadata, not production DDL or semantics.
 Every case rolls back; every changed variant restores a positive baseline.
 A SQL exception is a test error, never a successful denial oracle.

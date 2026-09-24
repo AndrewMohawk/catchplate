@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from serverware import authority_revocation_retention as retention
 from serverware import authority_revocation_writer_connection as writer_connection
@@ -201,7 +201,8 @@ def _persist_and_reserve_on_configuration(configuration, *, envelope_bytes,
 def _persist_and_reserve_request_on_connection(*, intent_bytes, relay_bytes,
         historical_expectations_bytes, configuration_digest, generation_sequence,
         generation_digest, envelope_bytes, evaluation_context_bytes, planned_at_epoch_ns,
-        envelope_id, planner_transaction_id, connection, work, **expectations):
+        envelope_id, planner_transaction_id, writer_private_key, writer_public_key,
+        writer_response_spki_digest, connection, work, **expectations):
     """Exact request custody and both real replays share one common scope.
 
     Upstream fixed composition supplies genuinely authenticated originals and
@@ -209,9 +210,13 @@ def _persist_and_reserve_request_on_connection(*, intent_bytes, relay_bytes,
     or claim to authenticate its ordinary local inputs independently. Existing
     rows are byte-compared before replay but never replace either replay. Only
     actual replay outputs supply final record/key links, not operation authority.
+    The ACK is signed or verified only after that complete request readback.
+    This private result remains inside the configured owner until outer and
+    connection exits complete normally; exit uncertainty returns no ACK.
     """
     from serverware.authority_store import revocation_execution
     from serverware.authority_store import revocation_writer_request as request_store
+    from serverware.authority_store import revocation_writer_acknowledgment as ack_store
 
     store._callback(work, store._transaction_connection, connection)
     raw = store._callback(work, store._require_planner_writer, connection)
@@ -234,18 +239,23 @@ def _persist_and_reserve_request_on_connection(*, intent_bytes, relay_bytes,
             work=work, **expectations)
         with store._context(store._callback(work, raw.cursor), work) as cursor:
             store._callback(work, revocation_execution._same_connection, connection, raw)
-            request_store._persist(cursor, prefix, retained_receipt, execution_reservation,
+            request_row = request_store._persist(cursor, prefix, retained_receipt, execution_reservation,
                 work, insert=existing is None)
+            store._callback(work, revocation_execution._same_connection, connection, raw)
+            acknowledgment_bytes = ack_store._persist(cursor, request_row,
+                writer_private_key=writer_private_key, writer_public_key=writer_public_key,
+                writer_response_spki_digest=writer_response_spki_digest, work=work)
             store._callback(work, revocation_execution._same_connection, connection, raw)
         store._callback(work, revocation_execution._same_connection, connection, raw)
     store._callback(work, revocation_execution._same_connection, connection, raw)
-    return retained_receipt, execution_reservation
+    return retained_receipt, execution_reservation, acknowledgment_bytes
 
 
 def _persist_and_reserve_request_on_configuration(configuration, *, intent_bytes,
         relay_bytes, historical_expectations_bytes, configuration_digest,
         generation_sequence, generation_digest, envelope_bytes, evaluation_context_bytes,
-        planned_at_epoch_ns, envelope_id, planner_transaction_id, work, **expectations):
+        planned_at_epoch_ns, envelope_id, planner_transaction_id, writer_private_key,
+        writer_public_key, writer_response_spki_digest, work, **expectations):
     """Fixed authenticated composition suffix; no caller operation or opener.
 
     Original raw controls and independently held scalar pins are mandatory.
@@ -264,12 +274,17 @@ def _persist_and_reserve_request_on_configuration(configuration, *, intent_bytes
     commitment._raw(relay_bytes, commitment.MAX_CONTROL_BYTES)
     commitment._raw(historical_expectations_bytes, commitment.MAX_HISTORY_BYTES)
     commitment._pins(configuration_digest, generation_sequence, generation_digest)
+    commitment.plan.contract._digest(writer_response_spki_digest)
+    if (not isinstance(writer_private_key, Ed25519PrivateKey)
+            or not isinstance(writer_public_key, Ed25519PublicKey)):
+        raise ValueError("revocation writer custody requires held Ed25519 response keys")
     # Fixed immutable argument scaffold; the runner captures all mutable
     # external expectations before its first database callback, as before.
     arguments.update(intent_bytes=intent_bytes, relay_bytes=relay_bytes,
         historical_expectations_bytes=historical_expectations_bytes,
         configuration_digest=configuration_digest, generation_sequence=generation_sequence,
-        generation_digest=generation_digest)
+        generation_digest=generation_digest, writer_private_key=writer_private_key,
+        writer_public_key=writer_public_key, writer_response_spki_digest=writer_response_spki_digest)
     return _run_on_configuration(configuration, _persist_and_reserve_request_on_connection,
         arguments, expectations, work)
 

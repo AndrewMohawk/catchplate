@@ -685,6 +685,9 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_writer_request_source.py \
 	scripts/test_authority_revocation_writer_signer.py \
 	scripts/test_authority_revocation_writer_signer_source.py \
+	scripts/test_authority_revocation_writer_acknowledgment.py \
+	scripts/test_authority_revocation_writer_acknowledgment_storage.py \
+	scripts/test_authority_revocation_writer_acknowledgment_storage_source.py \
 	scripts/test_authority_webauthn_trust.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
@@ -921,6 +924,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_revocation_writer_commitment.py \
 	serverware/authority_revocation_writer_composition.py \
 	serverware/authority_revocation_writer_signer.py \
+	serverware/authority_revocation_writer_acknowledgment.py \
 	serverware/authority_revocation_plan.py \
 	serverware/authority_revocation_plan_contract.py \
 	serverware/authority_revocation_plan_production.py \
@@ -952,6 +956,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/revocation_counted_sql.py \
 	serverware/authority_store/revocation_execution.py \
 	serverware/authority_store/revocation_writer_request.py \
+	serverware/authority_store/revocation_writer_acknowledgment.py \
 	serverware/authority_store/revocation_retained_sql.py \
 	serverware/authority_store/revocation_retention.py \
 	serverware/authority_store/root_transition_sql.py \
@@ -2664,6 +2669,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_writer_commitment.py \
 				serverware/authority_revocation_writer_composition.py \
 				serverware/authority_revocation_writer_signer.py \
+				serverware/authority_revocation_writer_acknowledgment.py \
 				serverware/authority_revocation_coordinator.py \
 				serverware/authority_store/planner_connection.py \
 				serverware/authority_store/authorization_records.py \
@@ -2673,6 +2679,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_store/revocation_counted_sql.py \
 				serverware/authority_store/revocation_execution.py \
 				serverware/authority_store/revocation_writer_request.py \
+				serverware/authority_store/revocation_writer_acknowledgment.py \
 				serverware/authority_store/revocation_retained_sql.py \
 				serverware/authority_store/executor_v9.py \
 				serverware/authority_revocation_write_trace.py \

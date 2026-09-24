@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.66"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.67"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -321,7 +321,9 @@ REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT = MappingProxyType({
     "requestTable": REVOCATION_WRITER_REQUEST_TABLE,
     "requestColumns": REVOCATION_WRITER_REQUEST_COLUMNS,
     "primaryKey": ("intent_envelope_id",),
-    "uniqueKeys": (("relay_envelope_id",), ("execution_envelope_id",)),
+    "uniqueKeys": (("relay_envelope_id",), ("execution_envelope_id",),
+                   ("intent_envelope_id", "configuration_digest", "generation_sequence",
+                    "generation_digest", "source_revision")),
     "identityScope": "global-across-configuration-generation-and-key-rotations",
     "plannerBinding": "deferred-retained-plan-composite-foreign-key",
     "executionBinding": "deferred-execution-and-planner-composite-foreign-key",
@@ -332,6 +334,29 @@ REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT = MappingProxyType({
     "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
     "authorityExclusions": ("acknowledgement", "signature-verification", "key-enrollment",
                             "currentness", "semantic-replay", "execution", "witness"),
+})
+REVOCATION_WRITER_ACK_TABLE = "policy_authority_revocation_writer_acknowledgments"
+REVOCATION_WRITER_ACK_COLUMNS = (
+    "ack_envelope_id", "intent_envelope_id", "configuration_digest",
+    "generation_sequence", "generation_digest", "writer_response_spki_digest",
+    "exact_ack_base64url", "exact_ack_bytes_digest", "exact_ack_byte_count",
+    "source_revision",
+)
+REVOCATION_WRITER_ACK_CUSTODY_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityRevocationWriterAckCustody/v1",
+    "operation": "webauthn.credential.revoke", "planProtocol": "revocation-v4",
+    "postgresOnly": True, "sqliteAdmission": False, "publicExecutionEnabled": False,
+    "ackTable": REVOCATION_WRITER_ACK_TABLE, "ackColumns": REVOCATION_WRITER_ACK_COLUMNS,
+    "primaryKey": ("ack_envelope_id",), "uniqueKeys": (("intent_envelope_id",),),
+    "identityScope": "global-across-configuration-generation-and-key-rotations",
+    "requestBinding": ("intent_envelope_id", "configuration_digest", "generation_sequence",
+                       "generation_digest", "source_revision"),
+    "requestForeignKey": "deferred-no-action-composite-foreign-key",
+    "maxAckBytes": 16384, "plannerPrivileges": ("SELECT", "INSERT"),
+    "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
+    "authorityExclusions": ("signature-verification", "commit-completion", "key-enrollment",
+                            "currentness", "semantic-replay", "execution", "witness",
+                            "globally-exactly-once-signing"),
 })
 PLANNER_RESERVATION_IMMUTABLE_COLUMNS = (
     "planner_transaction_id", "plan_protocol", "operation", "operation_id", "request_digest",
@@ -501,6 +526,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         "policy_authority_planner_transactions",
         REVOCATION_RETAINED_TABLE,
         REVOCATION_WRITER_REQUEST_TABLE,
+        REVOCATION_WRITER_ACK_TABLE,
         REVOCATION_RETAINED_CAPABILITY_TABLE,
         "policy_authority_query_dependency_manifests",
         "policy_authority_schema_contracts",
@@ -2583,6 +2609,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "plannerCompleteAcquisition": dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT),
         "revocationRetention": dict(REVOCATION_RETENTION_CONTRACT),
         "revocationWriterRequestCustody": dict(REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT),
+        "revocationWriterAckCustody": dict(REVOCATION_WRITER_ACK_CUSTODY_CONTRACT),
         "revocationCapabilityCustody": dict(REVOCATION_CAPABILITY_CUSTODY_CONTRACT),
         "signedRevocationPlanVerification": dict(SIGNED_REVOCATION_PLAN_CONTRACT),
         "signedRevocationPlanProduction": dict(SIGNED_REVOCATION_PRODUCTION_CONTRACT),

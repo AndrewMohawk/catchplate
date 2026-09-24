@@ -51,7 +51,8 @@ methods contained in these fixtures; it is not a count of 311 native SQL tests.
 | 14 | `test_authority_planner_writer_postgres.py` | 22 | 300 s | Yes |
 
 The appended planner-writer suite runs the actual fixed privilege query against
-eleven minimal tables and five trivial functions. These are catalog fixtures,
+thirteen minimal tables and five trivial functions, including request and ACK
+custody. These are catalog fixtures,
 not production function bodies. Exact grants admit; missing/excess privileges,
 column/PUBLIC access, grant options, membership, relation/function kinds and
 function metadata drift deny by returning a violation, never by treating a SQL

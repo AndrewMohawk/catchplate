@@ -16,6 +16,8 @@ import sys
 import unittest
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -26,7 +28,9 @@ from serverware import authority_revocation_persistence as persistence
 from serverware import authority_revocation_writer_composition as composition
 from serverware import authority_revocation_writer_configuration as mapper
 import test_authority_revocation_plan as oracle
+import test_authority_revocation_configuration as configuration_oracle
 import test_authority_revocation_writer_action as action_oracle
+import test_authority_revocation_writer_acknowledgment as acknowledgment_oracle
 import test_authority_revocation_writer_commitment as commitment_oracle
 import test_authority_revocation_writer_configuration as mapper_oracle
 
@@ -38,11 +42,24 @@ ORIGINAL_FIELDS = ("intent_bytes", "relay_bytes", "envelope_bytes", "evaluation_
 class CompositionFixture(commitment_oracle.CommitmentFixture):
     def __init__(self):
         super().__init__()
-        self.action.configuration.payload["roles"]["planner-writer"]["maximumInternalAgeNs"] = 60_000_000_000
+        self.writer_key = Ed25519PrivateKey.from_private_bytes(bytes([71]) * 32)
+        self.launch_key = Ed25519PrivateKey.from_private_bytes(bytes([72]) * 32)
+        self.writer_spki_digest = configuration_oracle.spki(self.writer_key.public_key())
+        roles = self.action.configuration.payload["roles"]
+        roles["planner-writer"]["maximumInternalAgeNs"] = 60_000_000_000
+        roles["planner-writer"]["responseSigningSpkiDigest"] = self.writer_spki_digest
+        # This is still an independently authored graph, not measured role
+        # admission. Complete the four excluded response pins for real binding.
+        for name, seed in (("issuer", 73), ("executor", 74)):
+            roles.setdefault(name, {"processMode": "policy-authority-" + name})[
+                "responseSigningSpkiDigest"] = configuration_oracle.spki(
+                    Ed25519PrivateKey.from_private_bytes(bytes([seed]) * 32).public_key())
+        self.other_response_spki_digests = tuple(roles[name]["responseSigningSpkiDigest"]
+            for name in ("verifier", "planner", "issuer", "executor"))
         self.refresh_configuration()
 
     def refresh_configuration(self):
-        # A new writer-age field changes the full configuration digest, hence
+        # Writer fields change the full configuration digest, hence
         # its verifier identity and both genuine original receipt/plan bytes.
         self.action.refresh()
         self.plan = self.action.plan
@@ -67,6 +84,7 @@ def prepare_components(fixture, work):
     provenance is source-linked separately, never emulated as successful here.
     """
     originals = fixture.originals()
+    writer_private_key, launch_public_key = fixture.writer_key, fixture.launch_key.public_key()
     payload, digest = fixture.action.configuration.payload, fixture.configuration_digest
     generation, dsn = fixture.action.configuration.generation, fixture.action.configuration.persistence_dsn
     owned = configuration._ConfigurationCapture(configuration.capability.capture._SharedLedger(work),
@@ -77,21 +95,24 @@ def prepare_components(fixture, work):
         configuration_digest=digest, generation=generation, persistence_dsn=dsn, work=work)
     fixed = owner._snapshot_configuration()
     return owner, fixed, {**originals, "owned_payload": owned, "configuration_digest": digest,
-        "generation_sequence": sequence, "generation_digest": generation_digest, "maximum_age_ns": age}
+        "generation_sequence": sequence, "generation_digest": generation_digest, "maximum_age_ns": age,
+        "writer_private_key": writer_private_key, "launch_public_key": launch_public_key}
 
 
 def independent_prefix_work(fixture):
     """Independent literal schedules, including the extra worker-owned copy."""
     copy_config = oracle.graph_cost(fixture.action.configuration.payload, 1, 1)
     factory = mapper_oracle.independent_factory_work(fixture.action.configuration)["total"]
+    binding = acknowledgment_oracle.independent_bind_work(fixture.writer_key.public_key(),
+        fixture.launch_key.public_key(), fixture.writer_spki_digest)["total"]
     receiver = commitment_oracle.independent_work(fixture)["receiver"]["total"]
     policy = action_oracle.independent_prefix_work(fixture.action)["policy"]
     identity = oracle.canonical_comparison(fixture.action.arguments["planner_transaction_id"],
         fixture.action.expectations["expected_planner_transaction_id"])
     preparation = oracle.add(copy_config, factory)
-    before_atomic = oracle.add(copy_config, receiver, policy)
+    before_atomic = oracle.add(copy_config, binding, receiver, policy)
     worker = oracle.add(before_atomic, identity)
-    return {"configuration": copy_config, "factory": factory, "receiver": receiver,
+    return {"configuration": copy_config, "factory": factory, "binding": binding, "receiver": receiver,
         "policy": policy, "identity": identity, "preparation": preparation,
         "before_atomic": before_atomic, "worker": worker, "total": oracle.add(preparation, worker)}
 
@@ -106,6 +127,7 @@ class RevocationWriterCompositionTests(unittest.TestCase):
     def stop_before_database(self, fixed, arguments, meter, *, fixture, clock=None):
         """Observe the actual preflight then raise; never forge a success."""
         failure, observed = RuntimeError("explicit pre-database fixture stop"), []
+        held_writer = arguments["writer_private_key"]
         custody = {name: arguments[name] for name in ("intent_bytes", "relay_bytes",
             "historical_expectations_bytes", "configuration_digest", "generation_sequence", "generation_digest")}
 
@@ -114,7 +136,11 @@ class RevocationWriterCompositionTests(unittest.TestCase):
             self.assertIs(operation, persistence._persist_and_reserve_request_on_connection)
             self.assertIs(work, meter)
             self.assertEqual({name: inputs[name] for name in custody}, custody)
-            self.assertEqual(set(inputs), set(fixture.action.arguments) | set(custody))
+            self.assertEqual(set(inputs), set(fixture.action.arguments) | set(custody) | {
+                "writer_private_key", "writer_public_key", "writer_response_spki_digest"})
+            self.assertIs(inputs["writer_private_key"], held_writer)
+            self.assertIsInstance(inputs["writer_public_key"], Ed25519PublicKey)
+            self.assertEqual(inputs["writer_response_spki_digest"], fixture.writer_spki_digest)
             observed.append((inputs, expectations))
             raise failure
 
@@ -152,7 +178,8 @@ class RevocationWriterCompositionTests(unittest.TestCase):
         self.assertEqual(historical, fixture.action.expectations)
         self.assertEqual(fixed, owner._snapshot_configuration())
         self.assertEqual(oracle.units(meter.metrics), expected["total"])
-        self.assertEqual((expected["factory"][0], expected["receiver"][0], expected["total"][0]), (4, 8, 12))
+        self.assertEqual((expected["factory"][0], expected["binding"][0], expected["receiver"][0],
+                          expected["total"][0]), (4, 2, 8, 14))
         for name in ("envelope_bytes", "evaluation_context_bytes"):
             self.assertIs(inputs[name], fixture.action.arguments[name])
 
@@ -259,7 +286,9 @@ class RevocationWriterCompositionTests(unittest.TestCase):
         # configuration or authenticate the physical source of either clock.
 
     def test_genuine_authentication_callbacks_keep_held_keys_and_worker_owned_policy(self):
-        for target in ("planner.export", "verifier.export", "planner.verify", "verifier.verify"):
+        stages = ["writer.derive", "writer.export", "launch.export",
+                  "planner.export", "verifier.export", "planner.verify", "verifier.verify"]
+        for target in stages:
             fixture = CompositionFixture()
             owner, fixed, arguments = self.prepared(fixture)
             expected, original, events = independent_prefix_work(fixture)["worker"], copy.deepcopy(fixture.action.expectations), []
@@ -268,17 +297,25 @@ class RevocationWriterCompositionTests(unittest.TestCase):
                 events.append(stage)
                 if stage != target: return
                 arguments["owned_payload"].clear()
+                arguments["writer_private_key"] = fixture.plan.other_key
+                arguments["launch_public_key"] = fixture.plan.other_key.public_key()
                 fixture.action.configuration.payload.clear()
                 object.__setattr__(owner, "persistence_dsn", "postgresql://late-owner.invalid/db")
                 object.__setattr__(owner, "verifier_public_key", fixture.plan.other_key.public_key())
 
             keys = commitment_oracle.observed_keys(fixture, mutate)
+            writer_public = commitment_oracle.key_oracle._ObservedPublicBytes(
+                fixture.writer_key.public_key(), lambda: mutate("writer.export"))
+            arguments["writer_private_key"] = commitment_oracle.key_oracle._ObservedPrivateKey(
+                fixture.writer_key, public_callback=lambda: mutate("writer.derive"), public_output=writer_public)
+            arguments["launch_public_key"] = commitment_oracle.key_oracle._ObservedPublicBytes(
+                fixture.launch_key.public_key(), lambda: mutate("launch.export"))
             held = (*fixed[:2], keys["planner_public_key"], keys["verifier_public_key"], *fixed[4:])
             meter = self.work(expected)
             with self.subTest(stage=target):
                 _, observed = self.stop_before_database(held, arguments, meter, fixture=fixture)
                 self.assertEqual(observed, original)
-                self.assertEqual(events, ["planner.export", "verifier.export", "planner.verify", "verifier.verify"])
+                self.assertEqual(events, stages)
                 self.assertEqual(oracle.units(meter.metrics), expected)
 
     def test_prefix_exact_prior_and_each_short_axis_never_allocate_another_work(self):

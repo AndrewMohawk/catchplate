@@ -864,6 +864,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
     ASSERTION = "policy_authority_webauthn_assertion_evidence"
     PROJECTION = "policy_authority_authorization_projections"
     REQUEST = "policy_authority_revocation_writer_requests"
+    ACK = "policy_authority_revocation_writer_acknowledgments"
     EXECUTION = "policy_authority_execution_envelopes"
     RESERVATION = (
         "planner_transaction_id", "plan_protocol", "operation", "operation_id", "request_digest",
@@ -902,7 +903,8 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         # The capability fixture also calls this concrete setup without
         # inheriting this class; do not require it to grow a request API.
         for table in (self.CHILD, self.ASSERTION, self.PROJECTION,
-                      AuthorityRevocationRetentionPostgresTests.REQUEST):
+                      AuthorityRevocationRetentionPostgresTests.REQUEST,
+                      AuthorityRevocationRetentionPostgresTests.ACK):
             for statement in production_retained_immutable_sql(table):
                 self.connection.execute(statement)
 
@@ -1193,6 +1195,142 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             self.assertEqual(caught.exception.diag.constraint_name, self.unique_constraint(self.REQUEST, (unique,)))
             self.assertEqual(self.request_rows(), (row,))
 
+    def ack_records(self, label):
+        """Opaque structural custody only, not a valid signed acknowledgment."""
+        records = self.request_records(label)
+        request = records[3]
+        ack = {
+            "ack_envelope_id": token("ack-" + label),
+            "intent_envelope_id": request["intent_envelope_id"],
+            "configuration_digest": request["configuration_digest"],
+            "generation_sequence": request["generation_sequence"],
+            "generation_digest": request["generation_digest"],
+            "writer_response_spki_digest": token("writer-response-key"),
+            "exact_ack_base64url": "e30", "exact_ack_bytes_digest": token("ack-bytes"),
+            "exact_ack_byte_count": 2, "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        self.assertEqual(tuple(ack), authority_contract.REVOCATION_WRITER_ACK_COLUMNS)
+        return records, ack
+
+    def ack_rows(self):
+        return tuple(row[0] for row in self.connection.execute(sql.SQL(
+            "SELECT pg_catalog.to_jsonb(t) FROM {} AS t ORDER BY ack_envelope_id COLLATE \"C\""
+        ).format(sql.Identifier(self.schema, self.ACK))).fetchall())
+
+    def insert_ack_parents(self, records):
+        self.insert_request_parents(records)
+        self.insert(self.REQUEST, records[3])
+
+    def assert_ack_deferred_contract(self):
+        constraints = self.connection.execute(
+            "SELECT conname, condeferrable, condeferred, confupdtype, confdeltype "
+            "FROM pg_catalog.pg_constraint WHERE conrelid = %s::regclass AND contype = 'f'",
+            (self.namespace + "." + self.ACK,)).fetchall()
+        self.assertEqual(constraints, [("serverware_writer_ack_request_fk", True, True, "a", "a")])
+        self.unique_constraint(self.ACK, ("ack_envelope_id",))
+        self.unique_constraint(self.ACK, ("intent_envelope_id",))
+        self.unique_constraint(self.REQUEST, ("intent_envelope_id", "configuration_digest",
+            "generation_sequence", "generation_digest", "source_revision"))
+        records, ack = self.ack_records("ack-deferred")
+        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+        self.insert(self.ACK, ack)
+        self.insert(self.REQUEST, records[3])
+        self.insert_request_parents(records)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.ack_rows(), (ack,))
+
+    def assert_ack_foreign_keys(self):
+        records, ack = self.ack_records("ack-fk")
+        self.insert_ack_parents(records)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        for field, value in (("intent_envelope_id", token("missing-intent")),
+                ("configuration_digest", token("other-config")), ("generation_sequence", 2),
+                ("generation_digest", token("other-generation"))):
+            with self.subTest(ack_fk=field), self.assertRaises(psycopg.errors.ForeignKeyViolation) as caught:
+                with self.connection.transaction():
+                    self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+                    self.insert(self.ACK, {**ack, field: value})
+                    self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            self.assertEqual(caught.exception.diag.constraint_name, "serverware_writer_ack_request_fk")
+            self.assertEqual(self.ack_rows(), ())
+        # A complete but differently scoped second request cannot be spliced
+        # into an ACK for the first scope, even though its intent ID exists.
+        other, _ = self.ack_records("ack-other-fk")
+        other[3]["configuration_digest"] = token("other-config")
+        self.insert_ack_parents(other)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+            with self.connection.transaction():
+                self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+                self.insert(self.ACK, {**ack, "intent_envelope_id": other[3]["intent_envelope_id"]})
+                self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.ack_rows(), ())
+
+    def assert_ack_shapes(self):
+        records, ack = self.ack_records("ack-shapes")
+        self.insert_ack_parents(records)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        for name in ack:
+            with self.subTest(ack_null=name), self.assertRaises(psycopg.errors.NotNullViolation) as caught:
+                with self.connection.transaction():
+                    self.insert(self.ACK, {**ack, name: None})
+            self.assertEqual(caught.exception.diag.column_name, name)
+        invalid = [("generation_sequence", 0), ("exact_ack_byte_count", 1),
+            ("exact_ack_byte_count", 16385), ("source_revision", "old"),
+            ("exact_ack_base64url", "e30="), ("exact_ack_base64url", "e3!"),
+            ("exact_ack_base64url", "e31")]
+        invalid.extend((name, "not-a-digest") for name in ack
+                       if name.endswith("_digest") or name.endswith("_id"))
+        for name, value in invalid:
+            with self.subTest(ack_shape=name, value=value), self.assertRaises(psycopg.errors.CheckViolation):
+                with self.connection.transaction():
+                    self.insert(self.ACK, {**ack, name: value})
+            self.assertEqual(self.ack_rows(), ())
+        # One-byte-tail padding bits and the exact upper bound are independent
+        # structural checks, not a claim that opaque originals are signatures.
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            with self.connection.transaction():
+                self.insert(self.ACK, {**ack, "exact_ack_base64url": "eHh4eB", "exact_ack_byte_count": 4})
+        for raw in (b"xxxx", b"x" * 16384):
+            self.connection.execute("SAVEPOINT ack_shape_variant")
+            try:
+                candidate = {**ack, "exact_ack_base64url": base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii"),
+                    "exact_ack_byte_count": len(raw)}
+                self.insert(self.ACK, candidate)
+                self.assertEqual(self.ack_rows(), (candidate,))
+            finally:
+                # Restore the positive variant without mutating immutable rows.
+                self.connection.execute("ROLLBACK TO SAVEPOINT ack_shape_variant")
+                self.connection.execute("RELEASE SAVEPOINT ack_shape_variant")
+            self.assertEqual(self.ack_rows(), ())
+
+    def assert_ack_immutable(self):
+        records, ack = self.ack_records("ack-immutable")
+        self.insert_ack_parents(records)
+        self.insert(self.ACK, ack)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        for name in ack:
+            with self.subTest(ack_update=name), self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+                with self.connection.transaction():
+                    self.connection.execute(sql.SQL("UPDATE {} SET {} = %s WHERE ack_envelope_id = %s").format(
+                        sql.Identifier(self.schema, self.ACK), sql.Identifier(name)),
+                        (self.changed(ack[name]), ack["ack_envelope_id"]))
+            self.assertEqual(self.ack_rows(), (ack,))
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+            with self.connection.transaction():
+                self.connection.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(self.schema, self.ACK)))
+        for unique in ("ack_envelope_id", "intent_envelope_id"):
+            candidate = {**ack, "ack_envelope_id": token("new-ack"), "intent_envelope_id": token("new-intent"),
+                "configuration_digest": token("rotated-config"), "generation_sequence": 2,
+                "generation_digest": token("rotated-generation"), "writer_response_spki_digest": token("rotated-writer-key")}
+            candidate[unique] = ack[unique]
+            with self.subTest(ack_unique=unique), self.assertRaises(psycopg.errors.UniqueViolation) as caught:
+                with self.connection.transaction():
+                    self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+                    self.insert(self.ACK, candidate)
+            self.assertEqual(caught.exception.diag.constraint_name, self.unique_constraint(self.ACK, (unique,)))
+            self.assertEqual(self.ack_rows(), (ack,))
+
     @staticmethod
     def changed(value):
         if type(value) is int:
@@ -1236,6 +1374,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
         self.assertEqual(self.snapshot(), ((planned, second), (child, second_child)))
         self.assert_request_deferred_contract()
+        self.assert_ack_deferred_contract()
 
     def test_incomplete_or_mismatched_pairs_roll_back_at_deferred_boundary(self):
         all_names = {"serverware_planner_retained_record_fk", "serverware_revocation_retained_parent_fk"}
@@ -1269,6 +1408,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
                 self.assertEqual(self.snapshot(), ((), ()))
 
         self.assert_request_foreign_keys()
+        self.assert_ack_foreign_keys()
 
     def test_parent_protocol_status_and_sidecar_shapes_are_closed(self):
         reserved, planned, child = self.records()
@@ -1312,6 +1452,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             self.assertEqual(self.snapshot(), baseline)
 
         self.assert_request_shapes()
+        self.assert_ack_shapes()
 
     def test_sidecar_update_delete_and_duplicate_insert_preserve_original(self):
         planned, child = self.complete_pair()
@@ -1343,6 +1484,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.assertEqual(caught.exception.diag.constraint_name, "serverware_revocation_retained_parent_fk")
         self.assertEqual(self.snapshot(), baseline)
         self.assert_request_immutable()
+        self.assert_ack_immutable()
 
     def test_planned_parent_reservation_and_payload_fields_are_immutable(self):
         planned, _ = self.complete_pair()

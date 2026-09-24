@@ -1748,7 +1748,11 @@ def _recv_message(connection: socket.socket) -> dict[str, Any]:
 
 def _send_message(connection: socket.socket, value: Mapping[str, Any]) -> None:
     encoded = _canonical(dict(value))
-    if not 2 <= len(encoded) <= MAX_MESSAGE_BYTES:
+    _send_encoded_message(connection, encoded)
+
+
+def _send_encoded_message(connection: socket.socket, encoded: bytes) -> None:
+    if type(encoded) is not bytes or not 2 <= len(encoded) <= MAX_MESSAGE_BYTES:
         raise AuthorityServiceError("authority response size is invalid")
     connection.sendall(len(encoded).to_bytes(8, "big") + encoded)
 
@@ -1829,6 +1833,37 @@ def _socket_request(
                 "authority socket server identity is not exact"
             )
         _send_message(connection, value)
+        return _recv_message(connection)
+    finally:
+        connection.close()
+
+
+def _socket_request_bytes(
+    path: str,
+    encoded: bytes,
+    *,
+    timeout_seconds: float,
+    expected_peer_uid: int,
+    expected_peer_gid: int,
+) -> dict[str, Any]:
+    """Send source-owned original bytes without decoding or re-encoding them.
+
+    The caller constructs canonical bytes; this transport grants no protocol
+    or signature authority. Its fixed framing and response checks are the
+    same as the mapping transport, which retains its existing public shape.
+    """
+    if type(encoded) is not bytes or not 2 <= len(encoded) <= MAX_MESSAGE_BYTES:
+        raise AuthorityServiceError("authority request bytes are not exact and bounded")
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        connection.settimeout(timeout_seconds)
+        connection.connect(path)
+        peer_uid, peer_gid, _peer_pid = _peer_identity(connection)
+        if peer_uid != expected_peer_uid or peer_gid != expected_peer_gid:
+            raise AuthorityServiceError(
+                "authority socket server identity is not exact"
+            )
+        _send_encoded_message(connection, encoded)
         return _recv_message(connection)
     finally:
         connection.close()
@@ -4824,6 +4859,34 @@ class AuthorityProcess:
         result_digest: str | None = None,
         predecessor_receipt: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        _request_bytes, receipt = self._witness_transition_with_request(
+            phase=phase,
+            operation=operation,
+            request_digest=request_digest,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            capability_id=capability_id,
+            result_digest=result_digest,
+            predecessor_receipt=predecessor_receipt,
+        )
+        return receipt
+
+    def _witness_transition_with_request(
+        self,
+        *,
+        phase: str,
+        operation: str,
+        request_digest: str,
+        deadline_monotonic_ns: int,
+        capability_id: str | None = None,
+        result_digest: str | None = None,
+        predecessor_receipt: Mapping[str, Any] | None = None,
+    ) -> tuple[bytes, dict[str, Any]]:
+        """Retain the original sent request only after genuine receipt checks.
+
+        This is still the existing witness protocol and preliminary reservation,
+        not a post-plan bind or a v4 service route. No request is reconstructed,
+        re-signed or cached for retry after the transport callback.
+        """
         if (
             phase
             not in {
@@ -4902,9 +4965,10 @@ class AuthorityProcess:
                 )
             ),
         }
-        response = _socket_request(
+        request_bytes = _canonical(request)
+        response = _socket_request_bytes(
             str(witness["socketPath"]),
-            request,
+            request_bytes,
             timeout_seconds=(
                 float(witness["requestTimeoutSeconds"])
                 if phase in {"abort", "reconcile"}
@@ -4991,7 +5055,7 @@ class AuthorityProcess:
             or response.get("canonicalRequestDigest")
                 != _domain_digest(
                     WITNESS_REQUEST_SCHEMA_V2,
-                    _canonical(request),
+                    request_bytes,
                 )
             or _require_digest(
                 response.get("headDigest"),
@@ -5030,7 +5094,7 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "external replay witness v2 signature is invalid"
             ) from exc
-        return dict(response)
+        return request_bytes, dict(response)
 
     def _witness_transition_v1_disabled(
         self,

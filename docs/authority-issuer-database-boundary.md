@@ -111,6 +111,11 @@ issuer access, and stored context cannot supply its own independent authority.
 Mutable execution bindings and planner capability identity need explicit
 comparison under a coordinated lock order.
 
+Source `.47` adds [private capability signing and original witness-request
+preservation](authority-revocation-signing.md). It does not add issuer database
+functions or grants. A produced signature remains input to independent issuer
+verification and transactional custody, not a successful storage observation.
+
 The post-plan witness event, current-state/one-use execution, atomic terminal
 publication and missing WebAuthn kernel/public gates remain separate required
 work. Fixing the existing issuer connection and grant recipe does not activate

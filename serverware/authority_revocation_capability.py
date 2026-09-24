@@ -325,6 +325,82 @@ def _receipt(record, ledger):
         "credentialBindingDigest": _credential_binding(credential, ledger)}
 
 
+def _capture_expectations(ledger, retention_expectations, *, expected_signer_identity,
+        expected_issuer_session_identity_digest, expected_execution_envelope_id,
+        expected_witness_receipt_digest, expected_witness_identity_digest,
+        expected_configuration_digest, expected_generation_sequence, expected_generation_digest):
+    """The actual shared external-input capture; it creates no work allowance."""
+    owned = capture._JSONCapture(ledger).visit({
+        "retention": {field: retention_expectations[field] for field in wire._EXPECTATIONS - _HANDLE_FIELDS},
+        "expectedSignerIdentity": expected_signer_identity,
+        "expectedIssuerSessionIdentityDigest": expected_issuer_session_identity_digest,
+        "expectedExecutionEnvelopeId": expected_execution_envelope_id,
+        "expectedWitnessReceiptDigest": expected_witness_receipt_digest,
+        "expectedWitnessIdentityDigest": expected_witness_identity_digest,
+        "expectedConfigurationDigest": expected_configuration_digest,
+        "expectedGenerationSequence": expected_generation_sequence,
+        "expectedGenerationDigest": expected_generation_digest,
+    }, depth=-1)
+    shape.validate_identity_shape(owned["expectedSignerIdentity"])
+    for name in ("expectedIssuerSessionIdentityDigest", "expectedExecutionEnvelopeId",
+            "expectedWitnessReceiptDigest", "expectedWitnessIdentityDigest",
+            "expectedConfigurationDigest", "expectedGenerationDigest"):
+        shape._digest(owned[name])
+    shape._integer(owned["expectedGenerationSequence"], minimum=1)
+    historical = owned["retention"]
+    for name in ("expected_fence", "reserved_at_epoch_ns", "deadline_epoch_ns", "deadline_monotonic_ns",
+            "now_epoch_ns", "now_monotonic_ns", "maximum_assertion_age_ns", "maximum_plan_age_ns"):
+        shape._integer(historical[name], minimum=1)
+    shape._integer(historical["maximum_clock_skew_ns"])
+    shape._digest(historical["expected_capability_id"])
+    shape._digest(historical["expected_planner_transaction_id"])
+    return owned
+
+
+def _expected_payload(record, execution, execution_request_bytes, witness_receipt,
+        witness_digest, owned, ledger):
+    """Bind the exact wrapper and derive the one source-owned 36-field recipe.
+
+    Only this invocation's genuine raw replay calls this helper. Its result is
+    a graph, not an admission token; consumers still authenticate original bytes.
+    """
+    work, historical = ledger.work, owned["retention"]
+    measured, actual = record.payload["measuredPlan"], record.payload
+    expected_execution = {"schema": EXECUTION_REQUEST_SCHEMA, "planProtocol": CAPABILITY_PROTOCOL,
+        "retainedRecordDigest": record.record_digest, "rootTransitionDigest": measured["rootTransitionDigest"],
+        "typedRequest": actual["typedRequest"]}
+    _same(execution, expected_execution, work, "revocation capability exact execution wrapper changed")
+    exact_request_digest = retention._bytes_digest(execution_request_bytes, work)
+    receipt = _receipt(record, ledger)
+    return {
+        "schema": CAPABILITY_SCHEMA, "capabilityId": measured["capabilityId"],
+        "envelopeId": owned["expectedExecutionEnvelopeId"],
+        "plannerTransactionId": measured["plannerTransactionId"],
+        "authorizationProjectionDigest": measured["authorizationProjectionDigest"],
+        "selectedBusinessRowsDigest": measured["selectedBusinessRowsDigest"],
+        "mutationPlanDigest": measured["mutationPlanDigest"], "expectedResultDigest": actual["expectedResultDigest"],
+        "operation": OPERATION, "operationId": measured["operationId"],
+        "handlerName": authority.operation_spec(OPERATION)["handler"], "requestDigest": measured["requestDigest"],
+        "operationManifestDigest": measured["operationManifestDigest"], "queryManifestDigest": measured["queryManifestDigest"],
+        "authorityRootSetDigest": measured["authorityRootSetBeforeDigest"],
+        "authoritySnapshotDigest": measured["authoritySnapshotDigest"],
+        "approverPolicyDigest": actual["authorizationProjection"]["approverPolicyDigest"],
+        "webauthnReceipt": receipt, "webauthnReceiptDigest": _digest(WEBAUTHN_RECEIPT_SCHEMA, receipt, ledger),
+        "webauthnTrustHighWaterDigest": actual["webauthnEvidence"]["trustHighWaterDigest"],
+        "witnessReservation": witness_receipt, "witnessReservationDigest": witness_digest,
+        "witnessSequence": witness_receipt["sequence"], "witnessHeadDigest": witness_receipt["headDigest"],
+        "witnessPredecessorHeadDigest": None,
+        "deadlineMonotonicNs": measured["deadlineMonotonicNs"], "deadlineEpochNs": measured["deadlineEpochNs"],
+        "fence": measured["fence"], "issuedAtEpochNs": historical["reserved_at_epoch_ns"],
+        "issuedMonotonicNs": historical["deadline_monotonic_ns"] - (
+            historical["deadline_epoch_ns"] - historical["reserved_at_epoch_ns"]),
+        "expiresAtEpochNs": measured["deadlineEpochNs"],
+        "issuerSessionIdentityDigest": owned["expectedIssuerSessionIdentityDigest"],
+        "planProtocol": CAPABILITY_PROTOCOL, "retainedRecordDigest": record.record_digest,
+        "rootTransitionDigest": measured["rootTransitionDigest"], "exactRequestBytesDigest": exact_request_digest,
+    }
+
+
 def _verify_signed_capability_on_work(*, work: _ValidationWork, envelope_bytes: bytes,
         retained_envelope_bytes: bytes, evaluation_context_bytes: bytes, execution_request_bytes: bytes,
         witness_request_bytes: bytes, signer_public_key: Ed25519PublicKey,
@@ -358,33 +434,19 @@ def _verify_signed_capability_on_work(*, work: _ValidationWork, envelope_bytes: 
             if type(raw) is not bytes or not 2 <= len(raw) <= maximum:
                 raise RevocationCapabilityError("revocation capability original transport is not exact and bounded")
         before = work.metrics
-        owned = capture._JSONCapture(ledger).visit({
-            "retention": {field: retention_expectations[field] for field in wire._EXPECTATIONS - _HANDLE_FIELDS},
-            "expectedSignerIdentity": expected_signer_identity,
-            "expectedIssuerSessionIdentityDigest": expected_issuer_session_identity_digest,
-            "expectedExecutionEnvelopeId": expected_execution_envelope_id,
-            "expectedWitnessReceiptDigest": expected_witness_receipt_digest,
-            "expectedWitnessIdentityDigest": expected_witness_identity_digest,
-            "expectedConfigurationDigest": expected_configuration_digest,
-            "expectedGenerationSequence": expected_generation_sequence,
-            "expectedGenerationDigest": expected_generation_digest,
-        }, depth=-1)
+        owned = _capture_expectations(ledger, retention_expectations,
+            expected_signer_identity=expected_signer_identity,
+            expected_issuer_session_identity_digest=expected_issuer_session_identity_digest,
+            expected_execution_envelope_id=expected_execution_envelope_id,
+            expected_witness_receipt_digest=expected_witness_receipt_digest,
+            expected_witness_identity_digest=expected_witness_identity_digest,
+            expected_configuration_digest=expected_configuration_digest,
+            expected_generation_sequence=expected_generation_sequence,
+            expected_generation_digest=expected_generation_digest)
         captured = plan.mixed._delta(before, work.metrics)
-        shape.validate_identity_shape(owned["expectedSignerIdentity"])
-        for name in ("expectedIssuerSessionIdentityDigest", "expectedExecutionEnvelopeId",
-                "expectedWitnessReceiptDigest", "expectedWitnessIdentityDigest",
-                "expectedConfigurationDigest", "expectedGenerationDigest"):
-            shape._digest(owned[name])
-        shape._integer(owned["expectedGenerationSequence"], minimum=1)
         # Validate all historical scalar types before arithmetic or callbacks;
         # the actual retained worker repeats the complete admission itself.
         historical = owned["retention"]
-        for name in ("expected_fence", "reserved_at_epoch_ns", "deadline_epoch_ns", "deadline_monotonic_ns",
-                "now_epoch_ns", "now_monotonic_ns", "maximum_assertion_age_ns", "maximum_plan_age_ns"):
-            shape._integer(historical[name], minimum=1)
-        shape._integer(historical["maximum_clock_skew_ns"])
-        shape._digest(historical["expected_capability_id"])
-        shape._digest(historical["expected_planner_transaction_id"])
         before = work.metrics
         envelope = wire._decode_object(envelope_bytes, work=work, maximum_bytes=MAX_CAPABILITY_BYTES,
             maximum_nodes=MAX_JSON_NODES, maximum_depth=MAX_JSON_DEPTH)
@@ -415,40 +477,8 @@ def _verify_signed_capability_on_work(*, work: _ValidationWork, envelope_bytes: 
             evaluation_context_bytes=evaluation_context_bytes, work=work, **historical, **handles)
         replayed = plan.mixed._delta(before, work.metrics)
         before = work.metrics
-        measured, actual = record.payload["measuredPlan"], record.payload
-        expected_execution = {"schema": EXECUTION_REQUEST_SCHEMA, "planProtocol": CAPABILITY_PROTOCOL,
-            "retainedRecordDigest": record.record_digest, "rootTransitionDigest": measured["rootTransitionDigest"],
-            "typedRequest": actual["typedRequest"]}
-        _same(execution, expected_execution, work, "revocation capability exact execution wrapper changed")
-        exact_request_digest = retention._bytes_digest(execution_request_bytes, work)
-        receipt = _receipt(record, ledger)
-        expected = {
-            "schema": CAPABILITY_SCHEMA, "capabilityId": measured["capabilityId"],
-            "envelopeId": owned["expectedExecutionEnvelopeId"],
-            "plannerTransactionId": measured["plannerTransactionId"],
-            "authorizationProjectionDigest": measured["authorizationProjectionDigest"],
-            "selectedBusinessRowsDigest": measured["selectedBusinessRowsDigest"],
-            "mutationPlanDigest": measured["mutationPlanDigest"], "expectedResultDigest": actual["expectedResultDigest"],
-            "operation": OPERATION, "operationId": measured["operationId"],
-            "handlerName": authority.operation_spec(OPERATION)["handler"], "requestDigest": measured["requestDigest"],
-            "operationManifestDigest": measured["operationManifestDigest"], "queryManifestDigest": measured["queryManifestDigest"],
-            "authorityRootSetDigest": measured["authorityRootSetBeforeDigest"],
-            "authoritySnapshotDigest": measured["authoritySnapshotDigest"],
-            "approverPolicyDigest": actual["authorizationProjection"]["approverPolicyDigest"],
-            "webauthnReceipt": receipt, "webauthnReceiptDigest": _digest(WEBAUTHN_RECEIPT_SCHEMA, receipt, ledger),
-            "webauthnTrustHighWaterDigest": actual["webauthnEvidence"]["trustHighWaterDigest"],
-            "witnessReservation": payload["witnessReservation"], "witnessReservationDigest": witness_digest,
-            "witnessSequence": payload["witnessReservation"]["sequence"],
-            "witnessHeadDigest": payload["witnessReservation"]["headDigest"], "witnessPredecessorHeadDigest": None,
-            "deadlineMonotonicNs": measured["deadlineMonotonicNs"], "deadlineEpochNs": measured["deadlineEpochNs"],
-            "fence": measured["fence"], "issuedAtEpochNs": historical["reserved_at_epoch_ns"],
-            "issuedMonotonicNs": historical["deadline_monotonic_ns"] - (
-                historical["deadline_epoch_ns"] - historical["reserved_at_epoch_ns"]),
-            "expiresAtEpochNs": measured["deadlineEpochNs"],
-            "issuerSessionIdentityDigest": owned["expectedIssuerSessionIdentityDigest"],
-            "planProtocol": CAPABILITY_PROTOCOL, "retainedRecordDigest": record.record_digest,
-            "rootTransitionDigest": measured["rootTransitionDigest"], "exactRequestBytesDigest": exact_request_digest,
-        }
+        expected = _expected_payload(record, execution, execution_request_bytes,
+            payload["witnessReservation"], witness_digest, owned, ledger)
         _same(payload, expected, work, "revocation capability differs from genuine retained plan bindings")
         bound = plan.mixed._delta(before, work.metrics)
         before = work.metrics
@@ -461,7 +491,7 @@ def _verify_signed_capability_on_work(*, work: _ValidationWork, envelope_bytes: 
             "capabilityProtocol": CAPABILITY_PROTOCOL, "capabilityId": payload["capabilityId"],
             "plannerTransactionId": payload["plannerTransactionId"], "executionEnvelopeId": payload["envelopeId"],
             "retainedRecordDigest": record.record_digest, "rootTransitionDigest": payload["rootTransitionDigest"],
-            "authoritySnapshotDigest": payload["authoritySnapshotDigest"], "exactRequestBytesDigest": exact_request_digest,
+            "authoritySnapshotDigest": payload["authoritySnapshotDigest"], "exactRequestBytesDigest": expected["exactRequestBytesDigest"],
             "capabilityDigest": capability_digest, "signerKeyDigest": signer_digest, "witnessKeyDigest": witness_key_digest,
             "envelopeDigest": envelope_digest, "envelopeByteCount": len(envelope_bytes),
             "witnessRequestBytesDigest": request_bytes_digest, "witnessRequestByteCount": len(witness_request_bytes)}

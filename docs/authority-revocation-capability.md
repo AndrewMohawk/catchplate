@@ -7,6 +7,11 @@ custody schema. The source is **unbuilt and unexecuted**. It does not install a
 successor issuer or executor, grant issuer table privileges, open a public
 revocation route, or establish an independently operated witness service.
 
+Source `.47` adds a private producer that signs only after genuine retained and
+witness verification, plus original witness-request preservation in the service;
+see [original-byte signing](authority-revocation-signing.md). The producer is
+not a configured issuer or storage path, and does not open these gates.
+
 The private verifier accepts original signed capability, signed planner,
 evaluation-context, execution-request and signed preliminary witness-request
 bytes. It authenticates the capability and both witness documents, replays the
@@ -147,7 +152,7 @@ table grants. Successor lock order
 must reconcile the current executor's fence/capability/execution/planner order
 with the private reservation's planner/execution order before activation.
 
-Successor issuance/storage/replay boundaries, post-plan witness binding,
+Configured successor issuance/storage/replay boundaries, post-plan witness binding,
 current roots and deadlines, mixed-root SQL execution, atomic terminal
 publication and public operation admission remain required. The closed
 `webauthn.trust.stage`, `webauthn.trust.complete`,

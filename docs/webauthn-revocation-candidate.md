@@ -1,7 +1,7 @@
 # Unactivated bounded self-revocation candidate
 
 Status: partial source implementation, not registered or activated, not an
-available API. All four missing-kernel closure failures remain intentional.
+enabled service API. All four missing-kernel closure failures remain intentional.
 This work does not repair control-plane startup, the legacy revoke endpoint,
 trust publication, or production authority acceptance.
 
@@ -69,14 +69,17 @@ Existing executor trust-generation, full-row CAS, witness and capability checks
 remain unchanged and must still succeed.
 
 The [shared receipt-work seam](authority-assertion-receipt-work.md) adds private
-accounting around those actual checks for a future bounded semantic composer.
+accounting around those actual checks for the separate
+[raw-input semantic verifier](authority-revocation-semantics.md).
 Its separate one-attempt Ed25519 limit is not a SHA-equivalent allowance, and
 it does not make the retained proof or the unregistered kernel authoritative.
 
 The [measured kernel route](authority-revocation-kernel-work.md) likewise charges
-the actual business computation under a supplied remaining budget. It does not
-establish complete selection, currentness or assertion authority, and still
-requires separate capacity finalization and a semantic proof integration.
+the actual business computation under a supplied remaining budget. The semantic
+verifier now connects it to genuine receipt/proof checking, capacity finalization
+and complete mutation comparison. Standalone kernel or receipt APIs remain
+non-authoritative, and this composition does not establish currentness or enable
+the planner, SQL acquisition or executor paths.
 
 `webauthn_revocation_admission.py` defines the exact raw-assertion challenge and
 execute client shapes. It does not call the obsolete `transactionResult` /
@@ -95,14 +98,16 @@ membership or exact-key absence, not that no matching row was omitted. Neither
 an ordinary page flag nor a new declaration alone is a completeness proof.
 
 The source must not convert this assumption into an enabled signed operation.
-The next prerequisite is actual producer/consumer integration for the new
-primitive, binding each source selector, index ordering, complete terminal range,
+The remaining service bridge is actual SQL proof acquisition and
+planner/witness/executor integration for the new primitive, binding each source
+selector, index ordering, complete terminal range,
 source relation root/revision, returned rows and absence/overflow boundary. It
 must be maintained by every writer of each indexed relation and verified before
 mutation derivation. Existing `KernelContext.exact_page_receipt` describes an
 authenticated receipt shape, but does not reconstruct a range root from its
 proof nodes. The candidate manifest does not authorize its receipt table, and
-no complete bridge is implemented here. Adding that bridge
+the separate retained-input semantic verifier does not implement this service
+bridge. Adding that bridge
 requires reviewed relation/proof manifests and matching producer, planner and
 executor tests; do not fabricate receipts or relax the current registry guard.
 An independently retained, monotonic root checkpoint is also required for the

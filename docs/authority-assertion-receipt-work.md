@@ -30,7 +30,7 @@ does not capture every input before its first cryptographic operation.
 Ed25519 verification is not equivalent to one SHA-256 invocation. The wrapper
 therefore permits at most one verification attempt, spent before calling the
 actual pinned key's verifier. A rejected signature still consumes that attempt.
-The future composer must create one wrapper and reuse it throughout its
+The enclosing composer must create one wrapper and reuse it throughout its
 invocation; constructing another wrapper is not a globally deduplicated budget
 operation or a permitted way for a helper to replenish that allowance.
 Exhausting this receipt-specific attempt policy raises `AssertionEvidenceError`;
@@ -99,13 +99,15 @@ receipt verification and does not waive any semantic check.
 The signature-attempt counter is private computation state, not a new persisted
 proof field, signed authority claim or replacement receipt.
 
-## Integration still required
+## Semantic composition and remaining integration
 
-The [retained revocation proof](authority-revocation-proof-bundle.md) does not yet
-invoke this measured worker. A future semantic composer must bind the returned
-verified assertion IDs to its owned proof inputs, run the actual revocation
-kernel, apply the [shared capacity finalizer](authority-audit-capacity-work.md),
-and compare the resulting mutation set with the genuinely proved writes.
+The separate [semantic verifier](authority-revocation-semantics.md) invokes this
+worker once after joint ownership, binds its returned verified IDs to the proof
+inputs, then performs genuine kernel and
+[shared capacity](authority-audit-capacity-work.md) recomputation and exact
+mutation comparison. The standalone
+[retained revocation proof](authority-revocation-proof-bundle.md) intentionally
+does not authenticate receipts or provide those semantic checks.
 Repeated work receives no discount merely because another phase saw the same
 bytes, keys or rows.
 

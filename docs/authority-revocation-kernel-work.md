@@ -84,16 +84,16 @@ Defined byte/node work is not exact interpreter memory or elapsed CPU time.
 Conservative reservations remain spent, including on failure, and local
 row/event/source limits remain independent of the enclosing cumulative budget.
 
-## Remaining semantic bridge
+## Semantic composition and remaining admission
 
-The [retained proof API](authority-revocation-proof-bundle.md) does not yet call
-the measured kernel. The future composer must bind independently verified
-assertion IDs and time to its owned inputs, run this actual transition, apply
-the [genuine shared capacity finalizer](authority-audit-capacity-work.md), and
-compare the complete finalized mutation set with the already-proved writes.
-It must reuse the same remaining budget throughout, not accept a supplied
-success result, repeat proofs under a new allowance or register the candidate
-to make a fixture appear integrated.
+The separate [semantic verifier](authority-revocation-semantics.md) now binds
+the actual request digest, pinned receipt IDs, UTC cutoff and independently
+supplied before vectors. It evaluates the retained proof once, runs this kernel
+and the [genuine shared capacity finalizer](authority-audit-capacity-work.md)
+on one ledger, then compares both source-sorted seven-field mutation inventories.
+It accepts no supplied successful transition and does not register the candidate.
+The [retained proof API](authority-revocation-proof-bundle.md) alone remains
+proof-only; registry, independent currentness and SQL gates remain closed.
 
 Source review and authored local controls do not establish runtime behavior.
 The immutable dependencies, approved verification boundary, frozen source and

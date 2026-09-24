@@ -192,10 +192,13 @@ def _compute_and_package(*, ledger, bundle, raw_decode_bytes, capture, claim_enc
             or finalization.input_bytes > ledger.reserved.input_bytes
             or finalization.json_nodes > ledger.reserved.json_nodes):
         raise RevocationProofBundleError("retained proof finalization exceeded its reserved source work")
-    return RetainedRevocationProof(result.write.primary, bundle_wire, bundle_digest,
+    retained = RetainedRevocationProof(result.write.primary, bundle_wire, bundle_digest,
         transition_wire, transition_digest, RevocationProofPackagingMetrics(
             raw_decode_bytes, capture, claim_encoding, bundle_encoding, verification, finalization,
             ledger.reserved, peak, ledger.hashes, ledger.input_bytes, ledger.json_nodes))
+    # Private composition retains this actual result without evaluating the
+    # proofs again. Neither public facade accepts a successful result as input.
+    return retained, result
 
 
 def derive_revocation_proof_bundle(*, limits: QueryReadValidationLimits | None = None,
@@ -213,7 +216,7 @@ def derive_revocation_proof_bundle(*, limits: QueryReadValidationLimits | None =
         owned, raw_decode_bytes, capture = mixed._capture(ledger=ledger, **inputs)
         contract.validate_inputs_shape(owned)
         return _compute_and_package(ledger=ledger, bundle=_bundle(owned), raw_decode_bytes=raw_decode_bytes,
-            capture=capture, claim_encoding=_zero(), claim_wire=None)
+            capture=capture, claim_encoding=_zero(), claim_wire=None)[0]
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
             core.TransitionKernelError) as exc:
         if isinstance(exc, RevocationProofBundleError):
@@ -245,7 +248,7 @@ def verify_revocation_proof_bundle(*, bundle: Any, transition: Any,
             maximum_bytes=contract.MAX_COMPACT_BYTES, maximum_nodes=contract.MAX_COMPACT_NODES)
         claim_encoding = mixed._delta(before, ledger.work.metrics)
         return _compute_and_package(ledger=ledger, bundle=owned["bundle"], raw_decode_bytes=0,
-            capture=capture, claim_encoding=claim_encoding, claim_wire=claim_wire)
+            capture=capture, claim_encoding=claim_encoding, claim_wire=claim_wire)[0]
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
             core.TransitionKernelError) as exc:
         if isinstance(exc, RevocationProofBundleError):

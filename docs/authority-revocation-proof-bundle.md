@@ -169,8 +169,11 @@ proof tampering, source variants and cumulative work bounds. It is source only;
 no test ran or passed for this component.
 
 Retention now exists as a pure wire component, not persisted planner transport.
-The actual kernel and shared audit-capacity finalizer must still authorize the
-proved mutation set under the same bounded work contract. The fixture's three
+The separate [semantic verifier](authority-revocation-semantics.md) now performs
+actual pinned-receipt, request, kernel and shared-capacity recomputation from raw
+inputs and compares complete finalized effects with these proofs on one ledger.
+Those checks are not added to the v1 compact document, and standalone retention
+does not invoke them. This retained-proof fixture's three
 sample updates are deliberately not the full revoke kernel's effects. An absent
 counter or present audit row can be a valid observation without authorizing
 revocation. Independently verified assertion/request/time, authenticated index
@@ -178,6 +181,6 @@ population and currentness, all-writer SQL maintenance, coordinated protocol
 upgrade, durable retention/replay and independently provisioned release and
 verification services remain mandatory. Existing startup gates stay closed.
 
-The separate [measured capacity worker](authority-audit-capacity-work.md) now
-provides genuine shared-body accounting for that future semantic stage. This
-retained-proof API does not invoke it or relax its initialized-counter checks.
+The [measured capacity worker](authority-audit-capacity-work.md) provides genuine
+shared-body accounting inside the separate semantic verifier. This retained-proof
+API does not invoke it or relax its initialized-counter checks.

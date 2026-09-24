@@ -22,6 +22,7 @@ from serverware import authority_contract
 from serverware import authority_complete_query
 from serverware import authority_primary_contract
 from serverware import authority_query_reads
+from serverware.authority_query_read_work import _ValidationWork, QueryReadWorkError
 from serverware import authority_query_staging
 from serverware import authority_radix_proof
 from serverware import authority_root_transition
@@ -231,6 +232,7 @@ def operation_id(operation: str, request_digest: str) -> str:
 
 def _authorization_arguments(
     arguments: Mapping[str, Any],
+    *, work: _ValidationWork | None = None,
 ) -> dict[str, Any]:
     excluded = {
         "authn",
@@ -238,6 +240,10 @@ def _authorization_arguments(
         "webauthn_authorization",
         "challenge_id",
     }
+    if work is not None:
+        # Full source units cover the actual sorted item list and filtered dict.
+        work.prepare_copy(arguments)
+        work.prepare_copy(arguments)
     return {
         key: value
         for key, value in sorted(arguments.items())
@@ -246,6 +252,28 @@ def _authorization_arguments(
 
 
 def typed_request_digest(request: Mapping[str, Any]) -> str:
+    # Computing a source-declared digest is not permission to plan it. Keep
+    # the public registration gate here, before the shared computation body.
+    if request.get("operation") not in authority_transition_registry.PLANNABLE_OPERATIONS:
+        raise AuthorityPlannerError("typed planner request is not closed")
+    return _typed_request_digest(request, work=None)
+
+
+def _request_different(left: Any, right: Any, *, work: _ValidationWork | None) -> bool:
+    if work is not None:
+        work.prepare_comparison(left, right)
+    return left != right
+
+
+def _typed_request_digest(
+    request: Mapping[str, Any], *, work: _ValidationWork | None,
+) -> str:
+    """The genuine request commitment, not planner or capability admission.
+
+    A private measured caller must already own its graph. Source-declared but
+    unregistered operations may be committed here without changing the public
+    planning gate. No caller-supplied manifest, serializer or success is used.
+    """
     required = {
         "schema",
         "operation",
@@ -255,39 +283,49 @@ def typed_request_digest(request: Mapping[str, Any]) -> str:
         "operationManifestDigest",
         "arguments",
     }
+    if work is not None:
+        if type(work) is not _ValidationWork:
+            raise QueryReadWorkError("typed request requires the real shared work meter")
+        if (type(request) is not dict or len(request) != len(required)
+                or any(type(key) is not str or len(key) > 128 for key in request)):
+            raise AuthorityPlannerError("typed planner request is not closed")
+        work.prepare_copy(request)
     operation = request.get("operation")
+    if work is not None and (type(operation) is not str or not 1 <= len(operation) <= 128):
+        raise AuthorityPlannerError("typed planner request is not closed")
+    try:
+        spec = authority_contract.operation_spec(str(operation))
+    except ValueError as exc:
+        raise AuthorityPlannerError("typed planner request is not closed") from exc
     if (
         set(request) != required
-        or request.get("schema")
-            != "serverware.policyAuthorityV9Request/v1"
-        or operation
-            not in authority_transition_registry.PLANNABLE_OPERATIONS
-        or request.get("handler")
-            != authority_contract.operation_spec(str(operation))["handler"]
-        or request.get("operationManifestDigest")
-            != authority_contract.OPERATION_MANIFEST_DIGEST
+        or _request_different(request.get("schema"), "serverware.policyAuthorityV9Request/v1", work=work)
+        or _request_different(request.get("handler"), spec["handler"], work=work)
+        or _request_different(request.get("operationManifestDigest"), authority_contract.OPERATION_MANIFEST_DIGEST, work=work)
         or not isinstance(request.get("arguments"), Mapping)
     ):
         raise AuthorityPlannerError(
             "typed planner request is not closed"
         )
-    _business_intent(request, operation=str(operation))
-    return framed_digest(
-        "serverware.policyAuthorityV9Request/v1",
-        canonical_bytes(
-            {
-                "schema":
-                    "serverware.policyAuthorityV9Authorization/v1",
-                "operation": operation,
-                "handler": request["handler"],
-                "operationManifestDigest":
-                    authority_contract.OPERATION_MANIFEST_DIGEST,
-                "arguments": _authorization_arguments(
-                    request["arguments"]
-                ),
-            }
-        ),
-    )
+    if work is None:
+        _business_intent(request, operation=str(operation))
+        arguments = _authorization_arguments(request["arguments"])
+    else:
+        _business_intent(request, operation=str(operation), work=work)
+        arguments = _authorization_arguments(request["arguments"], work=work)
+    document = {
+        "schema": "serverware.policyAuthorityV9Authorization/v1",
+        "operation": operation,
+        "handler": request["handler"],
+        "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": arguments,
+    }
+    if work is not None:
+        size, _ = work.prepare_encoding(document)
+        if size > authority_contract.MAX_REQUEST_BYTES:
+            raise AuthorityPlannerError("typed request commitment exceeds its source bound")
+        work.charge(hashes=1)
+    return framed_digest("serverware.policyAuthorityV9Request/v1", canonical_bytes(document))
 
 
 def _require_digest(value: object, label: str) -> str:
@@ -635,6 +673,7 @@ def _business_intent(
     request: Mapping[str, Any],
     *,
     operation: str,
+    work: _ValidationWork | None = None,
 ) -> Mapping[str, Any]:
     arguments = request.get("arguments")
     intent = (
@@ -642,6 +681,12 @@ def _business_intent(
         if isinstance(arguments, Mapping)
         else None
     )
+    if work is not None:
+        if type(arguments) is not dict or type(intent) is not dict or len(intent) != 4:
+            raise AuthorityPlannerError("typed operation business intent is not closed")
+        # Prepare the real sorted list and filtered caller-argument dictionary.
+        work.prepare_copy(arguments)
+        work.prepare_copy(arguments)
     caller_arguments = (
         {
             key: value
@@ -652,6 +697,8 @@ def _business_intent(
         else None
     )
     spec = authority_contract.operation_spec(operation)
+    if work is not None:
+        work.prepare_copy(intent)
     if (
         not isinstance(intent, Mapping)
         or set(intent)
@@ -661,10 +708,9 @@ def _business_intent(
                 "planningAdapterId",
                 "arguments",
             }
-        or intent.get("schema") != BUSINESS_INTENT_SCHEMA
-        or intent.get("operation") != operation
-        or intent.get("planningAdapterId")
-            != spec["planningAdapterId"]
+        or _request_different(intent.get("schema"), BUSINESS_INTENT_SCHEMA, work=work)
+        or _request_different(intent.get("operation"), operation, work=work)
+        or _request_different(intent.get("planningAdapterId"), spec["planningAdapterId"], work=work)
         or not isinstance(intent.get("arguments"), Mapping)
         or caller_arguments is None
     ):
@@ -672,18 +718,24 @@ def _business_intent(
             "typed operation business intent is not closed"
         )
     try:
-        expected = authority_contract.synthesize_business_intent(
-            operation,
-            caller_arguments,
-        )
+        expected = (authority_contract.synthesize_business_intent(operation, caller_arguments)
+                    if work is None else authority_contract._synthesize_business_intent(
+                        operation, caller_arguments, work=work))
+    except QueryReadWorkError:
+        raise
     except ValueError as exc:
         raise AuthorityPlannerError(
             "typed operation business intent cannot be synthesized"
         ) from exc
-    if (
-        dict(intent) != expected
-        or dict(intent["arguments"]) != expected["arguments"]
-    ):
+    if work is not None:
+        work.prepare_copy(intent)
+    if _request_different(dict(intent), expected, work=work):
+        raise AuthorityPlannerError(
+            "typed operation business intent differs from the registry"
+        )
+    if work is not None:
+        work.prepare_copy(intent["arguments"])
+    if _request_different(dict(intent["arguments"]), expected["arguments"], work=work):
         raise AuthorityPlannerError(
             "typed operation business intent differs from the registry"
         )

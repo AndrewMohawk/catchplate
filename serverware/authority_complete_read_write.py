@@ -139,10 +139,15 @@ def _raw_records(frontier) -> list[dict[str, Any]]:
     return records
 
 
-def _capture(*, ledger, operation, arguments, cutoff_us, queries,
-             business_before_roots, authorization_before_roots, selected_rows,
-             before_proofs, mutations, counted_before_heads, query_frontiers,
-             write_frontiers):
+def _raw_document(*, operation, arguments, cutoff_us, queries,
+                  business_before_roots, authorization_before_roots, selected_rows,
+                  before_proofs, mutations, counted_before_heads, query_frontiers,
+                  write_frontiers):
+    """Normalize without hashing; returned JSON still aliases caller values.
+
+    An enclosing private composer may extend this document before its one
+    ownership pass. Only the completed _JSONCapture copy may reach _verify.
+    """
     # All preparation here is non-hashing. Even later-role/frontier/row graphs
     # must be detached before the first source/profile constructor can run.
     if type(operation) is not str or operation != complete.OPERATION:
@@ -183,6 +188,20 @@ def _capture(*, ledger, operation, arguments, cutoff_us, queries,
         {"indexId": item.index_id, "frontier": _raw_records(item.frontier)}
         for item in write_frontiers
     ]
+    return document
+
+
+def _capture(*, ledger, operation, arguments, cutoff_us, queries,
+             business_before_roots, authorization_before_roots, selected_rows,
+             before_proofs, mutations, counted_before_heads, query_frontiers,
+             write_frontiers):
+    document = _raw_document(
+        operation=operation, arguments=arguments, cutoff_us=cutoff_us, queries=queries,
+        business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
+        before_proofs=before_proofs, mutations=mutations, counted_before_heads=counted_before_heads,
+        query_frontiers=query_frontiers, write_frontiers=write_frontiers,
+    )
     return query_batch._JSONCapture(ledger).visit(document)
 
 

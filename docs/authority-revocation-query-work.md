@@ -7,7 +7,9 @@ The private `_revocation_query_program` in
 runs the genuine cutoff-native business recipe and the genuine framework
 `add_capacity_query` under one supplied internal work object. Its output is a
 tuple of source declarations, not an admitted operation or successful proof.
-It is unbuilt, unexecuted and not activated in a planner or proof composer.
+It is unbuilt, unexecuted and not activated in a planner. The separate
+[mixed proof composer](authority-revocation-read-write.md) now calls this private
+entry point after owning its entire raw input graph.
 
 The public unmeasured APIs keep their signatures and source semantics. Private
 workers share the actual argument validation, business-intent normalization,
@@ -18,7 +20,7 @@ their existing behavior.
 
 This private entry point requires the real `_ValidationWork` object used by
 [query-observation accounting](authority-query-read-accounting.md). Helpers
-reuse it; they do not create independent 64 MiB allowances. A future enclosing
+reuse it; they do not create independent 64 MiB allowances. An enclosing
 composer must clamp the phase to its remaining outer budget and debit the
 actual work, including earlier input capture and later proof/transport phases.
 The unchanged source ceilings are 8,000,000 hashes, 64 MiB input work,
@@ -105,10 +107,11 @@ the cutoff is not a trusted clock, and the no-audit case does not consume the
 request digest. Full operation admission must validate and bind those values,
 even where the query recipe itself does not use them.
 
-The next integration still has to regenerate the exact mixed source program
-from the composer's owned context, validate all retained observations under the
-same remaining budget, bind full point keys in both presence and absence, and
-match complete observations to actual joined-leaf order. Raw retained transport,
+The mixed composer regenerates the exact source program from owned context,
+validates retained observations under the same remaining budget, binds full
+point keys in both presence and absence, and compares complete observations
+with actual joined-leaf order. This composition is still unexecuted source.
+Raw retained transport,
 kernel/audit-capacity admission, coordinated SQL/executor protocol and current
 root authority remain separate requirements. Snapshot/v3 and all four startup
 blockers are unchanged.

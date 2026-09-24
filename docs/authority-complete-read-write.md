@@ -123,22 +123,24 @@ unchanged.
 
 The combined observation is data, not a signed retained proof transport or
 permission to mutate storage. The next integration must retain raw frontiers
-and primary evidence, bind exact query declarations and ordered observations,
-and bind the full before/after union into a closed versioned transition.
+and primary evidence and bind the full before/after union into a closed
+versioned transition.
 Hashing a compact result does not eliminate the raw evidence needed to
 independently recompute it; encoding and hashing that transport must also be
 bounded and charged.
 
 [Measured query-observation validation](authority-query-read-accounting.md)
-provides the genuine shared-body accounting needed for that next composition.
-It is not yet called here; ordinary point-read/source-program admission and the
-comparison with actual complete-query leaf order remain required.
+provides genuine shared-body accounting. The separate, unexecuted
+[mixed revocation composer](authority-revocation-read-write.md) owns the larger
+raw graph once, binds the actual source program and full point keys, calls this
+component's private proof worker once, and compares observations with actual
+complete-query leaf order. The standalone API and its accounting are unchanged.
 
 The existing primary transition and nine-frame Snapshot/v3 remain unchanged.
 Planner, executor, SQL, receipts and historical replay must move together to an
 explicit new protocol; optional extra fields on v3 are not an upgrade path.
-Mixed ordinary-query closure, kernel admission, audit capacity, mutation-proof
-SQL acquisition, schema and all-writer maintenance, authenticated population,
+Planner integration of mixed query closure, kernel admission, audit capacity,
+mutation-proof SQL acquisition, schema and all-writer maintenance, authenticated population,
 trusted time/intent and [independent current roots](authority-current-root-witness-integration.md)
 remain separate required integrations. None is supplied by a successful pure
 read/write calculation alone.

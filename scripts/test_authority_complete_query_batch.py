@@ -103,7 +103,8 @@ class BatchFixture:
             self.joins[role] = join_oracle.JoinFixture(self.rows.get(table, []), index_id=index_id,
                 selector=declaration_oracle.selector_for(role, record_id=self.intent["record_id"],
                                                         cutoff_us=cutoff_us),
-                expiry_us={"past": 1_000_000, "future": 2_000_000, "used": 3_000_000},
+                expiry_us=({"past": 1_000_000, "future": 2_000_000, "used": 3_000_000}
+                           if table == "webauthn_challenges" else None),
                 primary_revision=17, index_revision=29)
             if self.joins[role].primary.root != self.trees[table].root:
                 raise AssertionError("independent per-query and global primary populations differ")

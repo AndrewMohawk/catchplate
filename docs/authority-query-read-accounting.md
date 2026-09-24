@@ -93,16 +93,18 @@ reads original keys and fields used by source references. Its caller must
 provide privately owned selected rows when composing it with proof validation.
 
 The [complete read/write composer](authority-complete-read-write.md) already
-owns its raw evidence before its genuine proof phases. The next integration
-must feed that same owned graph into measured observation validation and debit
+owns its raw evidence before its genuine proof phases. A mixed consumer must
+feed that same owned graph into measured observation validation and debit
 the same outer budget. It must additionally bind the entire source-generated
 mixed query program, compare complete observations with actual joined leaf
 order, enforce exact point-read keys for presence as well as absence, and
 retain every empty observation. Neither independently successful component is
 a reusable authority token. The separate
 [measured source generator](authority-revocation-query-work.md) now accounts the
-genuine recipe's own work; connecting both phases to proof admission is still
-required.
+genuine recipe's own work. The unexecuted
+[mixed revocation composer](authority-revocation-read-write.md) connects both
+workers to genuine proof computation and adds the full-key and joined-order
+bindings; it does not activate this path in the planner.
 
 Raw transport capture, retained-bundle encoding and hashing, compact transition
 packaging, kernel/audit-capacity admission, SQL acquisition and the coordinated

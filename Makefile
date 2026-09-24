@@ -632,6 +632,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_query_work.py \
 	scripts/test_authority_complete_query_batch.py \
 	scripts/test_authority_complete_read_write.py \
+	scripts/test_authority_revocation_read_write.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
 	scripts/test_authority_counted_root_transition.py \
@@ -2480,6 +2481,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_counted_root_transition.py \
 				serverware/authority_complete_query_batch.py \
 				serverware/authority_complete_read_write.py \
+				serverware/authority_revocation_read_write.py \
+				scripts/authority_revocation_observation_fixture.py \
 				serverware/authority_index_frontier.py \
 				data-plane/decision-gate-rs/Dockerfile \
 				data-plane/decision-gate-rs/Dockerfile.production \

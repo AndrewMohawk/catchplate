@@ -123,16 +123,17 @@ callers needing the full business validation must use the full recipe.
 
 The public cutoff-native APIs remain unmetered. A separate private
 [measured generator](authority-revocation-query-work.md) now charges the genuine
-source workers, but is not yet called by the proof composer. A full recipe
+source workers and is called by the unexecuted
+[mixed proof composer](authority-revocation-read-write.md). A full recipe
 followed by the actual capacity composition performs 20 profile hashes plus two hashes per
 audit subject. Argument canonicalization, business-intent normalization and
 JSON decoding, copies, comparisons, profile descriptor encodings and audit-ID
-encodings are additional real work. The later composer must charge those
+encodings are additional real work. A composer must charge those
 passes as well as [measured observation validation](authority-query-read-accounting.md)
 against its one remaining budget; neither the hash formula nor independently
 successful generation supplies that composition.
 
-The next consumer must own all inputs before generating this program, compare
+Every consumer must own all inputs before generating this program, compare
 every ordered observation with the generated declaration, enforce full-key
 binding for present and absent point reads, and compare complete observations
 with the genuine joined-leaf order. Empty roles cannot be omitted and an extra

@@ -55,6 +55,7 @@ from serverware import authority_revocation_semantics
 from serverware import authority_revocation_proof_bundle
 from serverware import authority_revocation_plan
 from serverware import authority_revocation_plan_production
+from serverware import authority_revocation_retention
 from serverware import authority_transition_core
 from serverware import authority_transition_registry
 from serverware import authority_transition_webauthn
@@ -465,11 +466,12 @@ class _RevocationAcquisition:
 
 @dataclass(frozen=True, slots=True)
 class _ProducedRevocationPlan:
-    """Original signed bytes and observed cutoff, not persistence authority."""
+    """Original signed/context bytes and cutoff, not persistence authority."""
 
     signed: authority_revocation_plan_production._ProducedPlan
     database_now: datetime
     metrics: QueryReadValidationMetrics
+    evaluation_context_bytes: bytes
 
 
 class PlanningProgram(Protocol):
@@ -1010,7 +1012,7 @@ class TypedTransitionPlanningProgram:
         raw graphs under the same remaining work for the compact proof's exact
         phase metrics. Repeated proof work is charged, not replaced by an
         acquisition success token. The output retains the original signed
-        envelope bytes and database cutoff; it authorizes no commit or replay.
+        envelope/context bytes and database cutoff; it authorizes no commit or replay.
         """
         if (type(query_work) is not _ValidationWork
                 or type(request) is not dict or type(manifest) is not tuple
@@ -1088,6 +1090,10 @@ class TypedTransitionPlanningProgram:
                 write_frontiers=tuple(authority_complete_read_write.CompleteWriteFrontier(
                     item.index_id, item.frontier) for item in acquired.write_evidence.index_inputs),
             )
+            if authority_complete_query.cutoff_microseconds(state.database_now) != raw.cutoff_us:
+                raise AuthorityPlannerError("private producer context lost its original acquisition cutoff")
+            evaluation_context_bytes = authority_revocation_retention._encode_context_on_work(
+                actual_context, database_now=state.database_now, work=query_work)
             signed = authority_revocation_plan_production._build_and_sign(
                 request=acquired.request, selected_rows=acquired.selected_rows,
                 mutations=acquired.mutations, before_proofs=raw.before_proofs,
@@ -1097,7 +1103,8 @@ class TypedTransitionPlanningProgram:
                 context=actual_context, planner_private_key=planner_private_key,
                 planner_public_key=planner_public_key, work=query_work,
             )
-            return _ProducedRevocationPlan(signed, state.database_now, query_work.metrics)
+            return _ProducedRevocationPlan(signed, state.database_now, query_work.metrics,
+                evaluation_context_bytes)
         except (AttributeError, KeyError, TypeError, ValueError, OverflowError,
                 RecursionError, InvalidSignature, authority_transition_core.TransitionKernelError) as exc:
             if isinstance(exc, AuthorityPlannerError):

@@ -393,7 +393,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.37")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.38")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -661,6 +661,8 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "publicV3Enabled": False, "productionV4Enabled": False,
             "proofPackaging": "genuine-mixed-replay-on-original-work/v1",
             "transportReservation": "measured-payload-and-envelope-before-signing/v1",
+            "contextSchema": "serverware.policyAuthorityRevocationEvaluationContext/v1",
+            "maxContextBytes": 512 * 1024, "maxContextNodes": 4096, "maxContextDepth": 8,
             "maxPayloadBytes": 64 * 1024 * 1024, "maxSharedHashes": 8_000_000,
             "maxSharedInputBytes": 64 * 1024 * 1024, "maxSharedJsonNodes": 1_000_000,
             "maxJsonDepth": 128,
@@ -668,6 +670,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                 "joint-request-evidence-context-capture", "reservation-context-binding",
                 "single-cutoff-read-effects-write-acquisition", "independent-before-vector-binding",
                 "raw-proof-normalization", "genuine-mixed-proof-replay", "compact-proof-packaging",
+                "original-evaluation-context-encoding",
                 "source-authorization-and-plan-commitments", "exact-outer-transport-preflight",
                 "planner-signature", "paired-public-key-verification",
                 "post-sign-payload-and-meter-stability", "original-envelope-encoding",

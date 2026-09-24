@@ -797,10 +797,11 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         checked = call(method, "authority_revocation_plan_production._validate_context")
         acquired = call(method, "self._acquire_revocation_transition")
         packaged = call(method, "authority_revocation_proof_bundle._derive_on_work")
+        context_encoded = call(method, "authority_revocation_retention._encode_context_on_work")
         signed = call(method, "authority_revocation_plan_production._build_and_sign")
         returned = call(method, "_ProducedRevocationPlan")
-        for left, right in zip((copied, checked, acquired, packaged, signed),
-                                (checked, acquired, packaged, signed, returned)):
+        for left, right in zip((copied, checked, acquired, packaged, context_encoded, signed),
+                                (checked, acquired, packaged, context_encoded, signed, returned)):
             self.assertLess(left.lineno, right.lineno)
         self.assertEqual([ast.unparse(item) for item in call(method, "authority_query_reads._CopyBudget").args],
                          ["query_work"])
@@ -827,6 +828,17 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertIn("acquired.write_evidence.index_inputs", package_inputs["write_frontiers"])
         self.assertIn("head.index_id for head in acquired.write_evidence.result.before_heads", ast.unparse(method))
         self.assertIn("for item in raw.heads if item.index_id in index_ids", ast.unparse(method))
+        cutoff = call(method, "authority_complete_query.cutoff_microseconds")
+        self.assertEqual([ast.unparse(item) for item in cutoff.args], ["state.database_now"])
+        cutoff_guard, = [item for item in ast.walk(method) if isinstance(item, ast.If)
+                        and cutoff in tuple(ast.walk(item.test))]
+        self.assertEqual(ast.unparse(cutoff_guard.test),
+                         "authority_complete_query.cutoff_microseconds(state.database_now) != raw.cutoff_us")
+        self.assertTrue(any(isinstance(item, ast.Raise) for item in cutoff_guard.body))
+        self.assertLess(packaged.lineno, cutoff_guard.lineno)
+        self.assertLess(cutoff_guard.lineno, context_encoded.lineno)
+        self.assertEqual([ast.unparse(item) for item in context_encoded.args], ["actual_context"])
+        self.assertEqual(keywords(context_encoded), {"database_now": "state.database_now", "work": "query_work"})
         signing = keywords(signed)
         for name, value in {"work": "query_work", "request": "acquired.request", "mutations": "acquired.mutations",
             "before_proofs": "raw.before_proofs", "result": "acquired.kernel.result", "work_units": "acquired.work_units",
@@ -835,7 +847,11 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             "planner_private_key": "planner_private_key", "planner_public_key": "planner_public_key"}.items():
             self.assertEqual(signing[name], value, name)
         self.assertEqual([ast.unparse(item) for item in returned.args],
-                         ["signed", "state.database_now", "query_work.metrics"])
+                         ["signed", "state.database_now", "query_work.metrics", "evaluation_context_bytes"])
+        carrier = definition(self.tree, "_ProducedRevocationPlan")
+        self.assertEqual([item.target.id for item in carrier.body if isinstance(item, ast.AnnAssign)],
+                         ["signed", "database_now", "metrics", "evaluation_context_bytes"])
+        self.assertEqual(ast.unparse(carrier.decorator_list[0]), "dataclass(frozen=True, slots=True)")
         for forbidden in ("_ValidationWork", "_read_database_now", "json.loads",
             "authority_revocation_proof_bundle.derive_revocation_proof_bundle",
             "authority_root_transition.derive_primary_root_transition", "self.kernel.transition"):

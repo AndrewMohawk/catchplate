@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -68,6 +69,44 @@ class _RetainedRevocationRecord:
     record_digest: str
     verification: plan.RevocationPlanObservation
     metrics: QueryReadValidationMetrics
+
+
+def _encode_context_on_work(context: dict, *, database_now: datetime,
+                            work: _ValidationWork) -> bytes:
+    """Encode the producer's already-owned historical context before signing.
+
+    No authority or ownership is inferred from this private helper's inputs.
+    The producer must supply its invocation-owned context and original UTC
+    database instant. The closed scalar/identity/root/head shapes have maximum
+    scalar depth four, below the context depth-eight decoder ceiling. Actual
+    bounded measurement and encoding cost 0H/2L/2N on existing work; there is
+    no parse, clock sample, signature, new allowance or copied proof result.
+    """
+    try:
+        ledger = capture._SharedLedger(work)
+        if type(database_now) is not datetime or database_now.tzinfo is not timezone.utc:
+            raise RevocationRetentionError("producer context requires its original exact UTC instant")
+        production._validate_context(context, work)
+        # These are the only unconstrained strings in the closed context.
+        # Shape admission already bounds each to 128 characters and limits
+        # the root/head inventory. The raw reader rejects NUL, so do not emit
+        # bytes that cannot be read back under that same transport contract.
+        for field, name in (("businessBeforeRoots", "table"),
+                            ("authorizationBeforeRoots", "table"),
+                            ("indexBeforeHeads", "indexId")):
+            for entry in context["expectedBefore"][field]:
+                if "\x00" in entry[name]:
+                    raise RevocationRetentionError("producer context identifier contains NUL")
+        document = {"schema": CONTEXT_SCHEMA, "sourceRevision": authority_contract.SOURCE_REVISION,
+            "databaseCutoffUs": plan.semantics.complete.cutoff_microseconds(database_now),
+            **{name: context[name] for name, _ in _CONTEXT_PAIRS}}
+        return plan.retained._bounded_wire(document, ledger,
+            maximum_bytes=MAX_CONTEXT_BYTES, maximum_nodes=MAX_CONTEXT_NODES)
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
+            plan.core.TransitionKernelError) as exc:
+        if isinstance(exc, RevocationRetentionError):
+            raise
+        raise RevocationRetentionError("producer evaluation context encoding failed") from exc
 
 
 def _bytes_digest(raw: bytes, work: _ValidationWork) -> str:

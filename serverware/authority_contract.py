@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.37"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.38"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -170,6 +170,10 @@ SIGNED_REVOCATION_PRODUCTION_CONTRACT = MappingProxyType({
     "productionV4Enabled": False,
     "proofPackaging": "genuine-mixed-replay-on-original-work/v1",
     "transportReservation": "measured-payload-and-envelope-before-signing/v1",
+    "contextSchema": "serverware.policyAuthorityRevocationEvaluationContext/v1",
+    "maxContextBytes": 512 * 1024,
+    "maxContextNodes": 4096,
+    "maxContextDepth": 8,
     "maxPayloadBytes": 64 * 1024 * 1024,
     "maxSharedHashes": 8_000_000,
     "maxSharedInputBytes": 64 * 1024 * 1024,
@@ -179,6 +183,7 @@ SIGNED_REVOCATION_PRODUCTION_CONTRACT = MappingProxyType({
         "joint-request-evidence-context-capture", "reservation-context-binding",
         "single-cutoff-read-effects-write-acquisition", "independent-before-vector-binding",
         "raw-proof-normalization", "genuine-mixed-proof-replay", "compact-proof-packaging",
+        "original-evaluation-context-encoding",
         "source-authorization-and-plan-commitments", "exact-outer-transport-preflight",
         "planner-signature", "paired-public-key-verification",
         "post-sign-payload-and-meter-stability", "original-envelope-encoding",

@@ -127,6 +127,13 @@ the genuine mixed proof computation on the same remaining work, and returns the
 original signed v4 bytes. This implements the private producer in source, not
 public protocol admission or durable replay.
 
+Source `.38` appends original `evaluation_context_bytes` as the producer's
+fourth output, preserving `signed`, `database_now` and `metrics`. After packaging
+it checks the acquisition cutoff and encodes the same owned fifteen-field
+context as canonical eighteen-field bytes before signing. The existing meter
+pays `0H/2L/2N`, within 512 KiB, 4,096 nodes and depth 8. This does not connect
+the producer to the retention coordinator or public service.
+
 Source `.37` implements private original-byte storage and historical replay.
 Public verifier-response admission and service persistence still require
 coordinated v4 admission and consumer changes. They need

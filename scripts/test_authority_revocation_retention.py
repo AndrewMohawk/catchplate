@@ -7,6 +7,7 @@ These fixtures establish neither deployed PostgreSQL behavior nor currentness.
 from __future__ import annotations
 
 import copy
+from datetime import timedelta, timezone
 from pathlib import Path
 import sys
 import unittest
@@ -87,6 +88,133 @@ class RevocationRetentionTests(unittest.TestCase):
             **wire_oracle.expectations(fixture)}
         supplied.update(changes)
         return retention._verify_record_on_work(**supplied)
+
+    def test_producer_context_original_bytes_exact_work_and_ownership(self):
+        fixture, prior = self.fixture(), (1, 7, 5)
+        context, document = oracle.production_context(fixture), record_context(fixture)
+        raw, expected = oracle.wire(document), oracle.graph_cost(document)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*oracle.add(prior, expected)))
+        work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+        limits = work.limits
+        # All hash allowance is already spent. The real encoder needs neither
+        # hashing, a parser nor a replacement work object to produce context.
+        with patch.object(retention.plan.core, "canonical_bytes",
+                wraps=retention.plan.core.canonical_bytes) as encode, \
+                patch.object(reader.json, "loads", side_effect=AssertionError("context reparsed")), \
+                patch.object(accounting._ValidationWork, "__init__",
+                             side_effect=AssertionError("fresh allowance")):
+            actual = retention._encode_context_on_work(context,
+                database_now=fixture.semantic.database_now, work=work)
+        self.assertIs(type(actual), bytes)
+        self.assertEqual(actual, raw)
+        self.assertEqual(encode.call_count, 1)
+        self.assertEqual(encode.call_args.args[0], document)
+        self.assertEqual(oracle.units(work.metrics), oracle.add(prior, expected))
+        self.assertIs(work.limits, limits)
+        context["expectedBefore"].clear()
+        context["expectedPlannerIdentity"].clear()
+        self.assertEqual(actual, raw)
+        self.assertEqual(reader._decode_object(actual,
+            work=accounting._ValidationWork(accounting.QueryReadValidationLimits()),
+            maximum_bytes=524288, maximum_nodes=4096, maximum_depth=8), document)
+
+    def test_producer_context_each_short_remaining_budget_denies_before_encoding(self):
+        fixture, prior = self.fixture(), (1, 7, 5)
+        context, document = oracle.production_context(fixture), record_context(fixture)
+        required = oracle.add(prior, oracle.graph_cost(document))
+        for dimension in (1, 2):
+            limits = list(required)
+            limits[dimension] -= 1
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            entering = work.limits
+            with self.subTest(dimension=dimension), patch.object(retention.plan.core,
+                    "canonical_bytes", wraps=retention.plan.core.canonical_bytes) as encode:
+                with self.assertRaises(retention.RevocationRetentionError) as raised:
+                    retention._encode_context_on_work(context,
+                        database_now=fixture.semantic.database_now, work=work)
+            self.assertIsInstance(raised.exception.__cause__, accounting.QueryReadWorkError)
+            self.assertEqual(encode.call_count, 0)
+            # The genuine first measurement remains spent; reservation of
+            # the actual encoder's entire second pass fails atomically.
+            self.assertEqual(oracle.units(work.metrics),
+                oracle.add(prior, oracle.graph_cost(document, 1, 1)))
+            self.assertIs(work.limits, entering)
+
+    def test_producer_context_local_exact_and_short_bounds_precede_encoding(self):
+        fixture = self.fixture()
+        context, document = oracle.production_context(fixture), record_context(fixture)
+        _, length, nodes = oracle.graph_cost(document, 1, 1)
+        for byte_bound, node_bound in ((length, nodes), (length - 1, nodes), (length, nodes - 1)):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            with self.subTest(byte_bound=byte_bound, node_bound=node_bound), \
+                    patch.object(retention, "MAX_CONTEXT_BYTES", byte_bound), \
+                    patch.object(retention, "MAX_CONTEXT_NODES", node_bound), \
+                    patch.object(retention.plan.core, "canonical_bytes",
+                                 wraps=retention.plan.core.canonical_bytes) as encode:
+                if (byte_bound, node_bound) == (length, nodes):
+                    self.assertEqual(retention._encode_context_on_work(context,
+                        database_now=fixture.semantic.database_now, work=work), oracle.wire(document))
+                    self.assertEqual((encode.call_count, oracle.units(work.metrics)),
+                        (1, (0, 2 * length, 2 * nodes)))
+                else:
+                    with self.assertRaises(retention.RevocationRetentionError):
+                        retention._encode_context_on_work(context,
+                            database_now=fixture.semantic.database_now, work=work)
+                    self.assertEqual((encode.call_count, oracle.units(work.metrics)), (0, (0, length, nodes)))
+
+    def test_producer_context_closed_shape_and_exact_utc_instant_precede_encoding(self):
+        fixture = self.fixture()
+        context = oracle.production_context(fixture)
+        malformed = [
+            {name: value for name, value in context.items() if name != "expectedBefore"},
+            {**context, "verified_record": {}}, {**context, "expectedFence": True},
+        ]
+        nested = copy.deepcopy(context)
+        nested["expectedBefore"]["businessBeforeRoots"][0]["table"] = {"nested": "not a scalar"}
+        malformed.append(nested)
+        invalid_instants = (fixture.semantic.database_now.replace(tzinfo=None),
+            fixture.semantic.database_now.astimezone(timezone(timedelta(hours=1))),
+            fixture.semantic.cutoff_us)
+        cases = [(changed, fixture.semantic.database_now) for changed in malformed]
+        cases.extend((context, instant) for instant in invalid_instants)
+        for ordinal, (changed, instant) in enumerate(cases):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            with self.subTest(ordinal=ordinal), patch.object(retention.plan.core,
+                    "canonical_bytes", wraps=retention.plan.core.canonical_bytes) as encode:
+                with self.assertRaises(retention.RevocationRetentionError):
+                    retention._encode_context_on_work(changed, database_now=instant, work=work)
+            self.assertEqual((encode.call_count, oracle.units(work.metrics)), (0, (0, 0, 0)))
+
+    def test_producer_context_identifier_nul_denies_and_other_unicode_round_trips(self):
+        fixture = self.fixture()
+        for field, name in (("businessBeforeRoots", "table"),
+                            ("authorizationBeforeRoots", "table"),
+                            ("indexBeforeHeads", "indexId")):
+            context = oracle.production_context(fixture)
+            self.assertTrue(context["expectedBefore"][field])
+            context["expectedBefore"][field][0][name] += "\x00"
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            with self.subTest(field=field), patch.object(retention.plan.core,
+                    "canonical_bytes", wraps=retention.plan.core.canonical_bytes) as encode:
+                with self.assertRaisesRegex(retention.RevocationRetentionError, "NUL"):
+                    retention._encode_context_on_work(context,
+                        database_now=fixture.semantic.database_now, work=work)
+            self.assertEqual((encode.call_count, oracle.units(work.metrics)), (0, (0, 0, 0)))
+
+        # These identifiers have only transport-shape validity here. They do
+        # not claim a real source table, index, root or planner admission.
+        context = oracle.production_context(fixture)
+        context["expectedBefore"]["businessBeforeRoots"][0]["table"] = 'table-\u00e9\U0001f600\n"\\'
+        context["expectedBefore"]["indexBeforeHeads"][0]["indexId"] = 'index-\u00e9\t'
+        document = {**record_context(fixture), **context}
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        actual = retention._encode_context_on_work(context, database_now=fixture.semantic.database_now, work=work)
+        self.assertEqual(actual, oracle.wire(document))
+        self.assertEqual(oracle.units(work.metrics), oracle.graph_cost(document))
+        self.assertEqual(reader._decode_object(actual,
+            work=accounting._ValidationWork(accounting.QueryReadValidationLimits()),
+            maximum_bytes=524288, maximum_nodes=4096, maximum_depth=8), document)
 
     def test_original_bytes_keys_header_and_genuine_replay_match_independent_oracles(self):
         fixture = self.fixture()

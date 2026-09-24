@@ -99,6 +99,13 @@ versioned schema/ACL guards and a configured coordinator. These are source
 implementations, not installed schema or public service activation. None of the four missing registered kernels is
 enabled by these private producer/verification components.
 
+Source `.38` adds the producer's original canonical eighteen-field context
+bytes as a fourth output, preserving its first three fields. It checks the
+original acquisition cutoff and encodes the same owned context after packaging,
+before signing, on existing work (`0H/2L/2N`; 512 KiB, 4,096 nodes, depth 8).
+Producer-to-coordinator/service wiring remains separate; no registered kernel,
+public execution path or production authority is enabled.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

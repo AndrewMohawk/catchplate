@@ -8,8 +8,9 @@ It is **unbuilt and unexecuted**, not an installed schema, public service or
 production authorization.
 Source `.35` implements the [private producer](authority-revocation-production.md).
 Source `.36` adds private [original-byte admission](authority-revocation-wire.md)
-and verification on the same invocation work. Public service, mixed-root SQL,
-one-use execution and terminal witness activation remain outstanding.
+and verification on the same invocation work. Source `.38` returns the private
+producer's original encoded context alongside its signed output. Public service,
+mixed-root SQL, one-use execution and terminal witness activation remain outstanding.
 
 The existing `exact_plan_*` fields continue to contain canonical **payload**
 bytes. Legacy v3 service replay reconstructs its envelope; private v4 replay
@@ -56,6 +57,14 @@ and its original UTC database cutoff. Preserve the original evaluation clocks;
 historical verification must not resample them. Context bounds are
 512 KiB, 4,096 nodes and depth 8, within the existing shared work ceilings.
 The immutable source descriptor and authored boundary controls pin these limits.
+
+The producer checks its original database instant against the acquisition
+cutoff after proof packaging, then calls `_encode_context_on_work` before
+signing. The same already-owned fifteen fields become the eighteen-field
+document above. Actual bounded measurement and encoding spend `0H/2L/2N` on
+the existing meter, without a new allowance, parser or clock sample. The
+closed context shapes fit depth 8. The result appends `evaluation_context_bytes`
+as its fourth field; `signed`, `database_now` and `metrics` retain their positions.
 
 ### Relational storage
 
@@ -137,11 +146,10 @@ API and service routes remain unchanged. Actual database startup still depends
 on resolving the missing registered kernels; a registry-free verifier does not
 repair that startup gate.
 
-The private producer currently returns signed bytes and the original database
-cutoff, not an encoded context document. Returning its invocation-owned context
-as original canonical bytes and wiring that handoff through the public service
-remain separate integration steps; this storage API requires those bytes and
-all independent expectations explicitly.
+The private producer now supplies original context bytes, but it does not call
+this configured coordinator or open a service route. Storage still requires
+both original byte strings and all independent expectations explicitly; the
+producer observation is not an accepted authority token.
 
 One cumulative work object pays for context/envelope decoding, captures,
 canonical comparisons, genuine signature/proof verification, raw32 key outputs,
@@ -156,7 +164,7 @@ driver that has already committed and then fails a callback guard.
 
 ## Migration at the actual consumers
 
-| Consumer | Source `.37` status / remaining work |
+| Consumer | Source `.38` status / remaining work |
 | --- | --- |
 | Configured retention coordinator | Separate `RevocationPlannerPersistence` implemented; configuration pins keys/identities and calls genuine raw-byte storage. |
 | Transaction reserve/complete | Private v4 reservation, sidecar insert, exact comparisons and locked CAS implemented. |

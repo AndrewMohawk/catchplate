@@ -3,7 +3,8 @@
 ## Status and authority boundary
 
 Source `.35` adds a private revoke-only producer that connects actual database
-acquisition to the original signed v4 envelope. It is **unbuilt and unexecuted**.
+acquisition to the original signed v4 envelope. Source `.38` also returns its
+original canonical evaluation-context bytes. It is **unbuilt and unexecuted**.
 It is not a public endpoint, registered kernel, durable replay implementation,
 SQL commit or deployed release.
 
@@ -31,8 +32,9 @@ flowchart TD
     B --> C[One database cutoff: real reads, effects and write proofs]
     C --> D[Bind observed exact read/write head union]
     D --> E[Normalize raw evidence and genuinely replay mixed proofs]
-    E --> F[Build compact proof and v4 commitments]
-    F --> G[Reserve complete payload, envelope and signing work]
+    E --> F[Build compact proof]
+    F --> I[Encode original evaluation context]
+    I --> G[Build v4 commitments and reserve transport and signing work]
     G --> H[Sign, verify pinned key and retain original bytes]
 ```
 
@@ -52,25 +54,39 @@ deltas, which cannot be invented from acquisition metrics. The actual normalized
 bundle and compact graphs are retained beside their canonical bytes, without
 parsing those bytes or constructing a substitute result token.
 
+After packaging and before signing, the producer checks that the original
+database instant still equals the acquired evidence's cutoff. It passes the
+same invocation-owned fifteen-field context and that instant to
+`authority_revocation_retention._encode_context_on_work`. The helper adds
+schema, source revision and `databaseCutoffUs` to form canonical eighteen-field
+bytes. It does not resample the clock, parse a replacement context or infer
+authority from matching values.
+
 The [production helper](../serverware/authority_revocation_plan_production.py)
 uses the existing authorization, framing and commitment bodies to assemble the
 exact sixteen-field payload and twenty-two-field measured plan. It preserves
 Snapshot/v4 and the v4 signature domain. The actual Ed25519 signature is checked
 with the separately pinned planner public key before any output is returned.
 
-The return value contains original payload/envelope bytes, the corresponding
-owned graphs, the original database instant and cumulative work. Nested graphs
-are mutable observations, not deeply immutable authority; retained bytes remain
-the original signed representation. Consumers must not re-sign a stored payload
-and call it original-envelope replay.
+The return value preserves its first three fields, `signed`, `database_now`
+and `metrics`, and appends `evaluation_context_bytes` as the fourth. `signed`
+contains the original payload/envelope bytes and corresponding owned graphs.
+Nested graphs are mutable observations, not deeply immutable authority; their
+later mutation does not rewrite the original bytes. Consumers must not re-sign
+a stored payload and call it original-envelope replay.
 
 ## One remaining allowance
 
 Context ownership, acquisition, genuine effects, repeated mixed proof replay,
-packaging, commitments and final transport use the same work object. The source
-ceilings remain eight million hashes, 64 MiB of defined byte work, one million
-JSON-node visits and depth 128. A standalone component's success under those
+packaging, context encoding, commitments and final transport use the same work
+object. Source ceilings remain eight million hashes, 64 MiB of defined byte
+work, one million JSON-node visits and depth 128. A standalone component's success under those
 ceilings does not imply the combined producer fits them.
+
+Context measurement and canonical encoding charge `0H/2L/2N` on that existing
+meter: zero hashes, twice the context byte length and twice its node count.
+The separate context bounds are 512 KiB, 4,096 nodes and depth 8; its closed
+shapes have maximum scalar depth four. These bounds grant no new allowance.
 
 The private packaging attachment reserves compact output against the entering
 ceiling and all earlier spending. Caught nested attachment poisons the active
@@ -92,8 +108,9 @@ the genuine signature is encoded or returned. Budget failure
 cannot yield a placeholder or a partial signed plan.
 
 Packaging totals and root-level metrics are cumulative snapshots, while the
-signing helper's metrics are its own invocation delta. Do not sum cumulative
-snapshots as if they were exclusive phases. These are defined work limits, not
+signing helper's metrics are its own invocation delta. Context encoding occurs
+between packaging and that signing delta. Do not sum cumulative snapshots as
+if they were exclusive phases. These are defined work limits, not
 a whole-process memory, SQL-cost or wall-clock deadline guarantee. The existing
 acquisition exclusions remain: clock/ordinary/primary-proof SQL are outside
 shared physical counters; staged proof/stamp work, acquisition trace encoding,
@@ -110,6 +127,9 @@ All four missing registered WebAuthn kernels remain production gates.
 Source `.37` adds private [original-envelope and independent-context
 retention](authority-revocation-retention.md): versioned storage, digest binding,
 identical retries, conflict denial and independent replay expectations.
+Source `.38` supplies the producer's original context bytes for that private
+handoff; connecting the producer to the configured retention coordinator or
+public service remains separate work.
 Current-state admission, public service activation, one-use consumption,
 mixed-root SQL/executor checks and terminal witness binding remain required. Historical evaluation context
 must remain separate from current execution authority and deadline enforcement.

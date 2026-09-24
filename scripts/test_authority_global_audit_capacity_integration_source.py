@@ -510,10 +510,17 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
     def test_public_v3_never_constructs_or_passes_complete_context_or_emits_its_evidence(self):
         forwarding = definition(self.tree, "_read_planning_inputs")
         self.assertNotIn("complete_acquisition", keywords(call(forwarding, "program.read_inputs")))
-        self.assertFalse(calls(self.tree, "authority_complete_acquisition._CompleteQueryAcquisition"))
         producer = self.method("derive", "MeasuredPlanner")
         self.assertNotIn("_complete_queries", keywords(call(producer, "PlannerTrace")))
         method = self.method("read_inputs")
+        for public_path in (forwarding, producer, method):
+            self.assertFalse(calls(public_path, "authority_complete_acquisition._CompleteQueryAcquisition"))
+            self.assertFalse(calls(public_path, "program._read_revocation_inputs"))
+            self.assertFalse(calls(public_path, "self._read_revocation_inputs"))
+        private = self.method("_read_revocation_inputs")
+        self.assertEqual(calls(self.tree, "authority_complete_acquisition._CompleteQueryAcquisition"),
+                         calls(private, "authority_complete_acquisition._CompleteQueryAcquisition"))
+        self.assertEqual(len(calls(private, "authority_complete_acquisition._CompleteQueryAcquisition")), 1)
         defaults = dict(zip((arg.arg for arg in method.args.kwonlyargs), method.args.kw_defaults))
         self.assertEqual(ast.unparse(defaults["complete_acquisition"]), "None")
         self.assertEqual(keywords(call(method, "_read_bounded_transition_rows"))["complete_acquisition"],
@@ -531,6 +538,116 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertIn("successor retained-evidence protocol", ast.unparse(denial.body[0]))
         self.assertLess(denial.lineno, call(kernel, "authority_transition_core.KernelContext").lineno)
         self.assertLess(denial.lineno, call(kernel, "self.kernel.transition").lineno)
+
+    def test_private_revocation_factory_captures_exact_context_before_one_clock_and_one_generation(self):
+        method = self.method("_read_revocation_inputs")
+        parameters = {argument.arg for argument in method.args.kwonlyargs}
+        self.assertEqual(parameters, {"request", "manifest", "trace", "query_work",
+            "business_before_roots", "authorization_before_roots", "verified_webauthn_evidence"})
+        identity, = [node for node in method.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "require_identity"]
+        rendered = ast.unparse(identity)
+        for predicate in ("type(query_work) is not _ValidationWork",
+                "type(kernel) is not authority_transition_webauthn.WebAuthnCredentialRevokeKernel",
+                "self.kernel is not kernel", "self.operation != operation", "self.handler != kernel.handler",
+                "kernel.program_id != authority_contract.transition_program_id(operation)",
+                "type(trace) is not PlannerTrace", "trace.operation != operation",
+                "trace._complete_queries is not True"):
+            self.assertIn(predicate, rendered)
+        self.assertIn("operation = authority_transition_webauthn.OPERATION", ast.unparse(method))
+        self.assertIn("type(verified_webauthn_evidence) not in (dict, MappingProxyType)", ast.unparse(method))
+        self.assertIn("set(verified_webauthn_evidence) != fields", ast.unparse(method))
+        projection = call(method, "query_work.prepare_copy")
+        self.assertEqual([ast.unparse(item) for item in projection.args], ["evidence_items"])
+        copied = call(method, "authority_query_reads._CopyBudget(query_work).copy")
+        self.assertIsInstance(copied.args[0], ast.Dict)
+        self.assertEqual({key.value: ast.unparse(value)
+                          for key, value in zip(copied.args[0].keys, copied.args[0].values)}, {
+            "request": "request", "manifest": "manifest", "evidence": "evidence_projection",
+            "businessBeforeRoots": "business_before_roots", "authorizationBeforeRoots": "authorization_before_roots"})
+        clock = call(method, "_read_database_now")
+        cutoff = call(method, "authority_complete_query.cutoff_microseconds")
+        generated = call(method, "authority_transition_webauthn._revocation_query_program")
+        for first, second in zip((projection, copied, clock, cutoff), (copied, clock, cutoff, generated)):
+            self.assertLess(first.lineno, second.lineno)
+        self.assertEqual([ast.unparse(item) for item in clock.args], ["cursor"])
+        self.assertEqual([ast.unparse(item) for item in cutoff.args], ["database_now"])
+        self.assertEqual(keywords(generated), {
+            "arguments": "actual_request['arguments']", "cutoff_us": "cutoff_us",
+            "request_digest": "request_digest", "evidence": "owned['evidence']", "work": "query_work"})
+        identities = sorted(calls(method, "require_identity"), key=lambda node: node.lineno)
+        self.assertEqual(len(identities), 3)
+        self.assertLess(identities[0].lineno, projection.lineno)
+        self.assertLess(clock.lineno, identities[1].lineno)
+        self.assertLess(identities[1].lineno, generated.lineno)
+        self.assertFalse(calls(method, "_ValidationWork"))
+        self.assertFalse(calls(method, "self.kernel.queries"))
+        self.assertFalse(calls(method, "authority_audit_capacity.add_capacity_query"))
+        self.assertFalse(calls(method, "authority_webauthn_assertion.verify_revoke_assertion_evidence"))
+
+    def test_private_revocation_factory_threads_original_roots_cursor_trace_and_meter_to_real_reader(self):
+        method = self.method("_read_revocation_inputs")
+        generated = call(method, "authority_transition_webauthn._revocation_query_program")
+        collector = call(method, "authority_complete_acquisition._CompleteQueryAcquisition")
+        staging = call(method, "authority_query_staging.StagedQueryProofs")
+        read = call(method, "_read_bounded_transition_rows")
+        retained = call(method, "collector.retained_evidence")
+        state = call(method, "PlanningState")
+        for before, after in zip((generated, collector, staging, read, retained),
+                                 (collector, staging, read, retained, state)):
+            self.assertLess(before.lineno, after.lineno)
+        self.assertEqual([ast.unparse(item) for item in collector.args], ["cursor"])
+        self.assertEqual([ast.unparse(item) for item in read.args], ["cursor"])
+        self.assertEqual(keywords(collector), {
+            "operation": "operation", "arguments": "actual_request['arguments']", "cutoff_us": "cutoff_us",
+            "queries": "tuple((query for query in queries if type(query) is authority_complete_query.CompleteIndexQuery))",
+            "business_before_roots": "owned['businessBeforeRoots']",
+            "authorization_before_roots": "owned['authorizationBeforeRoots']", "trace": "trace", "work": "query_work"})
+        self.assertEqual(keywords(staging), {
+            "operation": "operation", "business_before_roots": "owned['businessBeforeRoots']",
+            "authorization_before_roots": "owned['authorizationBeforeRoots']", "query_work": "query_work"})
+        self.assertEqual(keywords(read), {
+            "operation": "operation", "request": "actual_request", "queries": "queries",
+            "manifest": "owned['manifest']", "trace": "trace", "query_sources": "staging",
+            "query_work": "query_work", "complete_acquisition": "collector"})
+        self.assertEqual(keywords(state), {
+            "database_now": "database_now", "query_work_units": "sum((query.work_units for query in queries))",
+            "verified_webauthn_evidence": "owned['evidence']", "query_program": "queries",
+            "query_reads": "query_reads", "complete_query_evidence": "evidence"})
+        self.assertFalse(calls(method, "_derive_multiproofs"))
+        handlers = [node for node in ast.walk(method) if isinstance(node, ast.ExceptHandler)]
+        self.assertEqual(len(handlers), 1)
+        for error in ("QueryReadWorkError", "authority_query_staging.QueryStagingError",
+                      "authority_complete_acquisition.CompleteAcquisitionError"):
+            self.assertIn(error, ast.unparse(handlers[0].type))
+        self.assertIn("raise AuthorityPlannerError('private revocation read phase denied the request') from exc",
+                      ast.unparse(handlers[0]))
+
+    def test_private_complete_export_retains_actual_merged_proofs_and_never_reacquires_sql(self):
+        _, tree = source("serverware/authority_complete_acquisition.py")
+        record = definition(tree, "CompleteAcquisitionEvidence")
+        self.assertEqual([node.target.id for node in record.body if isinstance(node, ast.AnnAssign)],
+            ["cutoff_us", "heads", "frontiers", "business_before_roots", "authorization_before_roots", "before_proofs"])
+        verified = definition(tree, "verify", "_CompleteQueryAcquisition")
+        genuine = call(verified, "batch._verify_complete_query_batch")
+        copied = call(verified, "reads._CopyBudget(self._work).copy")
+        self.assertEqual([ast.unparse(item) for item in copied.args], ["actual.before_proofs"])
+        self.assertLess(genuine.lineno, copied.lineno)
+        saved, = [node for node in ast.walk(verified) if isinstance(node, ast.Assign)
+                  and any(ast.unparse(target) == "self._proofs" for target in node.targets)]
+        self.assertEqual(ast.unparse(saved.value), ast.unparse(copied))
+        export = definition(tree, "retained_evidence", "_CompleteQueryAcquisition")
+        self.assertEqual([ast.unparse(item) for item in call(export, "reads._CopyBudget").args], ["self._work"])
+        self.assertEqual([ast.unparse(item) for item in call(export, "self._guard").args], ["'complete'"])
+        copy_values = [ast.unparse(item.args[0]) for item in calls(export, "copier.copy")]
+        for value in ("self._business", "self._authorization", "self._proofs", "proof.query_id"):
+            self.assertIn(value, copy_values)
+        returned = call(export, "CompleteAcquisitionEvidence")
+        self.assertEqual([ast.unparse(item) for item in returned.args],
+            ["self._cutoff", "tuple(copied_heads)", "tuple(copied_frontiers)", "business", "authorization", "proofs"])
+        for forbidden in ("cursor.execute", "self._cursor.execute", "batch._verify_complete_query_batch",
+                          "_ValidationWork", "hashlib.sha256"):
+            self.assertFalse(calls(export, forbidden))
 
     def test_private_complete_trace_uses_source_markers_and_existing_global_budget_only(self):
         init = self.method("__init__", "PlannerTrace")

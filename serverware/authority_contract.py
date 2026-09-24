@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.32"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.33"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -89,6 +89,8 @@ PLANNER_COMPLETE_ACQUISITION_CONTRACT = MappingProxyType({
     "admission": "private-worker-only",
     "publicV3Enabled": False,
     "operation": "webauthn.credential.revoke",
+    "producerReadPhase": "single-cutoff-source-program/v1",
+    "retainedPrimaryEvidence": "detached-original-roots-and-proofs/v1",
     "headTraceProfile": "serverware.policyAuthorityCountedHeadRead/v1",
     "rangeTraceProfile": "serverware.policyAuthorityCountedIndexRead/v1",
     "primaryTraceProfile": "serverware.policyAuthorityCompletePrimaryRead/v1",
@@ -103,10 +105,11 @@ PLANNER_COMPLETE_ACQUISITION_CONTRACT = MappingProxyType({
     "maxBusinessTraceEntries": 4096,
     "maxFrameworkTraceEntries": 69,
     "includedPhases": (
+        "owned-read-phase-context", "single-cutoff-source-query-generation",
         "source-role-and-cutoff-binding", "counted-head-capture",
         "range-acquisition-and-reconstruction", "exact-primary-row-fetch",
         "raw-evidence-retention", "global-primary-and-range-row-reverification",
-        "shared-query-bookkeeping",
+        "shared-query-bookkeeping", "detached-root-and-primary-proof-retention",
     ),
     "excludedWork": (
         "sql-execution", "driver-allocation", "process-allocation",

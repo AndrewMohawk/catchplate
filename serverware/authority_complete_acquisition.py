@@ -2,7 +2,7 @@
 
 The caller owns one read-only MVCC transaction and its primary root capture.
 This worker retains actual head/frontier observations, fetches exact full rows,
-and replays genuine global primary membership and all five range/row joins.
+and replays genuine global primary membership and all six range/row joins.
 It is not independent root/time authority or a transport admission capability.
 The public v3 planner does not construct or accept this worker: its complete
 query gate remains closed until the coordinated successor protocol exists.
@@ -17,6 +17,7 @@ from serverware import authority_complete_query as complete
 from serverware import authority_complete_query_batch as batch
 from serverware import authority_contract
 from serverware import authority_index_heads as heads
+from serverware import authority_index_contract as counted
 from serverware import authority_index_reader as reader
 from serverware.authority_index_trace import PRIMARY_READ_PROFILE
 from serverware import authority_query_reads as reads
@@ -29,11 +30,18 @@ class CompleteAcquisitionError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class CompleteAcquisitionEvidence:
-    """Raw immutable observations, not a successful verification capability."""
+    """Detached raw observations, not a successful verification capability.
+
+    Nested wire dictionaries remain caller-mutable. Every retrieval owns fresh
+    dictionaries and counted DTOs; no returned value aliases the collector.
+    """
 
     cutoff_us: int
     heads: tuple[heads.CapturedIndexHead, ...]
     frontiers: tuple[batch.CompleteQueryFrontier, ...]
+    business_before_roots: tuple[dict[str, Any], ...]
+    authorization_before_roots: tuple[dict[str, Any], ...]
+    before_proofs: tuple[dict[str, Any], ...]
 
 
 def _query_value(query):
@@ -58,6 +66,7 @@ class _CompleteQueryAcquisition:
         self._identity = cursor, trace, work
         self._heads: tuple[heads.CapturedIndexHead, ...] = ()
         self._frontiers: list[batch.CompleteQueryFrontier] = []
+        self._proofs: tuple[dict[str, Any], ...] = ()
         self._next = 0
         try:
             if (type(operation) is not str or operation != complete.OPERATION
@@ -201,8 +210,42 @@ class _CompleteQueryAcquisition:
             return tuple(copier.copy(self._business)) + tuple(copier.copy(self._authorization))
 
     def retained_evidence(self) -> CompleteAcquisitionEvidence:
+        """Copy the actual verified read evidence without proof SQL or replay.
+
+        Source-value copies use the same real CopyBudget as input ownership.
+        Fixed source-bounded tuple/list and DTO scaffolding is not a separate
+        work unit. Counted constructors only recheck their bounded scalars;
+        they neither hash profiles nor confer authority on the returned data.
+        """
         with self._guard("complete"):
-            return CompleteAcquisitionEvidence(self._cutoff, self._heads, tuple(self._frontiers))
+            copier = reads._CopyBudget(self._work)
+            business = tuple(copier.copy(self._business))
+            authorization = tuple(copier.copy(self._authorization))
+            proofs = copier.copy(self._proofs)
+            copied_heads = []
+            for head in self._heads:
+                values = copier.copy((head.index_id, head.table, head.counted_profile,
+                    head.projection_digest, head.projection_manifest_digest,
+                    head.index_revision, head.index_root.digest, head.index_root.count))
+                copied_heads.append(heads.CapturedIndexHead(*values[:6],
+                    counted.CountedNode(*values[6:])))
+            copied_frontiers = []
+            for proof in self._frontiers:
+                query_id = copier.copy(proof.query_id)
+                records = []
+                for item in proof.frontier:
+                    if type(item) is counted.IndexLeaf:
+                        values = copier.copy((item.key, item.primary_key_digest,
+                                              item.primary_row_digest))
+                        records.append(counted.IndexLeaf(*values))
+                    elif type(item) is counted.OpaqueSubtree:
+                        values = copier.copy((item.prefix, item.digest, item.count))
+                        records.append(counted.OpaqueSubtree(*values))
+                    else:
+                        raise CompleteAcquisitionError("retained complete frontier type changed")
+                copied_frontiers.append(batch.CompleteQueryFrontier(query_id, tuple(records)))
+            return CompleteAcquisitionEvidence(self._cutoff, tuple(copied_heads),
+                tuple(copied_frontiers), business, authorization, proofs)
 
     def verify(self, *, selected_rows, before_proofs) -> batch.CompleteQueryBatchInputs:
         """Recompute raw global primary proofs and every genuine range/row join."""
@@ -216,5 +259,9 @@ class _CompleteQueryAcquisition:
                 selected_rows=selected_rows, before_proofs=before_proofs,
                 read_heads=read_heads, query_frontiers=tuple(self._frontiers), work=self._work)
             self._require_running()
+            # The actual verifier owns this exact merged primary inventory.
+            # Copy before exposing its mutable result to the caller, so later
+            # result/input mutation cannot contaminate retained evidence.
+            self._proofs = reads._CopyBudget(self._work).copy(actual.before_proofs)
             self._phase = "complete"
             return actual

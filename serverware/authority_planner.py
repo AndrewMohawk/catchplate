@@ -48,6 +48,7 @@ from serverware import authority_radix_proof
 from serverware import authority_root_transition
 from serverware import authority_transition_core
 from serverware import authority_transition_registry
+from serverware import authority_transition_webauthn
 from serverware import authority_webauthn_assertion
 from serverware.config import (
     WEBAUTHN_CHALLENGE_GLOBAL_LIVE_MAX,
@@ -690,6 +691,127 @@ class TypedTransitionPlanningProgram:
             complete_query_evidence=(None if complete_acquisition is None
                                      else complete_acquisition.retained_evidence()),
         )
+
+    def _read_revocation_inputs(
+        self,
+        cursor: Any,
+        *,
+        request: dict[str, Any],
+        manifest: tuple[dict[str, Any], ...],
+        trace: PlannerTrace,
+        query_work: _ValidationWork,
+        business_before_roots: Any,
+        authorization_before_roots: Any,
+        verified_webauthn_evidence: Mapping[str, Any],
+    ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
+        """Acquire the real private revocation read phase in one transaction.
+
+        The transaction owner supplies observed primary roots and independently
+        verified assertion evidence. This entry neither authenticates that
+        provenance nor opens public request/registry/v3 admission. It owns the
+        input graphs before driver callbacks, reads the database clock once,
+        and derives its own complete source program, staging and collector.
+        Query bookkeeping, generation, collection and evidence copies share
+        the supplied meter. Staged proof/stamp work and primary proof SQL keep
+        their existing separate bounds; this is not a whole-plan work claim.
+        """
+        operation = authority_transition_webauthn.OPERATION
+        kernel = self.kernel
+
+        def require_identity() -> None:
+            if (type(query_work) is not _ValidationWork
+                    or type(kernel) is not authority_transition_webauthn.WebAuthnCredentialRevokeKernel
+                    or self.kernel is not kernel
+                    or any(type(value) is not str for value in
+                           (self.operation, self.handler, kernel.operation,
+                            kernel.handler, kernel.program_id))
+                    or self.operation != operation
+                    or self.handler != kernel.handler
+                    or kernel.operation != operation
+                    or kernel.handler != "revoke_webauthn_credential"
+                    or kernel.program_id != authority_contract.transition_program_id(operation)
+                    or type(trace) is not PlannerTrace
+                    or type(trace.operation) is not str or trace.operation != operation
+                    or trace._complete_queries is not True):
+                raise AuthorityPlannerError("private revocation read identity changed")
+
+        require_identity()
+        if (type(request) is not dict or type(manifest) is not tuple
+                or type(verified_webauthn_evidence) not in (dict, MappingProxyType)):
+            raise AuthorityPlannerError("private revocation read inputs are not exact owned-value types")
+        fields = authority_webauthn_assertion.EVIDENCE_FIELDS
+        if (len(verified_webauthn_evidence) != len(fields)
+                or any(type(name) is not str or len(name) > 128
+                       for name in verified_webauthn_evidence)
+                or set(verified_webauthn_evidence) != fields):
+            raise AuthorityPlannerError("private revocation assertion fields changed")
+        try:
+            # The real verifier returns an exact MappingProxyType. Accept its
+            # raw fixed-field data without a general Mapping coercion or any
+            # inference that a freely constructible proxy proves a signature.
+            # Pair scaffolding is source-fixed; reserve the full pair graph
+            # before the actual shallow dictionary projection, then own it in
+            # the same context copy as every other input before callbacks.
+            evidence_items = tuple((name, verified_webauthn_evidence[name])
+                                   for name in sorted(fields))
+            query_work.prepare_copy(evidence_items)
+            evidence_projection = dict(evidence_items)
+            owned = authority_query_reads._CopyBudget(query_work).copy({
+                "request": request, "manifest": manifest,
+                "evidence": evidence_projection,
+                "businessBeforeRoots": business_before_roots,
+                "authorizationBeforeRoots": authorization_before_roots,
+            })
+            actual_request = owned["request"]
+            if (actual_request.get("operation") != operation
+                    or actual_request.get("handler") != kernel.handler
+                    or type(actual_request.get("arguments")) is not dict):
+                raise AuthorityPlannerError("private revocation request identity changed")
+            request_digest = _require_digest(actual_request.get("requestDigest"),
+                                             "private revocation request digest")
+            database_now = _read_database_now(cursor)
+            require_identity()
+            cutoff_us = authority_complete_query.cutoff_microseconds(database_now)
+            queries = authority_transition_webauthn._revocation_query_program(
+                arguments=actual_request["arguments"], cutoff_us=cutoff_us,
+                request_digest=request_digest, evidence=owned["evidence"], work=query_work,
+            )
+            collector = authority_complete_acquisition._CompleteQueryAcquisition(
+                cursor, operation=operation, arguments=actual_request["arguments"],
+                cutoff_us=cutoff_us,
+                queries=tuple(query for query in queries
+                              if type(query) is authority_complete_query.CompleteIndexQuery),
+                business_before_roots=owned["businessBeforeRoots"],
+                authorization_before_roots=owned["authorizationBeforeRoots"],
+                trace=trace, work=query_work,
+            )
+            staging = authority_query_staging.StagedQueryProofs(
+                operation=operation, business_before_roots=owned["businessBeforeRoots"],
+                authorization_before_roots=owned["authorizationBeforeRoots"],
+                query_work=query_work,
+            )
+            selected, queries, query_reads = _read_bounded_transition_rows(
+                cursor, operation=operation, request=actual_request, queries=queries,
+                manifest=owned["manifest"], trace=trace, query_sources=staging,
+                query_work=query_work, complete_acquisition=collector,
+            )
+            evidence = collector.retained_evidence()
+            require_identity()
+            return selected, PlanningState(
+                database_now=database_now,
+                query_work_units=sum(query.work_units for query in queries),
+                verified_webauthn_evidence=owned["evidence"],
+                query_program=queries, query_reads=query_reads,
+                complete_query_evidence=evidence,
+            )
+        except (authority_transition_core.TransitionKernelError,
+                authority_complete_query.CompleteQueryError,
+                authority_query_reads.QueryReadError,
+                authority_complete_acquisition.CompleteAcquisitionError,
+                authority_complete_query_batch.CompleteQueryBatchError,
+                IndexRangeError, QueryReadWorkError,
+                authority_query_staging.QueryStagingError) as exc:
+            raise AuthorityPlannerError("private revocation read phase denied the request") from exc
 
     def __call__(
         self,

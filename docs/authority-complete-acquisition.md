@@ -6,6 +6,9 @@ Source `.31` connects the real typed reader to a private complete-query collecto
 for `webauthn.credential.revoke`. This is unbuilt, unexecuted source wiring, not
 an enabled operation or independently authoritative database snapshot.
 Source `.32` extends the same path to the sixth, pending-trust role.
+Source `.33` adds a private single-cutoff read-phase entry and retains the
+original primary roots and actual merged primary proofs. It does not enable
+the production v4 producer or change either public planning gate.
 
 The public v3 planner does not construct or accept this collector. Its whole
 query inventory still rejects complete declarations before business/proof SQL,
@@ -16,6 +19,22 @@ rejects that state **before the kernel** because the successor retained-evidence
 protocol is missing. Neither gate is replaced by a successful component result.
 
 ## Actual acquisition and proof path
+
+[`TypedTransitionPlanningProgram._read_revocation_inputs`](../serverware/authority_planner.py)
+owns the request, manifest, assertion data and primary-root graphs before any
+database callback. It requires the exact revocation candidate, private complete
+trace and caller-owned meter. The assertion data may be the genuine verifier's
+read-only mapping or an exact dictionary; fixed fields are projected and copied
+under the same meter. Neither representation proves signature verification.
+Full request-commitment recomputation and receipt-to-request admission remain
+the caller's preceding responsibilities; this private read phase does neither.
+
+The entry reads the database clock once, derives the genuine complete source
+program at that cutoff, and creates staging and the collector internally with
+the same cursor, roots, trace and meter. The program includes the real capacity
+query and both existing complete-declaration copy passes. Callers cannot supply
+a replacement query recipe, collector or successful proof result. The existing
+public `read_inputs` path remains separate and unchanged.
 
 [`_CompleteQueryAcquisition`](../serverware/authority_complete_acquisition.py)
 requires the actual cursor, trace and caller-owned `_ValidationWork`, source
@@ -45,7 +64,18 @@ and checks the full argument bytes and ordered roles when the mixed reader begin
    raw inputs and runs the genuine global primary evaluator and all six
    range/full-row joins on the same remaining work allowance. The reader then
    revalidates observations against the engine's owned rows. Only after this
-   succeeds can the collector expose its cutoff, nine heads and six frontiers.
+   succeeds can the collector expose its cutoff, nine heads, six frontiers,
+   original business/authorization root vectors and complete merged primary
+   proof inventory. The collector copies the actual verified proofs before
+   returning the verifier's mutable result. It does not reacquire proof SQL or
+   rerun a verifier to construct the retained evidence.
+
+Each evidence retrieval spends the remaining copy budget and returns detached
+root/proof dictionaries, heads, counted nodes and frontier records. Mutating a
+returned graph cannot change the collector or a later retrieval. The frozen
+outer data class does not make nested dictionaries immutable, and freely
+constructing that class grants no authority. Copy exhaustion is terminal for
+the collector, including after a previous successful retrieval.
 
 There is no caller-provided successful proof token or substitute verifier.
 Current revocation has no scalar contract selectors: global and query-local
@@ -84,6 +114,12 @@ observation passes are not discounted. Public standalone component metrics and
 return types remain unchanged; shared batch metrics report the invocation delta,
 not a new allowance.
 
+The `.33` private factory also charges assertion projection, input-context
+ownership and genuine source-query generation to this meter. Private proof
+retention and every detached export are charged separately; exports do not
+hash profiles or reset the allowance. Fixed source-bounded DTO/tuple scaffolding
+remains outside the defined work profile, as declared by the source contract.
+
 The hash-free [trace validator](../serverware/authority_index_trace.py) admits
 only the exact source head, range and primary-fetch markers under the private
 trace permission. It adds no trace allowance, mutation permission or generic
@@ -106,27 +142,44 @@ expected roots and time accepted by the [semantic composer](authority-revocation
 also need an actual trusted producer; equality checking does not supply one.
 
 The private evidence must eventually survive coordinated planner, signed plan,
-persisted replay, service, SQL snapshot/commit and receipt consumers. Existing
-closed v3 readers, the nine-frame Snapshot/v3 and their digests are unchanged.
-No successor wire schema or activation is supplied here. Installed-storage and
-population admission, independent roots/time, retained read/write evidence and
-the [four missing registered kernels](authority-transition-startup-blocker.md)
+persisted replay, service, SQL snapshot/commit and receipt consumers. The
+[inactive signed v4 verifier](authority-revocation-plan.md) supplies a separate
+consumer contract, not that end-to-end integration. Existing closed v3 readers,
+the nine-frame Snapshot/v3 and their digests are unchanged.
+
+The next producer work must compute the genuine kernel/capacity mutations before
+acquiring their write frontiers, integrate read/write work and physical-read
+accounting, and bind the write-acquisition trace profile in both planner and
+signed-plan replay. The write reader's separate ledger and trace grammar do not
+yet satisfy those requirements. Durable replay also needs a versioned original
+signed envelope and independent evaluation-context record; the closed v3
+`exact_plan` payload cannot be silently repurposed. Historical evaluation time
+must remain distinct from current freshness and execution authority.
+
+Installed-storage and population admission, independent roots/time, retained
+read/write evidence and the
+[four missing registered kernels](authority-transition-startup-blocker.md)
 remain distinct production gates.
 
 ## Authored coverage, not execution evidence
 
 The new [collector](../scripts/test_authority_complete_acquisition.py),
 [head](../scripts/test_authority_index_heads.py) and
-[trace](../scripts/test_authority_index_trace.py) suites contain 20, 18 and 15
+[trace](../scripts/test_authority_index_trace.py) suites contain 27, 18 and 15
 authored methods respectively. They use independent trees/records and genuine proof
 engines, covering ordered and empty roles, full-row corruption, context and
 ownership changes, cumulative limits and poisoned lifecycles. The batch, range
 and frontier suites preserve their old methods and add shared-work controls.
-Startup-dependent cases retain the real registry import and both planner gates.
+The seven additional collector methods cover actual merged-proof retention,
+no additional SQL or proof replay, nested alias isolation, repeated exports,
+independently calculated copy limits and terminal failures. Startup-dependent
+cases retain the real registry import and both planner gates.
 
-Existing-suite totals are now 28 batch, 30 range, 33 frontier, 20 planner/capacity
-source-linkage, 21 ACL/source-contract and 38 startup methods. These are authored
-inventories only; the separate [native inventory](native-postgres-verification.md)
+The batch, range, frontier and ACL/source-contract suites retain their 28, 30,
+33 and 21 methods. The planner/capacity source-linkage suite grows from 20 to 23
+methods; the startup-dependent suite grows from 38 to 47 with actual read-phase
+controls. All prior IDs remain. Static linkage is not runtime evidence. The
+separate [native inventory](native-postgres-verification.md)
 now contains 256 methods across fourteen suites, including later policy-parity controls.
 
 None has been executed. Deterministic SQL responders are not PostgreSQL

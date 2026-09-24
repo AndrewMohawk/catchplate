@@ -843,6 +843,100 @@ class RecoveryWitnessIndependenceTests(unittest.TestCase):
         witness_postgres.assert_not_called()
 
 
+class _RevocationReadCursor:
+    """Closed deterministic SQL responses, not PostgreSQL or root authority.
+
+    The populations and stored digests are independent fixture constructions.
+    Actual planner SQL, staging, range acquisition and proof engines run without
+    successful-result replacements. This suite still imports the real blocked
+    startup/registry graph above; this responder does not bypass that gate.
+    """
+
+    def __init__(self, fixture, *, on_clock=None, change=None):
+        import test_authority_complete_acquisition as complete_oracle
+        import test_authority_index_frontier as range_oracle
+        import test_authority_index_heads as head_oracle
+        import test_authority_radix_batch as primary_oracle
+
+        self.fixture, self.on_clock, self.change = fixture, on_clock, change
+        read = fixture.read_write.read
+        stores = {query.role: range_oracle.IndependentStoredIndex(fixture.rows[query.table],
+            query=query, expiry_us=fixture.read_write.expiry_before
+            if query.table == "webauthn_challenges" else None, revision=29)
+            for query in read.queries}
+        head_rows = head_oracle.source_rows()
+        for row in head_rows:
+            revision, root = fixture.read_write.heads[row["index_id"]]
+            row.update(index_revision=revision, root_digest=root.digest, leaf_count=root.count)
+        raw = types.SimpleNamespace(rows=fixture.rows, queries=read.queries,
+                                    stores=stores, head_rows=head_rows)
+        self.complete = complete_oracle.Cursor(raw, change=change)
+        self.primary = primary_oracle.StoredTreeCursor(*read.trees.values(), reverse=True)
+        self.ordinary = []
+        for document, members in zip(fixture.resolved_documents, fixture.ordered_rows):
+            if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1":
+                continue
+            if any(item["operator"] != "eq" for item in document["predicates"]):
+                raise AssertionError("ordinary fixture escaped its literal equality-only recipe")
+            clauses = " AND ".join(f"target.{item['column']} IS NOT DISTINCT FROM %s"
+                                   for item in document["predicates"])
+            order = ", ".join(f"target.{item['column']} " + ("DESC" if item["descending"] else "ASC")
+                              for item in document["orderBy"])
+            sql = ("SELECT pg_catalog.to_jsonb(target) AS row_value "
+                   f"FROM serverware_metadata.{document['table']} AS target "
+                   + ("WHERE " + clauses + " " if clauses else "") + f"ORDER BY {order} LIMIT %s")
+            parameters = tuple(item["value"] for item in document["predicates"]) + (document["maximumRows"] + 1,)
+            rows = [{"row_value": copy.deepcopy(item["row"])} for item in members if item["present"]]
+            self.ordinary.append((sql, parameters, rows))
+        self.calls, self.clock_reads, self.ordinary_position = [], 0, 0
+        self.target, self.kind, self.rows = None, None, []
+
+    def execute(self, sql, parameters=None):
+        self.calls.append((sql, copy.deepcopy(parameters)))
+        if sql == "SELECT pg_catalog.clock_timestamp() AS database_now":
+            if parameters is not None:
+                raise AssertionError("clock query unexpectedly acquired parameters")
+            self.clock_reads += 1
+            if self.clock_reads != 1:
+                raise AssertionError("private revocation read sampled a second database cutoff")
+            self.kind, self.target = "clock", None
+            if self.on_clock is not None:
+                self.on_clock()
+        elif any(f'FROM "serverware_metadata".{name} ' in sql for name in (
+                "policy_authority_authenticated_leaves", "policy_authority_authenticated_tree_nodes")):
+            self.kind, self.target = "proof", self.primary
+            self.target.execute(sql, parameters)
+        elif sql.startswith("SELECT pg_catalog.to_jsonb(target) AS row_value "):
+            if self.ordinary_position >= len(self.ordinary):
+                raise AssertionError("unexpected extra ordinary query")
+            expected_sql, expected_parameters, rows = self.ordinary[self.ordinary_position]
+            if sql != expected_sql or parameters != expected_parameters:
+                raise AssertionError("ordinary SQL differs from independent resolved source declaration")
+            self.ordinary_position += 1
+            self.kind, self.target, self.rows = "ordinary", None, copy.deepcopy(rows)
+        else:
+            self.kind, self.target = "complete", self.complete
+            self.target.execute(sql, parameters)
+        return self
+
+    def fetchone(self):
+        if self.kind == "clock":
+            return {"database_now": self.fixture.database_now}
+        if self.kind != "proof":
+            raise AssertionError("unexpected unbounded singleton read")
+        return self.target.fetchone()
+
+    def fetchall(self):
+        if self.kind != "ordinary":
+            raise AssertionError("only already SQL-bounded ordinary queries may use fetchall")
+        return copy.deepcopy(self.rows)
+
+    def fetchmany(self, maximum):
+        if self.kind not in {"proof", "complete"}:
+            raise AssertionError("unexpected bounded fetch")
+        return self.target.fetchmany(maximum)
+
+
 class TypedRequestPlannerIntegrationTests(unittest.TestCase):
     """Real planner facade/reader checks; registry/startup closure is required.
 
@@ -1009,7 +1103,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         expected = [{"ordinal": ordinal, "access": "read", "table": table,
                      "key": copy.deepcopy(key)} for ordinal, (table, key) in enumerate(entries)]
         self.assertEqual(trace._entries, expected)
-        self.assertEqual((trace._budget.business_entries, trace._budget.framework_entries), (16, 0))
+        self.assertEqual((trace._budget.business_entries, trace._budget.framework_entries), (19, 0))
         for table in (markers.HEAD_TABLE, markers.LEAF_TABLE, markers.NODE_TABLE):
             with self.subTest(write_table=table), self.assertRaises(self.planner.AuthorityPlannerError):
                 trace.write(table, {"indexId": markers.HEAD_IDS[0]})
@@ -1124,7 +1218,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         # contain verified observations. Neither it nor a real candidate
         # object may bypass the missing retained-evidence protocol gate.
         raw = authority_complete_acquisition.CompleteAcquisitionEvidence(
-            cutoff_us=1_000_007, heads=(), frontiers=())
+            cutoff_us=1_000_007, heads=(), frontiers=(), business_before_roots=(),
+            authorization_before_roots=(), before_proofs=())
         for kernel in kernels:
             with self.subTest(operation=kernel.operation):
                 program = self.planner.TypedTransitionPlanningProgram(
@@ -1141,6 +1236,309 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                         program(operation=kernel.operation, handler=kernel.handler, request=request,
                                 manifest=(), selected_rows=(), state=state)
                 self.assertEqual((context.call_count, transition.call_count), (0, 0))
+
+    def revocation_reader_fixture(self, *, work=None, separate_signer=False, include_audit=True):
+        from serverware import authority_transition_webauthn as candidate
+        from serverware import authority_webauthn_assertion as assertion
+        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+        from authority_revocation_semantics_fixture import SemanticFixture
+
+        fixture = SemanticFixture(separate_signer=separate_signer, include_audit=include_audit)
+        # The private read method consumes an already-verified projection; this
+        # fixture obtains it from the actual deterministic Ed25519 receipt.
+        # The signer pins and observed roots are synthetic, not current authority.
+        inputs = fixture.inputs()
+        verified = assertion.verify_revoke_assertion_evidence(inputs["evidence"],
+            operation_id=fixture.operation_id, request_digest=fixture.request_digest,
+            **{name: inputs[name] for name in ("capability_id", "verifier_identity",
+                "verifier_public_key", "now_epoch_ns", "deadline_epoch_ns", "maximum_age_ns")})
+        kernel = candidate.WebAuthnCredentialRevokeKernel()
+        program = self.planner.TypedTransitionPlanningProgram(
+            operation=kernel.operation, handler=kernel.handler, kernel=kernel)
+        work = _ValidationWork(QueryReadValidationLimits()) if work is None else work
+        arguments = {"request": copy.deepcopy(fixture.request),
+            "manifest": tuple({"table": item.table, "keyColumns": list(item.key_columns)}
+                              for item in fixture.read_write.read.contracts),
+            "trace": self.planner.PlannerTrace(operation=kernel.operation, _complete_queries=True),
+            "query_work": work, "verified_webauthn_evidence": verified,
+            "business_before_roots": copy.deepcopy(fixture.expected_before["businessBeforeRoots"]),
+            "authorization_before_roots": copy.deepcopy(fixture.expected_before["authorizationBeforeRoots"])}
+        return fixture, _RevocationReadCursor(fixture), program, arguments
+
+    def assert_revocation_read(self, fixture, selected, state):
+        self.assertEqual(selected, fixture.selected_rows)
+        self.assertEqual(state.database_now, fixture.database_now)
+        self.assertEqual(tuple(query.contract_value() for query in state.query_program), fixture.documents)
+        self.assertEqual(state.query_reads, fixture.query_reads)
+        self.assertEqual(state.query_work_units, sum(item["workUnits"] for item in fixture.documents))
+        self.assertEqual(dict(state.verified_webauthn_evidence), fixture.receipt.evidence)
+        raw = state.complete_query_evidence
+        self.assertEqual(raw.cutoff_us, fixture.cutoff_us)
+        self.assertEqual(raw.business_before_roots, tuple(fixture.expected_before["businessBeforeRoots"]))
+        self.assertEqual(raw.authorization_before_roots, tuple(fixture.expected_before["authorizationBeforeRoots"]))
+        self.assertEqual(raw.before_proofs, fixture.before_proofs)
+        self.assertEqual(tuple((head.index_id, head.index_revision, head.index_root.digest, head.index_root.count)
+                              for head in raw.heads),
+            tuple((name, revision, root.digest, root.count)
+                  for name, (revision, root) in fixture.read_write.heads.items()))
+        expected = fixture.read_write.read.arguments()["query_frontiers"]
+        self.assertEqual(raw.frontiers, expected)
+
+    def test_private_revocation_reader_uses_one_clock_one_generation_and_real_shared_workers(self):
+        from serverware import authority_complete_acquisition as acquisition
+        from serverware import authority_complete_query_batch as batch
+        from serverware import authority_query_staging as staging
+        from serverware import authority_transition_webauthn as candidate
+        from serverware import authority_transition_core as core
+
+        fixture, cursor, program, arguments = self.revocation_reader_fixture()
+        calls = []
+        collector_init = acquisition._CompleteQueryAcquisition.__init__
+        staging_init = staging.StagedQueryProofs.__init__
+
+        def collector(instance, *args, **kwargs):
+            calls.append(("collector", args, kwargs, instance))
+            return collector_init(instance, *args, **kwargs)
+
+        def stage(instance, *args, **kwargs):
+            calls.append(("staging", args, kwargs, instance))
+            return staging_init(instance, *args, **kwargs)
+
+        with patch.object(self.planner, "_read_database_now", wraps=self.planner._read_database_now) as clock, \
+                patch.object(candidate, "_revocation_query_program", wraps=candidate._revocation_query_program) as generation, \
+                patch.object(acquisition._CompleteQueryAcquisition, "__init__", new=collector), \
+                patch.object(staging.StagedQueryProofs, "__init__", new=stage), \
+                patch.object(batch, "_verify_complete_query_batch", wraps=batch._verify_complete_query_batch) as proof, \
+                patch.object(self.planner, "_read_bounded_transition_rows", wraps=self.planner._read_bounded_transition_rows) as read:
+            selected, state = program._read_revocation_inputs(cursor, **arguments)
+        self.assert_revocation_read(fixture, selected, state)
+        self.assertEqual((clock.call_count, cursor.clock_reads, generation.call_count, read.call_count, proof.call_count),
+                         (1, 1, 1, 1, 1))
+        self.assertEqual([name for name, *_ in calls], ["collector", "staging"])
+        actual_collector, actual_staging = calls[0][3], calls[1][3]
+        self.assertIs(calls[0][1][0], cursor)
+        self.assertIs(calls[0][2]["trace"], arguments["trace"])
+        for actual in (generation.call_args.kwargs["work"], calls[0][2]["work"],
+                       calls[1][2]["query_work"], read.call_args.kwargs["query_work"],
+                       proof.call_args.kwargs["work"]):
+            self.assertIs(actual, arguments["query_work"])
+        self.assertIs(read.call_args.kwargs["complete_acquisition"], actual_collector)
+        self.assertIs(read.call_args.kwargs["query_sources"], actual_staging)
+        self.assertIs(read.call_args.args[0], cursor)
+        self.assertIs(read.call_args.kwargs["trace"], arguments["trace"])
+        for name in ("business_before_roots", "authorization_before_roots"):
+            self.assertIs(calls[0][2][name], calls[1][2][name])
+            self.assertEqual(calls[0][2][name], arguments[name])
+        self.assertEqual(generation.call_args.kwargs["cutoff_us"], fixture.cutoff_us)
+        self.assertEqual(cursor.ordinary_position, len(cursor.ordinary))
+        self.assertGreater(arguments["query_work"].hash_work, 0)
+        # Even genuinely acquired raw evidence does not open the v3 kernel path.
+        with patch.object(core, "KernelContext", wraps=core.KernelContext) as context, \
+                patch.object(type(program.kernel), "transition", wraps=program.kernel.transition) as transition:
+            with self.assertRaisesRegex(self.planner.AuthorityPlannerError, "successor retained-evidence protocol"):
+                program(operation=program.operation, handler=program.handler, request=arguments["request"],
+                        manifest=arguments["manifest"], selected_rows=selected, state=state)
+        self.assertEqual((context.call_count, transition.call_count), (0, 0))
+
+    def test_private_revocation_reader_retains_merged_proofs_without_reacquiring_staged_rows(self):
+        import test_authority_radix_proof as proof_oracle
+        from serverware import authority_complete_query_batch as batch
+
+        for separate, audit in ((False, True), (True, False)):
+            with self.subTest(separate_signer=separate, include_audit=audit):
+                fixture, cursor, program, arguments = self.revocation_reader_fixture(
+                    separate_signer=separate, include_audit=audit)
+                selected, state = program._read_revocation_inputs(cursor, **arguments)
+                self.assert_revocation_read(fixture, selected, state)
+                expected = {(item["table"], proof_oracle.sql_digest(
+                    "serverware.policyAuthorityAuthenticatedKey/v1", item["table"].encode("utf-8"),
+                    proof_oracle.sql_json(item["key"]))) for item in fixture.selected_rows}
+                leaf_reads = [parameters for sql, parameters in cursor.primary.calls
+                              if "policy_authority_authenticated_leaves " in sql]
+                self.assertEqual(set(leaf_reads), expected)
+                self.assertEqual(len(leaf_reads), len(expected))
+                high_water = [value for value in leaf_reads if value[0] == "webauthn_trust_publication_high_water"]
+                self.assertEqual(len(high_water), 1)
+                self.assertEqual(len(state.complete_query_evidence.frontiers), 6)
+                self.assertEqual(len(state.complete_query_evidence.heads), 9)
+                before_calls = len(cursor.calls)
+                # Raw retained fields replay in the genuine engine without SQL
+                # or any successful-result token. This is component proof only.
+                raw = state.complete_query_evidence
+                query_inputs = fixture.read_write.read.arguments()
+                batch.verify_complete_query_batch(**{**query_inputs, "selected_rows": selected,
+                    "before_proofs": raw.before_proofs, "business_before_roots": raw.business_before_roots,
+                    "authorization_before_roots": raw.authorization_before_roots,
+                    "query_frontiers": raw.frontiers})
+                self.assertEqual(len(cursor.calls), before_calls)
+
+    def test_private_revocation_reader_owns_raw_inputs_before_the_clock_callback(self):
+        fixture, cursor, program, arguments = self.revocation_reader_fixture()
+        arguments["verified_webauthn_evidence"] = dict(arguments["verified_webauthn_evidence"])
+        original = copy.deepcopy({name: value for name, value in arguments.items()
+                                  if name not in {"trace", "query_work"}})
+
+        def mutate_caller():
+            arguments["request"]["arguments"]["record_id"] = "caller-changed"
+            arguments["manifest"][0]["keyColumns"][:] = ["wrong"]
+            arguments["verified_webauthn_evidence"]["challengeId"] = "wrong"
+            arguments["business_before_roots"][0]["rootDigest"] = "sha256:" + "0" * 64
+            arguments["authorization_before_roots"][0]["rootRevision"] += 1
+
+        cursor.on_clock = mutate_caller
+        selected, state = program._read_revocation_inputs(cursor, **arguments)
+        self.assert_revocation_read(fixture, selected, state)
+        self.assertNotEqual(arguments["request"], original["request"])
+        self.assertEqual(state.complete_query_evidence.business_before_roots,
+                         tuple(original["business_before_roots"]))
+        expected_digest = fixture.before_proofs[0]["rootDigest"]
+        self.assertIsNot(state.complete_query_evidence.before_proofs[0], fixture.before_proofs[0])
+        state.complete_query_evidence.before_proofs[0]["rootDigest"] = "sha256:" + "f" * 64
+        self.assertEqual(fixture.before_proofs[0]["rootDigest"], expected_digest)
+
+    def test_private_revocation_reader_rejects_wrong_identity_trace_and_work_before_clock(self):
+        from dataclasses import replace
+        from serverware import authority_transition_registry as registry
+        from serverware import authority_transition_webauthn as candidate
+        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+
+        class DerivedKernel(candidate.WebAuthnCredentialRevokeKernel):
+            pass
+
+        class DerivedWork(_ValidationWork):
+            pass
+
+        fixture, _, program, arguments = self.revocation_reader_fixture()
+        cases = [(replace(program, operation="webauthn.counter.cas"), {}),
+            (replace(program, handler="wrong"), {}),
+            (replace(program, kernel=registry.KERNELS["webauthn.counter.cas"]), {}),
+            (replace(program, kernel=DerivedKernel()), {}),
+            (program, {"trace": self.planner.PlannerTrace(operation=program.operation)}),
+            (program, {"trace": self.planner.PlannerTrace(operation="webauthn.counter.cas")}),
+            (program, {"query_work": None}),
+            (program, {"query_work": DerivedWork(QueryReadValidationLimits())})]
+        for tested, changes in cases:
+            with self.subTest(changes=changes, operation=tested.operation):
+                cursor = _RevocationReadCursor(fixture)
+                with self.assertRaisesRegex(self.planner.AuthorityPlannerError, "private revocation read identity changed"):
+                    tested._read_revocation_inputs(cursor, **{**arguments, **changes})
+                self.assertEqual(cursor.calls, [])
+
+    def test_private_revocation_reader_rechecks_trace_identity_after_clock_before_generation(self):
+        from serverware import authority_transition_webauthn as candidate
+
+        fixture, cursor, program, arguments = self.revocation_reader_fixture()
+        cursor.on_clock = lambda: setattr(arguments["trace"], "_complete_queries", False)
+        with patch.object(candidate, "_revocation_query_program", wraps=candidate._revocation_query_program) as generation:
+            with self.assertRaisesRegex(self.planner.AuthorityPlannerError, "private revocation read identity changed"):
+                program._read_revocation_inputs(cursor, **arguments)
+        self.assertEqual((cursor.clock_reads, generation.call_count), (1, 0))
+        self.assertEqual(len(cursor.calls), 1)
+
+    def test_private_revocation_reader_denies_nonclosed_inputs_and_unverified_raw_dto_shortcuts(self):
+        from collections import UserDict
+        from serverware import authority_complete_acquisition as acquisition
+
+        fixture, _, program, arguments = self.revocation_reader_fixture()
+        raw = acquisition.CompleteAcquisitionEvidence(cutoff_us=fixture.cutoff_us, heads=(),
+            frontiers=(), business_before_roots=(), authorization_before_roots=(), before_proofs=())
+        evidence = dict(arguments["verified_webauthn_evidence"])
+        cases = ({"request": types.MappingProxyType(arguments["request"])},
+            {"manifest": list(arguments["manifest"])}, {"verified_webauthn_evidence": raw},
+            {"verified_webauthn_evidence": UserDict(evidence)},
+            {"verified_webauthn_evidence": {**evidence, "extra": None}},
+            {"verified_webauthn_evidence": {name: value for name, value in evidence.items()
+                                           if name != "credentialRecordId"}})
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                cursor = _RevocationReadCursor(fixture)
+                with self.assertRaises(self.planner.AuthorityPlannerError):
+                    program._read_revocation_inputs(cursor, **{**arguments, **changes})
+                self.assertEqual(cursor.calls, [])
+        for shortcut in ("complete_acquisition", "query_sources", "queries"):
+            with self.subTest(shortcut=shortcut):
+                cursor = _RevocationReadCursor(fixture)
+                with self.assertRaises(TypeError):
+                    program._read_revocation_inputs(cursor, **{**arguments, shortcut: raw})
+                self.assertEqual(cursor.calls, [])
+
+    def test_private_revocation_reader_uses_remaining_work_and_denies_before_clock_when_exhausted(self):
+        from serverware import authority_transition_webauthn as candidate
+        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits, QueryReadWorkError
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        work.charge(hashes=7, input_bytes=11, json_nodes=13)  # Explicit previously charged component work.
+        fixture, cursor, program, arguments = self.revocation_reader_fixture(work=work)
+        observed = []
+        actual = candidate._revocation_query_program
+
+        def generate(**kwargs):
+            observed.append(kwargs["work"].metrics)
+            return actual(**kwargs)
+
+        with patch.object(candidate, "_revocation_query_program", new=generate):
+            selected, state = program._read_revocation_inputs(cursor, **arguments)
+        self.assert_revocation_read(fixture, selected, state)
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0].hash_work, 7)  # Ownership and the clock do not hash.
+        self.assertGreater(observed[0].input_bytes, 11)
+        self.assertGreater(observed[0].json_nodes, 13)
+        self.assertGreater(work.hash_work, observed[0].hash_work)
+        for field in ("max_input_bytes", "max_json_nodes"):
+            with self.subTest(field=field):
+                limited = _ValidationWork(QueryReadValidationLimits(**{field: 1}))
+                limited.charge(**{"input_bytes" if field == "max_input_bytes" else "json_nodes": 1})
+                cursor = _RevocationReadCursor(fixture)
+                with patch.object(candidate, "_revocation_query_program", wraps=actual) as generation:
+                    with self.assertRaises(self.planner.AuthorityPlannerError) as raised:
+                        program._read_revocation_inputs(cursor, **{**arguments, "query_work": limited})
+                self.assertIsInstance(raised.exception.__cause__, QueryReadWorkError)
+                self.assertEqual((cursor.calls, generation.call_count), ([], 0))
+
+    def test_private_revocation_reader_wrong_roots_or_staged_proof_deny_before_reference_sql(self):
+        from serverware import authority_query_staging as staging
+        from serverware import authority_radix_mutation as primary
+        from serverware import authority_radix_proof as radix
+
+        for change_root in (True, False):
+            with self.subTest(change_root=change_root):
+                fixture, cursor, program, arguments = self.revocation_reader_fixture()
+                if change_root:
+                    root = next(item for item in arguments["authorization_before_roots"]
+                                if item["table"] == "webauthn_trust_publication_high_water")
+                    root["rootDigest"] = "sha256:" + "0" * 64
+                else:
+                    def corrupt(kind, rows, parameters):
+                        if kind == "batch" and rows:
+                            rows[0]["node_digest"] = "sha256:" + "0" * 64
+                        return rows
+                    cursor.primary.change = corrupt
+                with patch.object(staging, "evaluate_primary_radix_memberships",
+                                  wraps=staging.evaluate_primary_radix_memberships) as membership:
+                    with self.assertRaises(self.planner.AuthorityPlannerError) as raised:
+                        program._read_revocation_inputs(cursor, **arguments)
+                self.assertIsInstance(raised.exception.__cause__, staging.QueryStagingError)
+                self.assertEqual(membership.call_count, 1)
+                self.assertIsInstance(raised.exception.__cause__.__cause__, primary.PrimaryRadixMutationError)
+                self.assertIsInstance(raised.exception.__cause__.__cause__.__cause__, radix.RadixProofError)
+                self.assertEqual(cursor.clock_reads, 1)
+                self.assertFalse(any("FROM serverware_metadata.webauthn_trust_publications AS target WHERE" in sql
+                                     for sql, _ in cursor.calls))
+
+    def test_actual_public_revocation_read_still_denies_complete_queries_before_proof_or_business_sql(self):
+        from serverware import authority_query_staging as staging
+
+        fixture, cursor, program, arguments = self.revocation_reader_fixture()
+        sources = staging.StagedQueryProofs(operation=program.operation,
+            business_before_roots=arguments["business_before_roots"],
+            authorization_before_roots=arguments["authorization_before_roots"],
+            query_work=arguments["query_work"])
+        with self.assertRaisesRegex(self.planner.AuthorityPlannerError,
+                                    "complete index query acquisition is not available"):
+            program.read_inputs(cursor, **{name: value for name, value in arguments.items()
+                if name not in {"business_before_roots", "authorization_before_roots"}}, query_sources=sources)
+        self.assertEqual(cursor.calls, [("SELECT pg_catalog.clock_timestamp() AS database_now", None)])
+        self.assertEqual((cursor.primary.calls, cursor.complete.calls), ([], []))
 
 
 if __name__ == "__main__":

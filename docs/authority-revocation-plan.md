@@ -96,6 +96,15 @@ checks consistency of signed metadata, not whether physical SQL was executed.
 
 ## Remaining production integration
 
+Source `.33` adds the [private producer read phase](authority-complete-acquisition.md):
+one owned input context, one database cutoff, the genuine source query program,
+and retained original roots plus actual merged primary proofs. It does not yet
+produce a signed v4 plan. The write reader still uses a separate work/physical
+ledger, and its mutation-read trace markers require coordinated admission and
+association checks. Genuine kernel/capacity derivation must precede acquisition
+of the resulting write frontiers; a caller-supplied mutation recipe is not a
+substitute.
+
 The actual verifier-response admission, durable planner replay and persistence
 paths still require coordinated v4 producer/consumer changes. They need
 independently admitted roots and the original evaluation cutoff; replay cannot
@@ -103,6 +112,13 @@ derive those expectations from its retained envelope or sample a new cutoff.
 Database Snapshot/persistence, one-use consumption, executor and terminal
 witness semantics must move together before activation. Registry admission and
 the other three missing WebAuthn kernels remain outstanding.
+
+Current `exact_plan` storage retains a closed v3 payload, not the original v4
+signed envelope or independent evaluation context. The successor needs explicit
+versioned storage binding those original bytes and their digests, identical
+retry semantics, and rejection of conflicting envelopes or context. Stored
+context is historical data, not independent root/key/time authority. Replaying
+the original cutoff must not authorize execution against stale current state.
 
 The active v9 SQL credential-policy reconstruction now uses the fixed
 [`webauthn_credential_policy_sql`](../serverware/authority_store/webauthn_trust_sql.py)

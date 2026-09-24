@@ -27,6 +27,7 @@ from serverware import authority_complete_query_batch as batch
 from serverware import authority_index_heads as heads
 from serverware import authority_index_join as joined
 from serverware import authority_index_reader as reader
+from serverware import authority_query_staging as staging
 from serverware import authority_radix_mutation as primary
 from serverware.authority_query_read_work import (
     _ValidationWork, QueryReadValidationLimits, QueryReadWorkError,
@@ -320,9 +321,45 @@ def expected_work(fixture):
     acquired = work.total
     proof_metrics = batch_oracle.independent_batch_metrics(fixture.batch)
     work.add(batch_oracle.expected_totals(proof_metrics))
+    proof_verified = work.total
+    # The genuine batch result is mutable: retain a separate raw proof graph
+    # before publishing that result, then charge each later detached export.
+    private_proofs = WorkOracle()
+    private_proofs.copy(fixture.batch.proofs)
+    work.add(private_proofs.total)
+    verified = work.total
+    exported = retained_work(fixture)
+    work.add(exported)
     return {"constructor": constructed, "begin": begun, "acquired": acquired,
-            "total": work.total, "proof": proof_metrics,
+            "proof_verified": proof_verified, "private_proofs": private_proofs.total,
+            "verified": verified, "export": exported, "total": work.total, "proof": proof_metrics,
             "physical": (sql_reads, parameter_bytes, transport_bytes)}
+
+
+def retained_work(fixture):
+    """One detached export, from independent roots/proofs/stored terminals.
+
+    Source-bounded DTO/tuple scaffolding is excluded by the declared producer
+    scope; every copied root/proof graph and retained scalar is counted here.
+    No result counter, producer copier or successful observation is consulted.
+    """
+    work = WorkOracle()
+    raw = fixture.constructor()
+    work.copy(raw["business_before_roots"])
+    work.copy(raw["authorization_before_roots"])
+    work.copy(fixture.batch.proofs)
+    for row in fixture.head_rows:
+        work.copy((row["index_id"], row["table_name"], row["counted_profile"],
+                   row["projection_digest"], row["projection_manifest_digest"],
+                   row["index_revision"], row["root_digest"], row["leaf_count"]))
+    for query in fixture.queries:
+        work.copy(query.query_id)
+        for item in fixture.stores[query.role].fixture.frontier:
+            if type(item) is range_oracle.contract.IndexLeaf:
+                work.copy((item.key, item.primary_key_digest, item.primary_row_digest))
+            else:
+                work.copy((item.prefix, item.digest, item.count))
+    return work.total
 
 
 class CompleteAcquisitionTests(unittest.TestCase):
@@ -627,6 +664,8 @@ class CompleteAcquisitionTests(unittest.TestCase):
         worker = acquisition._CompleteQueryAcquisition(cursor, **raw, trace=trace, work=work)
         raw["arguments"]["actor_id"] = "caller changed"
         raw["business_before_roots"][0]["rootDigest"] = "sha256:" + "0" * 64
+        raw["authorization_before_roots"][0]["rootDigest"] = "sha256:" + "0" * 64
+        raw["cutoff_us"] += 99
         state = fixture, cursor, trace, work, worker
         observed, evidence = self.collect(state)
         self.assertIsNone(evidence)
@@ -643,6 +682,9 @@ class CompleteAcquisitionTests(unittest.TestCase):
         exported[0]["rootDigest"] = "sha256:" + "f" * 64
         result = self.verify(state, observed)
         evidence = worker.retained_evidence()
+        self.assertEqual(evidence.business_before_roots, tuple(roots["business_before_roots"]))
+        self.assertEqual(evidence.authorization_before_roots, tuple(roots["authorization_before_roots"]))
+        self.assertEqual(evidence.cutoff_us, fixture.batch.cutoff_us)
         observed[0][0]["metadata"]["note"] = "caller changed after verification"
         self.assertEqual(result.arguments, fixture.intent)
         self.assertEqual(result.selected_rows, fixture.batch.selected)
@@ -703,13 +745,17 @@ class CompleteAcquisitionTests(unittest.TestCase):
         with mock.patch.object(batch, "_verify_complete_query_batch", side_effect=verify), \
                 mock.patch.object(_ValidationWork, "__init__", side_effect=AssertionError("fresh work allowance")):
             result = self.verify(state, observed)
-        self.assertEqual(seen, [(work, *batch_oracle.expected_totals(expected["proof"]))])
+            self.assert_totals(work, tuple(left + right for left, right in zip(prefix, expected["verified"])))
+            evidence = state[4].retained_evidence()
+        remaining = tuple(total - spent for total, spent in zip(expected["total"], expected["acquired"]))
+        self.assertEqual(seen, [(work, *remaining)])
+        self.assertEqual(evidence.before_proofs, fixture.batch.proofs)
         self.assertEqual(metric_values(result.metrics), expected["proof"])
         self.assert_totals(work, maxima)
 
     def test_independent_minus_one_whole_quotas_deny_real_proof_without_retry(self):
         fixture = Fixture()
-        expected = expected_work(fixture)["total"]
+        expected = expected_work(fixture)["proof_verified"]
         for dimension in range(3):
             with self.subTest(dimension=dimension):
                 limits = list(expected)
@@ -753,6 +799,203 @@ class CompleteAcquisitionTests(unittest.TestCase):
         self.verify(state, observed)
         physical = state[4]._acquisition
         self.assertEqual((physical.sql_reads, physical.parameter_bytes, physical.transport_bytes), expected)
+
+    def test_retained_raw_proofs_are_the_actual_merged_before_proofs_without_more_sql(self):
+        state = self.start(Fixture(approval=True))
+        fixture, cursor, trace, work, worker = state
+        observed, _ = self.collect(state)
+        selected = fixture.selected(observed)
+        raw = fixture.constructor()
+        sources = staging.StagedQueryProofs(operation=OPERATION,
+            business_before_roots=raw["business_before_roots"],
+            authorization_before_roots=raw["authorization_before_roots"], query_work=work)
+        # These rows need no deferred-reference stage. The actual completion
+        # merger still checks exact coverage and normalizes arbitrary proof
+        # order; the following actual global proof establishes membership.
+        self.assertEqual(sources.unproved_rows(selected), selected)
+        sql_before, trace_before = copy.deepcopy(cursor.calls), copy.deepcopy(trace.entries)
+        with mock.patch.object(sources, "merge_proofs", wraps=sources.merge_proofs) as merge, \
+                mock.patch.object(batch, "_verify_complete_query_batch", wraps=batch._verify_complete_query_batch) as proof, \
+                mock.patch.object(cursor, "execute", side_effect=AssertionError("retention issued SQL")):
+            merged = sources.merge_proofs(selected_rows=selected,
+                remaining_proofs=tuple(reversed(copy.deepcopy(fixture.batch.proofs))))
+            result = worker.verify(selected_rows=selected, before_proofs=merged)
+            retained = worker.retained_evidence()
+        self.assertEqual((merge.call_count, proof.call_count), (1, 1))
+        self.assertIs(proof.call_args.kwargs["before_proofs"], merged)
+        self.assertIs(proof.call_args.kwargs["work"], work)
+        self.assertEqual(merged, fixture.batch.proofs)
+        self.assertEqual(retained.before_proofs, result.before_proofs)
+        self.assertEqual(retained.before_proofs, merged)
+        self.assertIsNot(retained.before_proofs, merged)
+        self.assertIsNot(retained.before_proofs[0], result.before_proofs[0])
+        self.assertEqual(retained.business_before_roots, tuple(raw["business_before_roots"]))
+        self.assertEqual(retained.authorization_before_roots, tuple(raw["authorization_before_roots"]))
+        self.assertEqual(retained.cutoff_us, fixture.batch.cutoff_us)
+        self.assertEqual(tuple(field.name for field in fields(retained)),
+            ("cutoff_us", "heads", "frontiers", "business_before_roots",
+             "authorization_before_roots", "before_proofs"))
+        self.assertEqual((cursor.calls, trace.entries), (sql_before, trace_before))
+        self.assert_totals(work, expected_work(fixture)["total"])
+
+    def test_repeated_retention_detaches_roots_proofs_heads_and_every_frontier_layer(self):
+        state = self.start(Fixture(approval=True))
+        fixture, cursor, _, work, worker = state
+        observed, _ = self.collect(state)
+        supplied = copy.deepcopy(fixture.batch.proofs)
+        result = worker.verify(selected_rows=fixture.selected(observed), before_proofs=supplied)
+        first = worker.retained_evidence()
+        pristine = copy.deepcopy(metric_values(first))
+        before = work.hash_work, work.input_bytes, work.json_nodes
+        physical = worker._acquisition.sql_reads
+        supplied[0]["keyDigest"] = "sha256:" + "1" * 64
+        result.before_proofs[0]["keyDigest"] = "sha256:" + "2" * 64
+        first.before_proofs[0]["keyDigest"] = "sha256:" + "3" * 64
+        first.business_before_roots[0]["rootDigest"] = "sha256:" + "4" * 64
+        first.authorization_before_roots[0]["rootDigest"] = "sha256:" + "5" * 64
+        object.__setattr__(first, "cutoff_us", fixture.batch.cutoff_us + 1)
+        object.__setattr__(first.heads[0], "index_revision", 0)
+        object.__setattr__(first.heads[0].index_root, "digest", "sha256:" + "6" * 64)
+        for frontier in first.frontiers:
+            object.__setattr__(frontier, "query_id", "caller-forged-query")
+            for terminal in frontier.frontier:
+                attribute = "primary_row_digest" if type(terminal) is range_oracle.contract.IndexLeaf else "digest"
+                object.__setattr__(terminal, attribute, "sha256:" + "7" * 64)
+        with mock.patch.object(cursor, "execute", side_effect=AssertionError("export reread SQL")), \
+                mock.patch.object(batch, "_verify_complete_query_batch", side_effect=AssertionError("export repeated proof")), \
+                mock.patch.object(hashlib, "sha256", side_effect=AssertionError("export invented a hash")):
+            second = worker.retained_evidence()
+        self.assertEqual(metric_values(second), pristine)
+        self.assertEqual(second.before_proofs, fixture.batch.proofs)
+        self.assertIsNot(second.heads[0], first.heads[0])
+        self.assertIsNot(second.heads[0].index_root, first.heads[0].index_root)
+        for left, right in zip(first.frontiers, second.frontiers):
+            self.assertIsNot(left, right)
+            for first_terminal, second_terminal in zip(left.frontier, right.frontier):
+                self.assertIsNot(first_terminal, second_terminal)
+        self.assertEqual(worker._acquisition.sql_reads, physical)
+        self.assert_totals(work, tuple(left + right for left, right in zip(before, retained_work(fixture))))
+
+    def test_private_proof_retention_minus_one_denies_after_genuine_proof_and_stays_terminal(self):
+        fixture = Fixture()
+        expected = expected_work(fixture)
+        original = batch._verify_complete_query_batch
+        for dimension in (1, 2):
+            with self.subTest(dimension=dimension):
+                limits = list(expected["verified"])
+                limits[dimension] -= 1
+                state = self.start(fixture, limits=QueryReadValidationLimits(*limits))
+                observed, _ = self.collect(state)
+                completed = []
+                def verify(**kwargs):
+                    result = original(**kwargs)
+                    completed.append(result.metrics)
+                    return result
+                with mock.patch.object(batch, "_verify_complete_query_batch", side_effect=verify) as proof:
+                    with self.assertRaises((QueryReadWorkError, acquisition.reads.QueryReadError)):
+                        self.verify(state, observed)
+                    with self.assertRaises(acquisition.CompleteAcquisitionError):
+                        self.verify(state, observed)
+                self.assertEqual((proof.call_count, len(completed)), (1, 1))
+                self.assertEqual(metric_values(completed[0]), expected["proof"])
+                self.assertEqual(state[3].hash_work, expected["verified"][0])
+                with self.assertRaises(acquisition.CompleteAcquisitionError):
+                    state[4].retained_evidence()
+                self.assert_sticky(state[4])
+
+    def test_repeated_retention_spends_the_same_exact_remaining_copy_budget(self):
+        fixture = Fixture()
+        expected = expected_work(fixture)
+        prefix = 3, 41, 7
+        maximum = tuple(start + spent + 2 * exported for start, spent, exported in
+                        zip(prefix, expected["verified"], expected["export"]))
+        work = _ValidationWork(QueryReadValidationLimits(*maximum))
+        work.charge(hashes=prefix[0], input_bytes=prefix[1], json_nodes=prefix[2])
+        state = self.start(fixture, work=work)
+        observed, _ = self.collect(state)
+        self.verify(state, observed)
+        sql_before = len(state[1].calls)
+        with mock.patch.object(_ValidationWork, "__init__", side_effect=AssertionError("export reset the meter")):
+            first = state[4].retained_evidence()
+            second = state[4].retained_evidence()
+            self.assertEqual(first, second)
+            self.assert_totals(work, maximum)
+            with self.assertRaises((QueryReadWorkError, acquisition.reads.QueryReadError)):
+                state[4].retained_evidence()
+            with self.assertRaises(acquisition.CompleteAcquisitionError):
+                state[4].retained_evidence()
+        self.assertEqual(len(state[1].calls), sql_before)
+        self.assertEqual(first.before_proofs, fixture.batch.proofs)
+        self.assert_sticky(state[4])
+
+    def test_retained_export_minus_one_cannot_publish_a_partial_evidence_value(self):
+        fixture = Fixture()
+        expected = expected_work(fixture)
+        for dimension in (1, 2):
+            with self.subTest(dimension=dimension):
+                limits = list(expected["total"])
+                limits[dimension] -= 1
+                state = self.start(fixture, limits=QueryReadValidationLimits(*limits))
+                observed, _ = self.collect(state)
+                self.verify(state, observed)
+                self.assert_totals(state[3], expected["verified"])
+                sql_before = len(state[1].calls)
+                with mock.patch.object(acquisition, "CompleteAcquisitionEvidence", wraps=acquisition.CompleteAcquisitionEvidence) as evidence:
+                    with self.assertRaises((QueryReadWorkError, acquisition.reads.QueryReadError)):
+                        state[4].retained_evidence()
+                self.assertEqual(evidence.call_count, 0)
+                self.assertEqual(len(state[1].calls), sql_before)
+                with self.assertRaises(acquisition.CompleteAcquisitionError):
+                    state[4].retained_evidence()
+                self.assert_sticky(state[4])
+
+    def test_caught_nested_retention_copy_failure_prevents_outer_verification_or_export(self):
+        original_copy = acquisition.reads._CopyBudget.copy
+        for phase in ("verify", "export"):
+            with self.subTest(phase=phase):
+                state = self.start()
+                observed, _ = self.collect(state)
+                if phase == "export":
+                    self.verify(state, observed)
+                caught = []
+                def copied(copier, value, depth=0, ancestors=frozenset()):
+                    if depth == 0 and copier.work is state[3] and not caught:
+                        try:
+                            state[4].retained_evidence()
+                        except acquisition.CompleteAcquisitionError:
+                            caught.append(True)
+                    return original_copy(copier, value, depth, ancestors)
+                sql_before = len(state[1].calls)
+                with mock.patch.object(acquisition.reads._CopyBudget, "copy", new=copied):
+                    with self.assertRaises(acquisition.CompleteAcquisitionError):
+                        if phase == "verify":
+                            self.verify(state, observed)
+                        else:
+                            state[4].retained_evidence()
+                self.assertEqual(caught, [True])
+                self.assertEqual(len(state[1].calls), sql_before)
+                with self.assertRaises(acquisition.CompleteAcquisitionError):
+                    state[4].retained_evidence()
+                self.assert_sticky(state[4])
+
+    def test_freely_constructed_retention_dto_cannot_replace_raw_proofs_or_lifecycle(self):
+        forged = acquisition.CompleteAcquisitionEvidence(cutoff_us=0, heads=(), frontiers=(),
+            business_before_roots=(), authorization_before_roots=(), before_proofs=())
+        self.assertEqual(forged.before_proofs, ())
+        state = self.start()
+        self.collect(state)
+        with self.assertRaises(acquisition.CompleteAcquisitionError):
+            state[4].retained_evidence()
+        self.assert_sticky(state[4])
+        state = self.start()
+        observed, _ = self.collect(state)
+        with mock.patch.object(batch, "_verify_complete_query_batch", wraps=batch._verify_complete_query_batch) as proof:
+            with self.assertRaises(batch.CompleteQueryBatchError):
+                state[4].verify(selected_rows=state[0].selected(observed), before_proofs=forged)
+        self.assertEqual(proof.call_count, 1)
+        with self.assertRaises(acquisition.CompleteAcquisitionError):
+            state[4].retained_evidence()
+        self.assert_sticky(state[4])
 
 
 if __name__ == "__main__":

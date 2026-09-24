@@ -73,6 +73,16 @@ retained proofs and semantic effects on one budget. Production producer,
 persistence, executor and witness activation are still missing; the four
 startup gaps and verification prerequisites remain in force.
 
+Source `.33` adds a private single-cutoff revocation read-phase factory and
+detached retention of the original roots and genuinely merged primary proofs.
+It derives the actual metered source program and internally creates staging
+and acquisition, eliminating a separately configured cutoff and discarded proof
+inventory. The public v3 and pre-kernel successor gates remain closed. Shared
+write acquisition/accounting, write-trace binding, durable original-envelope
+and independent-context persistence, and coordinated v4 activation remain
+required; this read-phase implementation is not a registered kernel or startup
+repair.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

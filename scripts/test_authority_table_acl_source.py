@@ -392,7 +392,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.32")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.33")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -452,6 +452,8 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "schema": "serverware.policyAuthorityPlannerCompleteAcquisition/v1",
             "admission": "private-worker-only", "publicV3Enabled": False,
             "operation": "webauthn.credential.revoke",
+            "producerReadPhase": "single-cutoff-source-program/v1",
+            "retainedPrimaryEvidence": "detached-original-roots-and-proofs/v1",
             "headTraceProfile": "serverware.policyAuthorityCountedHeadRead/v1",
             "rangeTraceProfile": "serverware.policyAuthorityCountedIndexRead/v1",
             "primaryTraceProfile": "serverware.policyAuthorityCompletePrimaryRead/v1",
@@ -462,10 +464,11 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "maxSharedJsonNodes": 1_000_000,
             "maxBusinessTraceEntries": 4096, "maxFrameworkTraceEntries": 69,
             "includedPhases": (
+                "owned-read-phase-context", "single-cutoff-source-query-generation",
                 "source-role-and-cutoff-binding", "counted-head-capture",
                 "range-acquisition-and-reconstruction", "exact-primary-row-fetch",
                 "raw-evidence-retention", "global-primary-and-range-row-reverification",
-                "shared-query-bookkeeping",
+                "shared-query-bookkeeping", "detached-root-and-primary-proof-retention",
             ),
             "excludedWork": (
                 "sql-execution", "driver-allocation", "process-allocation",

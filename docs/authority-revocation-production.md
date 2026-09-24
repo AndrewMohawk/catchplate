@@ -13,6 +13,8 @@ Source `.42` adds a private SQL retained-byte integrity binder, without
 connecting it to this producer or activating any execution route.
 Source `.43` adds a separately invoked private execution-envelope reservation
 after genuine stored replay, without activating business execution.
+Source `.44` adds private source-derived counted before/after SQL fragments;
+they remain separate from this producer and any installed executor.
 These implementations are **unbuilt and
 unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
 deployed release.
@@ -97,6 +99,14 @@ current deadline/age/skew checks still apply. No execution-envelope database
 immutability/FK, current-root, capability or terminal-authority guarantee is
 added. `produce_and_persist` does not automatically reserve execution; see the
 [private reservation contract](authority-revocation-retention.md#private-execution-envelope-reservation).
+
+The [private counted-head fragments](authority-revocation-retention.md#private-counted-head-fresh-apply-fragments)
+derive complete-read plus actual-write indices and real projected event deltas,
+then bind locked full source heads to exact compact before/after vectors.
+They require genuine independent replay, primary locks before counted locks,
+and one fresh-apply transaction; historical retry must not invoke live-head
+reads. They do not supply independent currentness, activate an executor, or
+claim SQL H/B/N accounting or a general deadlock proof.
 
 ## Actual pipeline
 

@@ -42,6 +42,11 @@ transaction. This is reservation custody, not capability issuance, current-root
 admission, business execution or terminal authority. Public v3 routes stay closed
 to v4 records.
 
+Source `.44` adds private counted-head fresh-apply SQL fragments. They compare
+the source-derived complete-read/actual-write index union before and after
+real mutations; they are not installed into an executor and do not turn a
+retained root vector into independent current-root authority.
+
 The existing `exact_plan_*` fields continue to contain canonical **payload**
 bytes. Legacy v3 service replay reconstructs its envelope; private v4 replay
 returns the original envelope and context from the new immutable sidecar.
@@ -322,9 +327,45 @@ authority, one-use execution and terminal witness commitments. This private
 method is not called automatically by `produce_and_persist` and does not open
 the legacy executor or public service. Its fixtures are authored and unexecuted.
 
+## Private counted-head fresh-apply fragments
+
+[`authority_store.revocation_counted_sql`](../serverware/authority_store/revocation_counted_sql.py)
+provides `revocation_counted_declarations_sql()`,
+`prepare_revocation_counted_transition_sql(namespace)`,
+`lock_and_assert_revocation_counted_before_sql(namespace)` and
+`assert_revocation_counted_after_sql(namespace)`. They consume the actual
+`planner`, `rv_payload`, `rv_transition` and `rv_primary` bindings. Their
+`rvc_` locals are ordinary phase observations, not a successful-verification
+token or a caller-selected index subset.
+
+Preparation derives the exact union of source complete-query role indices and
+profiles of actual mutation tables, not every potential write head captured
+by the producer. It uses the real source projector for OLD/NEW membership and
+normalized-event count/revision deltas. Preparation does not read current
+heads. The before fragment locks the required full eight-field head rows in
+C-sorted index order with bounded sentinel reads, validates their source
+profile/manifest and empty-root conventions, and compares the exact four-field
+compact before vector. After actual mutations and their real tree triggers,
+the after fragment checks the same union against the captured compact after
+vector, including unchanged read-only indices.
+
+The consumer must first genuinely replay the original signed v4 record with
+independently admitted expectations, bind and lock primary roots in their
+existing sorted order, and keep those locks through counted before-checks,
+mutations and after-checks in one fresh-apply transaction. Historical committed
+retry must return through its separately verified original-byte path before
+any live-head fragment. These are caller sequencing prerequisites, not proof
+that a standalone fragment establishes authority or a deadlock-free executor.
+
+No table shape, ACL, public route or installed executor expands. SQL
+hash/projection/driver work is not claimed under the Python H/B/N meter.
+Capability/fence admission, one-use consumption, successor terminal receipts
+and witness bindings remain separate required consumers. The source and native
+component controls are authored and unexecuted.
+
 ## Migration at the actual consumers
 
-| Consumer | Source `.43` status / remaining work |
+| Consumer | Source `.44` status / remaining work |
 | --- | --- |
 | Configured retention coordinator | Separate `RevocationPlannerPersistence` implemented; configuration pins keys/identities and calls genuine raw-byte storage. |
 | Configured read-to-persist owner | Private `RevocationPlanningCoordinator` closes read scopes before separate persistence, preserving original bytes, expectations and work. |
@@ -332,7 +373,7 @@ the legacy executor or public service. Its fixtures are authored and unexecuted.
 | Store replay | Private original-byte replay requires existing exact assertion/projection custody; no repair or re-signing. |
 | Execution-envelope reservation | Private genuine replay and exact reserved-row custody under one parent lock implemented; current-root, capability and terminal authority remain separate. |
 | Service persist/replay | Admit the explicit successor protocol; preserve original bytes and require independent context. |
-| Root-transition SQL | Private retained-byte integrity binder added; legacy early protocol denial unchanged. Independently admitted mixed-root v4 commit validation remains required. |
+| Root-transition SQL | Private retained-byte binder and source-derived counted before/after fragments added; legacy early protocol denial unchanged. Actual independently admitted mixed-root v4 executor integration remains required. |
 | Execution and terminal receipts | Bind the retained record and mixed transition; retain separate current-state, deadline and one-use checks. |
 | External witness | Authenticate the terminal writer/record/mixed-transition commitments, without exposing proof rows. |
 

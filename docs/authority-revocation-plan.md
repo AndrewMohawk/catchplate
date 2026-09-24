@@ -188,6 +188,16 @@ execution-row/FK schema guarantee and no current-root, capability, business
 execution or terminal authority; the legacy v3 and public service gates remain
 unchanged.
 
+Source `.44` adds [private counted-head SQL fragments](authority-revocation-retention.md#private-counted-head-fresh-apply-fragments).
+The source complete-read/actual-mutation union and real OLD/NEW projector
+determine required indices and count/revision deltas. Locked full source heads
+must match exact compact before/after vectors, including read-only indices.
+An actual consumer still owes genuine independently pinned replay, sorted
+primary locks before counted locks and one fresh-apply transaction; historical
+retry must bypass live-head reads. There is no new schema/ACL, installed
+executor, capability or witness activation, Python SQL-work accounting or
+general deadlock/current-root-authority claim.
+
 Source `.37` implements private original-byte storage and historical replay.
 Public verifier-response admission and service persistence still require
 coordinated v4 admission and consumer changes. They need

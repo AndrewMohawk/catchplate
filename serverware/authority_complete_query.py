@@ -1,7 +1,7 @@
 """Source-owned complete-index query intent, not range evidence or authority.
 
 The first admitted declaration family is the unregistered explicit revocation
-candidate's five roles. Its arguments and cutoff are supplied intent/time, not
+candidate's six roles. Its arguments and cutoff are supplied intent/time, not
 authenticated facts. Binding proves neither a complete index population nor a
 current root, trusted clock, SQL result, authorized operation or working kernel.
 The planner must reject this distinct query kind until its real proof producer

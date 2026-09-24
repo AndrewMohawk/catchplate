@@ -25,19 +25,19 @@ supply independent approval, installed controller identity or cleanup proof.
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
 defines `serverware.nativePostgresInventory/v1`, fourteen ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 274`. Each record contains an
+`NativePostgresSuite` records and `TOTAL_TESTS = 282`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 274 native SQL tests.
+methods contained in these fixtures; it is not a count of 282 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
 | 00 | `test_webauthn_trust_projection_postgres.py` | 12 | 300 s | No |
 | 01 | `test_postgres_trigger_manifest.py` | 5 | 300 s | No |
 | 02 | `test_authority_mutation_postgres.py` | 14 | 300 s | No |
-| 03 | `test_authority_root_transition_postgres.py` | 39 | 300 s | No |
+| 03 | `test_authority_root_transition_postgres.py` | 47 | 300 s | No |
 | 04 | `test_authority_primary_tree_postgres.py` | 9 | 300 s | No |
 | 05 | `test_authority_audit_initialization_postgres.py` | 31 | 300 s | No |
 | 06 | `test_authority_audit_initialization_store_postgres.py` | 36 | 900 s | Yes |
@@ -49,7 +49,21 @@ methods contained in these fixtures; it is not a count of 274 native SQL tests.
 | 12 | `test_authority_counted_store_postgres.py` | 10 | 300 s | No |
 | 13 | `test_authority_counted_maintenance_postgres.py` | 32 | 300 s | No |
 
-Eight further retained-binding methods use independently constructed, genuinely
+Eight counted-transition component methods start from the same genuine retained
+fixture and binder, seed full independent populations for all eleven counted
+profiles, and run real counted SQL maintenance between the private before/after
+guards. They check the exact six-role/five-read-profile plus actual-write union,
+membership-dependent revisions, unchanged read-only heads, complete leaf/node
+stores, and rollback after an actual after-head mismatch. DDL-admitted stale or
+missing heads deny without repair. Explicitly corrupted component documents are
+injected only after the original binder to isolate source-closure and phase
+guards; they are not claimed to be valid signed plans. The preceding caller's
+primary live-root validation/locking, business writes, full executor admission,
+historical retries and atomic terminal publication remain outside this lane.
+These additions are authored and unexecuted; suite/child counts and deadlines
+are unchanged.
+
+Eight retained-binding methods use independently constructed, genuinely
 signed v4 fixture bytes and a real Python raw-replay sanity check, then invoke
 the separate production SQL binder against caller-locked parent and actual
 sidecar rows under full v9 DDL. They compare original envelope/context/payload

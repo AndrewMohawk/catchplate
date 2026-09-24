@@ -886,6 +886,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/planner_connection.py \
 	serverware/authority_store/postgres_trigger_manifest.py \
 	serverware/authority_store/primary_tree_sql.py \
+	serverware/authority_store/revocation_counted_sql.py \
 	serverware/authority_store/revocation_execution.py \
 	serverware/authority_store/revocation_retained_sql.py \
 	serverware/authority_store/revocation_retention.py \
@@ -2583,6 +2584,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_store/planner_connection.py \
 				serverware/authority_store/authorization_records.py \
 				serverware/authority_store/revocation_retention.py \
+				serverware/authority_store/revocation_counted_sql.py \
 				serverware/authority_store/revocation_execution.py \
 				serverware/authority_store/revocation_retained_sql.py \
 				serverware/authority_store/executor_v9.py \

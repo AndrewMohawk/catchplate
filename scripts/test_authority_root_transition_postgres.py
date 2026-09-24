@@ -19,6 +19,11 @@ The separate v4 integrity-binding class starts with genuinely signed/proved
 fixture bytes and actual Python raw replay under synthetic independent pins.
 Its SQL checks bind stored bytes and commitments only, not signatures, current
 roots/time, execution or public activation. Its schemas are rollback-owned.
+
+The counted-transition component adds actual counted-store guards and genuine
+SQL maintenance between them. Primary live-root locking, business writes and
+full executor admission remain preceding caller responsibilities, not proofs
+supplied by this component fixture.
 """
 from __future__ import annotations
 
@@ -49,7 +54,12 @@ from serverware.native_postgres_results import run_native_fixture
 from serverware import authority_contract
 from serverware import authority_query_read_work as query_work
 from serverware import authority_revocation_retention as retained_record
-from serverware.authority_store.primary_tree_sql import canonical_json_function_sql
+from serverware.authority_store.primary_tree_sql import canonical_json_function_sql, framed_digest_function_sql
+from serverware.authority_store.counted_store_sql import counted_store_ddl
+from serverware.authority_store.counted_hash_sql import counted_hash_functions_sql
+from serverware.authority_store.counted_projection_sql import counted_projection_functions_sql
+from serverware.authority_store.counted_path_sql import counted_path_functions_sql
+from serverware.authority_store.counted_maintenance_sql import counted_maintenance_functions_sql
 from serverware.authority_store.root_transition_sql import (
     TRANSITION_PROFILE,
     TRANSITION_SCHEMA,
@@ -65,6 +75,12 @@ from serverware.authority_store.revocation_retained_sql import (
     load_revocation_retained_sql,
     revocation_retained_declarations_sql,
 )
+from serverware.authority_store.revocation_counted_sql import (
+    revocation_counted_declarations_sql,
+    prepare_revocation_counted_transition_sql,
+    lock_and_assert_revocation_counted_before_sql,
+    assert_revocation_counted_after_sql,
+)
 from serverware.authority_store.v9_schema_source import (
     authority_v9_schema_source,
     planner_retention_guard_sql,
@@ -73,6 +89,10 @@ from test_webauthn_trust_projection_postgres import local_connection_parameters
 import test_authority_revocation_plan as revocation_oracle
 import test_authority_revocation_retention as retained_oracle
 import test_authority_revocation_persistence as persistence_oracle
+import test_authority_counted_store_postgres as counted_store_oracle
+import test_authority_index_join as counted_profile_oracle
+import test_authority_index_range as counted_tree_oracle
+import test_authority_indexed_mutation as counted_mutation_oracle
 
 
 CONNECTION_PARAMETERS: dict[str, str | int] | None = None
@@ -1650,6 +1670,482 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
                 work=query_work._ValidationWork(query_work.QueryReadValidationLimits()), **expectations)
         # No SQL proof/signature success token is passed into that verifier;
         # false cryptographic authority remains false after integrity binding.
+
+
+class AuthorityRevocationCountedTransitionPostgresTests(unittest.TestCase):
+    """Counted-only before/maintenance/after component, never a full executor.
+
+    The original retained fixture really replays. Damaged component inputs are
+    injected only after its real integrity binder, to isolate the new guards;
+    they are not represented as valid signed plans. The signed primary vectors
+    remain population ceilings, not a substitute for actual primary locking.
+    """
+
+    PARENT = AuthorityRevocationRetainedBindingPostgresTests.PARENT
+    CHILD = AuthorityRevocationRetainedBindingPostgresTests.CHILD
+    records = AuthorityRevocationRetainedBindingPostgresTests.records
+    inserted = AuthorityRevocationRetainedBindingPostgresTests.inserted
+    rollback_owned_schema = AuthorityRevocationRetainedBindingPostgresTests.rollback_owned_schema
+
+    @classmethod
+    def setUpClass(cls):
+        # Reuse genuine fixture setup without inheriting its eight test IDs.
+        AuthorityRevocationRetainedBindingPostgresTests.setUpClass.__func__(cls)
+
+    def setUp(self):
+        AuthorityRevocationRetainedBindingPostgresTests.setUp(self)
+        for statement in counted_store_ddl(self.namespace):
+            self.connection.execute(statement)
+        self.connection.execute(canonical_json_function_sql(self.namespace))
+        self.connection.execute(framed_digest_function_sql(self.namespace))
+        for statement in (*counted_hash_functions_sql(self.namespace),
+                *counted_projection_functions_sql(self.namespace), *counted_path_functions_sql(self.namespace),
+                *counted_maintenance_functions_sql(self.namespace)):
+            self.connection.execute(statement)
+        self.before_store = self.expected_store()
+        for table in counted_store_oracle.TABLES:
+            columns = tuple(name for name, _ in counted_store_oracle.COLUMNS[table])
+            rows = list(self.before_store[table].values())
+            if rows:
+                with self.connection.cursor() as cursor:
+                    cursor.executemany(sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+                        sql.Identifier(self.schema, table),
+                        sql.SQL(", ").join(sql.Identifier(name) for name in columns),
+                        sql.SQL(", ").join(sql.Placeholder() for _ in columns)),
+                        [tuple(row[name] for name in columns) for row in rows])
+        self.assertEqual(self.snapshot(), self.before_store)
+        self.connection.execute(f"""
+            CREATE FUNCTION {self.namespace}.counted_component(
+                planner_id text, damaged jsonb, requested_phase text, drift_index text)
+            RETURNS TABLE(index_ids text[], write_ids text[], expected_before jsonb,
+                expected_after jsonb, actual_before jsonb, actual_after jsonb)
+            LANGUAGE plpgsql SET search_path = pg_catalog AS $counted_component$
+            DECLARE
+                planner {self.namespace}.policy_authority_planner_transactions%ROWTYPE;
+                component_mutation jsonb;
+                component_after_claim jsonb;
+                {revocation_retained_declarations_sql()}
+                {revocation_counted_declarations_sql()}
+            BEGIN
+                SELECT * INTO STRICT planner FROM {self.namespace}.policy_authority_planner_transactions
+                    WHERE planner_transaction_id = planner_id FOR UPDATE;
+                {load_revocation_retained_sql(self.namespace)}
+                -- Test-only corrupted component inputs AFTER genuine binding.
+                -- This is deliberately not cryptographic or kernel admission.
+                IF damaged ? 'before' THEN
+                    rv_transition := pg_catalog.jsonb_set(rv_transition, '{{indexBeforeHeads}}', damaged->'before');
+                    rv_payload := pg_catalog.jsonb_set(rv_payload,
+                        '{{revocationProofBundle,inputs,countedBeforeHeads}}', damaged->'before');
+                END IF;
+                IF damaged ? 'after' THEN
+                    rv_transition := pg_catalog.jsonb_set(rv_transition, '{{indexAfterHeads}}', damaged->'after');
+                END IF;
+                IF damaged ? 'queries' THEN
+                    rv_payload := pg_catalog.jsonb_set(rv_payload,
+                        '{{revocationProofBundle,inputs,queries}}', damaged->'queries');
+                END IF;
+                IF damaged ? 'mutations' THEN
+                    rv_payload := pg_catalog.jsonb_set(rv_payload, '{{mutationPlan}}', damaged->'mutations');
+                    rv_payload := pg_catalog.jsonb_set(rv_payload,
+                        '{{revocationProofBundle,inputs,mutations}}', damaged->'mutations');
+                END IF;
+                rv_payload := pg_catalog.jsonb_set(rv_payload, '{{rootTransition}}', rv_transition);
+                IF requested_phase = 'unprepared-before' THEN
+                    {lock_and_assert_revocation_counted_before_sql(self.namespace)}
+                END IF;
+                {prepare_revocation_counted_transition_sql(self.namespace)}
+                IF requested_phase = 'replace-after-prepare' THEN
+                    rv_transition := '{{}}'::jsonb;
+                    rv_payload := pg_catalog.jsonb_set(rv_payload, '{{rootTransition}}', rv_transition);
+                    rv_payload := pg_catalog.jsonb_set(rv_payload,
+                        '{{revocationProofBundle,inputs,countedBeforeHeads}}', '[]'::jsonb);
+                END IF;
+                IF requested_phase = 'prepare-twice' THEN
+                    {prepare_revocation_counted_transition_sql(self.namespace)}
+                END IF;
+                IF requested_phase = 'after-without-before' THEN
+                    {assert_revocation_counted_after_sql(self.namespace)}
+                END IF;
+                {lock_and_assert_revocation_counted_before_sql(self.namespace)}
+                IF requested_phase = 'replace-after-before' THEN
+                    rv_transition := pg_catalog.jsonb_set(rv_transition, '{{indexAfterHeads}}', '[]'::jsonb);
+                    rv_payload := pg_catalog.jsonb_set(rv_payload, '{{rootTransition}}', rv_transition);
+                    rv_payload := pg_catalog.jsonb_set(rv_payload,
+                        '{{revocationProofBundle,inputs,queries}}', '[]'::jsonb);
+                END IF;
+                IF requested_phase = 'before-twice' THEN
+                    {lock_and_assert_revocation_counted_before_sql(self.namespace)}
+                END IF;
+                FOR component_mutation IN SELECT value FROM
+                    pg_catalog.jsonb_array_elements(rv_payload->'mutationPlan')
+                LOOP
+                    IF component_mutation->>'table' IN ('webauthn_credentials', 'webauthn_challenges',
+                            'oidc_browser_sessions', 'approval_grants', 'control_plane_approvals',
+                            'webauthn_trust_publications') THEN
+                        PERFORM {self.namespace}.serverware_policy_authority_counted_apply_event(
+                            component_mutation->>'table', component_mutation->>'operation',
+                            NULLIF(component_mutation->'expectedRow', 'null'::jsonb),
+                            NULLIF(component_mutation->'row', 'null'::jsonb));
+                    END IF;
+                END LOOP;
+                IF drift_index IS NOT NULL THEN
+                    UPDATE {self.namespace}.policy_authority_counted_index_heads
+                        SET index_revision = index_revision + 1 WHERE index_id = drift_index;
+                END IF;
+                IF requested_phase = 'rebind-drift' THEN
+                    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+                        'indexId', head.index_id, 'indexRevision', head.index_revision,
+                        'rootDigest', head.root_digest, 'leafCount', head.leaf_count)
+                        ORDER BY head.index_id COLLATE "C") INTO component_after_claim
+                    FROM {self.namespace}.policy_authority_counted_index_heads AS head
+                    WHERE head.index_id = ANY(rvc_index_ids);
+                    rv_transition := pg_catalog.jsonb_set(rv_transition, '{{indexAfterHeads}}', component_after_claim);
+                    rv_payload := pg_catalog.jsonb_set(rv_payload, '{{rootTransition}}', rv_transition);
+                END IF;
+                {assert_revocation_counted_after_sql(self.namespace)}
+                IF requested_phase = 'after-twice' THEN
+                    {assert_revocation_counted_after_sql(self.namespace)}
+                END IF;
+                RETURN QUERY SELECT rvc_index_ids, rvc_write_ids, rvc_before_heads, rvc_after_heads,
+                    rvc_actual_before_heads, rvc_actual_after_heads;
+            END;
+            $counted_component$;
+        """)
+
+    def models(self, rows, *, after=False):
+        expiry = (self.fixture.semantic.read_write.expiry_after if after
+                  else self.fixture.semantic.read_write.expiry_before)
+        result = {}
+        for identity in counted_store_oracle.INDEX_IDS:
+            profile = counted_profile_oracle.expected_profile(identity)
+            leaves, identifiers = [], {}
+            for row in rows.get(profile.table, {}).values():
+                leaf = counted_mutation_oracle.image_leaf(profile, row, expiry.get(row["id"]))
+                if leaf is not None:
+                    leaves.append(leaf)
+                    identifiers[leaf.key] = row["id"]
+            result[identity] = (counted_tree_oracle.IndependentIndex(leaves, profile), identifiers)
+        return result
+
+    def expected_store(self, *, after=False):
+        """Full independent population and touched-record revision oracle."""
+        rows = {table: {row["id"]: copy.deepcopy(row) for row in self.fixture.semantic.rows.get(table, [])}
+                for table in counted_mutation_oracle.PROFILE_TABLES}
+        models = self.models(rows)
+        revisions = {identity: 29 for identity in counted_store_oracle.INDEX_IDS}
+        leaf_revisions = {(identity, path): 29 for identity, (tree, _) in models.items() for path in tree.leaves}
+        node_revisions = {(identity, path): 29 for identity, (tree, _) in models.items()
+                          for path, (_, count) in tree.nodes.items() if path and count}
+        if after:
+            for mutation in self.fixture.payload["mutationPlan"]:
+                table = mutation["table"]
+                if table not in counted_mutation_oracle.PROFILE_TABLES:
+                    continue
+                old, new = mutation["expectedRow"], mutation["row"]
+                changes = {}
+                for identity in counted_mutation_oracle.PROFILE_TABLES[table]:
+                    profile = counted_profile_oracle.expected_profile(identity)
+                    changes[identity] = (
+                        counted_mutation_oracle.image_leaf(profile, old,
+                            self.fixture.semantic.read_write.expiry_before.get(mutation["key"]["id"])),
+                        counted_mutation_oracle.image_leaf(profile, new,
+                            self.fixture.semantic.read_write.expiry_after.get(mutation["key"]["id"])))
+                rows[table].pop(mutation["key"]["id"], None)
+                if new is not None:
+                    rows[table][new["id"]] = copy.deepcopy(new)
+                models = self.models(rows, after=True)
+                for identity, (old_leaf, new_leaf) in changes.items():
+                    if old_leaf is None and new_leaf is None:
+                        continue
+                    revisions[identity] += 1
+                    tree = models[identity][0]
+                    paths = {leaf.key for leaf in (old_leaf, new_leaf) if leaf is not None}
+                    touched = {path[:depth] for path in paths for depth in range(1, 161)}
+                    node_revisions = {address: revision for address, revision in node_revisions.items()
+                                      if address[0] != identity or address[1] in tree.nodes
+                                      and tree.nodes[address[1]][1] > 0}
+                    for path in touched:
+                        if path in tree.nodes and tree.nodes[path][1] > 0:
+                            node_revisions[(identity, path)] = revisions[identity]
+                    if old_leaf is not None:
+                        leaf_revisions.pop((identity, old_leaf.key), None)
+                    if new_leaf is not None:
+                        leaf_revisions[(identity, new_leaf.key)] = revisions[identity]
+        result = {table: {} for table in counted_store_oracle.TABLES}
+        for identity, (tree, identifiers) in models.items():
+            result[counted_store_oracle.HEADS][identity] = counted_store_oracle.head(identity,
+                index_revision=revisions[identity], root_digest=tree.root.digest, leaf_count=tree.root.count)
+            for path, leaf in tree.leaves.items():
+                result[counted_store_oracle.LEAVES][(identity, path)] = {"index_id": identity,
+                    "projection_digest": tree.profile.projection_digest, "index_key": path,
+                    "primary_id": identifiers[path], "primary_key_digest": leaf.primary_key_digest,
+                    "primary_row_digest": leaf.primary_row_digest, "index_revision": leaf_revisions[(identity, path)]}
+            for path, (node_digest, count) in tree.nodes.items():
+                if path and count:
+                    result[counted_store_oracle.NODES][(identity, len(path), path)] = {"index_id": identity,
+                        "projection_digest": tree.profile.projection_digest, "depth": len(path),
+                        "path_prefix": path, "node_digest": node_digest, "subtree_count": count,
+                        "index_revision": node_revisions[(identity, path)]}
+        return result
+
+    def snapshot(self):
+        result = {}
+        for table in counted_store_oracle.TABLES:
+            fields = {counted_store_oracle.HEADS: ("index_id",),
+                      counted_store_oracle.LEAVES: ("index_id", "index_key"),
+                      counted_store_oracle.NODES: ("index_id", "depth", "path_prefix")}[table]
+            rows = self.connection.execute(sql.SQL("SELECT pg_catalog.to_jsonb(t) FROM {} AS t").format(
+                sql.Identifier(self.schema, table))).fetchall()
+            result[table] = {(row[0][fields[0]] if len(fields) == 1 else tuple(row[0][name] for name in fields)): row[0]
+                             for row in rows}
+        return result
+
+    def head_documents(self, store, identities):
+        return [{"indexId": identity, "indexRevision": store[counted_store_oracle.HEADS][identity]["index_revision"],
+                 "rootDigest": store[counted_store_oracle.HEADS][identity]["root_digest"],
+                 "leafCount": store[counted_store_oracle.HEADS][identity]["leaf_count"]} for identity in identities]
+
+    def call_component(self, parent, *, damaged=None, phase="normal", drift=None):
+        return self.connection.execute(sql.SQL("SELECT * FROM {}(%s,%s,%s,%s)").format(
+            sql.Identifier(self.schema, "counted_component")),
+            (parent["planner_transaction_id"], Jsonb({} if damaged is None else damaged), phase, drift)).fetchone()
+
+    def deny_component(self, parent, message, **changes):
+        before = self.snapshot()
+        with self.assertRaises(psycopg.Error) as caught:
+            with self.connection.transaction():
+                self.call_component(parent, **changes)
+        self.assertEqual(caught.exception.sqlstate, "P0001")
+        self.assertRegex(str(caught.exception), message)
+        self.assertEqual(self.snapshot(), before)
+
+    def inventories(self):
+        read_ids = ("webauthn_control_approval_approved", "webauthn_grant_approver_active",
+                    "webauthn_publication_status", "webauthn_registration_unused_global",
+                    "webauthn_session_credential_status")
+        write_ids = sorted({identity for mutation in self.fixture.payload["mutationPlan"]
+                            for identity in counted_mutation_oracle.PROFILE_TABLES.get(mutation["table"], ())})
+        return list(sorted(set(read_ids) | set(write_ids))), write_ids, list(read_ids)
+
+    def test_exact_source_union_uses_real_maintenance_and_independent_full_store(self):
+        parent, child = self.records()
+        identities, write_ids, read_ids = self.inventories()
+        queries = self.fixture.semantic.bundle["inputs"]["queries"]
+        self.assertEqual(len(queries), 6)
+        self.assertEqual({item["role"] for item in queries}, {"sessions_pending_webauthn", "sessions_active",
+            "grants", "approvals", "global_registration_challenges", "pending_trust_publications"})
+        self.assertEqual(len(read_ids), 5)
+        self.assertEqual(len(self.before_store[counted_store_oracle.HEADS]), 11)
+        expected_after = self.expected_store(after=True)
+        before_heads = self.head_documents(self.before_store, identities)
+        after_heads = self.head_documents(expected_after, identities)
+        self.assertEqual(before_heads, self.fixture.semantic.transition["indexBeforeHeads"])
+        self.assertEqual(after_heads, self.fixture.semantic.transition["indexAfterHeads"])
+        with self.inserted(parent, child):
+            result = self.call_component(parent)
+            self.assertEqual(result, (identities, write_ids, before_heads, after_heads, before_heads, after_heads))
+            self.assertEqual(self.snapshot(), expected_after)
+            self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.snapshot(), self.before_store)
+
+    def test_membership_exit_nonmember_and_read_only_profiles_keep_exact_revisions(self):
+        parent, child = self.records()
+        expected = self.expected_store(after=True)
+        before, after = self.before_store[counted_store_oracle.HEADS], expected[counted_store_oracle.HEADS]
+        live = "webauthn_credential_live_trust"
+        self.assertEqual(after[live]["leaf_count"], before[live]["leaf_count"] - 1)
+        self.assertGreater(after[live]["index_revision"], before[live]["index_revision"])
+        identities, write_ids, read_ids = self.inventories()
+        readonly = set(read_ids) - set(write_ids)
+        self.assertTrue(readonly)
+        for identity in readonly:
+            self.assertEqual(after[identity], before[identity])
+        nonmembers = []
+        for mutation in self.fixture.payload["mutationPlan"]:
+            for identity in counted_mutation_oracle.PROFILE_TABLES.get(mutation["table"], ()):
+                profile = counted_profile_oracle.expected_profile(identity)
+                key = mutation["key"]["id"]
+                old = counted_mutation_oracle.image_leaf(profile, mutation["expectedRow"],
+                    self.fixture.semantic.read_write.expiry_before.get(key))
+                new = counted_mutation_oracle.image_leaf(profile, mutation["row"],
+                    self.fixture.semantic.read_write.expiry_after.get(key))
+                if old is None and new is None:
+                    nonmembers.append((identity, key))
+        self.assertTrue(nonmembers)
+        with self.inserted(parent, child):
+            self.call_component(parent)
+            self.assertEqual(self.snapshot(), expected)
+            # Exact independent leaves/node revisions include unchanged older
+            # records and every genuinely touched path, not just final roots.
+            self.assertTrue(any(row["index_revision"] == 29
+                                for row in expected[counted_store_oracle.NODES].values()))
+            self.assertTrue(any(row["index_revision"] > 29
+                                for row in expected[counted_store_oracle.NODES].values()))
+        for changed in ("revision", "count", "overflow"):
+            before_heads = copy.deepcopy(self.fixture.semantic.transition["indexBeforeHeads"])
+            after_heads = copy.deepcopy(self.fixture.semantic.transition["indexAfterHeads"])
+            old = next(item for item in before_heads if item["indexId"] == "webauthn_credential_id")
+            new = next(item for item in after_heads if item["indexId"] == old["indexId"])
+            if changed == "revision":
+                new["indexRevision"] += 1
+            elif changed == "count":
+                new["leafCount"] = 0
+                new["rootDigest"] = counted_tree_oracle.empty(
+                    counted_profile_oracle.expected_profile(old["indexId"]), "")[0]
+            else:
+                # Both scalars are individually int64-valid; the genuine
+                # member event's +1 is what must fail, before any live read.
+                old["indexRevision"] = new["indexRevision"] = 2**63 - 1
+            parent, child = self.records()
+            with self.subTest(projected_delta=changed), self.inserted(parent, child):
+                self.deny_component(parent, "revocation counted projected head delta changed",
+                    damaged={"before": before_heads, "after": after_heads})
+
+    def test_prepare_rejects_missing_extra_duplicate_reordered_and_typed_head_vectors(self):
+        original = self.fixture.semantic.transition
+        identities, _, _ = self.inventories()
+        extra_id = next(identity for identity in counted_store_oracle.INDEX_IDS if identity not in identities)
+        extra_head = self.head_documents(self.before_store, (extra_id,))[0]
+        for side, field in (("before", "indexBeforeHeads"), ("after", "indexAfterHeads")):
+            baseline = original[field]
+            cases = (
+                (baseline[:-1], "head or frontier inventory differs from exact union"),
+                (sorted([*copy.deepcopy(baseline), extra_head], key=lambda item: item["indexId"]),
+                 "head or frontier inventory differs from exact union"),
+                ([baseline[0], baseline[0], *baseline[2:]], "compact head is not exact sorted source"),
+                (list(reversed(baseline)), "compact head is not exact sorted source"),
+            )
+            for vector, message in cases:
+                parent, child = self.records()
+                with self.subTest(side=side, message=message), self.inserted(parent, child):
+                    self.deny_component(parent, "revocation counted " + message, damaged={side: vector})
+            for field_name, replacement in (("indexRevision", True), ("leafCount", None),
+                                              ("indexRevision", 2**63)):
+                vector = copy.deepcopy(baseline)
+                vector[0][field_name] = replacement
+                parent, child = self.records()
+                message = "counter bound is invalid" if replacement == 2**63 else "counter type is invalid"
+                with self.subTest(side=side, field=field_name, value=replacement), self.inserted(parent, child):
+                    self.deny_component(parent, "revocation counted " + message, damaged={side: vector})
+
+    def test_prepare_requires_all_six_source_roles_and_actual_mutation_profile_closure(self):
+        queries = self.fixture.semantic.bundle["inputs"]["queries"]
+        parent, child = self.records()
+        with self.inserted(parent, child):
+            # This SQL component binds the complete role set, not declaration
+            # order. No claim is made that altered retained bytes replay.
+            self.call_component(parent, damaged={"queries": list(reversed(queries))})
+            self.assertEqual(self.snapshot(), self.expected_store(after=True))
+        variants = [(queries[:-1], "role inventory is invalid"),
+                    ([queries[0], queries[0], *queries[2:]], "role is duplicated")]
+        for value, message in variants:
+            parent, child = self.records()
+            with self.subTest(message=message), self.inserted(parent, child):
+                self.deny_component(parent, "revocation counted " + message, damaged={"queries": value})
+        for field, value in (("maximumRows", 2), ("selectorItems", [["publication_status", "published"]])):
+            altered = copy.deepcopy(queries)
+            pending = next(item for item in altered if item["role"] == "pending_trust_publications")
+            pending[field] = value
+            parent, child = self.records()
+            with self.subTest(field=field), self.inserted(parent, child):
+                self.deny_component(parent, "revocation counted role selector or bound changed",
+                    damaged={"queries": altered})
+        mutations = self.fixture.payload["mutationPlan"]
+        for change in ("template", "duplicate", "omit_writes"):
+            altered = copy.deepcopy(mutations)
+            if change == "template":
+                altered[0]["templateId"] = "not-a-source-template"
+                message = "mutation template is not source declared"
+            elif change == "duplicate":
+                altered.append(copy.deepcopy(altered[0]))
+                message = "mutation address is duplicated"
+            else:
+                altered = []
+                message = "head or frontier inventory differs from exact union"
+            parent, child = self.records()
+            with self.subTest(change=change), self.inserted(parent, child):
+                self.deny_component(parent, "revocation counted " + message, damaged={"mutations": altered})
+
+    def test_before_rejects_ddl_admitted_stale_or_missing_live_heads_without_repair(self):
+        identity = "webauthn_credential_id"
+        for change in ("index_revision", "root_digest", "leaf_count", "missing"):
+            parent, child = self.records()
+            with self.subTest(change=change), self.inserted(parent, child):
+                if change == "missing":
+                    for table in (counted_store_oracle.NODES, counted_store_oracle.LEAVES, counted_store_oracle.HEADS):
+                        self.connection.execute(sql.SQL("DELETE FROM {} WHERE index_id = %s").format(
+                            sql.Identifier(self.schema, table)), (identity,))
+                    message = "before head is absent"
+                else:
+                    current = self.before_store[counted_store_oracle.HEADS][identity][change]
+                    value = token("stale counted root") if change == "root_digest" else current + 1
+                    # Real CHECK/FK admission occurs before the guard-denial
+                    # scope; a storage constraint failure is not guard proof.
+                    self.connection.execute(sql.SQL("UPDATE {} SET {} = %s WHERE index_id = %s").format(
+                        sql.Identifier(self.schema, counted_store_oracle.HEADS), sql.Identifier(change)), (value, identity))
+                    message = "before live head changed"
+                self.deny_component(parent, "revocation counted " + message)
+        self.assertEqual(self.snapshot(), self.before_store)
+
+    def test_after_root_mismatch_rolls_back_every_actual_counted_maintenance_record(self):
+        after = copy.deepcopy(self.fixture.semantic.transition["indexAfterHeads"])
+        altered = next(item for item in after if item["indexId"] == "webauthn_credential_id")
+        self.assertGreater(altered["leafCount"], 0)
+        altered["rootDigest"] = token("incorrect after commitment")
+        parent, child = self.records()
+        with self.inserted(parent, child):
+            self.deny_component(parent, "revocation counted after live head changed", damaged={"after": after})
+            # The same untouched before population then admits the real
+            # original transition; failure did not leave partial path writes.
+            self.call_component(parent)
+            self.assertEqual(self.snapshot(), self.expected_store(after=True))
+        self.assertEqual(self.snapshot(), self.before_store)
+
+    def test_read_only_head_drift_denies_but_unrelated_installed_profiles_are_not_invented_members(self):
+        identities, write_ids, read_ids = self.inventories()
+        readonly = next(identity for identity in read_ids if identity not in write_ids)
+        unrelated = next(identity for identity in counted_store_oracle.INDEX_IDS if identity not in identities)
+        parent, child = self.records()
+        with self.inserted(parent, child):
+            self.deny_component(parent, "revocation counted after live head changed", drift=readonly)
+        parent, child = self.records()
+        with self.inserted(parent, child):
+            # This genuine installed profile remains outside the exact source
+            # read/write union. Its presence and unrelated revision are legal.
+            self.connection.execute(sql.SQL("UPDATE {} SET index_revision = index_revision + 1 WHERE index_id = %s").format(
+                sql.Identifier(self.schema, counted_store_oracle.HEADS)), (unrelated,))
+            result = self.call_component(parent)
+            self.assertEqual(result[0], identities)
+            expected = self.expected_store(after=True)
+            expected[counted_store_oracle.HEADS][unrelated]["index_revision"] += 1
+            self.assertEqual(self.snapshot(), expected)
+
+    def test_private_prepare_before_after_phases_are_single_use_and_ordered(self):
+        for phase, message in (("unprepared-before", "before"), ("prepare-twice", "prepare"),
+                               ("after-without-before", "after"), ("before-twice", "before"),
+                               ("after-twice", "after")):
+            parent, child = self.records()
+            with self.subTest(phase=phase), self.inserted(parent, child):
+                self.deny_component(parent, "revocation counted " + message + " phase is invalid", phase=phase)
+        identities, write_ids, read_ids = self.inventories()
+        expected = self.expected_store(after=True)
+        before_heads = self.head_documents(self.before_store, identities)
+        after_heads = self.head_documents(expected, identities)
+        for phase in ("replace-after-prepare", "replace-after-before"):
+            parent, child = self.records()
+            with self.subTest(captured=phase), self.inserted(parent, child):
+                # Replacing upstream JSON after capture cannot select a new
+                # expected vector; actual maintenance keeps its original plan.
+                result = self.call_component(parent, phase=phase)
+                self.assertEqual(result, (identities, write_ids, before_heads, after_heads, before_heads, after_heads))
+                self.assertEqual(self.snapshot(), expected)
+        readonly = next(identity for identity in read_ids if identity not in write_ids)
+        parent, child = self.records()
+        with self.inserted(parent, child):
+            # A fabricated upstream after vector exactly matches drifted SQL
+            # rows, but the originally captured vector must still reject it.
+            self.deny_component(parent, "revocation counted after live head changed",
+                phase="rebind-drift", drift=readonly)
 
 
 if __name__ == "__main__":

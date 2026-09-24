@@ -160,6 +160,16 @@ current-head validation, capability/fence authority, business commit or terminal
 witness. No native inventory, public v3 route, registry or service gate expands;
 the source and isolated controls remain unexecuted.
 
+Source `.44` adds [private counted-head before/after fragments](authority-revocation-retention.md#private-counted-head-fresh-apply-fragments)
+using the exact source read/actual-write union and real projected OLD/NEW
+event deltas. Full source head rows are locked and compared to the exact
+compact vectors, including unchanged read-only profiles. The future fresh
+executor must already own genuine independently pinned replay and sorted
+primary locks before counted locks, preserve one transaction, and keep live
+head reads outside historical retry. These fragments do not activate a public
+executor, capability, terminal witness or missing kernel, expand schema/ACLs,
+or establish a SQL H/B/N or deadlock proof. Component controls remain unexecuted.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

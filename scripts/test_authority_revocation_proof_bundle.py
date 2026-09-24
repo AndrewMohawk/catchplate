@@ -34,7 +34,7 @@ BUNDLE_SCHEMA = "serverware.policyAuthorityRevocationProofBundle/v1"
 BUNDLE_PROFILE = "serverware.policyAuthorityRevocationProofBundleProfile/v1"
 TRANSITION_SCHEMA = "serverware.policyAuthorityRevocationReadWriteTransition/v1"
 TRANSITION_PROFILE = "serverware.policyAuthorityRevocationReadWriteTransitionProfile/v1"
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.34"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.35"
 COUNTED_PROFILE = "serverware.policyAuthorityCountedIndex/v1"
 PHASES = (("generation", "generation"), ("declarationBinding", "declaration_binding"),
     ("observationValidation", "observation_validation"), ("pointBinding", "point_binding"),
@@ -831,6 +831,233 @@ class RevocationProofBundleTests(unittest.TestCase):
                     else:
                         self.derive(too_deep)
             self.assertEqual((hashes.call_count, actual.call_count), (0, 0))
+
+    def test_shared_derivation_keeps_actual_graphs_and_genuine_proof_on_exact_existing_work(self):
+        fixture = fixture_oracle.RevocationObservationFixture(separate_signer=True)
+        inputs = fixture.inputs()
+        expected = expected_packaging(fixture)
+        expected_bundle, expected_transition = expected_documents(fixture)
+        prior = units(7, 101, 13)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        work.charge(hashes=prior["hash_work"], input_bytes=prior["input_bytes"], json_nodes=prior["json_nodes"])
+        entering = work.limits
+        actual_verify = retained.mixed._verify
+        actual_initialize = accounting._ValidationWork.__init__
+        seen, children = [], []
+        spent_before_verification = add_units(prior, units(0, expected["raw_decode_bytes"]),
+            expected["capture"], expected["bundle_encoding"])
+        child_limits = tuple(maximum - expected["reserved_compact_work"][name]
+            - spent_before_verification[name] for maximum, name in zip(
+                (entering.max_hashes, entering.max_input_bytes, entering.max_json_nodes),
+                ("hash_work", "input_bytes", "json_nodes")))
+
+        def initialize(instance, limits):
+            # The genuine mixed worker uses one remaining-clamped child for
+            # recipe/observation phases, then debits the existing outer work.
+            # Observe that real constructor; forbid an unclamped new allowance.
+            self.assertEqual((limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes), child_limits)
+            self.assertIsNot(instance, work)
+            actual_initialize(instance, limits)
+            children.append(instance)
+
+        def verify(owned, ledger, raw_decode, capture):
+            self.assertIs(ledger.work, work)
+            result = actual_verify(owned, ledger, raw_decode, capture)
+            seen.append((owned, result))
+            return result
+
+        with patch.object(accounting._ValidationWork, "__init__", new=initialize), \
+                patch.object(retained.mixed, "_verify", side_effect=verify) as actual, \
+                patch.object(retained, "_compact_document", wraps=retained._compact_document) as compact, \
+                patch.object(json, "loads", wraps=json.loads) as loads:
+            derived = retained._derive_on_work(work=work, **inputs)
+        self.assertEqual((actual.call_count, compact.call_count, loads.call_count), (1, 1, 1))
+        self.assertEqual(len(children), 1)
+        self.assertEqual(observed_units(children[0].metrics), add_units(*(expected["verification"][name]
+            for name in ("generation", "declarationBinding", "observationValidation", "pointBinding"))))
+        self.assertEqual(loads.call_args.args[0], wire(fixture.values).decode("ascii"))
+        self.assertIs(derived.bundle["inputs"], seen[0][0])
+        self.assertIs(derived.result, seen[0][1])
+        self.assertIs(derived.retained.primary, derived.result.write.primary)
+        self.assertEqual((derived.bundle, derived.transition), (expected_bundle, expected_transition))
+        self.assertEqual((wire(derived.bundle), wire(derived.transition)),
+            (derived.retained.bundle_bytes, derived.retained.transition_bytes))
+        self.assert_documents(fixture, derived.retained)
+        self.assertEqual(observed_units(work.metrics), add_units(prior, expected["total"]))
+        self.assertEqual(observed_units(derived.retained.packaging.peak_reserved_work),
+                         add_units(prior, expected["peak_reserved_work"]))
+        for name in ("capture", "claim_encoding", "bundle_encoding", "finalization", "reserved_compact_work"):
+            self.assertEqual(observed_units(getattr(derived.retained.packaging, name)), expected[name])
+        self.assertIs(work.limits, entering)
+        self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+        with self.assertRaises(FrozenInstanceError):
+            derived.bundle = {}
+        # Frozen carrier fields do not turn its ordinary mutable graphs into
+        # authority. Immutable bytes retain the original commitment.
+        derived.bundle["inputs"]["arguments"]["reason"] = "local-output-mutation"
+        self.assertEqual(derived.retained.bundle_bytes, wire(expected_bundle))
+
+    def test_shared_independent_peak_exact_and_one_less_restore_existing_outer_ceiling(self):
+        fixture = fixture_oracle.RevocationObservationFixture()
+        inputs, expected, prior = fixture.inputs(), expected_packaging(fixture), units(11, 127, 17)
+        maximum = add_units(prior, expected["peak_reserved_work"])
+        names = ("hash_work", "input_bytes", "json_nodes")
+        for dimension in (None, *names):
+            bounded = dict(maximum)
+            if dimension is not None:
+                bounded[dimension] -= 1
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*(bounded[name] for name in names)))
+            work.charge(hashes=prior["hash_work"], input_bytes=prior["input_bytes"], json_nodes=prior["json_nodes"])
+            entering = work.limits  # May already be a downward outer reservation.
+            with self.subTest(dimension=dimension):
+                if dimension is None:
+                    derived = retained._derive_on_work(work=work, **inputs)
+                    self.assert_documents(fixture, derived.retained)
+                    self.assertEqual(observed_units(work.metrics), add_units(prior, expected["total"]))
+                else:
+                    with self.assertRaises(retained.RevocationProofBundleError):
+                        retained._derive_on_work(work=work, **inputs)
+                    self.assertTrue(all(prior[name] <= getattr(work, name) <= bounded[name] for name in names))
+                self.assertIs(work.limits, entering)
+                self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_two_real_shared_derivations_accumulate_without_reset_or_proof_shortcut(self):
+        fixture = fixture_oracle.RevocationObservationFixture()
+        expected, inputs = expected_packaging(fixture), fixture.inputs()
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        entering = work.limits
+        observations = []
+        with patch.object(retained.mixed, "_verify", wraps=retained.mixed._verify) as actual:
+            for count in (1, 2):
+                derived = retained._derive_on_work(work=work, **inputs)
+                observations.append(derived)
+                self.assertEqual(observed_units(work.metrics),
+                    {name: count * value for name, value in expected["total"].items()})
+                self.assertEqual(observed_units(derived.retained.packaging.peak_reserved_work),
+                    add_units({name: (count - 1) * value for name, value in expected["total"].items()},
+                              expected["peak_reserved_work"]))
+                self.assertIs(work.limits, entering)
+        self.assertEqual(actual.call_count, 2)
+        self.assertIsNot(observations[0].result, observations[1].result)
+        self.assertEqual(observations[0].retained.bundle_bytes, observations[1].retained.bundle_bytes)
+        self.assertEqual(observations[0].retained.transition_bytes, observations[1].retained.transition_bytes)
+
+    def test_shared_hold_admission_and_closed_work_fail_before_capture_without_refund(self):
+        fixture = fixture_oracle.RevocationObservationFixture()
+        inputs = fixture.inputs()
+        reserve = units(1, 131_072, 2048)
+        for dimension, limit_name in (("hash_work", "max_hashes"), ("input_bytes", "max_input_bytes"),
+                                      ("json_nodes", "max_json_nodes")):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(**{limit_name: reserve[dimension] + 9}))
+            work.charge(**{"hashes" if dimension == "hash_work" else dimension: 10})
+            entering, spent = work.limits, work.metrics
+            with self.subTest(dimension=dimension), \
+                    patch.object(retained.mixed, "_capture", wraps=retained.mixed._capture) as capture:
+                with self.assertRaises(retained.RevocationProofBundleError):
+                    retained._derive_on_work(work=work, **inputs)
+            self.assertEqual(capture.call_count, 0)
+            self.assertIs(work.limits, entering)
+            self.assertEqual(work.metrics, spent)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+        class DerivedWork(accounting._ValidationWork):
+            pass
+        for bad in (None, {}, DerivedWork(accounting.QueryReadValidationLimits()),
+                    object.__new__(accounting._ValidationWork)):
+            with self.subTest(type=type(bad).__name__), \
+                    patch.object(retained.mixed, "_capture", wraps=retained.mixed._capture) as capture:
+                with self.assertRaises(retained.RevocationProofBundleError):
+                    retained._derive_on_work(work=bad, **inputs)
+            self.assertEqual(capture.call_count, 0)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        for bad in ({**inputs, "successful_result": {}}, {name: value for name, value in inputs.items() if name != "before_proofs"}):
+            with self.assertRaises(retained.RevocationProofBundleError):
+                retained._derive_on_work(work=work, **bad)
+            self.assertEqual(observed_units(work.metrics), units())
+
+    def test_shared_invalid_genuine_proof_and_driver_style_failure_restore_hold_but_keep_work(self):
+        fixture = fixture_oracle.RevocationObservationFixture()
+        for driver in (False, True):
+            inputs = fixture.inputs()
+            if not driver:
+                inputs["before_proofs"][0]["rowDigest"] = "sha256:" + "0" * 64
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            work.charge(hashes=3, input_bytes=19, json_nodes=7)
+            entering = work.limits
+            genuine = retained.mixed._verify
+            calls = []
+            def verify(*args):
+                calls.append(args[1])
+                if driver:
+                    raise RuntimeError("observer failed after real bundle hash")
+                return genuine(*args)
+            with self.subTest(driver=driver), patch.object(retained.mixed, "_verify", side_effect=verify):
+                with self.assertRaises(RuntimeError if driver else retained.RevocationProofBundleError):
+                    retained._derive_on_work(work=work, **inputs)
+            self.assertEqual(len(calls), 1)
+            self.assertGreaterEqual(work.hash_work, 4)
+            self.assertGreater(work.input_bytes, 19)
+            self.assertGreater(work.json_nodes, 7)
+            self.assertIs(work.limits, entering)
+            self.assertFalse(calls[0]._held)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_caught_nested_shared_attachment_cannot_publish_before_or_after_hold_release(self):
+        fixture = fixture_oracle.RevocationObservationFixture()
+        inputs = fixture.inputs()
+        for late in (False, True):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            entering, caught = work.limits, []
+            original = retained._bounded_wire
+            def encode(value, ledger, **kwargs):
+                target = TRANSITION_SCHEMA if late else BUNDLE_SCHEMA
+                if value.get("schema") == target and not caught:
+                    try:
+                        retained._derive_on_work(work=work, **inputs)
+                    except retained.RevocationProofBundleError:
+                        caught.append(True)
+                    else:
+                        self.fail("nested shared attachment returned a result")
+                return original(value, ledger, **kwargs)
+            with self.subTest(late=late), patch.object(retained, "_bounded_wire", side_effect=encode):
+                with self.assertRaises(retained.RevocationProofBundleError):
+                    retained._derive_on_work(work=work, **inputs)
+            self.assertEqual(caught, [True])
+            self.assertGreater(work.input_bytes, 0)
+            self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_shared_source_graphs_are_owned_before_hash_and_original_two_tuple_seam_remains(self):
+        fixture = fixture_oracle.RevocationObservationFixture()
+        inputs = fixture.inputs()
+        expected_bundle, expected_transition = expected_documents(fixture)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        original = retained.core.framed_digest
+        changed = []
+        def digest_and_change(domain, *frames):
+            if domain == BUNDLE_SCHEMA and not changed:
+                changed.append(True)
+                inputs["arguments"]["reason"] = "changed-after-capture"
+                inputs["selected_rows"][0]["keyDigest"] = "sha256:" + "0" * 64
+                inputs["before_proofs"][0]["rowDigest"] = "sha256:" + "1" * 64
+            return original(domain, *frames)
+        with patch.object(retained.core, "framed_digest", side_effect=digest_and_change):
+            derived = retained._derive_on_work(work=work, **inputs)
+        self.assertEqual(changed, [True])
+        self.assertEqual((derived.bundle, derived.transition), (expected_bundle, expected_transition))
+        original_compute = retained._compute_and_package
+        tuples = []
+        def compute(**kwargs):
+            result = original_compute(**kwargs)
+            tuples.append(result)
+            return result
+        with patch.object(retained, "_compute_and_package", side_effect=compute), \
+                patch.object(retained.mixed, "_verify", wraps=retained.mixed._verify) as actual:
+            public = self.derive(fixture)
+        self.assertEqual(actual.call_count, 1)
+        self.assertEqual(len(tuples), 1)
+        self.assertIs(type(tuples[0]), tuple)
+        self.assertEqual(len(tuples[0]), 2)
+        self.assertIs(public, tuples[0][0])
 
 
 if __name__ == "__main__":

@@ -119,8 +119,14 @@ retains original roots and merged primary proofs, shares read/write work and
 physical acquisition spending, and emits the exact writer block. It returns
 raw observations and does not yet package or sign a v4 plan.
 
+Source `.35` adds the [private signed producer](authority-revocation-production.md)
+on top of that acquisition path. It normalizes the actual raw evidence, repeats
+the genuine mixed proof computation on the same remaining work, and returns the
+original signed v4 bytes. This implements the private producer in source, not
+public protocol admission or durable replay.
+
 The actual verifier-response admission, durable planner replay and persistence
-paths still require coordinated v4 producer/consumer changes. They need
+paths still require coordinated v4 admission and consumer changes. They need
 independently admitted roots and the original evaluation cutoff; replay cannot
 derive those expectations from its retained envelope or sample a new cutoff.
 Database Snapshot/persistence, one-use consumption, executor and terminal

@@ -22,7 +22,9 @@ from serverware import authority_revocation_bundle_contract as contract
 from serverware import authority_revocation_read_write as mixed
 from serverware import authority_root_transition as legacy
 from serverware import authority_transition_core as core
-from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadValidationMetrics
+from serverware.authority_query_read_work import (
+    QueryReadValidationLimits, QueryReadValidationMetrics, _ValidationWork,
+)
 
 
 _PHASES = (
@@ -72,6 +74,21 @@ class RetainedRevocationProof:
     packaging: RevocationProofPackagingMetrics
 
 
+@dataclass(frozen=True, slots=True)
+class _DerivedRevocationProof:
+    """Actual private outputs, including owned mutable graphs; never authority.
+
+    No graph is reconstructed by parsing the immutable retained bytes. Callers
+    must keep these ordinary values inside their own invocation and must not
+    accept a freely constructed instance as proof or authorization.
+    """
+
+    retained: RetainedRevocationProof
+    result: mixed.RevocationReadWriteInputs
+    bundle: dict[str, Any]
+    transition: dict[str, Any]
+
+
 class _PackagingLedger(mixed._Ledger):
     """A held output allowance constrains the actual work object's limits.
 
@@ -83,26 +100,80 @@ class _PackagingLedger(mixed._Ledger):
 
     def __init__(self, limits, *, comparing: bool):
         super().__init__(limits)
+        self._reserve_compact(comparing=comparing)
+
+    @classmethod
+    def _attach(cls, work: _ValidationWork, *, comparing: bool):
+        """Attach exact live work, without constructing a replacement meter."""
+        if type(work) is not _ValidationWork or type(work.limits) is not QueryReadValidationLimits:
+            raise RevocationProofBundleError("retained proof attachment requires exact shared work")
+        owner = getattr(work, "_revocation_packaging_owner", None)
+        if owner is not None:
+            if type(owner) is cls:
+                owner._attachment_failed = True
+            raise RevocationProofBundleError("retained proof shared attachment is already active")
+        try:
+            limits = work.limits
+            QueryReadValidationLimits(limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+            for value, maximum in ((work.hash_work, limits.max_hashes),
+                                   (work.input_bytes, limits.max_input_bytes),
+                                   (work.json_nodes, limits.max_json_nodes)):
+                if type(value) is not int or not 0 <= value <= maximum:
+                    raise RevocationProofBundleError("retained proof shared counters are not within entering limits")
+        except AttributeError as exc:
+            raise RevocationProofBundleError("retained proof shared work is incomplete") from exc
+        ledger = object.__new__(cls)
+        ledger.work = work
+        ledger._reserve_compact(comparing=comparing)
+        ledger._attachment_failed = False
+        work._revocation_packaging_owner = ledger
+        return ledger
+
+    def _reserve_compact(self, *, comparing: bool):
         self.original_limits = self.work.limits
+        self._original_work = self.work
+        self._entering_metrics = self.work.metrics
         self.reserved = QueryReadValidationMetrics(1,
             (4 if comparing else 2) * contract.MAX_COMPACT_BYTES,
             2 * contract.MAX_COMPACT_NODES)
         reduced = (self.original_limits.max_hashes - self.reserved.hash_work,
                    self.original_limits.max_input_bytes - self.reserved.input_bytes,
                    self.original_limits.max_json_nodes - self.reserved.json_nodes)
-        if min(reduced) < 1:
+        if (min(reduced) < 1 or self.work.hash_work > reduced[0]
+                or self.work.input_bytes > reduced[1] or self.work.json_nodes > reduced[2]):
             raise RevocationProofBundleError("retained proof budget cannot reserve bounded compact output")
-        self.work.limits = QueryReadValidationLimits(*reduced)
+        self.work.limits = self._held_limits = QueryReadValidationLimits(*reduced)
         self._held = True
 
     def release_compact_hold(self) -> QueryReadValidationMetrics:
-        if not self._held:
+        if (not self._held or getattr(self, "_attachment_failed", False)
+                or self.work is not self._original_work
+                or self.work.limits is not self._held_limits
+                or self.work.hash_work < self._entering_metrics.hash_work
+                or self.work.input_bytes < self._entering_metrics.input_bytes
+                or self.work.json_nodes < self._entering_metrics.json_nodes):
             raise RevocationProofBundleError("retained proof compact allowance was already released")
         peak = QueryReadValidationMetrics(self.hashes + self.reserved.hash_work,
             self.input_bytes + self.reserved.input_bytes, self.json_nodes + self.reserved.json_nodes)
         self.work.limits = self.original_limits
         self._held = False
         return peak
+
+    def _restore_entering_limits(self) -> None:
+        """Unwind a private attachment, restoring ceilings but never counters."""
+        self._original_work.limits = self.original_limits
+        self._held = False
+        if getattr(self._original_work, "_revocation_packaging_owner", None) is self:
+            del self._original_work._revocation_packaging_owner
+
+    def _require_attachment_complete(self) -> None:
+        if (self._attachment_failed or self._held or self.work is not self._original_work
+                or self.work.limits is not self.original_limits
+                or getattr(self.work, "_revocation_packaging_owner", None) is not self
+                or self.work.hash_work < self._entering_metrics.hash_work
+                or self.work.input_bytes < self._entering_metrics.input_bytes
+                or self.work.json_nodes < self._entering_metrics.json_nodes):
+            raise RevocationProofBundleError("retained proof shared attachment was poisoned or replaced")
 
 
 def _zero() -> QueryReadValidationMetrics:
@@ -162,7 +233,7 @@ def _compact_document(result, bundle_digest) -> dict[str, Any]:
         "metrics": metrics}
 
 
-def _compute_and_package(*, ledger, bundle, raw_decode_bytes, capture, claim_encoding, claim_wire):
+def _compute_with_graphs(*, ledger, bundle, raw_decode_bytes, capture, claim_encoding, claim_wire):
     before = ledger.work.metrics
     bundle_wire = _bounded_wire(bundle, ledger,
         maximum_bytes=query_batch.MAX_TOTAL_INPUT_BYTES, maximum_nodes=query_batch.MAX_TOTAL_JSON_NODES)
@@ -196,9 +267,46 @@ def _compute_and_package(*, ledger, bundle, raw_decode_bytes, capture, claim_enc
         transition_wire, transition_digest, RevocationProofPackagingMetrics(
             raw_decode_bytes, capture, claim_encoding, bundle_encoding, verification, finalization,
             ledger.reserved, peak, ledger.hashes, ledger.input_bytes, ledger.json_nodes))
-    # Private composition retains this actual result without evaluating the
-    # proofs again. Neither public facade accepts a successful result as input.
-    return retained, result
+    return _DerivedRevocationProof(retained, result, bundle, compact)
+
+
+def _compute_and_package(*, ledger, bundle, raw_decode_bytes, capture, claim_encoding, claim_wire):
+    # Preserve the established private two-tuple seam used by semantic replay.
+    # Both routes execute the same actual body, with no repeated proof pass.
+    derived = _compute_with_graphs(ledger=ledger, bundle=bundle, raw_decode_bytes=raw_decode_bytes,
+        capture=capture, claim_encoding=claim_encoding, claim_wire=claim_wire)
+    return derived.retained, derived.result
+
+
+def _derive_on_work(*, work: _ValidationWork, **inputs) -> _DerivedRevocationProof:
+    """Own raw evidence and genuinely recompute on the caller's remaining work.
+
+    Earlier acquisition is not accepted as proof: the actual mixed verifier
+    runs and is charged again. Packaging phase deltas retain their existing
+    meaning; cumulative totals and reservation peaks include prior spending.
+    A failure aborts the owning invocation. This restores its exact entering
+    ceiling (including any outer hold), but never refunds spent work and never
+    creates an independent allowance. Returned graphs are not authority tokens.
+    """
+    ledger = None
+    try:
+        if len(inputs) != len(_INPUT_KEYWORDS) or set(inputs) != _INPUT_KEYWORDS:
+            raise RevocationProofBundleError("retained proof input keyword inventory is not closed")
+        ledger = _PackagingLedger._attach(work, comparing=False)
+        owned, raw_decode_bytes, capture = mixed._capture(ledger=ledger, **inputs)
+        contract.validate_inputs_shape(owned)
+        derived = _compute_with_graphs(ledger=ledger, bundle=_bundle(owned), raw_decode_bytes=raw_decode_bytes,
+            capture=capture, claim_encoding=_zero(), claim_wire=None)
+        ledger._require_attachment_complete()
+        return derived
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
+            core.TransitionKernelError) as exc:
+        if isinstance(exc, RevocationProofBundleError):
+            raise
+        raise RevocationProofBundleError("shared retained revocation proof derivation failed") from exc
+    finally:
+        if ledger is not None:
+            ledger._restore_entering_limits()
 
 
 def derive_revocation_proof_bundle(*, limits: QueryReadValidationLimits | None = None,

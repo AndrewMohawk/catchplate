@@ -193,8 +193,9 @@ the nine-frame Snapshot/v3 and their digests are unchanged.
 
 The private producer now computes genuine kernel/capacity mutations before
 acquiring their write frontiers, shares read/write accounting, and emits the
-writer markers required by signed replay. It still needs actual signed-v4
-packaging and coordinated consumer admission. Durable replay needs a versioned original
+writer markers required by signed replay. Source `.35` supplies the
+[private signed packaging path](authority-revocation-production.md), while
+public consumer admission remains closed. Durable replay needs a versioned original
 signed envelope and independent evaluation-context record; the closed v3
 `exact_plan` payload cannot be silently repurposed. Historical evaluation time
 must remain distinct from current freshness and execution authority.

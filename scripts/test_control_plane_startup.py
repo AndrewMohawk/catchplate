@@ -1573,6 +1573,392 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         return fixture, cursor, program, arguments, patch.object(
             writer, "_acquire_indexed_primary_batch", side_effect=acquire)
 
+    def revocation_plan_fixture(self, *, work=None, separate_signer=False, include_audit=True):
+        import test_authority_revocation_plan as plan_oracle
+
+        expectation = plan_oracle.PlanFixture(separate_signer=separate_signer, include_audit=include_audit)
+        fixture, cursor, program, acquisition_arguments, writer_scope = self.revocation_producer_fixture(
+            work=work, separate_signer=separate_signer, include_audit=include_audit)
+        # Both independent fixture populations are built before the observed
+        # production call. Pins/time/roots are never copied from its output.
+        self.assertEqual(fixture.request, expectation.semantic.request)
+        self.assertEqual(fixture.expected_before, expectation.semantic.expected_before)
+        self.assertEqual(fixture.receipt.evidence, expectation.semantic.receipt.evidence)
+        context = {
+            "expectedPlannerIdentity": copy.deepcopy(expectation.identity),
+            "expectedVerifierIdentity": copy.deepcopy(fixture.receipt.identity),
+            "expectedCapabilityId": fixture.receipt.capability_id,
+            "expectedPlannerTransactionId": expectation.planner_transaction_id,
+            "expectedFence": expectation.fence,
+            "reservedAtEpochNs": expectation.reserved_at_epoch_ns,
+            "deadlineEpochNs": expectation.deadline_epoch_ns,
+            "deadlineMonotonicNs": expectation.deadline_monotonic_ns,
+            "nowEpochNs": expectation.now_epoch_ns,
+            "nowMonotonicNs": expectation.now_monotonic_ns,
+            "maximumAssertionAgeNs": expectation.maximum_assertion_age_ns,
+            "maximumPlanAgeNs": expectation.maximum_plan_age_ns,
+            "maximumClockSkewNs": expectation.maximum_clock_skew_ns,
+            "expectedBefore": copy.deepcopy(fixture.expected_before),
+            "expectedApproverPolicyDigest": expectation.approver_policy_digest,
+        }
+        arguments = {name: acquisition_arguments[name] for name in (
+            "request", "manifest", "evidence", "verifier_public_key", "query_work")}
+        arguments.update(context=context, planner_private_key=expectation.key,
+                         planner_public_key=expectation.key.public_key())
+        return expectation, fixture, cursor, program, arguments, writer_scope
+
+    def assert_produced_revocation_plan(self, expectation, fixture, produced):
+        import test_authority_revocation_plan as plan_oracle
+
+        signed = produced.signed
+        self.assertEqual(produced.database_now, fixture.database_now)
+        # The actual acquired read/proof transcript is longer than the compact
+        # synthetic transcript in PlanFixture; every other expected payload
+        # field comes from independently constructed request/effect/tree data.
+        for field, expected in expectation.payload.items():
+            if field not in {"plannerTrace", "plannerTraceDigest"}:
+                self.assertEqual(signed.payload[field], expected, field)
+        trace = signed.payload["plannerTrace"]
+        self.assertEqual((trace["schema"], trace["operation"]), (
+            "serverware.policyAuthorityPlannerTrace/v1", "webauthn.credential.revoke"))
+        writer_entries = [entry for entry in trace["entries"] if type(entry["key"]) is dict
+            and entry["key"].get("profile") == "serverware.policyAuthorityCountedIndexMutationRead/v1"]
+        identity = lambda entry: {name: entry[name] for name in ("access", "table", "key")}
+        self.assertEqual([identity(entry) for entry in writer_entries],
+            [identity(entry) for entry in plan_oracle.independent_write_trace(fixture)])
+        self.assertEqual(signed.payload["plannerTraceDigest"], plan_oracle.framed(
+            "serverware.policyAuthorityPlannerTrace/v1", plan_oracle.wire(trace)))
+        self.assertEqual(signed.payload_bytes, plan_oracle.wire(signed.payload))
+        self.assertEqual(signed.envelope, {"schema": "serverware.signedPolicyAuthorityMeasuredPlan/v4",
+            "payload": signed.payload, "signatureBase64Url": plan_oracle.encoded(expectation.key.sign(
+                plan_oracle.framed("serverware.signedPolicyAuthorityMeasuredPlan/v4",
+                    signed.payload_bytes).encode("ascii")))})
+        self.assertEqual(signed.envelope_bytes, plan_oracle.wire(signed.envelope))
+        self.assertEqual((signed.signing_attempts, signed.signature_verifications), (1, 1))
+
+    def test_private_plan_production_replays_real_acquisition_packaging_and_signed_verification(self):
+        from serverware import authority_revocation_plan as replay
+        from serverware import authority_revocation_plan_production as production
+        from serverware import authority_revocation_proof_bundle as retained
+        from serverware import authority_revocation_read_write as mixed
+        from serverware import authority_revocation_semantics as semantics
+        from serverware import authority_transition_webauthn as candidate
+        from serverware import authority_webauthn_assertion as assertion
+
+        for separate, audit in ((False, True), (True, False)):
+            with self.subTest(separate_signer=separate, include_audit=audit):
+                expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture(
+                    separate_signer=separate, include_audit=audit)
+                work = arguments["query_work"]
+                entering_limits = work.limits
+                with writer_scope as writer, \
+                        patch.object(program, "_acquire_revocation_transition",
+                                     wraps=program._acquire_revocation_transition) as acquisition, \
+                        patch.object(candidate, "_revocation_query_program",
+                                     wraps=candidate._revocation_query_program) as generation, \
+                        patch.object(assertion, "_verify_revoke_assertion_evidence",
+                                     wraps=assertion._verify_revoke_assertion_evidence) as receipt, \
+                        patch.object(semantics, "_derive_revocation_effects",
+                                     wraps=semantics._derive_revocation_effects) as effects, \
+                        patch.object(retained, "_derive_on_work", wraps=retained._derive_on_work) as packaging, \
+                        patch.object(mixed, "_verify", wraps=mixed._verify) as proof, \
+                        patch.object(production, "_build_and_sign", wraps=production._build_and_sign) as build, \
+                        patch.object(replay, "verify_signed_revocation_plan",
+                                     wraps=replay.verify_signed_revocation_plan) as public_replay:
+                    produced = program._produce_revocation_plan(cursor, **arguments)
+                self.assertEqual((cursor.clock_reads, acquisition.call_count, generation.call_count,
+                    receipt.call_count, effects.call_count, writer.call_count, packaging.call_count,
+                    proof.call_count, build.call_count, public_replay.call_count),
+                    (1, 1, 2, 1, 1, 1, 1, 1, 1, 0))
+                # Acquisition generates once at the original cutoff; genuine
+                # raw packaging replays that source recipe once more.
+                self.assertIs(acquisition.call_args.kwargs["query_work"], work)
+                self.assertIs(receipt.call_args.kwargs["work"].shared, work)
+                for actual in (effects, packaging, build):
+                    self.assertIs(actual.call_args.kwargs["work"], work)
+                self.assertIs(writer.call_args.kwargs["acquisition_budget"].engine.work, work)
+                self.assertEqual(produced.metrics, work.metrics)
+                self.assertIs(work.limits, entering_limits)
+                self.assertGreater(produced.metrics.hash_work, produced.signed.metrics.hash_work)
+                self.assertGreater(produced.metrics.input_bytes, produced.signed.metrics.input_bytes)
+                self.assertGreater(produced.metrics.json_nodes, produced.signed.metrics.json_nodes)
+                self.assert_produced_revocation_plan(expected, fixture, produced)
+
+                # A separate real consumer invocation uses the original pins,
+                # roots and cutoff, never values adopted from the signed plan.
+                supplied = expected.arguments()
+                supplied["envelope"] = produced.signed.envelope
+                calls_before = copy.deepcopy(cursor.calls)
+                with patch.object(mixed, "_verify", wraps=mixed._verify) as proof, \
+                        patch.object(semantics, "_derive_revocation_effects",
+                                     wraps=semantics._derive_revocation_effects) as effects:
+                    observed = replay.verify_signed_revocation_plan(**supplied)
+                self.assertEqual((proof.call_count, effects.call_count), (1, 1))
+                self.assertEqual(observed.payload_bytes, produced.signed.payload_bytes)
+                self.assertEqual(observed.envelope_bytes, produced.signed.envelope_bytes)
+                self.assertEqual(observed.semantics.mutations, fixture.final_mutations)
+                self.assertEqual(observed.semantics.kernel.result, fixture.kernel_expected["result"])
+                self.assertEqual((observed.metrics.planner_signature_attempts,
+                                  observed.metrics.assertion_signature_attempts), (1, 1))
+                self.assertEqual(cursor.calls, calls_before)
+
+    def test_private_plan_independent_root_mismatch_denies_before_packaging_or_signing(self):
+        from serverware import authority_revocation_plan_production as production
+        from serverware import authority_revocation_proof_bundle as retained
+
+        for vector in ("businessBeforeRoots", "authorizationBeforeRoots", "indexBeforeHeads"):
+            with self.subTest(vector=vector):
+                _, _, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+                arguments["context"]["expectedBefore"][vector][0]["rootDigest"] = "sha256:" + "0" * 64
+                with writer_scope, \
+                        patch.object(retained, "_derive_on_work", wraps=retained._derive_on_work) as packaging, \
+                        patch.object(production, "_build_and_sign", wraps=production._build_and_sign) as build:
+                    with self.assertRaises(self.planner.AuthorityPlannerError):
+                        program._produce_revocation_plan(cursor, **arguments)
+                self.assertEqual((packaging.call_count, build.call_count), (0, 0))
+                self.assertEqual(cursor.clock_reads, 1)
+                if vector == "indexBeforeHeads":
+                    # Counted roots are independently compared only after the
+                    # genuine acquisition, including its actual write proofs.
+                    self.assertGreater(len(cursor.write_cursor.calls), 0)
+
+    def test_private_plan_bad_context_request_and_receipt_never_reach_sql_or_builder(self):
+        from serverware import authority_revocation_plan_production as production
+
+        for changed in ("extra", "fence", "deadline", "reservation", "transaction", "request", "signature"):
+            with self.subTest(changed=changed):
+                _, _, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+                context = arguments["context"]
+                if changed == "extra":
+                    context["authorityToken"] = True
+                elif changed == "fence":
+                    context["expectedFence"] = True
+                elif changed == "deadline":
+                    context["deadlineMonotonicNs"] = context["nowMonotonicNs"]
+                elif changed == "reservation":
+                    context["reservedAtEpochNs"] = context["nowEpochNs"] + context["maximumClockSkewNs"] + 1
+                elif changed == "transaction":
+                    context["expectedPlannerTransactionId"] = "sha256:" + "0" * 64
+                elif changed == "request":
+                    arguments["request"]["arguments"]["record_id"] = "different-request"
+                else:
+                    arguments["evidence"]["verifierSignatureBase64url"] = "A" * 86
+                    arguments["evidence"]["verifierSignatureDigest"] = "sha256:" + hashlib.sha256(bytes(64)).hexdigest()
+                with writer_scope as writer, \
+                        patch.object(production, "_build_and_sign", wraps=production._build_and_sign) as build:
+                    with self.assertRaises(self.planner.AuthorityPlannerError):
+                        program._produce_revocation_plan(cursor, **arguments)
+                self.assertEqual((cursor.calls, cursor.clock_reads, writer.call_count, build.call_count),
+                                 ([], 0, 0, 0))
+
+    def test_private_plan_joint_capture_keeps_original_context_through_clock_callback(self):
+        from serverware import authority_revocation_plan as replay
+
+        expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+
+        def change_caller():
+            arguments["request"]["arguments"]["record_id"] = "changed-after-capture"
+            arguments["manifest"][0]["table"] = "foreign_table"
+            arguments["evidence"].clear()
+            context = arguments["context"]
+            context["expectedPlannerIdentity"].clear()
+            context["expectedVerifierIdentity"].clear()
+            context["expectedBefore"]["indexBeforeHeads"].clear()
+            context["expectedFence"] += 1
+            context["deadlineEpochNs"] = 1
+
+        cursor.on_clock = change_caller
+        with writer_scope:
+            produced = program._produce_revocation_plan(cursor, **arguments)
+        self.assertEqual(cursor.clock_reads, 1)
+        self.assert_produced_revocation_plan(expected, fixture, produced)
+        supplied = expected.arguments()
+        supplied["envelope"] = produced.signed.envelope
+        observed = replay.verify_signed_revocation_plan(**supplied)
+        self.assertEqual(observed.semantics.mutations, fixture.final_mutations)
+
+    def test_private_plan_output_does_not_replace_consumer_pins_roots_or_original_cutoff(self):
+        from datetime import timedelta
+        from serverware import authority_revocation_plan as replay
+
+        expected, _, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+        with writer_scope:
+            produced = program._produce_revocation_plan(cursor, **arguments)
+        for changed in ("planner_key", "planner_identity", "verifier_identity", "fence", "roots", "cutoff"):
+            with self.subTest(changed=changed):
+                supplied = expected.arguments()
+                supplied["envelope"] = produced.signed.envelope
+                if changed == "planner_key":
+                    supplied["planner_public_key"] = expected.other_key.public_key()
+                elif changed in {"planner_identity", "verifier_identity"}:
+                    supplied["expected_" + changed]["measurementDigest"] = "sha256:" + "0" * 64
+                elif changed == "fence":
+                    supplied["expected_fence"] += 1
+                elif changed == "roots":
+                    supplied["expected_before"]["indexBeforeHeads"][0]["rootDigest"] = "sha256:" + "0" * 64
+                else:
+                    supplied["database_now"] += timedelta(microseconds=1)
+                with self.assertRaises(replay.RevocationPlanError):
+                    replay.verify_signed_revocation_plan(**supplied)
+
+    def test_private_plan_prior_work_remains_spent_across_acquisition_packaging_and_signing(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_plan_production as production
+        from serverware import authority_revocation_proof_bundle as retained
+
+        observations = []
+        # Explicit synthetic prior accounting supplements the actual chained
+        # phases; it is not represented as proof of some earlier operation.
+        for prior in ((0, 0, 0), (7, 101, 13)):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture(work=work)
+            before = work.metrics
+            seen = []
+            real_acquire, real_package, real_build = (program._acquire_revocation_transition,
+                retained._derive_on_work, production._build_and_sign)
+
+            def acquire(*args, **kwargs):
+                self.assertIs(kwargs["query_work"], work)
+                seen.append(work.metrics)
+                return real_acquire(*args, **kwargs)
+
+            def package(**kwargs):
+                self.assertIs(kwargs["work"], work)
+                seen.append(work.metrics)
+                return real_package(**kwargs)
+
+            def build(**kwargs):
+                self.assertIs(kwargs["work"], work)
+                seen.append(work.metrics)
+                return real_build(**kwargs)
+
+            with self.subTest(prior=prior), writer_scope, \
+                    patch.object(program, "_acquire_revocation_transition", side_effect=acquire), \
+                    patch.object(retained, "_derive_on_work", side_effect=package), \
+                    patch.object(production, "_build_and_sign", side_effect=build):
+                produced = program._produce_revocation_plan(cursor, **arguments)
+            self.assertEqual(len(seen), 3)
+            for first, second in zip((before, *seen), (*seen, produced.metrics)):
+                self.assertGreater(second.hash_work, first.hash_work)
+                self.assertGreater(second.input_bytes, first.input_bytes)
+                self.assertGreater(second.json_nodes, first.json_nodes)
+            self.assert_produced_revocation_plan(expected, fixture, produced)
+            self.assertEqual(produced.metrics, work.metrics)
+            observations.append(produced)
+        plain, prior = observations
+        self.assertEqual(prior.signed.envelope_bytes, plain.signed.envelope_bytes)
+        self.assertEqual(prior.signed.metrics, plain.signed.metrics)
+        self.assertEqual((prior.metrics.hash_work - plain.metrics.hash_work,
+                          prior.metrics.input_bytes - plain.metrics.input_bytes,
+                          prior.metrics.json_nodes - plain.metrics.json_nodes), (7, 101, 13))
+
+    def test_private_plan_exact_final_wire_reservation_and_one_less_deny_before_signing(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_plan_production as production
+        from serverware import authority_transition_core as core
+        import test_authority_revocation_plan as plan_oracle
+        import test_webauthn_revocation_work as kernel_oracle
+
+        domain = "serverware.signedPolicyAuthorityMeasuredPlan/v4"
+        fields = ("hash_work", "input_bytes", "json_nodes")
+        for deficient in (None, *fields):
+            expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+            work = arguments["query_work"]
+            entering_limits = work.limits
+            original_measure, original_encode = work.measure, core.canonical_bytes
+            reserved, encodings = [], []
+
+            def measure(value, **kwargs):
+                measured = original_measure(value, **kwargs)
+                if type(value) is dict and value.get("schema") == domain:
+                    self.assertEqual(reserved, [])
+                    payload_size = len(plan_oracle.wire(value["payload"]))
+                    envelope_size = len(plan_oracle.wire(value))
+                    payload_nodes = kernel_oracle.nodes(value["payload"])
+                    envelope_nodes = kernel_oracle.nodes(value)
+                    # Both measurement walks have genuinely completed. Pin
+                    # the remaining three real encodes, post-sign payload
+                    # measure/comparison, signature64/base64 transport and
+                    # actual domain frame/message preparation.
+                    # Spend excess allowance synthetically; no counter reset,
+                    # output metric or successful helper substitutes for work.
+                    pending = (1, 5 * payload_size + envelope_size + 2 * 64 + 4 * 88 + 86
+                        + 2 * len(domain) + 9 + payload_size + 2 * 71,
+                        3 * payload_nodes + envelope_nodes + 4)
+                    remaining = (work.limits.max_hashes - work.hash_work,
+                        work.limits.max_input_bytes - work.input_bytes,
+                        work.limits.max_json_nodes - work.json_nodes)
+                    allowed = tuple(amount - int(name == deficient) for name, amount in zip(fields, pending))
+                    self.assertTrue(all(available >= required for available, required in zip(remaining, pending)))
+                    work.charge(hashes=remaining[0] - allowed[0],
+                        input_bytes=remaining[1] - allowed[1], json_nodes=remaining[2] - allowed[2])
+                    reserved.append((pending, work.metrics))
+                return measured
+
+            def encode(value):
+                if type(value) is dict and value.get("schema") in {
+                        domain, "serverware.policyAuthorityPlannerResponse/v4"}:
+                    encodings.append(value["schema"])
+                return original_encode(value)
+
+            with self.subTest(deficient=deficient), writer_scope, \
+                    patch.object(work, "measure", side_effect=measure), \
+                    patch.object(core, "canonical_bytes", side_effect=encode), \
+                    patch.object(production, "_sign_and_verify", wraps=production._sign_and_verify) as sign:
+                if deficient is None:
+                    produced = program._produce_revocation_plan(cursor, **arguments)
+                else:
+                    with self.assertRaises(self.planner.AuthorityPlannerError) as raised:
+                        program._produce_revocation_plan(cursor, **arguments)
+                    self.assertIsInstance(raised.exception.__cause__, accounting.QueryReadWorkError)
+            self.assertEqual(len(reserved), 1)
+            self.assertEqual(cursor.clock_reads, 1)
+            self.assertIs(work.limits, entering_limits)
+            if deficient is None:
+                self.assertEqual((sign.call_count, encodings), (1,
+                    ["serverware.policyAuthorityPlannerResponse/v4",
+                     "serverware.policyAuthorityPlannerResponse/v4", domain]))
+                self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes),
+                    (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes))
+                self.assert_produced_revocation_plan(expected, fixture, produced)
+            else:
+                self.assertEqual((sign.call_count, encodings), (0, []))
+                spent = reserved[0][1]
+                self.assertGreaterEqual(work.hash_work, spent.hash_work)
+                self.assertGreaterEqual(work.input_bytes, spent.input_bytes)
+                self.assertGreaterEqual(work.json_nodes, spent.json_nodes)
+
+    def test_private_plan_actual_paired_key_denial_and_no_result_token_entrypoint(self):
+        from cryptography.exceptions import InvalidSignature
+        from serverware import authority_revocation_plan as replay
+        from serverware import authority_revocation_plan_production as production
+
+        expected, _, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+        arguments["planner_public_key"] = expected.other_key.public_key()
+        with writer_scope, \
+                patch.object(production, "_sign_and_verify", wraps=production._sign_and_verify) as sign:
+            with self.assertRaises(self.planner.AuthorityPlannerError) as raised:
+                program._produce_revocation_plan(cursor, **arguments)
+        self.assertEqual((cursor.clock_reads, sign.call_count), (1, 1))
+        self.assertIsInstance(raised.exception.__cause__, replay.RevocationPlanError)
+        self.assertIsInstance(raised.exception.__cause__.__cause__, InvalidSignature)
+        self.assertGreater(arguments["query_work"].hash_work, 0)
+        for name in ("planner_private_key", "planner_public_key", "verifier_public_key", "context", "query_work"):
+            with self.subTest(name=name):
+                _, _, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+                arguments[name] = types.SimpleNamespace(verified=True)
+                with writer_scope, patch.object(production, "_sign_and_verify",
+                        wraps=production._sign_and_verify) as sign:
+                    with self.assertRaises(self.planner.AuthorityPlannerError):
+                        program._produce_revocation_plan(cursor, **arguments)
+                self.assertEqual((cursor.calls, sign.call_count), ([], 0))
+        _, _, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+        with writer_scope:
+            with self.assertRaises(TypeError):
+                program._produce_revocation_plan(cursor, **arguments, successful_result={})
+        self.assertEqual(cursor.calls, [])
+
     def test_private_revocation_producer_runs_real_receipt_reads_effects_and_write_proofs_on_one_ledger(self):
         from serverware import authority_webauthn_assertion as assertion
         from serverware import authority_revocation_semantics as semantics

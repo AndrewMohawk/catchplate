@@ -520,6 +520,16 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertFalse(calls(public_path, "self._read_revocation_inputs_with_acquisition"))
             self.assertFalse(calls(public_path, "program._acquire_revocation_transition"))
             self.assertFalse(calls(public_path, "self._acquire_revocation_transition"))
+            self.assertFalse(calls(public_path, "program._produce_revocation_plan"))
+            self.assertFalse(calls(public_path, "self._produce_revocation_plan"))
+            self.assertFalse(calls(public_path, "authority_revocation_proof_bundle._derive_on_work"))
+            self.assertFalse(calls(public_path, "authority_revocation_plan_production._build_and_sign"))
+        literals = {node.targets[0].id: node.value.value for node in self.tree.body
+                    if isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Constant)}
+        self.assertEqual(literals["PLANNER_RESPONSE_SCHEMA"], "serverware.policyAuthorityPlannerResponse/v3")
+        self.assertEqual(literals["MEASURED_PLAN_SCHEMA"], "serverware.policyAuthorityMeasuredPlan/v3")
+        self.assertEqual(literals["SIGNED_MEASURED_PLAN_SCHEMA"], "serverware.signedPolicyAuthorityMeasuredPlan/v3")
         private = self.method("_read_revocation_inputs_with_acquisition")
         self.assertEqual(calls(self.tree, "authority_complete_acquisition._CompleteQueryAcquisition"),
                          calls(private, "authority_complete_acquisition._CompleteQueryAcquisition"))
@@ -777,6 +787,90 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertIn("raise AuthorityPlannerError('complete trace read is not source closed') from exc", ast.unparse(read))
         append = self.method("_append", "PlannerTrace")
         self.assertLess(call(append, "self._budget.append").lineno, call(append, "self._entries.append").lineno)
+
+    def test_private_signed_producer_owns_context_then_packages_and_signs_actual_raw_acquisition(self):
+        method = self.method("_produce_revocation_plan")
+        self.assertEqual({item.arg for item in method.args.kwonlyargs}, {
+            "request", "manifest", "evidence", "context", "verifier_public_key",
+            "planner_private_key", "planner_public_key", "query_work"})
+        copied = call(method, "authority_query_reads._CopyBudget(query_work).copy")
+        checked = call(method, "authority_revocation_plan_production._validate_context")
+        acquired = call(method, "self._acquire_revocation_transition")
+        packaged = call(method, "authority_revocation_proof_bundle._derive_on_work")
+        signed = call(method, "authority_revocation_plan_production._build_and_sign")
+        returned = call(method, "_ProducedRevocationPlan")
+        for left, right in zip((copied, checked, acquired, packaged, signed),
+                                (checked, acquired, packaged, signed, returned)):
+            self.assertLess(left.lineno, right.lineno)
+        self.assertEqual([ast.unparse(item) for item in call(method, "authority_query_reads._CopyBudget").args],
+                         ["query_work"])
+        self.assertEqual([ast.unparse(item) for item in checked.args], ["actual_context", "query_work"])
+        self.assertEqual([ast.unparse(item) for item in acquired.args], ["cursor"])
+        self.assertEqual(keywords(acquired)["query_work"], "query_work")
+        self.assertEqual(keywords(acquired)["business_before_roots"], "expected_before['businessBeforeRoots']")
+        self.assertEqual(keywords(acquired)["authorization_before_roots"], "expected_before['authorizationBeforeRoots']")
+        bindings = sorted(calls(method, "authority_revocation_semantics._canonical_equal"), key=lambda item: item.lineno)
+        self.assertEqual(len(bindings), 2)
+        self.assertLess(bindings[0].lineno, acquired.lineno)
+        self.assertLess(acquired.lineno, bindings[1].lineno)
+        self.assertLess(bindings[1].lineno, packaged.lineno)
+        self.assertEqual([ast.unparse(item) for item in bindings[1].args], ["observed_before", "expected_before"])
+        self.assertTrue(all(keywords(item)["work"] == "query_work" for item in bindings))
+        package_inputs = keywords(packaged)
+        for name, value in {"work": "query_work", "arguments": "acquired.request['arguments']",
+            "cutoff_us": "raw.cutoff_us", "request_digest": "acquired.request['requestDigest']",
+            "query_reads": "state.query_reads", "queries": "queries", "selected_rows": "acquired.selected_rows",
+            "before_proofs": "raw.before_proofs", "mutations": "acquired.mutations", "counted_before_heads": "heads",
+            "business_before_roots": "raw.business_before_roots", "authorization_before_roots": "raw.authorization_before_roots",
+            "query_frontiers": "raw.frontiers"}.items():
+            self.assertEqual(package_inputs[name], value, name)
+        self.assertIn("acquired.write_evidence.index_inputs", package_inputs["write_frontiers"])
+        self.assertIn("head.index_id for head in acquired.write_evidence.result.before_heads", ast.unparse(method))
+        self.assertIn("for item in raw.heads if item.index_id in index_ids", ast.unparse(method))
+        signing = keywords(signed)
+        for name, value in {"work": "query_work", "request": "acquired.request", "mutations": "acquired.mutations",
+            "before_proofs": "raw.before_proofs", "result": "acquired.kernel.result", "work_units": "acquired.work_units",
+            "trace": "acquired.trace", "bundle": "packaged.bundle", "transition": "packaged.transition",
+            "transition_digest": "packaged.retained.transition_digest", "context": "actual_context",
+            "planner_private_key": "planner_private_key", "planner_public_key": "planner_public_key"}.items():
+            self.assertEqual(signing[name], value, name)
+        self.assertEqual([ast.unparse(item) for item in returned.args],
+                         ["signed", "state.database_now", "query_work.metrics"])
+        for forbidden in ("_ValidationWork", "_read_database_now", "json.loads",
+            "authority_revocation_proof_bundle.derive_revocation_proof_bundle",
+            "authority_root_transition.derive_primary_root_transition", "self.kernel.transition"):
+            self.assertFalse(calls(method, forbidden))
+
+    def test_private_packaging_attaches_current_work_and_common_body_returns_actual_graphs(self):
+        _, tree = source("serverware/authority_revocation_proof_bundle.py")
+        method = definition(tree, "_derive_on_work")
+        attached = call(method, "_PackagingLedger._attach")
+        self.assertEqual([ast.unparse(item) for item in attached.args], ["work"])
+        self.assertEqual(keywords(attached), {"comparing": "False"})
+        captured = call(method, "mixed._capture")
+        computed = call(method, "_compute_with_graphs")
+        complete = call(method, "ledger._require_attachment_complete")
+        self.assertLess(attached.lineno, captured.lineno)
+        self.assertLess(captured.lineno, computed.lineno)
+        self.assertLess(computed.lineno, complete.lineno)
+        self.assertEqual(keywords(captured)["ledger"], "ledger")
+        self.assertEqual(keywords(computed)["ledger"], "ledger")
+        self.assertFalse(calls(method, "_ValidationWork"))
+        self.assertFalse(calls(method, "json.loads"))
+        guarded, = [node for node in method.body if isinstance(node, ast.Try)]
+        self.assertEqual(len(calls(guarded.finalbody[0], "ledger._restore_entering_limits")), 1)
+        body = definition(tree, "_compute_with_graphs")
+        genuine = call(body, "mixed._verify")
+        compact = call(body, "_compact_document")
+        carrier = call(body, "_DerivedRevocationProof")
+        self.assertLess(genuine.lineno, compact.lineno)
+        self.assertLess(compact.lineno, carrier.lineno)
+        self.assertEqual([ast.unparse(item) for item in carrier.args], ["retained", "result", "bundle", "compact"])
+        facade = definition(tree, "_compute_and_package")
+        self.assertEqual(len(calls(facade, "_compute_with_graphs")), 1)
+        self.assertFalse(calls(facade, "mixed._verify"))
+        returned, = [node for node in facade.body if isinstance(node, ast.Return)]
+        self.assertEqual([ast.unparse(item) for item in returned.value.elts], ["derived.retained", "derived.result"])
 
 
 if __name__ == "__main__":

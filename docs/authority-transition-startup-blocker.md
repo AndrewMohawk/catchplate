@@ -80,10 +80,16 @@ and acquisition, eliminating a separately configured cutoff and discarded proof
 inventory. Source `.34` connects genuine request/receipt verification,
 single-cutoff reads, actual kernel/capacity effects and write acquisition on
 one work and physical ledger, and binds the exact writer trace in signed
-replay. The public v3 and pre-kernel successor gates remain closed. Signed-v4
-production, durable original-envelope and independent-context persistence,
-and coordinated v4 activation remain required; the private raw producer is
+replay. The public v3 and pre-kernel successor gates remain closed. At `.34`,
+signed-v4 production, durable original-envelope and independent-context persistence,
+and coordinated v4 activation remained required; the private raw producer is
 not a registered kernel or startup repair.
+
+Source `.35` adds a [private original signed-v4 producer](authority-revocation-production.md)
+using actual acquisition, same-work mixed proof packaging and precharged final
+transport. Public v3, service/persistence and registry admission remain unchanged.
+Producing an original signed envelope does not establish current roots, durable
+replay, one-use execution or a terminal witness.
 
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the

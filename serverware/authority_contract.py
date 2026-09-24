@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.34"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.35"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -158,6 +158,41 @@ SIGNED_REVOCATION_PLAN_CONTRACT = MappingProxyType({
         "key-and-identity-enrollment", "before-root-and-cutoff-currentness",
         "capability-reservation", "one-use-persistence", "sql-commit",
         "registry-admission", "terminal-witness",
+    ),
+})
+# Private production of an original signed envelope is distinct from public
+# protocol activation, persisted replay or independently enrolled authority.
+SIGNED_REVOCATION_PRODUCTION_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthoritySignedRevocationPlanProduction/v1",
+    "admission": "private-producer-only",
+    "operation": "webauthn.credential.revoke",
+    "publicV3Enabled": False,
+    "productionV4Enabled": False,
+    "proofPackaging": "genuine-mixed-replay-on-original-work/v1",
+    "transportReservation": "measured-payload-and-envelope-before-signing/v1",
+    "maxPayloadBytes": 64 * 1024 * 1024,
+    "maxSharedHashes": 8_000_000,
+    "maxSharedInputBytes": 64 * 1024 * 1024,
+    "maxSharedJsonNodes": 1_000_000,
+    "maxJsonDepth": 128,
+    "includedPhases": (
+        "joint-request-evidence-context-capture", "reservation-context-binding",
+        "single-cutoff-read-effects-write-acquisition", "independent-before-vector-binding",
+        "raw-proof-normalization", "genuine-mixed-proof-replay", "compact-proof-packaging",
+        "source-authorization-and-plan-commitments", "exact-outer-transport-preflight",
+        "planner-signature", "paired-public-key-verification",
+        "post-sign-payload-and-meter-stability", "original-envelope-encoding",
+    ),
+    "excludedWork": (
+        "sql-execution", "driver-allocation", "process-allocation",
+        "staged-proof-work", "staging-cache-stamps", "primary-proof-acquisition",
+        "acquisition-trace-serialization", "indexed-projection-allocation",
+        "fixed-metadata-scaffolding", "whole-plan",
+    ),
+    "excludedAuthority": (
+        "key-and-identity-enrollment", "read-only-transaction-ownership",
+        "before-root-and-cutoff-currentness", "capability-reservation",
+        "one-use-persistence", "sql-commit", "registry-admission", "terminal-witness",
     ),
 })
 # Current measured verifier evidence reads, not planner/business query closure
@@ -2340,6 +2375,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "plannerQueryBookkeeping": dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT),
         "plannerCompleteAcquisition": dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT),
         "signedRevocationPlanVerification": dict(SIGNED_REVOCATION_PLAN_CONTRACT),
+        "signedRevocationPlanProduction": dict(SIGNED_REVOCATION_PRODUCTION_CONTRACT),
         "auditCapacityQueryWorkUnits": AUDIT_CAPACITY_QUERY_WORK_UNITS,
         "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
         "phase2StoreTables": list(PHASE2_STORE_TABLES),

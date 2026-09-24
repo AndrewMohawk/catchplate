@@ -9,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from serverware import authority_audit_capacity
 from serverware.authority_audit_trace import (
@@ -33,7 +34,7 @@ from serverware import authority_index_projection
 from serverware import authority_primary_contract
 from serverware import authority_query_reads
 from serverware.authority_query_read_work import (
-    _ValidationWork, QueryReadValidationLimits, QueryReadWorkError,
+    _ValidationWork, QueryReadValidationLimits, QueryReadValidationMetrics, QueryReadWorkError,
 )
 # Preserve the existing planner names as direct re-exports of the actual
 # registry-free computation bodies. Public request admission remains below.
@@ -51,6 +52,9 @@ from serverware import authority_query_staging
 from serverware import authority_radix_proof
 from serverware import authority_root_transition
 from serverware import authority_revocation_semantics
+from serverware import authority_revocation_proof_bundle
+from serverware import authority_revocation_plan
+from serverware import authority_revocation_plan_production
 from serverware import authority_transition_core
 from serverware import authority_transition_registry
 from serverware import authority_transition_webauthn
@@ -457,6 +461,15 @@ class _RevocationAcquisition:
     work_units: int
     write_evidence: authority_index_mutation_reader.AcquiredIndexedMutation
     trace: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProducedRevocationPlan:
+    """Original signed bytes and observed cutoff, not persistence authority."""
+
+    signed: authority_revocation_plan_production._ProducedPlan
+    database_now: datetime
+    metrics: QueryReadValidationMetrics
 
 
 class PlanningProgram(Protocol):
@@ -978,6 +991,118 @@ class TypedTransitionPlanningProgram:
         except BaseException:
             acquisition.failed = True
             raise
+
+    def _produce_revocation_plan(
+        self, cursor: Any, *, request: dict[str, Any], manifest: tuple[dict[str, Any], ...],
+        evidence: dict[str, Any], context: dict[str, Any],
+        verifier_public_key: Ed25519PublicKey, planner_private_key: Ed25519PrivateKey,
+        planner_public_key: Ed25519PublicKey, query_work: _ValidationWork,
+    ) -> _ProducedRevocationPlan:
+        """Privately acquire, package and sign the genuine revoke-only v4 plan.
+
+        The cursor belongs to a caller-owned read-only MVCC transaction. Key
+        enrollment, planner/database identity, current roots, reservation and
+        clock provenance are preceding independent admission requirements.
+        This method does not open public routes, registry or durable execution.
+
+        Capture all caller graphs together before callbacks. Acquire real
+        reads/effects/write proofs internally, then normalize and replay those
+        raw graphs under the same remaining work for the compact proof's exact
+        phase metrics. Repeated proof work is charged, not replaced by an
+        acquisition success token. The output retains the original signed
+        envelope bytes and database cutoff; it authorizes no commit or replay.
+        """
+        if (type(query_work) is not _ValidationWork
+                or type(request) is not dict or type(manifest) is not tuple
+                or type(evidence) is not dict or type(context) is not dict
+                or not isinstance(verifier_public_key, Ed25519PublicKey)
+                or not isinstance(planner_private_key, Ed25519PrivateKey)
+                or not isinstance(planner_public_key, Ed25519PublicKey)):
+            raise AuthorityPlannerError("private revocation production context has unexpected types")
+        try:
+            owned = authority_query_reads._CopyBudget(query_work).copy({
+                "request": request, "manifest": manifest, "evidence": evidence, "context": context,
+            })
+            actual_request, actual_context = owned["request"], owned["context"]
+            authority_revocation_plan_production._validate_context(actual_context, query_work)
+            # Bind the externally reserved transaction before any SQL. The
+            # genuine acquisition below independently recomputes the request
+            # and operation commitments before its clock or driver callbacks.
+            operation_identifier = _require_digest(actual_request.get("operationId"), "producer operation id")
+            request_digest = _require_digest(actual_request.get("requestDigest"), "producer request digest")
+            transaction_id = authority_revocation_plan._frame(
+                "serverware.policyAuthorityPlannerTransaction/v1",
+                tuple(authority_revocation_plan._ascii(value, query_work) for value in (
+                    operation_identifier, request_digest, actual_context["expectedCapabilityId"])), query_work)
+            authority_revocation_semantics._canonical_equal(transaction_id,
+                actual_context["expectedPlannerTransactionId"], work=query_work,
+                label="private producer transaction differs from independent reservation")
+            expected_before = actual_context["expectedBefore"]
+            acquired = self._acquire_revocation_transition(cursor,
+                request=actual_request, manifest=owned["manifest"], evidence=owned["evidence"],
+                business_before_roots=expected_before["businessBeforeRoots"],
+                authorization_before_roots=expected_before["authorizationBeforeRoots"],
+                verifier_identity=actual_context["expectedVerifierIdentity"],
+                verifier_public_key=verifier_public_key,
+                capability_id=actual_context["expectedCapabilityId"],
+                now_epoch_ns=actual_context["nowEpochNs"],
+                deadline_epoch_ns=actual_context["deadlineEpochNs"],
+                maximum_age_ns=actual_context["maximumAssertionAgeNs"], query_work=query_work,
+            )
+            raw, state = acquired.state.complete_query_evidence, acquired.state
+            if raw is None or type(state.database_now) is not datetime:
+                raise AuthorityPlannerError("private producer lost its original complete evidence")
+            queries = tuple(query for query in state.query_program
+                            if type(query) is authority_complete_query.CompleteIndexQuery)
+            # The collector captures all nine potential heads. Packaging needs
+            # only the exact six-role read/ACTUAL write union, not unused heads.
+            index_ids = {query.index_id for query in queries} | {
+                head.index_id for head in acquired.write_evidence.result.before_heads}
+            heads = tuple(authority_complete_read_write.CompleteReadWriteHead(
+                item.index_id, item.index_revision, item.index_root)
+                for item in raw.heads if item.index_id in index_ids)
+            observed_before = {
+                "businessBeforeRoots": raw.business_before_roots,
+                "authorizationBeforeRoots": raw.authorization_before_roots,
+                "indexBeforeHeads": [{"indexId": head.index_id, "indexRevision": head.index_revision,
+                    "rootDigest": head.index_root.digest, "leafCount": head.index_root.count}
+                    for head in heads],
+            }
+            authority_revocation_semantics._canonical_equal(observed_before, expected_before,
+                work=query_work, label="private producer roots differ from independent expectations")
+            verified_evidence = state.verified_webauthn_evidence
+            if type(verified_evidence) is not dict:
+                raise AuthorityPlannerError("private producer lost its owned verified assertion")
+            packaged = authority_revocation_proof_bundle._derive_on_work(
+                work=query_work, operation=authority_transition_webauthn.OPERATION,
+                arguments=acquired.request["arguments"], cutoff_us=raw.cutoff_us,
+                request_digest=acquired.request["requestDigest"],
+                assertion_binding={name: verified_evidence[name]
+                                   for name in ("credentialRecordId", "challengeId")},
+                query_reads=state.query_reads, queries=queries,
+                business_before_roots=raw.business_before_roots,
+                authorization_before_roots=raw.authorization_before_roots,
+                selected_rows=acquired.selected_rows, before_proofs=raw.before_proofs,
+                mutations=acquired.mutations, counted_before_heads=heads,
+                query_frontiers=raw.frontiers,
+                write_frontiers=tuple(authority_complete_read_write.CompleteWriteFrontier(
+                    item.index_id, item.frontier) for item in acquired.write_evidence.index_inputs),
+            )
+            signed = authority_revocation_plan_production._build_and_sign(
+                request=acquired.request, selected_rows=acquired.selected_rows,
+                mutations=acquired.mutations, before_proofs=raw.before_proofs,
+                trace=acquired.trace, evidence=verified_evidence, result=acquired.kernel.result,
+                work_units=acquired.work_units, bundle=packaged.bundle,
+                transition=packaged.transition, transition_digest=packaged.retained.transition_digest,
+                context=actual_context, planner_private_key=planner_private_key,
+                planner_public_key=planner_public_key, work=query_work,
+            )
+            return _ProducedRevocationPlan(signed, state.database_now, query_work.metrics)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError,
+                RecursionError, InvalidSignature, authority_transition_core.TransitionKernelError) as exc:
+            if isinstance(exc, AuthorityPlannerError):
+                raise
+            raise AuthorityPlannerError("private signed revocation production failed") from exc
 
     def __call__(
         self,

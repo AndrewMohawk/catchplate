@@ -28,6 +28,7 @@ from serverware import authority_contract
 from serverware import authority_primary_contract
 from serverware import authority_query_read_work as accounting
 from serverware import authority_revocation_plan as plan
+from serverware import authority_revocation_plan_production as production
 from serverware import authority_revocation_semantics as semantics
 from serverware import authority_transition_webauthn as candidate
 from serverware import authority_webauthn_assertion as assertion
@@ -444,6 +445,73 @@ def independent_metrics(fixture):
     result["semantic_total"] = add(outer, result["semantic_verification"])
     result["admission"] = tuple(max(result["retained_peak"][index], result["total"][index]) for index in range(3))
     return result
+
+
+def production_context(fixture):
+    owned = capture_document(fixture)
+    return {name: copy.deepcopy(owned[name]) for name in (
+        "expectedPlannerIdentity", "expectedVerifierIdentity", "expectedCapabilityId",
+        "expectedPlannerTransactionId", "expectedFence", "reservedAtEpochNs",
+        "deadlineEpochNs", "deadlineMonotonicNs", "nowEpochNs", "nowMonotonicNs",
+        "maximumAssertionAgeNs", "maximumPlanAgeNs", "maximumClockSkewNs",
+        "expectedBefore", "expectedApproverPolicyDigest")}
+
+
+def production_arguments(fixture, work):
+    payload = copy.deepcopy(fixture.payload)
+    return {"request": payload["typedRequest"], "selected_rows": tuple(payload["selectedBusinessRows"]),
+        "mutations": tuple(payload["mutationPlan"]), "before_proofs": tuple(payload["queryMultiproofs"]),
+        "trace": tuple(payload["plannerTrace"]["entries"]), "evidence": payload["webauthnEvidence"],
+        "result": payload["expectedResult"], "work_units": fixture.semantic.work_units,
+        "bundle": payload["revocationProofBundle"], "transition": payload["rootTransition"],
+        "transition_digest": payload["measuredPlan"]["rootTransitionDigest"],
+        "context": production_context(fixture), "planner_private_key": fixture.key,
+        "planner_public_key": fixture.key.public_key(), "work": work}
+
+
+def independent_production_work(fixture):
+    """Actual builder-only units over independently authored raw v4 graphs."""
+    payload, semantic = fixture.payload, fixture.semantic
+    measured = payload["measuredPlan"]
+    inputs = semantic.bundle["inputs"]
+    values = [canonical_comparison(left, right) for left, right in (
+        (semantic.selected_rows, inputs["selectedRows"]), (semantic.final_mutations, inputs["mutations"]),
+        (semantic.before_proofs, inputs["beforeProofs"]),
+        (semantic.expected_before["businessBeforeRoots"], inputs["businessBeforeRoots"]),
+        (semantic.expected_before["authorizationBeforeRoots"], inputs["authorizationBeforeRoots"]),
+        (semantic.expected_before["indexBeforeHeads"], inputs["countedBeforeHeads"]),
+        (semantic.request_digest, inputs["requestDigest"]),
+        (semantic.request_digest, semantic.transition["requestDigest"]))]
+    transaction = tuple(measured[name].encode("ascii") for name in ("operationId", "requestDigest", "capabilityId"))
+    values.extend(utf8_cost(measured[name]) for name in ("operationId", "requestDigest", "capabilityId"))
+    values.extend((frame_cost("serverware.policyAuthorityPlannerTransaction/v1", transaction),
+        canonical_comparison(fixture.planner_transaction_id, fixture.planner_transaction_id)))
+    for item in semantic.selected_rows:
+        if item["table"] in authority_contract.operation_spec(OPERATION)["authorizationReads"]:
+            values.extend((graph_cost(item["key"], 8, 8), graph_cost(item["row"]),
+                utf8_cost(item["table"]), utf8_cost("serverware.policyAuthorityAuthorizationRow/v1"),
+                (1, 1 + 32 + len(item["table"].encode("ascii")) + len(wire(item["key"]))
+                    + (7 if item["present"] else 6) + len(wire(item["row"])), 0)))
+    values.extend((json_digest_cost("serverware.policyAuthorityAuthorizationRootSet/v1",
+        semantic.expected_before["authorizationBeforeRoots"]),
+        json_digest_cost("serverware.policyAuthorityWebAuthnAssertionEvidence/v1", payload["webauthnEvidence"])))
+    values.extend(graph_cost(value) for value in (semantic.selected_rows, semantic.final_mutations,
+        semantic.before_proofs, payload["plannerTrace"]["entries"]))
+    for domain, graph in (
+        ("serverware.policyAuthoritySelectedBusinessRows/v1", payload["selectedBusinessRows"]),
+        ("serverware.policyAuthorityMutationPlan/v3", payload["mutationPlan"]),
+        ("serverware.policyAuthorityAuthorizationProjection/v1", payload["authorizationProjection"]),
+        ("serverware.policyAuthorityRootSet/v1", semantic.expected_before["businessBeforeRoots"]),
+        ("serverware.policyAuthorityRadixMultiproofSet/v3", payload["queryMultiproofs"]),
+        (TRACE_SCHEMA, payload["plannerTrace"]),
+        ("serverware.policyAuthorityControlledWriterResult/v2", payload["expectedResult"]),
+    ):
+        values.append(json_digest_cost(domain, graph))
+    values.extend(utf8_cost(measured[name]) for name in SNAPSHOT_FIELDS)
+    values.append(frame_cost(SNAPSHOT_DOMAIN, tuple(measured[name].encode("ascii") for name in SNAPSHOT_FIELDS)))
+    values.extend((graph_cost(payload, 6, 4), graph_cost(fixture.envelope), (0, 566, 0),
+        frame_cost(SIGNED_SCHEMA, (wire(payload),)), utf8_cost(framed(SIGNED_SCHEMA, wire(payload)))))
+    return add(*values)
 
 
 class RevocationPlanTests(unittest.TestCase):
@@ -1009,6 +1077,170 @@ class RevocationPlanTests(unittest.TestCase):
             for left, right in zip(seen, seen[1:])))
         self.assertEqual((actual.metrics.total_hashes, actual.metrics.total_input_bytes,
             actual.metrics.total_json_nodes), independent_metrics(fixture)["total"])
+
+    def test_private_builder_matches_independent_payload_signature_and_genuine_replay(self):
+        for options in ({}, {"separate_signer": True, "include_audit": False}):
+            fixture = PlanFixture(**options)
+            expected = independent_production_work(fixture)
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            with self.subTest(options=options), patch.object(production, "_sign_and_verify",
+                    wraps=production._sign_and_verify) as signing:
+                actual = production._build_and_sign(**production_arguments(fixture, work))
+            self.assertEqual(actual.payload, fixture.payload)
+            self.assertEqual(actual.envelope, fixture.envelope)
+            self.assertEqual((actual.payload_bytes, actual.envelope_bytes), (wire(fixture.payload), wire(fixture.envelope)))
+            self.assertEqual((signing.call_count, actual.signing_attempts, actual.signature_verifications), (1, 1, 1))
+            self.assertEqual(units(actual.metrics), expected)
+            self.assertEqual(units(work.metrics), expected)
+            replay = self.verify(fixture, envelope=actual.envelope)
+            self.assertEqual(replay.semantics.mutations, fixture.semantic.final_mutations)
+            self.assertEqual(replay.semantics.kernel.result, fixture.semantic.kernel_expected["result"])
+
+    def test_private_builder_exact_units_and_preconsumed_original_work_never_allocate_a_meter(self):
+        fixture = PlanFixture()
+        expected, spent = independent_production_work(fixture), (11, 17, 5)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*add(expected, spent)))
+        work.charge(hashes=spent[0], input_bytes=spent[1], json_nodes=spent[2])
+        with patch.object(accounting._ValidationWork, "__init__", side_effect=AssertionError("fresh work")):
+            actual = production._build_and_sign(**production_arguments(fixture, work))
+        self.assertEqual(units(actual.metrics), expected)
+        self.assertEqual(units(work.metrics), add(expected, spent))
+        self.assertEqual(actual.envelope_bytes, wire(fixture.envelope))
+
+    def test_private_builder_minus_one_denies_before_final_buffers_or_signing(self):
+        fixture = PlanFixture()
+        expected = independent_production_work(fixture)
+        original = production.core.canonical_bytes
+        for dimension in range(3):
+            limits = list(expected)
+            limits[dimension] -= 1
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+            encoded = []
+            def encode(value):
+                if type(value) is dict and value.get("schema") in (PAYLOAD_SCHEMA, SIGNED_SCHEMA):
+                    encoded.append(value["schema"])
+                return original(value)
+            with self.subTest(dimension=dimension), \
+                    patch.object(production.core, "canonical_bytes", side_effect=encode), \
+                    patch.object(production, "_sign_and_verify", wraps=production._sign_and_verify) as signing:
+                with self.assertRaises(ValueError):
+                    production._build_and_sign(**production_arguments(fixture, work))
+            self.assertEqual((encoded, signing.call_count), ([], 0))
+            self.assertGreater(work.input_bytes, 0)
+
+    def test_private_builder_context_is_closed_exact_fresh_and_checked_before_hashes(self):
+        fixture = PlanFixture()
+        for change in ("missing", "extra", "boolean", "stale", "skew", "identity", "roots"):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            arguments = production_arguments(fixture, work)
+            context = arguments["context"]
+            if change == "missing":
+                context.pop("expectedFence")
+            elif change == "extra":
+                context["trustedByCaller"] = True
+            elif change == "boolean":
+                context["expectedFence"] = True
+            elif change == "stale":
+                context["nowEpochNs"] = context["deadlineEpochNs"]
+            elif change == "skew":
+                context["nowMonotonicNs"] += context["maximumClockSkewNs"] + 1
+            elif change == "identity":
+                context["expectedPlannerIdentity"]["measurementDigest"] = "sha256:" + "F" * 64
+            else:
+                context["expectedBefore"]["indexBeforeHeads"][0]["leafCount"] = True
+            with self.subTest(change=change), patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes, \
+                    patch.object(production, "_sign_and_verify", wraps=production._sign_and_verify) as signing:
+                with self.assertRaises(ValueError):
+                    production._build_and_sign(**arguments)
+            self.assertEqual((hashes.call_count, signing.call_count), (0, 0))
+            self.assertEqual(units(work.metrics), (0, 0, 0))
+
+    def test_private_builder_divergent_raw_views_and_wrong_reserved_transaction_cannot_sign(self):
+        for change in ("selected", "mutations", "proofs", "before", "request", "transaction"):
+            fixture = PlanFixture()
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            arguments = production_arguments(fixture, work)
+            if change == "selected":
+                arguments["selected_rows"] = arguments["selected_rows"][:-1]
+            elif change == "mutations":
+                arguments["mutations"] = arguments["mutations"][:-1]
+            elif change == "proofs":
+                arguments["before_proofs"] = arguments["before_proofs"][:-1]
+            elif change == "before":
+                arguments["context"]["expectedBefore"]["indexBeforeHeads"][0]["rootDigest"] = sha(b"another root")
+            elif change == "request":
+                arguments["request"]["requestDigest"] = sha(b"another request")
+            else:
+                arguments["context"]["expectedPlannerTransactionId"] = sha(b"another reservation")
+            with self.subTest(change=change), patch.object(production, "_sign_and_verify",
+                    wraps=production._sign_and_verify) as signing:
+                with self.assertRaises(ValueError):
+                    production._build_and_sign(**arguments)
+            self.assertEqual(signing.call_count, 0)
+
+    def test_private_builder_uses_actual_pinned_public_verification_and_never_returns_placeholder(self):
+        fixture = PlanFixture()
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        arguments = production_arguments(fixture, work)
+        arguments["planner_public_key"] = fixture.other_key.public_key()
+        with patch.object(production, "_sign_and_verify", wraps=production._sign_and_verify) as signing:
+            with self.assertRaisesRegex(plan.RevocationPlanError, "pinned public key"):
+                production._build_and_sign(**arguments)
+        self.assertEqual(signing.call_count, 1)
+        self.assertGreater(work.hash_work, 0)
+        self.assertGreater(work.input_bytes, 0)
+        good = production._build_and_sign(**production_arguments(fixture,
+            accounting._ValidationWork(accounting.QueryReadValidationLimits())))
+        self.assertNotEqual(good.envelope["signatureBase64Url"], "A" * 86)
+        self.assertEqual(good.envelope["signatureBase64Url"], fixture.envelope["signatureBase64Url"])
+
+    def test_private_builder_same_length_post_sign_payload_drift_denies_before_envelope_output(self):
+        fixture = PlanFixture()
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        arguments = production_arguments(fixture, work)
+        real_sign, real_encode = production._sign_and_verify, production.core.canonical_bytes
+        encoded = []
+        def sign(*args):
+            signature = real_sign(*args)
+            reason = arguments["request"]["arguments"]["reason"]
+            arguments["request"]["arguments"]["reason"] = "!" * len(reason)
+            return signature
+        def encode(value):
+            if type(value) is dict and value.get("schema") in (PAYLOAD_SCHEMA, SIGNED_SCHEMA):
+                encoded.append(value["schema"])
+            return real_encode(value)
+        with patch.object(production, "_sign_and_verify", side_effect=sign), \
+                patch.object(production.core, "canonical_bytes", side_effect=encode):
+            with self.assertRaisesRegex(plan.RevocationPlanError, "payload changed during signing"):
+                production._build_and_sign(**arguments)
+        self.assertEqual(encoded, [PAYLOAD_SCHEMA, PAYLOAD_SCHEMA])
+
+    def test_private_builder_key_callbacks_cannot_replace_widen_spend_refund_or_alias_meter_units(self):
+        fixture = PlanFixture()
+        expected = independent_production_work(fixture)
+        real = production._sign_and_verify
+        for change in ("replace", "widen", "spend", "refund", "float_counter", "float_limit"):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*add(expected, (3, 7, 5))))
+            arguments = production_arguments(fixture, work)
+            def sign(*args):
+                signature = real(*args)
+                if change == "replace":
+                    work.limits = accounting.QueryReadValidationLimits(work.limits.max_hashes,
+                        work.limits.max_input_bytes, work.limits.max_json_nodes)
+                elif change == "widen":
+                    object.__setattr__(work.limits, "max_input_bytes", work.limits.max_input_bytes + 1)
+                elif change == "spend":
+                    work.charge(input_bytes=1)
+                elif change == "refund":
+                    work.input_bytes -= 1
+                elif change == "float_counter":
+                    work.input_bytes = float(work.input_bytes)
+                else:
+                    object.__setattr__(work.limits, "max_json_nodes", float(work.limits.max_json_nodes))
+                return signature
+            with self.subTest(change=change), patch.object(production, "_sign_and_verify", side_effect=sign):
+                with self.assertRaises(ValueError):
+                    production._build_and_sign(**arguments)
 
 
 if __name__ == "__main__":

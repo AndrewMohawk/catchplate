@@ -392,7 +392,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.34")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.35")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -597,6 +597,56 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertTrue({"_JSONCapture", "_PackagingLedger", "_verify",
                          "derive_authorization_sources", "verify"}.issubset(calls))
         # Source linkage and closed shapes are not runtime or enrollment proof.
+        self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
+        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+
+    def test_private_signed_production_contract_binds_shared_replay_and_precharged_transport(self):
+        contract = authority_contract.SIGNED_REVOCATION_PRODUCTION_CONTRACT
+        self.assertIs(type(contract), MappingProxyType)
+        self.assertEqual(dict(contract), {
+            "schema": "serverware.policyAuthoritySignedRevocationPlanProduction/v1",
+            "admission": "private-producer-only", "operation": "webauthn.credential.revoke",
+            "publicV3Enabled": False, "productionV4Enabled": False,
+            "proofPackaging": "genuine-mixed-replay-on-original-work/v1",
+            "transportReservation": "measured-payload-and-envelope-before-signing/v1",
+            "maxPayloadBytes": 64 * 1024 * 1024, "maxSharedHashes": 8_000_000,
+            "maxSharedInputBytes": 64 * 1024 * 1024, "maxSharedJsonNodes": 1_000_000,
+            "maxJsonDepth": 128,
+            "includedPhases": (
+                "joint-request-evidence-context-capture", "reservation-context-binding",
+                "single-cutoff-read-effects-write-acquisition", "independent-before-vector-binding",
+                "raw-proof-normalization", "genuine-mixed-proof-replay", "compact-proof-packaging",
+                "source-authorization-and-plan-commitments", "exact-outer-transport-preflight",
+                "planner-signature", "paired-public-key-verification",
+                "post-sign-payload-and-meter-stability", "original-envelope-encoding",
+            ),
+            "excludedWork": (
+                "sql-execution", "driver-allocation", "process-allocation",
+                "staged-proof-work", "staging-cache-stamps", "primary-proof-acquisition",
+                "acquisition-trace-serialization", "indexed-projection-allocation",
+                "fixed-metadata-scaffolding", "whole-plan",
+            ),
+            "excludedAuthority": (
+                "key-and-identity-enrollment", "read-only-transaction-ownership",
+                "before-root-and-cutoff-currentness", "capability-reservation",
+                "one-use-persistence", "sql-commit", "registry-admission", "terminal-witness",
+            ),
+        })
+        with self.assertRaises(TypeError):
+            contract["productionV4Enabled"] = True
+        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        material = named_assignment(tree, "OPERATION_MANIFEST_DIGEST").value.args[1]
+        fields = {key.value: value for key, value in zip(material.keys, material.values)}
+        self.assert_shape(fields["signedRevocationPlanProduction"],
+                          "dict(SIGNED_REVOCATION_PRODUCTION_CONTRACT)")
+        imports = {alias.name for node in tree.body if isinstance(node, ast.ImportFrom)
+                   and node.module == "serverware" for alias in node.names}
+        self.assertTrue({"authority_planner", "authority_revocation_plan_production",
+                         "authority_revocation_proof_bundle"}.isdisjoint(imports))
+        limits = authority_query_read_work.QueryReadValidationLimits()
+        self.assertEqual((contract["maxSharedHashes"], contract["maxSharedInputBytes"],
+                          contract["maxSharedJsonNodes"]),
+                         (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes))
         self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
         self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
 

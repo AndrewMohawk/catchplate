@@ -249,9 +249,8 @@ def _trace(payload, ledger, business_after_roots):
             raise RevocationPlanError("revocation trace omits an actual selected address")
 
 
-def _expectations(owned, ledger):
-    work, payload = ledger.work, owned["envelope"]["payload"]
-    plan = payload["measuredPlan"]
+def _expectation_context(owned):
+    """Shared scalar/freshness admission; provenance remains independent."""
     for name in ("expectedPlannerIdentity", "expectedVerifierIdentity"):
         contract.validate_identity_shape(owned[name])
     for name in ("expectedCapabilityId", "expectedPlannerTransactionId"):
@@ -271,6 +270,12 @@ def _expectations(owned, ledger):
             or remaining_monotonic > owned["maximumPlanAgeNs"]
             or abs(remaining_epoch - remaining_monotonic) > owned["maximumClockSkewNs"]):
         raise RevocationPlanError("revocation plan reservation or deadlines are not fresh and consistent")
+
+
+def _expectations(owned, ledger):
+    work, payload = ledger.work, owned["envelope"]["payload"]
+    plan = payload["measuredPlan"]
+    _expectation_context(owned)
     for actual, expected in (
         (payload["typedRequest"], owned["expectedRequest"]),
         (payload["plannerIdentity"], owned["expectedPlannerIdentity"]),

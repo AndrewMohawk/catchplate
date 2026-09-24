@@ -33,6 +33,13 @@ aggregate staging, authenticated predicate/capacity proofs, independent roots
 and time, and non-circular evidence production. It does not change the current
 contract or waive any startup gate.
 
+Source `.74` adds [successor business-transition helpers](webauthn-successor-transitions.md)
+for registration, aggregate trust staging and installation-bound completion,
+plus actual original-byte evidence signing/verification with independent pins.
+They produce ordinary row effects, not registered kernels or proof tokens.
+Successor manifest/query/evidence-consumption adapters and independently owned
+production composers remain necessary; all four startup gaps remain visible.
+
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from
 the planner's eager registry import. Its standalone fixtures can describe that

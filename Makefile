@@ -992,8 +992,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_core.py \
 	serverware/authority_transition_policy.py \
 	serverware/authority_transition_webauthn.py \
+	serverware/authority_transition_webauthn_registration.py \
+	serverware/authority_transition_webauthn_completion.py \
+	serverware/authority_transition_webauthn_trust_stage.py \
 	serverware/authority_transport.py \
 	serverware/authority_webauthn_assertion.py \
+	serverware/authority_webauthn_evidence.py \
 	serverware/authority_webauthn_trust.py \
 	serverware/db.py \
 	serverware/native_postgres_inventory.py \
@@ -2726,7 +2730,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_request_commitment.py \
 				serverware/authority_planner.py \
 				serverware/authority_webauthn_assertion.py \
+				serverware/authority_webauthn_evidence.py \
 				serverware/authority_transition_webauthn.py \
+				serverware/authority_transition_webauthn_registration.py \
+				serverware/authority_transition_webauthn_completion.py \
+				serverware/authority_transition_webauthn_trust_stage.py \
 				scripts/authority_revocation_observation_fixture.py \
 				scripts/authority_revocation_semantics_fixture.py \
 				scripts/authority_revocation_trust_fixture.py \

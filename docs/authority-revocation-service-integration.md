@@ -112,6 +112,10 @@ reserve execution, produce capability, sign/send invocation, issue capability.
 Source `.62` supplies a private [measured writer action](authority-revocation-writer-action.md)
 for atomic retain-and-reserve with independent inputs and same-configuration
 policy binding. It is not connected to authenticated RPC or serving dispatch.
+Source `.63` adds pure [detached writer commitments](authority-revocation-writer-commitment.md):
+original verifier intent, planner relay and separate plan/context/history bodies.
+Their signatures and byte commitments do not supply transport, durable custody,
+an acknowledgment signer or permission to bypass the actual writer action.
 Post-plan witness binding, current-root one-use execution and atomic terminal
 publication remain incomplete. The four unfinished WebAuthn authority kernels
 must not be bypassed to make the registry import or tests succeed.

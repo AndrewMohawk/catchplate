@@ -107,9 +107,12 @@ Synthetic mappings and driver observations are not measured service admission,
 native PostgreSQL durability or a real socket exchange. Follow the
 [source-freeze workflow](../goal.md) before any execution.
 
-Authenticated verifier-to-planner-to-writer custody, durable exact retry and
-acknowledgment bytes, writer response-key custody and a whole-message size
-contract remain unfinished. The method does not enable public dispatch, alter
+Source `.63` adds a pure [detached writer commitment](authority-revocation-writer-commitment.md)
+contract with verifier intent and planner relay signatures. It does not connect
+this action to serving ingress or replace its measured-policy and proof checks.
+Authenticated end-to-end custody, durable exact retry and acknowledgment bytes,
+writer response-key custody and detached-body transport remain unfinished.
+The method does not enable public dispatch, alter
 planner-only peers, issue capabilities or activate execution. Registry closure,
 the four WebAuthn authority gates, independent current-root/witness evidence
 and production Nitro/KMS/signing/witness provisioning remain incomplete.

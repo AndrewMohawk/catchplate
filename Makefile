@@ -677,6 +677,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_writer_configuration_source.py \
 	scripts/test_authority_revocation_writer_action.py \
 	scripts/test_authority_revocation_writer_action_source.py \
+	scripts/test_authority_revocation_writer_commitment.py \
+	scripts/test_authority_revocation_writer_commitment_source.py \
 	scripts/test_authority_webauthn_trust.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
@@ -910,6 +912,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_revocation_writer_connection.py \
 	serverware/authority_revocation_writer_configuration.py \
 	serverware/authority_revocation_writer_action.py \
+	serverware/authority_revocation_writer_commitment.py \
 	serverware/authority_revocation_plan.py \
 	serverware/authority_revocation_plan_contract.py \
 	serverware/authority_revocation_plan_production.py \
@@ -2649,6 +2652,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_writer_connection.py \
 				serverware/authority_revocation_writer_configuration.py \
 				serverware/authority_revocation_writer_action.py \
+				serverware/authority_revocation_writer_commitment.py \
 				serverware/authority_revocation_coordinator.py \
 				serverware/authority_store/planner_connection.py \
 				serverware/authority_store/authorization_records.py \

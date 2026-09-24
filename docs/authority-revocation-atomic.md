@@ -113,7 +113,9 @@ Source `.62` adds a private [measured writer action](authority-revocation-writer
 that owns caller inputs and joins historical age/skew policy to the same held
 configuration before invoking this owner. It adds no serving purpose, peer
 permission, public transport or capability issuance path. Authenticated
-verifier-to-planner-to-writer custody, durable original retry/acknowledgment
+verifier-to-planner-to-writer custody remains unfinished; source `.63` adds only
+the pure [detached commitment contract](authority-revocation-writer-commitment.md).
+Serving integration, detached-body transfer, durable original retry/acknowledgment
 bytes and writer response-key custody remain unfinished. Registry closure and
 the four WebAuthn authority gates remain incomplete. Production Nitro/KMS, signing and independent
 witness services are still unprovisioned.

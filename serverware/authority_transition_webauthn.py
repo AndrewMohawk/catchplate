@@ -24,6 +24,7 @@ from serverware import authority_contract
 from serverware import authority_audit_capacity
 from serverware import authority_complete_query
 from serverware import authority_transition_core as core
+from serverware.authority_query_read_work import _ValidationWork, QueryReadWorkError
 
 
 OPERATION = "webauthn.credential.revoke"
@@ -45,33 +46,63 @@ _LIST_FIELDS = (
 
 def prepare_revocation_input(arguments: Mapping[str, Any]) -> dict[str, Any]:
     """Close semantic input before challenge issuance and request signing."""
+    return _prepare_revocation_input(arguments, work=None)
+
+
+def _prepare_revocation_input(
+    arguments: Mapping[str, Any], *, work: _ValidationWork | None,
+) -> dict[str, Any]:
+    if work is not None and (type(arguments) is not dict or len(arguments) != len(REVOKE_FIELDS)):
+        raise core.TransitionKernelError("revocation input fields are not exact")
     if not isinstance(arguments, Mapping) or set(arguments) != REVOKE_FIELDS:
         raise core.TransitionKernelError("revocation input fields are not exact")
+    if work is not None:
+        work.prepare_copy(arguments)
     values = dict(arguments)
     for name in ("record_id", "actor_id"):
+        if work is not None:
+            work.prepare_utf8(values[name])
         core.require_text(values[name], name, maximum_bytes=1024)
     if values["source"] != "explicit":
         raise core.TransitionKernelError(
             "standalone revocation supports explicit self-service only"
         )
     reason = values["reason"]
+    if work is not None and isinstance(reason, str):
+        work.prepare_utf8(reason)
     if reason is not None and (
         not isinstance(reason, str) or len(reason.encode("utf-8")) > 16_384
     ):
         raise core.TransitionKernelError("revocation reason exceeds its bound")
     event = values["audit_event"]
     if event is not None:
+        if work is not None and isinstance(event, Mapping):
+            work.prepare_encoding(event)
         if not isinstance(event, Mapping) or len(core.canonical_bytes(event)) > 2 * 1024 * 1024:
             raise core.TransitionKernelError("revocation audit event exceeds its bound")
+        if work is not None:
+            work.prepare_copy(event)
         values["audit_event"] = dict(event)
     for name in _LIST_FIELDS:
         ids = values[name]
         if not isinstance(ids, list) or len(ids) > CASCADE_MAX:
             raise core.TransitionKernelError("revocation address set exceeds its bound")
         for item in ids:
+            if work is not None:
+                work.prepare_utf8(item)
             core.require_text(item, name, maximum_bytes=1024)
-        if ids != sorted(set(ids)):
+        if work is not None:
+            # Full-list units conservatively bound the set and sorted copy;
+            # a rejected duplicate list receives no discount for fewer items.
+            work.prepare_copy(ids)
+            work.prepare_copy(ids)
+        ordered = sorted(set(ids))
+        if work is not None:
+            work.prepare_comparison(ids, ordered)
+        if ids != ordered:
             raise core.TransitionKernelError("revocation address set is not sorted and unique")
+        if work is not None:
+            work.prepare_copy(ids)
         values[name] = list(ids)
     # Reserve both assertion writes even when signer == revoked credential.
     mutation_bound = (
@@ -81,14 +112,30 @@ def prepare_revocation_input(arguments: Mapping[str, Any]) -> dict[str, Any]:
     )
     if mutation_bound > authority_contract.operation_spec(OPERATION)["maximumBusinessMutations"]:
         raise core.TransitionKernelError("revocation aggregate mutation bound exceeded")
+    if work is not None:
+        work.prepare_encoding(values)
     core.canonical_bytes(values)
     return values
 
 
-def _arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
+def _arguments(
+    arguments: Mapping[str, Any], *, work: _ValidationWork | None = None,
+) -> dict[str, Any]:
+    if work is not None and (type(arguments) is not dict or len(arguments) != len(REVOKE_FIELDS) + 1):
+        raise core.TransitionKernelError("authority transition arguments are not exact")
     core.require_exact_arguments(arguments, REVOKE_FIELDS)
-    values = prepare_revocation_input({key: arguments[key] for key in REVOKE_FIELDS})
-    if arguments["businessIntent"] != authority_contract.synthesize_business_intent(OPERATION, values):
+    if work is not None:
+        # The full input is a conservative bound for the semantic-field copy.
+        work.prepare_copy(arguments)
+    semantic = {key: arguments[key] for key in REVOKE_FIELDS}
+    values = (prepare_revocation_input(semantic) if work is None else
+              _prepare_revocation_input(semantic, work=work))
+    expected = (authority_contract.synthesize_business_intent(OPERATION, values)
+                if work is None else authority_contract._synthesize_business_intent(
+                    OPERATION, values, work=work))
+    if work is not None:
+        work.prepare_comparison(arguments["businessIntent"], expected)
+    if arguments["businessIntent"] != expected:
         raise core.TransitionKernelError("revocation business intent changed")
     return values
 
@@ -114,11 +161,25 @@ def _exact_query(operation: str, name: str, table: str, item_id: str) -> core.Bo
 
 
 def audit_id(operation: str, request_digest: str, approval_id: str | None) -> str:
+    return _audit_id(operation, request_digest, approval_id, work=None)
+
+
+def _audit_id(
+    operation: str, request_digest: str, approval_id: str | None,
+    *, work: _ValidationWork | None,
+) -> str:
     subject = "credential" if approval_id is None else "approval:" + approval_id
+    if work is not None:
+        work.prepare_utf8(subject)
+        work.charge(hashes=1)
     subject_digest = hashlib.sha256(subject.encode("utf-8")).hexdigest()
-    return core.deterministic_uuid(
-        operation=operation, request_digest=request_digest,
-        purpose="webauthn-revocation-audit:" + subject_digest,
+    purpose = "webauthn-revocation-audit:" + subject_digest
+    if work is None:
+        return core.deterministic_uuid(
+            operation=operation, request_digest=request_digest, purpose=purpose,
+        )
+    return core._deterministic_uuid(
+        operation=operation, request_digest=request_digest, purpose=purpose, work=work,
     )
 
 
@@ -147,26 +208,75 @@ def cascade_queries_at_cutoff(
     The signed-int64 cutoff is a supplied input, not authenticated time. This
     source recipe is not aggregate withdrawal authority or work accounting.
     """
+    return _cascade_queries_at_cutoff(
+        operation=operation, values=values, cutoff_us=cutoff_us,
+        request_digest=request_digest, work=None,
+    )
+
+
+def _cascade_queries_at_cutoff(
+    *, operation: str, values: Mapping[str, Any], cutoff_us: int,
+    request_digest: str, work: _ValidationWork | None,
+) -> tuple[core.Query, ...]:
     record_id = values["record_id"]
     queries = [_exact_query(operation, "revoked_credential", "webauthn_credentials", record_id)]
     try:
-        queries.extend(authority_complete_query.bind_query(
-            operation, role, arguments=values, cutoff_us=cutoff_us,
-        ) for role in (
+        for role in (
             "sessions_pending_webauthn", "sessions_active", "grants", "approvals",
             "global_registration_challenges",
-        ))
+        ):
+            queries.append(
+                authority_complete_query.bind_query(
+                    operation, role, arguments=values, cutoff_us=cutoff_us,
+                ) if work is None else authority_complete_query._bind_query(
+                    operation, role, arguments=values, cutoff_us=cutoff_us, work=work,
+                )
+            )
     except authority_complete_query.CompleteQueryError as exc:
         raise core.TransitionKernelError("revocation complete query binding failed") from exc
+    if work is not None:
+        work.prepare_copy(values["control_plane_approval_ids"])
     audit_subjects = list(values["control_plane_approval_ids"])
     if values["audit_event"] is not None:
         audit_subjects.append(None)
     for ordinal, subject in enumerate(audit_subjects):
         queries.append(_exact_query(
             operation, f"audit_{ordinal}", "metadata_audit_outbox",
-            audit_id(operation, request_digest, subject),
+            audit_id(operation, request_digest, subject) if work is None else
+            _audit_id(operation, request_digest, subject, work=work),
         ))
     return tuple(queries)
+
+
+def _prepare_complete_copies(queries: tuple[core.Query, ...], work: _ValidationWork) -> None:
+    for query in queries:
+        if type(query) is authority_complete_query.CompleteIndexQuery:
+            authority_complete_query._prepare_constructor_work(query.index_id, query.selector_items, work)
+
+
+def _revocation_query_program(
+    *, arguments: Mapping[str, Any], cutoff_us: int, request_digest: str,
+    evidence: Mapping[str, Any], work: _ValidationWork,
+) -> tuple[core.Query, ...]:
+    """Privately generate real source declarations under one supplied meter.
+
+    The future composer must already own all input graphs and give this phase
+    only its remaining budget. This function neither captures those graphs nor
+    authenticates assertion identities, request digests, time, rows or proofs.
+    Its result is ordinary declaration data, not an admission token.
+    """
+    if type(work) is not _ValidationWork:
+        raise QueryReadWorkError("revocation query generation requires the real private work meter")
+    queries = WebAuthnCredentialRevokeKernel()._queries_with_evidence_at_cutoff(
+        arguments=arguments, cutoff_us=cutoff_us, request_digest=request_digest,
+        evidence=evidence, work=work,
+    )
+    # The genuine capacity helper snapshots every complete declaration and its
+    # final close_queries snapshots them again. Reserve both actual passes,
+    # without a cache discount, before entering that unchanged helper.
+    _prepare_complete_copies(queries, work)
+    _prepare_complete_copies(queries, work)
+    return authority_audit_capacity.add_capacity_query(OPERATION, queries)
 
 
 def _row(selected: Mapping[str, Any]) -> dict[str, Any]:
@@ -367,12 +477,30 @@ class WebAuthnCredentialRevokeKernel:
         request_digest: str, evidence: Mapping[str, Any],
     ) -> tuple[core.Query, ...]:
         """Regenerate the closed business program; assertion IDs remain inputs."""
-        values = _arguments(arguments)
-        queries = list(cascade_queries_at_cutoff(
-            operation=self.operation, values=values, cutoff_us=cutoff_us,
-            request_digest=request_digest,
-        ))
+        return self._queries_with_evidence_at_cutoff(
+            arguments=arguments, cutoff_us=cutoff_us, request_digest=request_digest,
+            evidence=evidence, work=None,
+        )
+
+    def _queries_with_evidence_at_cutoff(
+        self, *, arguments: Mapping[str, Any], cutoff_us: int,
+        request_digest: str, evidence: Mapping[str, Any], work: _ValidationWork | None,
+    ) -> tuple[core.Query, ...]:
+        values = _arguments(arguments) if work is None else _arguments(arguments, work=work)
+        queries = list(
+            cascade_queries_at_cutoff(
+                operation=self.operation, values=values, cutoff_us=cutoff_us,
+                request_digest=request_digest,
+            ) if work is None else _cascade_queries_at_cutoff(
+                operation=self.operation, values=values, cutoff_us=cutoff_us,
+                request_digest=request_digest, work=work,
+            )
+        )
+        if work is not None:
+            work.prepare_utf8(evidence.get("credentialRecordId"))
         signer = core.require_text(evidence.get("credentialRecordId"), "assertion credential", maximum_bytes=1024)
+        if work is not None:
+            work.prepare_utf8(evidence.get("challengeId"))
         challenge = core.require_text(evidence.get("challengeId"), "assertion challenge", maximum_bytes=1024)
         if signer != values["record_id"]:
             queries.append(_exact_query(self.operation, "assertion_credential", "webauthn_credentials", signer))
@@ -381,6 +509,8 @@ class WebAuthnCredentialRevokeKernel:
         if (sum(query.maximum_rows for query in queries) > spec["maximumBusinessQueryRows"]
                 or sum(query.work_units for query in queries) > spec["maximumBusinessWorkUnits"]):
             raise core.TransitionKernelError("revocation query program exceeds its business bound")
+        if work is not None:
+            _prepare_complete_copies(tuple(queries), work)
         return core.close_queries(self.operation, tuple(queries))
 
     def transition(self, context: core.KernelContext) -> core.KernelTransition:

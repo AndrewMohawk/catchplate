@@ -1,4 +1,4 @@
-"""Private cumulative work accounting for measured QueryRead validation.
+"""Private cumulative work accounting for query validation and generation.
 
 Only standard-library imports are permitted here: transition_core itself uses
 query_reads. Byte units are defined canonical/framed work, not Python allocation
@@ -141,6 +141,51 @@ class _ValidationWork:
         """Charge measurement plus one hidden canonical-sized shallow copy."""
         size, nodes = self.measure(value)
         self.charge(input_bytes=size, json_nodes=nodes)
+
+    def prepare_scan(self, value: Any) -> None:
+        """Prepare a conservative full-graph scan, including measurement."""
+        size, nodes = self.measure(value)
+        self.charge(input_bytes=size, json_nodes=nodes)
+
+    def prepare_comparison(self, left: Any, right: Any) -> None:
+        """Reserve both full operands before an equality may short-circuit."""
+        self.prepare_scan(left)
+        self.prepare_scan(right)
+
+    def prepare_normalization(self, value: Any) -> tuple[int, int]:
+        """Prepare canonical encoding, ASCII decoding and a real JSON parse.
+
+        Measurement and encoding each charge L bytes/N nodes. Decoding charges
+        L bytes, and parsing charges L bytes/N nodes: total 4L/3N. This must be
+        called before any of the three actual buffers/graphs is produced.
+        """
+        size, nodes = self.prepare_encoding(value)
+        self.charge(input_bytes=2 * size, json_nodes=nodes)
+        return size, nodes
+
+    def prepare_utf8(self, value: str) -> int:
+        """Measure and reserve raw UTF-8 material before its actual encoding.
+
+        Each of the measurement/encoding passes is one scalar node and U raw
+        bytes, without JSON quoting or framing. No encoded buffer is made here.
+        """
+        if type(value) is not str:
+            raise QueryReadWorkError("query read UTF-8 material is not an exact string")
+        self.charge(json_nodes=1)
+        remaining = self.limits.max_input_bytes - self.input_bytes
+        if len(value) > remaining:
+            raise QueryReadWorkError("query read UTF-8 material exceeds remaining work")
+        size = 0
+        for character in value:
+            point = ord(character)
+            if 0xD800 <= point <= 0xDFFF:
+                raise QueryReadWorkError("query read UTF-8 material contains a Unicode surrogate")
+            size += 1 if point < 128 else 2 if point < 2048 else 3 if point < 65536 else 4
+            if size > remaining:
+                raise QueryReadWorkError("query read UTF-8 material exceeds remaining work")
+        self.charge(input_bytes=size)
+        self.charge(input_bytes=size, json_nodes=1)
+        return size
 
     def wire(self, value: Any) -> bytes:
         size, _ = self.prepare_encoding(value)

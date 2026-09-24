@@ -11,6 +11,7 @@ from typing import Any, Mapping, Protocol
 from serverware import authority_contract
 from serverware import authority_complete_query
 from serverware import authority_query_reads
+from serverware.authority_query_read_work import _ValidationWork
 
 
 QUERY_PROGRAM_SCHEMA = "serverware.policyAuthorityQueryProgram/v1"
@@ -3141,19 +3142,34 @@ def deterministic_uuid(
     request_digest: str,
     purpose: str,
 ) -> str:
+    return _deterministic_uuid(
+        operation=operation, request_digest=request_digest, purpose=purpose,
+        work=None,
+    )
+
+
+def _deterministic_uuid(
+    *,
+    operation: str,
+    request_digest: str,
+    purpose: str,
+    work: _ValidationWork | None,
+) -> str:
+    """Build the one source identity document, optionally preparing its work."""
     require_digest(request_digest, "authority transition request digest")
+    if work is not None:
+        work.prepare_utf8(purpose)
     require_text(purpose, "authority transition identity purpose")
-    material = hashlib.sha256(
-        canonical_bytes(
-            {
-                "schema":
-                    "serverware.policyAuthorityDeterministicIdentity/v1",
-                "operation": operation,
-                "requestDigest": request_digest,
-                "purpose": purpose,
-            }
-        )
-    ).hexdigest()
+    document = {
+        "schema": "serverware.policyAuthorityDeterministicIdentity/v1",
+        "operation": operation,
+        "requestDigest": request_digest,
+        "purpose": purpose,
+    }
+    if work is not None:
+        work.prepare_encoding(document)
+        work.charge(hashes=1)
+    material = hashlib.sha256(canonical_bytes(document)).hexdigest()
     value = list(material[:32])
     value[12] = "5"
     value[16] = format((int(value[16], 16) & 0x3) | 0x8, "x")

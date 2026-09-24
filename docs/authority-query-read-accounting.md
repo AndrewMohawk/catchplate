@@ -99,7 +99,10 @@ the same outer budget. It must additionally bind the entire source-generated
 mixed query program, compare complete observations with actual joined leaf
 order, enforce exact point-read keys for presence as well as absence, and
 retain every empty observation. Neither independently successful component is
-a reusable authority token.
+a reusable authority token. The separate
+[measured source generator](authority-revocation-query-work.md) now accounts the
+genuine recipe's own work; connecting both phases to proof admission is still
+required.
 
 Raw transport capture, retained-bundle encoding and hashing, compact transition
 packaging, kernel/audit-capacity admission, SQL acquisition and the coordinated

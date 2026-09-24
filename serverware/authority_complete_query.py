@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from serverware import authority_index_projection as projection
+from serverware.authority_query_read_work import _ValidationWork
 
 
 QUERY_SCHEMA = "serverware.policyAuthorityCompleteIndexQuery/v1"
@@ -83,12 +84,14 @@ def _role(operation: str, role: Any) -> _Role:
     raise CompleteQueryError("complete query role is not declared for its operation")
 
 
-def _source_id(value: Any) -> str:
+def _source_id(value: Any, *, work: _ValidationWork | None = None) -> str:
     # Preserve the candidate's source-ID admission, not just the looser index
     # codec's 4096-byte text ceiling. Never coerce numbers, null or subclasses.
     if (type(value) is not str or not 1 <= len(value) <= MAX_SOURCE_ID_BYTES
             or value != value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value)):
         raise CompleteQueryError("complete query source ID is invalid")
+    if work is not None:
+        work.prepare_utf8(value)
     try:
         if len(value.encode("utf-8")) > MAX_SOURCE_ID_BYTES:
             raise CompleteQueryError("complete query source ID exceeds its UTF-8 bound")
@@ -215,27 +218,65 @@ def snapshot_query(query: CompleteIndexQuery) -> CompleteIndexQuery:
         raise CompleteQueryError("complete query is incomplete") from exc
 
 
-def _binding_inputs(arguments: Any, cutoff_us: Any) -> tuple[str, dict[str, int], int]:
+def _binding_inputs(
+    arguments: Any, cutoff_us: Any, *, work: _ValidationWork | None = None,
+) -> tuple[str, dict[str, int], int]:
     # Only referenced primitive fields are inspected. This is deliberately not
     # a second full business-intent validator and does not retain its audit data.
     if type(arguments) is not dict or len(arguments) > MAX_ARGUMENT_FIELDS:
         raise CompleteQueryError("complete query arguments are not a bounded exact dictionary")
     if type(arguments.get("source")) is not str or arguments["source"] != "explicit":
         raise CompleteQueryError("complete query roles require explicit revocation")
-    record_id = _source_id(arguments.get("record_id"))
+    record_id = _source_id(arguments.get("record_id"), work=work)
     sizes = {}
     for name in _HINT_FIELDS:
         supplied = arguments.get(name)
         if type(supplied) is not list or len(supplied) > CASCADE_MAX:
             raise CompleteQueryError("complete query hint inventory exceeds its source bound")
-        owned = tuple(_source_id(item) for item in supplied)
-        if owned != tuple(sorted(set(owned))):
+        if work is not None:
+            work.prepare_copy(supplied)
+        owned = tuple(_source_id(item, work=work) for item in supplied)
+        if work is not None:
+            # Conservative full-list units for the set, sorted list, and final
+            # tuple. The separately prepared comparison never refunds a
+            # shortcut or an input containing duplicate values.
+            for _ in range(3):
+                work.prepare_copy(owned)
+        ordered = tuple(sorted(set(owned)))
+        if work is not None:
+            work.prepare_comparison(owned, ordered)
+        if owned != ordered:
             raise CompleteQueryError("complete query hints are not sorted and unique")
         sizes[name] = len(owned)
     return record_id, sizes, _cutoff(cutoff_us)
 
 
-def _bind(operation: str, declared: _Role, inputs: tuple[str, dict[str, int], int]) -> CompleteIndexQuery:
+def _prepare_constructor_work(
+    index_id: str, selector_items: tuple[tuple[str, str | int], ...],
+    work: _ValidationWork,
+) -> None:
+    """Prepare one real constructor without constructing a second selector.
+
+    The actual pair graph conservatively bounds both selector dictionary
+    copies. Text is encoded once by the projection codec and, for source IDs,
+    once more by the declaration's stricter source-ID guard.
+    """
+    for name, value in selector_items:
+        if type(value) is str:
+            work.prepare_utf8(value)
+            if name != "status":
+                work.prepare_utf8(value)
+    work.prepare_copy(selector_items)
+    work.prepare_copy(selector_items)
+    descriptor = projection._definition(index_id).document()
+    work.prepare_encoding(descriptor, ensure_ascii=False)
+    work.charge(hashes=1)
+
+
+def _bind(
+    operation: str, declared: _Role, inputs: tuple[str, dict[str, int], int],
+    *, work: _ValidationWork | None = None,
+) -> CompleteIndexQuery:
     record_id, sizes, cutoff_us = inputs
     if declared.name == "global_registration_challenges":
         selector = (("expires_after_us", cutoff_us),)
@@ -243,6 +284,8 @@ def _bind(operation: str, declared: _Role, inputs: tuple[str, dict[str, int], in
         selector = (("credential_record_id", record_id), ("status", declared.status))
     else:
         selector = (("credential_record_id", record_id),)
+    if work is not None:
+        _prepare_constructor_work(declared.index_id, selector, work)
     return CompleteIndexQuery(operation, declared.name, selector, max(1, sizes[declared.hint_field]))
 
 
@@ -250,6 +293,15 @@ def bind_query(operation: str, role: str, *, arguments: Any, cutoff_us: int) -> 
     """Derive a fixed role from supplied intent/time, not caller index claims."""
     declared = _role(operation, role)
     return _bind(operation, declared, _binding_inputs(arguments, cutoff_us))
+
+
+def _bind_query(
+    operation: str, role: str, *, arguments: Any, cutoff_us: int,
+    work: _ValidationWork,
+) -> CompleteIndexQuery:
+    """Private metered route through the same binding and constructor body."""
+    declared = _role(operation, role)
+    return _bind(operation, declared, _binding_inputs(arguments, cutoff_us, work=work), work=work)
 
 
 def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery, ...], *,

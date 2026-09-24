@@ -121,13 +121,16 @@ bind it even in that case; successful query generation is not sufficient.
 The lower cascade helper retains its existing prepared-values precondition;
 callers needing the full business validation must use the full recipe.
 
-This factoring does not meter source generation. A full recipe followed by the
-actual capacity composition performs 20 profile hashes plus two hashes per
+The public cutoff-native APIs remain unmetered. A separate private
+[measured generator](authority-revocation-query-work.md) now charges the genuine
+source workers, but is not yet called by the proof composer. A full recipe
+followed by the actual capacity composition performs 20 profile hashes plus two hashes per
 audit subject. Argument canonicalization, business-intent normalization and
 JSON decoding, copies, comparisons, profile descriptor encodings and audit-ID
 encodings are additional real work. The later composer must charge those
 passes as well as [measured observation validation](authority-query-read-accounting.md)
-against its one remaining budget; the hash formula alone is not that admission.
+against its one remaining budget; neither the hash formula nor independently
+successful generation supplies that composition.
 
 The next consumer must own all inputs before generating this program, compare
 every ordered observation with the generated declaration, enforce full-key

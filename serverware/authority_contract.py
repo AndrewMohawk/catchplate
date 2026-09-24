@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from serverware import authority_complete_query
+from serverware.authority_query_read_work import _ValidationWork
 
 
 SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.28"
@@ -2243,7 +2244,19 @@ def synthesize_business_intent(
     operation: str,
     arguments: Mapping[str, Any],
 ) -> dict[str, Any]:
+    return _synthesize_business_intent(operation, arguments, work=None)
+
+
+def _synthesize_business_intent(
+    operation: str,
+    arguments: Mapping[str, Any],
+    *,
+    work: _ValidationWork | None,
+) -> dict[str, Any]:
+    """The actual normalization body; a private caller may charge its work."""
     spec = operation_spec(operation)
+    if work is not None:
+        work.prepare_scan(arguments)
     if (
         not isinstance(arguments, Mapping)
         or _contains_business_intent(arguments)
@@ -2267,11 +2280,17 @@ def synthesize_business_intent(
         "webauthn.challenge.consume",
     }:
         excluded.add("challenge_id")
+    if work is not None:
+        # Use the full source graph conservatively for the filtered shallow
+        # copy; do not reproduce this exclusion recipe in an accounting caller.
+        work.prepare_copy(arguments)
     closed_arguments = {
         key: value
         for key, value in sorted(arguments.items())
         if key not in excluded
     }
+    if work is not None:
+        work.prepare_normalization(closed_arguments)
     try:
         normalized = json.loads(
             _canonical(closed_arguments).decode("ascii")

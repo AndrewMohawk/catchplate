@@ -126,6 +126,28 @@ deriving proposed INSERT/no-op effects and roots, but persists nothing and
 does not activate the registry or a serving route. This is unexecuted source,
 not provisioned signer/target authority or completed installation admission.
 
+## Original-input capture and historical replay (.85)
+
+Actual evidence acquisition now encodes the held original inputs before its
+root/row/proof SQL reads and returns canonical input-record bytes plus their framed
+digest alongside the genuine acquisition result. The installation record
+preserves the exact signed evidence, bundle and state bytes, original
+observation instant and committed-stage descriptor; it does not enroll a
+signer, target or policy.
+
+The configured owner's `replay_installation` reconstructs those originals,
+repeats the actual admission adapter and compares the complete mutations,
+result, kernel work units and total business work units on the same remaining
+allowance. The input commitment, typed request, selected rows, database cutoff
+and signer/target policy require independent admission for that exact history;
+neither stored descriptors nor a currently active owner establish it.
+
+This replay opens no SQL, stores or signs no plan, and verifies no selected-row
+root proofs. It establishes neither current authority nor physical installation,
+durable custody or execution. Original-input capture and semantic replay are
+source-implemented prerequisites, not an extension of public v3 or the
+revocation-only retained protocol.
+
 ## Authored tests and remaining authority work
 
 `test_webauthn_trust_core.py` has 22 authored methods for actual local signatures, explicit context,
@@ -145,8 +167,9 @@ It is not wired into legacy reconciliation. The `.84` optional signed policy
 and private configured factory supply the source configuration seam; completing
 that path still needs independently provisioned signer/target authority,
 authenticated committed aggregate-stage/current-root ancestry, durable receipt
-admission, retained semantic signed-plan replay and actual
-producer/planner/witness/executor integration. In particular, the post-readback
+admission, signed-plan custody binding the `.85` originals and semantic replay,
+root-proof verification and actual producer/planner/witness/executor
+integration. In particular, the post-readback
 observation time must not be substituted by the earlier local `verifiedAt`, and
 an error after physical installation cannot be handled as a filesystem
 rollback. See the

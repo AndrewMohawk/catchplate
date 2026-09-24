@@ -34,6 +34,27 @@ still encounters the registry gate and returns proposed row/root observations,
 not persisted evidence. These additions are unbuilt and unexecuted; provisioning,
 independent root/time admission and the activation evidence below remain required.
 
+Source `.85` adds closed original-input records for later genuine admission
+replay. Registration retains the original evidence, client data, attestation
+and ceremony-authorization bytes, actual trust-root DER and metadata,
+historical verification time, credential/transports and expected authorization.
+Installation retains its evidence, installed bundle/state bytes, observation
+time and committed-stage descriptor. Keys and configuration authority are not
+adopted from either record. Both codecs share the existing work allowance and
+source-bounded canonical transport; local maxima do not promise that a complete
+encode/decode/replay fits the cumulative ceiling.
+
+The actual private acquisitions now derive those bytes and their framed
+commitment before their root/row/proof reads and return them as ordinary
+observations, without durable storage. The separate semantic replay checks an
+independently supplied historical input commitment, reconstructs genuine core
+inputs, invokes the actual purpose kernel and signature/attestation checks, and
+compares complete effects and work totals. It does **not** replay selected-row
+membership proofs or establish historical root, time, signer or committed-stage
+authority. A durable signed retention/replay protocol, independent admission of
+those historical expectations and terminal integration remain missing. This is
+unexecuted source, with no v3 expansion, revocation-v4 relabeling or activation.
+
 The [startup blocker](authority-transition-startup-blocker.md) and
 [unactivated revocation candidate](webauthn-revocation-candidate.md) identify the
 current seams. Completing them requires the following coordinated producer,
@@ -294,8 +315,8 @@ v1 fields. The successor now supplies v2 evidence semantics and private
 admission acquisition, with purpose-specific key/identity/target/time policy
 and a configured read factory in `.84`. Independently provisioned authority,
 durable admission and its authenticated root transition, retained semantic
-replay and terminal integration remain required. The local bundle signing key
-and generic receipt structure checks are not substitutes.
+replay's signed protocol and terminal integration remain required. The local
+bundle signing key and generic receipt structure checks are not substitutes.
 
 An installed-but-uncompleted crash remains a pending, reconciliable operation;
 a local file alone does not publish authority. Retry verifies the same stage,

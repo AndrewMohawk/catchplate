@@ -1004,6 +1004,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_evidence_planning.py \
 	serverware/authority_webauthn_evidence_policy.py \
 	serverware/authority_webauthn_evidence_configuration.py \
+	serverware/authority_webauthn_evidence_input_wire.py \
+	serverware/authority_webauthn_evidence_replay.py \
+	serverware/authority_webauthn_registration_inputs.py \
+	serverware/authority_webauthn_installation_inputs.py \
 	serverware/authority_webauthn_registration_production.py \
 	serverware/authority_webauthn_registration_admission.py \
 	serverware/authority_webauthn_installation_admission.py \
@@ -2751,6 +2755,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_evidence_planning.py \
 				serverware/authority_webauthn_evidence_policy.py \
 				serverware/authority_webauthn_evidence_configuration.py \
+				serverware/authority_webauthn_evidence_input_wire.py \
+				serverware/authority_webauthn_evidence_replay.py \
+				serverware/authority_webauthn_registration_inputs.py \
+				serverware/authority_webauthn_installation_inputs.py \
 				serverware/authority_webauthn_registration_production.py \
 				serverware/authority_webauthn_registration_admission.py \
 				serverware/authority_webauthn_installation_admission.py \

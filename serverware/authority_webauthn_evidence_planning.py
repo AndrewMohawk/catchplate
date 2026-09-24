@@ -6,13 +6,15 @@ evidence signer and freshness policy, and either RP/origin or installation
 target. Requests cannot replace those pins, supply a cursor/manifest or expand
 the read transaction. Actual acquisition uses one original work allowance.
 
-These explicit configuration inputs still require independent admission: the
-current measured configuration has no purpose-scoped evidence signer block.
-This owner does not infer that authority from a generic verifier key. Likewise,
+These explicit configuration inputs require independent admission through the
+signed purpose-policy mapper and actual service factory. This owner does not
+infer that authority from a generic verifier key. Likewise,
 caller root/time/enrollment or committed-stage/readback expectations still need
 independent provenance. SQL identity/source checks and driver work retain their
 existing separate bounds. No signing, persistence, execution or service/registry
-activation follows from the returned ordinary acquisition observations.
+activation follows from the returned ordinary acquisition observations. The
+private replay methods repeat genuine historical semantics with the held pins;
+historical input/context admission and durable plan/proof replay remain external.
 """
 from __future__ import annotations
 
@@ -127,6 +129,44 @@ class EvidenceAdmissionPlanner:
         if configured[3] != operation:
             raise WebAuthnEvidencePlanningError("evidence planner method differs from its configured operation")
         return configured
+
+    def replay_registration(self, *, request, selected_rows, database_now,
+            inputs_bytes, expected_inputs_digest, expected_transition, work):
+        """Recheck actual originals/effects under independently admitted history.
+
+        The historical commitment, selected rows and cutoff must come from an
+        admitted original plan, not be copied from untrusted input storage.
+        Held configuration must be independently resolved for that history;
+        using a currently active owner does not establish historical authority.
+        This opens no SQL and does not establish current roots or execution.
+        """
+        configured = self._snapshot(registration.OPERATION)
+        from serverware import authority_webauthn_evidence_replay as replay
+
+        return replay._replay_registration_on_work(request=request, selected_rows=selected_rows,
+            database_now=database_now, inputs_bytes=inputs_bytes,
+            expected_inputs_digest=expected_inputs_digest, expected_transition=expected_transition,
+            public_key=configured[4], expected_identity=dict(zip(_IDENTITY_FIELDS, configured[5])),
+            expected_spki_digest=configured[6], maximum_age_ns=configured[7],
+            maximum_clock_skew_ns=configured[8], rp_id=configured[9], origin=configured[10], work=work)
+
+    def replay_installation(self, *, request, selected_rows, database_now,
+            inputs_bytes, expected_inputs_digest, expected_transition, work):
+        """Recheck original installation semantics, never attest physical state.
+
+        Historical input commitment, selected rows/cutoff and the configured
+        signer/target policy need independent admission for the exact history.
+        No current owner or retained stage descriptor establishes that lineage.
+        """
+        configured = self._snapshot(installation.OPERATION)
+        from serverware import authority_webauthn_evidence_replay as replay
+
+        return replay._replay_installation_on_work(request=request, selected_rows=selected_rows,
+            database_now=database_now, inputs_bytes=inputs_bytes,
+            expected_inputs_digest=expected_inputs_digest, expected_transition=expected_transition,
+            public_key=configured[4], expected_identity=dict(zip(_IDENTITY_FIELDS, configured[5])),
+            expected_spki_digest=configured[6], maximum_age_ns=configured[7],
+            maximum_clock_skew_ns=configured[8], installation_target_digest=configured[11], work=work)
 
     def acquire_registration(self, *, request, business_before_roots, authorization_before_roots,
             envelope_bytes, client_data_json, attestation_object, credential_id, transports,

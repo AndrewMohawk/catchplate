@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.84`, implementation only. These helpers do not register the
+Status: source `.85`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -176,6 +176,55 @@ digest and generation membership bind the extension, requiring configuration
 resigning and regenerated bindings. Merely adding a policy does not add a
 service operation, registry kernel, handler, permission, SQL write or signer.
 Independent infrastructure and evidence signers remain unprovisioned.
+
+## Original inputs and genuine historical semantic replay
+
+The acquisition now encodes held originals before its root/row/proof SQL reads
+and returns `original_inputs_bytes` and their domain-separated
+`original_inputs_digest` only with the successful kernel/proof observations.
+These are ordinary retained data, not a signed plan or durable receipt.
+
+Registration's closed input record preserves the signed evidence envelope,
+client JSON, attestation object, credential ID, original transport order,
+ceremony authorization bytes and expected authorization, historical UTC time
+and actual trust-root DER plus metadata. Only the AAGUID set receives a sorted
+unique representation; trust-root and transport ordering are preserved. The
+decoder reconstructs actual `CeremonyScope`, `TrustRootSnapshot` and
+`VerificationContext` objects on the same work allowance. A reconstructed trust
+snapshot still needs independent historical admission.
+
+Installation's separate closed record preserves the signed evidence envelope,
+installed bundle and rollback-state originals, original observation time and
+exact committed-stage descriptor. It contains no installer key, identity,
+target, policy, current root or verification result. A retained stage descriptor
+is not proof of a committed stage or physical readback.
+
+Both formats bind source revision and operation. The shared transport uses
+canonical JSON, duplicate-rejecting bounded decoding, exact byte counts and
+canonical unpadded base64url; times round-trip through integer UTC microseconds
+without floating-point conversion and retain the actual semantic nanosecond
+range. The 64 MiB / one-million-node transport ceilings are not new work
+allowances. Every copy, encoding, parse, comparison and hash uses remaining
+caller work; combinations of locally valid maxima can exceed that allowance.
+
+The configured owner's `replay_registration` and `replay_installation` methods
+now call the genuine private semantic replay worker. It owns request, selected
+rows, expected effects and signer settings before callbacks, recomputes the
+typed request/operation and input commitments, reconstructs originals and
+invokes the actual purpose-specific kernel. Registration repeats actual
+ceremony/attestation and signed-evidence checks; installation repeats actual
+bundle/state/stage semantics and signed-evidence checks. The worker compares
+complete `mutations`, `result`, `kernelWorkUnits` and `workUnits`, including
+recomputed query-plus-kernel work. It accepts no successful-verification DTO.
+
+The historical input commitment, request, selected rows, database cutoff and
+signer/configuration history must be independently admitted; copying a digest
+from untrusted storage supplies none of that authority. A current configured
+owner alone cannot resolve historical keys or policy. These methods do not
+verify selected-row/root proofs, grant current execution, sign, persist or open
+SQL. A versioned signed-plan binding, durable original-input custody, independent
+proof replay and executor/recovery integration still need implementation. V3
+cannot silently acquire these fields, and revocation-only v4 remains unchanged.
 
 ## Retained evidence and consumption
 

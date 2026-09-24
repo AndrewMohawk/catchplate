@@ -6,6 +6,8 @@ ceremony or installed originals and time expectations. This module reads and
 joins those roots, proves its actual selected rows, invokes the fixed genuine
 semantic adapter and derives the real primary after-roots on the same work.
 Neither supplied context data nor the returned observations grant admission.
+The held originals are encoded and committed before root/row/proof SQL reads;
+their returned bytes are retained data, not a substitute for genuine replay.
 
 These operations have no outbox/capacity state or counted-index profiles. The
 actual indexed-primary engine receives an empty head inventory and still runs
@@ -22,6 +24,9 @@ from typing import Any
 from serverware import authority_planner as planner
 from serverware import authority_transition_webauthn_registration_admission as registration
 from serverware import authority_transition_webauthn_installation_admission as installation
+from serverware import authority_webauthn_evidence_input_wire as input_wire
+from serverware import authority_webauthn_registration_inputs as registration_inputs
+from serverware import authority_webauthn_installation_inputs as installation_inputs
 
 
 authority, core = planner.authority_contract, planner.authority_transition_core
@@ -48,6 +53,8 @@ class _EvidenceAdmissionAcquisition:
     business_before_roots: tuple[dict[str, Any], ...]
     authorization_before_roots: tuple[dict[str, Any], ...]
     before_proofs: tuple[dict[str, Any], ...]
+    original_inputs_bytes: bytes
+    original_inputs_digest: str
 
 
 def _source(operation):
@@ -136,6 +143,20 @@ def _acquire_owned(cursor, *, operation, owned, raw, ceremony, public_key, query
             roots = tuple(production.attestation.TrustRootSnapshot(*fields, _work=query_work)
                 for fields in root_fields)
             context = production.attestation.VerificationContext(*context_fields, roots, _work=query_work)
+            original_inputs_bytes = registration_inputs._encode_on_work(
+                envelope_bytes=raw[0], client_data_json=raw[1], attestation_object=raw[2],
+                credential_id=inputs["credentialId"], transports=inputs["transports"],
+                scope=scope, verification_context=context,
+                expected_authorization=inputs["authorization"], work=query_work)
+        else:
+            original_inputs_bytes = installation_inputs._encode_on_work(
+                installation_envelope_bytes=raw[0], installed_bundle_bytes=raw[1],
+                installed_state_bytes=raw[2], observed_at=ceremony,
+                expected_committed_stage=inputs["stage"], work=query_work)
+        # The codecs own the actual held originals, not caller-supplied record
+        # bytes. This framed commitment spends the same remaining allowance
+        # before any root, clock, business-row or proof SQL callback.
+        original_inputs_digest = input_wire._digest_on_work(original_inputs_bytes, query_work)
         queries = adapter._query_recipe_on_work(arguments=arguments, work=query_work)
         if (any(type(query) is not core.BoundedQuery for query in queries)
                 or sum(query.maximum_rows for query in queries) > spec["maximumQueryRows"]):
@@ -232,7 +253,8 @@ def _acquire_owned(cursor, *, operation, owned, raw, ceremony, public_key, query
         state = planner.PlanningState(database_now=database_now,
             query_work_units=sum(query.work_units for query in queries), query_program=queries, query_reads=records)
         return _EvidenceAdmissionAcquisition(request, selected, state, kernel, mutations,
-            work_units, write_evidence, closed_trace, business, authorization, proofs)
+            work_units, write_evidence, closed_trace, business, authorization, proofs,
+            original_inputs_bytes, original_inputs_digest)
     except BaseException:
         acquisition.failed = True
         raise

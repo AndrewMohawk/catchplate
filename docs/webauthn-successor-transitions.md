@@ -1,8 +1,8 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.87`, implementation only. Configured evidence-admission plan
-owners now join real read acquisition, exact-PK proof and original-input replay,
-and genuine signing within one live epoch/monotonic window.
+Status: source `.88`, implementation only. Configured evidence-admission plan
+owners now preserve original historical context alongside the signed plan and
+detached inputs, with genuine three-original replay against independent pins.
 These helpers do not register missing kernels or repair service startup. They
 are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
@@ -319,7 +319,7 @@ The actual plan producer requires that same window and joins its deadline,
 age and skew to the held expectations. It samples after input ownership,
 immediately before signing after expensive replay/output reservations, after
 the signature operation, and after final envelope encoding. The owner also
-checks before returning the two original byte strings. Fresh checks do not
+checks before returning the original byte strings. Fresh checks do not
 rewrite signed issuance, original evidence time or historical database cutoff;
 standalone retained-plan verification remains historical and independent.
 
@@ -330,6 +330,48 @@ trusted hardware clock or process watchdog. This is configured private source
 composition, not a serving route, historical admission, durable custody,
 execution capability or completed registry activation. Existing schemas,
 permissions, work allowances and release gates remain unchanged.
+
+## Original historical context and retained-record replay
+
+Source `.88` preserves a third original, `evaluation_context_bytes`, after the
+producer's existing envelope and input fields. It is encoded from the actual
+owned expectations before signing, not reconstructed from a signed response or
+database row. The existing live window also covers this encoding work.
+
+The context codec uses the closed flat twenty-field
+`serverware.policyAuthorityWebAuthnEvidencePlanEvaluationContext/v1` document:
+`schema`, `sourceRevision` and the plan verifier's eighteen exact expectations.
+Those expectations preserve request, both before-root classes, original-input
+commitment, configuration/planner/evidence pins, original cutoff and evaluation
+time/deadline, age/skew and the applicable RP/origin or installation target.
+It contains no private/public key bytes, live monotonic window, fabricated
+reservation or capability. The actual shared validator closes the request and
+root inventories and admits the exact historical cutoff representation.
+
+`authority_webauthn_evidence_plan_retention._verify_record_on_work` takes all
+three raw originals, independently admitted expectations and actual public
+keys. It owns the independent graph before decoding, checks canonical original
+context bytes and complete equality with that graph, then invokes genuine
+signed-plan proof and semantic replay using the independent graph, never the
+stored context as authority. It subsequently derives both actual raw-key hashes,
+three original-byte hashes and a closed sixteen-field record commitment under
+`serverware.policyAuthorityWebAuthnEvidenceAdmissionRetainedPlan/v1`.
+That commitment binds the original plan identity, request/operation/configuration,
+key fingerprints and byte counts/hashes; it is not a signed custody receipt.
+
+The configured owner's `verify_retained` method first joins every independent
+configuration/purpose pin and policy bound to its held configuration, then
+runs that actual three-original verifier. It uses public keys only and samples
+no clock. A matching current owner does not prove historical authority: the
+caller must still independently admit the historical configuration, request,
+roots, inputs and time expectations. Neither a stored key digest nor successful
+local replay enrolls keys, refreshes history or establishes current roots.
+
+Encoding, canonical comparisons, signatures, proofs and record hashes share
+the original invocation work. The existing 64 MiB / one-million-node / depth-128
+transport ceilings grant no replacement budget. These are custody inputs and
+replay mechanics, not durable storage. No SQL, table, privilege, execution
+reservation, handler registration or serving route is added by this batch.
 
 ## Retained evidence and consumption
 
@@ -541,7 +583,7 @@ witnessing and recovery remain pending. The generic evidence signer and ordinary
 row/acquisition results cannot fill those gaps or repair service startup.
 
 The evidence-storage integration must connect the private authenticated
-acquisitions and genuine signed-plan replay to durable retention and an
+acquisitions and genuine three-original signed-plan replay to durable retention and an
 authorized atomic commit through authenticated root maintenance. The identical
 unused verified-row no-op requires an explicit empty-mutation policy when its
 configured kernel is eventually registered. No placeholder handler, keyless

@@ -153,6 +153,39 @@ class EvidenceAdmissionPlanOwner:
             raise WebAuthnEvidencePlanOwnerError("evidence plan method differs from its configured purpose")
         return configured
 
+    def verify_retained(self, *, envelope_bytes, inputs_bytes, evaluation_context_bytes,
+            expectations, work):
+        """Replay three originals against separately admitted historical context.
+
+        Matching this owner's configured pins does not establish that it was
+        the historical configuration. The caller still admits the request,
+        roots, input commitment, database cutoff and historical time window.
+        This method neither samples a new clock nor uses the private signer.
+        """
+        if type(self) is not EvidenceAdmissionPlanOwner:
+            raise WebAuthnEvidencePlanOwnerError("evidence plan owner type changed")
+        held = _configuration(self._configured)
+        configured = self._snapshot(held[0][3])
+        ledger = evidence.capture._SharedLedger(work)
+        expected = evidence.capture._JSONCapture(ledger).visit(expectations)
+        operation = configured[0][3]
+        producing.plan._validate_expectations(expected, operation)
+        read_config, _private, public, identity, spki, configuration_digest = configured
+        evidence.plan._same((expected["configurationDigest"], expected["plannerIdentity"],
+                expected["plannerSpkiDigest"], expected["evidenceIdentity"], expected["evidenceSpkiDigest"],
+                expected["maximumPlanAgeNs"], expected["maximumEvidenceAgeNs"],
+                expected["maximumClockSkewNs"], expected["rpId"], expected["origin"],
+                expected["installationTargetDigest"]),
+            (configuration_digest, dict(zip(_IDENTITY_FIELDS, identity)), spki,
+                dict(zip(_IDENTITY_FIELDS, read_config[5])), read_config[6],
+                read_config[7], read_config[7], read_config[8], read_config[9], read_config[10], read_config[11]),
+            work, "retained evidence plan context differs from held configuration")
+        from serverware import authority_webauthn_evidence_plan_retention as retention
+
+        return retention._verify_record_on_work(envelope_bytes=envelope_bytes,
+            inputs_bytes=inputs_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            expectations=expected, planner_public_key=public, evidence_public_key=read_config[4], work=work)
+
     def produce_registration(self, *, request, business_before_roots, authorization_before_roots,
             envelope_bytes, client_data_json, attestation_object, credential_id, transports,
             scope, verification_context, expected_authorization, deadline_epoch_ns, work):

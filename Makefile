@@ -1009,10 +1009,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_evidence_plan.py \
 	serverware/authority_webauthn_evidence_plan_clock.py \
 	serverware/authority_webauthn_evidence_plan_configuration.py \
+	serverware/authority_webauthn_evidence_plan_context.py \
 	serverware/authority_webauthn_evidence_plan_contract.py \
 	serverware/authority_webauthn_evidence_plan_owner.py \
 	serverware/authority_webauthn_evidence_plan_production.py \
 	serverware/authority_webauthn_evidence_plan_reads.py \
+	serverware/authority_webauthn_evidence_plan_retention.py \
 	serverware/authority_webauthn_evidence_proofs.py \
 	serverware/authority_webauthn_registration_inputs.py \
 	serverware/authority_webauthn_installation_inputs.py \
@@ -2768,10 +2770,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_evidence_plan.py \
 				serverware/authority_webauthn_evidence_plan_clock.py \
 				serverware/authority_webauthn_evidence_plan_configuration.py \
+				serverware/authority_webauthn_evidence_plan_context.py \
 				serverware/authority_webauthn_evidence_plan_contract.py \
 				serverware/authority_webauthn_evidence_plan_owner.py \
 				serverware/authority_webauthn_evidence_plan_production.py \
 				serverware/authority_webauthn_evidence_plan_reads.py \
+				serverware/authority_webauthn_evidence_plan_retention.py \
 				serverware/authority_webauthn_evidence_proofs.py \
 				serverware/authority_webauthn_registration_inputs.py \
 				serverware/authority_webauthn_installation_inputs.py \

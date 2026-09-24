@@ -56,18 +56,36 @@ def _capture(payload, expectations, inputs_bytes, work):
     owned = evidence.capture._JSONCapture(ledger).visit({"payload": payload, "expectations": expectations})
     contract.validate_payload_shape(owned["payload"])
     expected = owned["expectations"]
+    _validate_expectations(expected, owned["payload"]["operation"])
+    return owned["payload"], expected
+
+
+def _validate_expectations(expected, operation):
+    """Close already-owned independent data, without granting its provenance.
+
+    Context encoding and retained replay share this real validator instead of
+    constructing a placeholder plan. Request and both primary-root inventories
+    retain their source-fixed shapes; actual request commitments, memberships,
+    evidence semantics and signatures still require the genuine plan replay.
+    """
     shape = evidence.plan.contract
     shape._object(expected, _EXPECTATION_FIELDS, "independent evidence plan expectations")
+    if type(operation) is not str or operation not in contract.OPERATIONS:
+        raise WebAuthnEvidencePlanError("evidence plan expectation operation is not source fixed")
+    contract._request(expected["request"], operation, contract._SPECS[operation])
+    contract._roots(expected["businessBeforeRoots"], contract._BUSINESS_TABLES[operation])
+    contract._roots(expected["authorizationBeforeRoots"], contract._AUTHORIZATION_TABLES[operation])
     for name in ("inputsDigest", "configurationDigest", "plannerSpkiDigest", "evidenceSpkiDigest"):
         shape._digest(expected[name])
     for name in ("plannerIdentity", "evidenceIdentity"):
         evidence._identity(expected[name])
     for name in ("nowEpochNs", "deadlineEpochNs", "databaseCutoffUs"):
         shape._integer(expected[name], minimum=1)
+    replay.registration.registration._now(inputs_wire._from_epoch_us(expected["databaseCutoffUs"]))
     for name in ("maximumPlanAgeNs", "maximumEvidenceAgeNs"):
         shape._integer(expected[name], evidence.authority.VERIFIER_RESPONSE_MAX_AGE_NS, minimum=1)
     shape._integer(expected["maximumClockSkewNs"], evidence.authority.VERIFIER_MAX_CLOCK_SKEW_NS)
-    if owned["payload"]["operation"] == replay.registration.OPERATION:
+    if operation == replay.registration.OPERATION:
         shape._text(expected["rpId"], 4096)
         shape._text(expected["origin"], 8192)
         if expected["installationTargetDigest"] is not None:
@@ -78,7 +96,6 @@ def _capture(payload, expectations, inputs_bytes, work):
             raise WebAuthnEvidencePlanError("installation expectations cannot use a registration RP")
     if expected["nowEpochNs"] >= expected["deadlineEpochNs"]:
         raise WebAuthnEvidencePlanError("evidence plan invocation has expired")
-    return owned["payload"], expected
 
 
 def _bind(payload, expected, work):

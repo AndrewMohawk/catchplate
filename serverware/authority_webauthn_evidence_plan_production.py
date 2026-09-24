@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from serverware import authority_webauthn_evidence_plan as plan
+from serverware import authority_webauthn_evidence_plan_context as plan_context
 
 
 contract, evidence = plan.contract, plan.evidence
@@ -32,6 +33,7 @@ class _ProducedEvidencePlan:
 
     envelope_bytes: bytes
     inputs_bytes: bytes
+    evaluation_context_bytes: bytes
 
 
 def _list(values, maximum, work):
@@ -144,8 +146,9 @@ def _produce_from_acquisition_on_work(acquisition, *, expectations,
             "kernelWorkUnits": owned["kernelWorkUnits"], "workUnits": owned["workUnits"]},
         "issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     contract.validate_payload_shape(payload)
+    evaluation_context_bytes = plan_context._encode_on_work(expectations=expected, work=work)
     original = plan._produce_on_work(payload=payload, inputs_bytes=inputs_bytes,
         expectations=expected, planner_private_key=planner_private_key,
         planner_public_key=planner_public_key, evidence_public_key=evidence_public_key,
         live_window=live_window, work=work)
-    return _ProducedEvidencePlan(original, inputs_bytes)
+    return _ProducedEvidencePlan(original, inputs_bytes, evaluation_context_bytes)

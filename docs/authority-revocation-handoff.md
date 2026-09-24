@@ -76,12 +76,13 @@ current-root checks and one-use execution remain separate requirements.
 ## Still required
 
 The private configured composition now calls this helper with independently
-owned inputs; original-byte serving integration is still required. The existing
-combined planning coordinator
-cannot simply be installed in the planner role: it requires both a planner
-read DSN and writer persistence, while actual process admission deliberately
-separates planner and planner-writer credentials. Preserve that separation in
-the eventual authenticated persistence and reservation RPCs.
+owned inputs; original-byte serving integration is still required. Source `.56`
+adds a [planner-only observed producer](authority-revocation-planning.md) using
+the shared genuine read body. The existing combined planning coordinator still
+cannot be installed in the planner role: it holds both a planner read DSN and
+writer persistence, while process admission deliberately separates them.
+Preserve that separation in the eventual authenticated persistence and
+reservation RPCs.
 
 Durable original invocation retries, reserve-before-capability ordering,
 post-plan witness binding, current-root execution and atomic terminal

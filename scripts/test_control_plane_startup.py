@@ -1001,6 +1001,7 @@ class _RevocationOwnerConnection:
         self.name, self.sql_cursor, self.events = name, cursor, events
         self.recorder, self.on_event = recorder, None
         self.info = types.SimpleNamespace(transaction_status=0)
+        self.closed, self.autocommit, self.pgconn = False, False, object()
         self.transactions = 0
 
     def event(self, name):
@@ -1013,10 +1014,14 @@ class _RevocationOwnerConnection:
         return self
 
     def __exit__(self, kind, error, traceback):
-        self.event(self.name + ".connection.exit")
+        try:
+            self.event(self.name + ".connection.exit")
+        finally:
+            self.closed = True
         return False
 
     def close(self):
+        self.closed = True
         self.event(self.name + ".close")
 
     def transaction(self):
@@ -1026,7 +1031,37 @@ class _RevocationOwnerConnection:
                                     manager=manager, transaction=True)
 
     def cursor(self):
-        return _RevocationOwnerScope(self, self.name + ".cursor", self.sql_cursor)
+        return _RevocationOwnerCursorScope(self, self.name + ".cursor", self.sql_cursor)
+
+
+class _RevocationOwnerCursorScope(_RevocationOwnerScope):
+    """Model the same cursor returned by psycopg entry and execute.
+
+    Only driver lifecycle is synthetic. SQL responses and genuine production
+    workers remain unchanged; this recorder does not establish DB admission.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        return self
+
+    def execute(self, sql, parameters=None):
+        arguments = (sql,) if parameters is None else (sql, parameters)
+        result = self.value.execute(*arguments)
+        return self if result is self.value else result
+
+    def fetchone(self):
+        return self.value.fetchone()
+
+    def fetchall(self):
+        return self.value.fetchall()
+
+    def fetchmany(self, size):
+        return self.value.fetchmany(size)
+
+    @property
+    def rowcount(self):
+        return self.value.rowcount
 
 
 class _RevocationOwnerReadCursor:
@@ -1851,6 +1886,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 connection, timeout = write, 5
                 self.assertIn("read.connection.exit", events)
                 self.assertEqual(read.info.transaction_status, 0)
+                self.assertIs(read.closed, True)
             else:
                 raise AssertionError("connection escaped the original independently configured DSNs")
             self.assertEqual(set(options), {"row_factory", "connect_timeout", "options"})
@@ -1959,6 +1995,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                                  "connect.write", "write.connection.enter")):
             self.assertLess(fixture.events.index(before), fixture.events.index(after))
         self.assertEqual((fixture.read.info.transaction_status, fixture.write.info.transaction_status), (0, 0))
+        self.assertIs(fixture.read.closed, True)
+        self.assertIs(fixture.write.closed, True)
         self.assertEqual((fixture.cursor.clock_reads, len(fixture.cursor.root_calls)),
                          (1, len(fixture.cursor.root_order)))
         prefix = produced.signed.payload["plannerTrace"]["entries"][:2]
@@ -1986,6 +2024,102 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertGreater(work.hash_work, produced.metrics.hash_work)
         self.assertGreater(work.input_bytes, produced.metrics.input_bytes)
         self.assertGreater(work.json_nodes, produced.metrics.json_nodes)
+
+    def observed_planner_owner_fixture(self):
+        """Real gated planner workers over independent synthetic populations."""
+        from serverware import authority_revocation_planning as planning
+        import test_authority_revocation_handoff as handoff_oracle
+        import test_authority_revocation_plan as plan_oracle
+        import test_authority_revocation_roots as root_oracle
+
+        fixture = self.revocation_owner_fixture()
+        expected = fixture.expected
+        expected.maximum_plan_age_ns = 30_000_000_000
+        expected.maximum_clock_skew_ns = 5_000_000_000
+        expected.rebuild_payload()
+        primary, heads = handoff_oracle.full_root_rows(expected)
+        inventory = root_oracle.acquire(root_oracle.inventory_fixture(
+            primary_values=primary, head_values=heads))
+        context = plan_oracle.production_context(expected)
+        owner = planning.RevocationObservedPlanner(
+            read_dsn="postgresql://synthetic-reader.invalid/metadata", connect_timeout_seconds=7,
+            database_identity=fixture.owner._database_identity,
+            planner_private_key=expected.key, planner_public_key=expected.key.public_key(),
+            verifier_public_key=fixture.fixture.receipt.key.public_key(),
+            expected_verifier_identity=fixture.fixture.receipt.identity,
+            maximum_assertion_age_ns=expected.maximum_assertion_age_ns,
+            maximum_plan_age_ns=30_000_000_000, maximum_clock_skew_ns=5_000_000_000)
+        caller = {name: copy.deepcopy(value) for name, value in context.items() if name not in {
+            "expectedPlannerIdentity", "expectedVerifierIdentity", "expectedBefore",
+            "maximumAssertionAgeNs", "maximumPlanAgeNs", "maximumClockSkewNs"}}
+        arguments = {"request": fixture.arguments["request"], "evidence": fixture.arguments["evidence"],
+            "context": caller, "root_inventory": inventory, "work": fixture.arguments["work"]}
+        return fixture, owner, arguments, context
+
+    def test_observed_planner_only_owner_returns_originals_then_genuine_independent_handoff(self):
+        from serverware import authority_revocation_handoff as handoff
+        import test_authority_revocation_plan as plan_oracle
+
+        fixture, owner, arguments, independent = self.observed_planner_owner_fixture()
+        original = self.planner.TypedTransitionPlanningProgram._produce_observed_revocation_plan
+        productions = []
+
+        def produce(program, *args, **kwargs):
+            self.assertIs(kwargs["query_work"], arguments["work"])
+            result = original(program, *args, **kwargs)
+            productions.append(result)
+            fixture.events.append("produced.observed")
+            return result
+
+        with self.revocation_owner_scope(fixture), patch.object(
+                self.planner.TypedTransitionPlanningProgram, "_produce_observed_revocation_plan",
+                autospec=True, side_effect=produce):
+            result = owner.produce_observed(**arguments)
+        produced, = productions
+        self.assert_produced_revocation_plan(fixture.expected, fixture.fixture, produced)
+        self.assertIs(result.envelope_bytes, produced.signed.envelope_bytes)
+        self.assertIs(result.evaluation_context_bytes, produced.evaluation_context_bytes)
+        self.assertEqual(result.expected_context, independent)
+        self.assertIsNot(result.expected_context, produced.expected_context)
+        self.assertEqual(result.database_now, fixture.fixture.database_now)
+        self.assertEqual(fixture.connected, ["postgresql://synthetic-reader.invalid/metadata"])
+        self.assertIs(fixture.read.closed, True)
+        self.assertEqual(fixture.read.info.transaction_status, 0)
+        self.assertEqual((fixture.recorder.parent, fixture.recorder.sidecar, fixture.write.transactions), (None, None, 0))
+        self.assertLess(fixture.events.index("produced.observed"), fixture.events.index("read.cursor.exit"))
+        self.assertLess(fixture.events.index("read.transaction1.exit"), fixture.events.index("read.connection.exit"))
+        # Replay the actual originals against independently constructed pins,
+        # never expectations recovered from the returned producer object.
+        replayed = handoff._verify_observed_plan_handoff_on_work(
+            envelope_bytes=result.envelope_bytes, evaluation_context_bytes=result.evaluation_context_bytes,
+            expected_request=fixture.expected.semantic.request,
+            context={name: value for name, value in independent.items() if name != "expectedBefore"},
+            root_inventory=arguments["root_inventory"], planner_public_key=fixture.expected.key.public_key(),
+            verifier_public_key=fixture.fixture.receipt.key.public_key(), work=arguments["work"])
+        self.assertEqual(replayed.expected_context, independent)
+        self.assertEqual(replayed.retained_record.envelope_bytes, result.envelope_bytes)
+        self.assertEqual(replayed.retained_record.context_bytes, result.evaluation_context_bytes)
+        self.assertEqual(result.evaluation_context_bytes,
+            plan_oracle.wire(self.original_revocation_context(fixture.expected, fixture.fixture)))
+
+    def test_observed_planner_only_owner_cannot_return_after_any_read_exit_failure(self):
+        for failed in ("read.cursor.exit", "read.transaction1.exit", "read.connection.exit"):
+            fixture, owner, arguments, _ = self.observed_planner_owner_fixture()
+
+            def fail(event):
+                if event == failed:
+                    raise RuntimeError("synthetic observed planner exit denied")
+
+            fixture.read.on_event = fail
+            with self.subTest(failed=failed), self.revocation_owner_scope(fixture):
+                with self.assertRaisesRegex(RuntimeError, "synthetic observed planner exit denied"):
+                    owner.produce_observed(**arguments)
+            self.assertEqual(fixture.connected, ["postgresql://synthetic-reader.invalid/metadata"])
+            self.assertIs(fixture.read.closed, True)
+            self.assertEqual(fixture.read.info.transaction_status, 0)
+            for cleanup in ("read.cursor.exit", "read.transaction1.exit", "read.connection.exit"):
+                self.assertEqual(fixture.events.count(cleanup), 1)
+            self.assertEqual((fixture.recorder.parent, fixture.recorder.sidecar, fixture.write.transactions), (None, None, 0))
 
     def test_configured_revocation_owner_cleanup_failure_never_opens_writer(self):
         for failed in ("read.cursor.exit", "read.transaction1.exit", "read.connection.exit"):

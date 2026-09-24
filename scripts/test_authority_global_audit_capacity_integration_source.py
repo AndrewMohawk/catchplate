@@ -990,7 +990,14 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual({key.value: ast.unparse(value)
                           for key, value in zip(copied.args[0].keys, copied.args[0].values)},
                          {"request": "request", "evidence": "evidence", "context": "context"})
-        body = definition(tree, "_produce_on_read_configuration")
+        compatibility = definition(tree, "_produce_on_read_configuration")
+        shared = call(compatibility, "planning._produce_on_read_configuration")
+        self.assertEqual([ast.unparse(item) for item in shared.args], ["read_configuration[:4]"])
+        self.assertEqual(keywords(shared), {"planner_public_key": "configured[2]",
+            "verifier_public_key": "configured[3]", "owned": "owned", "actual_context": "actual_context",
+            "work": "work", "root_inventory": "root_inventory"})
+        _, planning = source("serverware/authority_revocation_planning.py")
+        body = definition(planning, "_produce_on_read_configuration")
         trace = call(body, "planner.PlannerTrace")
         identity = call(body, "planner._validate_database_identity")
         business = call(body, "planner._load_manifest")
@@ -1007,7 +1014,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual([ast.unparse(item) for item in produced.args], ["guarded"])
         for name, value in {"trace": "trace", "query_work": "work", "manifest": "manifest + authorization",
             "request": "owned['request']", "evidence": "owned['evidence']", "context": "actual_context",
-            "verifier_public_key": "configured[3]", "planner_public_key": "configured[2]",
+            "verifier_public_key": "verifier_public_key", "planner_public_key": "planner_public_key",
             "planner_private_key": "private_key"}.items():
             self.assertEqual(keywords(produced)[name], value)
         for name in ("_produce_revocation_plan", "_acquire_revocation_transition"):
@@ -1027,7 +1034,15 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
     def test_configured_owner_captures_original_bytes_before_cleanup_and_only_then_persists(self):
         _, tree = source("serverware/authority_revocation_coordinator.py")
         method = definition(tree, "produce_and_persist_with_cutoff", "RevocationPlanningCoordinator")
-        body = definition(tree, "_produce_on_read_configuration")
+        compatibility = definition(tree, "_produce_on_read_configuration")
+        shared = call(compatibility, "planning._produce_on_read_configuration")
+        self.assertEqual([ast.unparse(item) for item in shared.args], ["read_configuration[:4]"])
+        self.assertEqual(keywords(shared), {"planner_public_key": "configured[2]",
+            "verifier_public_key": "configured[3]", "owned": "owned", "actual_context": "actual_context",
+            "work": "work", "root_inventory": "root_inventory"})
+        _, planning = source("serverware/authority_revocation_planning.py")
+        body = definition(planning, "_produce_on_read_configuration")
+        returned, = [node for node in ast.walk(body) if isinstance(node, ast.Return)]
         produced = call(body, "program._produce_revocation_plan")
         delegated = call(method, "_produce_on_read_configuration")
         persistence = call(method, "persistence_module._run_on_configuration")
@@ -1047,7 +1062,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             "context_bytes": "produced.evaluation_context_bytes", "database_now": "produced.database_now"})
         for node in captures.values():
             self.assertLess(produced.lineno, node.lineno)
-            self.assertLess(node.lineno, body.body[-1].lineno)
+            self.assertLess(node.lineno, returned.lineno)
             for scope in scopes:
                 self.assertIn(node, list(ast.walk(scope)))
         self.assertEqual([ast.unparse(item) for item in persistence.args], [
@@ -1057,7 +1072,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(call(method, "expectations.update")),
                          {"expected_request": "owned['request']", "database_now": "database_now"})
         self.assertIn("owned['context'][name]", ast.unparse(method))
-        self.assertEqual(ast.unparse(body.body[-1]),
+        self.assertEqual(ast.unparse(returned),
                          "return (envelope_bytes, context_bytes, database_now, expected_context)")
         self.assertIn("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE", ast.unparse(body))
         for forbidden in ("persistence.persist", "json.loads", "retention._verify_record_on_work",

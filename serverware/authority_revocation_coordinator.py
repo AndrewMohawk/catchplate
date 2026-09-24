@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from serverware import authority_query_reads
 from serverware import authority_revocation_observed as observed
+from serverware import authority_revocation_planning as planning
 from serverware import authority_revocation_persistence as persistence_module
 from serverware import authority_revocation_retention as retention
 
@@ -42,58 +43,6 @@ def _validate_read_configuration(configuration):
         retention.plan.contract._digest(value)
 
 
-class _ReadResult:
-    """The actual driver's bounded fetches cannot change invocation work."""
-
-    __slots__ = ("_result", "_work", "_identity")
-
-    def __init__(self, result, work):
-        self._result, self._work = result, work
-        self._identity = result, work
-
-    def _call(self, method, *args):
-        identity = self._identity
-        if type(identity) is not tuple or len(identity) != 2:
-            raise ValueError("revocation read result binding is invalid")
-        result, work = identity
-        if self._result is not result or self._work is not work:
-            raise ValueError("revocation read result binding changed")
-        value = persistence_module.store._callback(work, lambda: getattr(result, method)(*args))
-        if self._identity is not identity or self._result is not result or self._work is not work:
-            raise ValueError("revocation read result binding changed")
-        return value
-
-    def fetchone(self):
-        return self._call("fetchone")
-
-    def fetchall(self):
-        return self._call("fetchall")
-
-    def fetchmany(self, size):
-        return self._call("fetchmany", size)
-
-
-class _ReadCursor:
-    __slots__ = ("_cursor", "_work", "_identity")
-
-    def __init__(self, cursor, work):
-        self._cursor, self._work = cursor, work
-        self._identity = cursor, work
-
-    def execute(self, sql, parameters=None):
-        arguments = (sql,) if parameters is None else (sql, parameters)
-        identity = self._identity
-        if type(identity) is not tuple or len(identity) != 2:
-            raise ValueError("revocation read cursor binding is invalid")
-        cursor, work = identity
-        if self._cursor is not cursor or self._work is not work:
-            raise ValueError("revocation read cursor binding changed")
-        result = persistence_module.store._callback(work, lambda: cursor.execute(*arguments))
-        if self._identity is not identity or self._cursor is not cursor or self._work is not work:
-            raise ValueError("revocation read cursor binding changed")
-        return _ReadResult(result, work)
-
-
 @dataclass(frozen=True, slots=True)
 class _PersistedObservedRevocationPlan:
     """Ordinary custody and independent history, never a verification token."""
@@ -105,67 +54,15 @@ class _PersistedObservedRevocationPlan:
 
 def _produce_on_read_configuration(read_configuration, configured, *, owned,
                                    actual_context, work, root_inventory=None):
-    """One actual read transaction for exact or independently observed inputs.
-
-    The entry methods already own all variable inputs and configuration. The
-    optional inventory is private routing, not a caller-supplied producer or
-    successful-verification callback. Fixed metadata admission is unchanged.
-    """
-    read_dsn, timeout, identity, private_key, _ = read_configuration
-    from serverware import authority_planner as planner
-    import psycopg
-    from psycopg.rows import dict_row
-
-    database_identity = planner.PlannerIdentity(*identity)
-    operation = planner.authority_transition_webauthn.OPERATION
-    kernel = planner.authority_transition_webauthn.WebAuthnCredentialRevokeKernel()
-    program = planner.TypedTransitionPlanningProgram(
-        operation=operation, handler=kernel.handler, kernel=kernel)
-    trace = planner.PlannerTrace(operation=operation, _complete_queries=True)
-    store = persistence_module.store
-    connection = persistence_module._connect(work, lambda: psycopg.connect(read_dsn,
-        row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))
-    with store._context(connection, work):
-        transaction = store._callback(work, lambda: connection.transaction())
-        with store._context(transaction, work):
-            cursor = store._callback(work, lambda: connection.cursor())
-            with store._context(cursor, work) as active:
-                guarded = _ReadCursor(active, work)
-                guarded.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE")
-                planner._validate_database_identity(guarded, database_identity)
-                manifest, _ = planner._load_manifest(guarded, operation=operation, trace=trace)
-                authorization = planner._load_authorization_manifest(
-                    guarded, operation=operation, trace=trace)
-                # Keep the exact-context branch's actual producer/copy schedule.
-                # Both branches retain the same genuine manifest-prefix trace.
-                if root_inventory is None:
-                    produced = program._produce_revocation_plan(guarded,
-                        request=owned["request"], evidence=owned["evidence"],
-                        context=actual_context, manifest=manifest + authorization,
-                        verifier_public_key=configured[3], planner_private_key=private_key,
-                        planner_public_key=configured[2], query_work=work, trace=trace)
-                    expected_context = None
-                else:
-                    produced = program._produce_observed_revocation_plan(guarded,
-                        request=owned["request"], evidence=owned["evidence"],
-                        context=actual_context, root_inventory=root_inventory,
-                        manifest=manifest + authorization, verifier_public_key=configured[3],
-                        planner_private_key=private_key, planner_public_key=configured[2],
-                        query_work=work, trace=trace)
-                    # Own independent projected expectations before any read
-                    # exit callback. Never decode them from the signed output.
-                    expected_context = authority_query_reads._CopyBudget(work).copy(produced.expected_context)
-                    retention.production._validate_context(expected_context, work)
-                    retention.plan.semantics._canonical_equal(
-                        {name: expected_context[name] for name in actual_context}, actual_context,
-                        work=work, label="observed producer changed independent context pins")
-                envelope_bytes = produced.signed.envelope_bytes
-                context_bytes = produced.evaluation_context_bytes
-                database_now = produced.database_now
-                if type(envelope_bytes) is not bytes or type(context_bytes) is not bytes:
-                    raise ValueError("revocation producer lost original immutable bytes")
-                retention.plan._verification_types(configured[2], configured[3], database_now)
-    return envelope_bytes, context_bytes, database_now, expected_context
+    """Preserve the combined API while using the genuine read-only body."""
+    try:
+        return planning._produce_on_read_configuration(read_configuration[:4],
+            planner_public_key=configured[2], verifier_public_key=configured[3],
+            owned=owned, actual_context=actual_context, work=work, root_inventory=root_inventory)
+    except planning.reader.roots.RevocationRootReadError as exc:
+        # Only the dedicated driver/lifecycle guard retains the legacy facade
+        # error family. Genuine planner, proof and input errors are untouched.
+        raise persistence_module.store._error(str(exc)) from exc
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)

@@ -337,7 +337,17 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertIn("identity[4:] != configured[4]", ast.unparse(method))
 
     def test_shared_read_body_selects_real_producer_and_owns_projected_context_before_exit(self):
-        _, tree = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        _, coordinator = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        facade = definition(coordinator, "_produce_on_read_configuration")
+        delegated, = calls(facade, "planning._produce_on_read_configuration")
+        self.assert_shape(delegated, "planning._produce_on_read_configuration(read_configuration[:4], "
+            "planner_public_key=configured[2], verifier_public_key=configured[3], "
+            "owned=owned, actual_context=actual_context, work=work, root_inventory=root_inventory)")
+        caught, = [node for node in ast.walk(facade) if isinstance(node, ast.ExceptHandler)]
+        self.assert_shape(caught.type, "planning.reader.roots.RevocationRootReadError")
+        self.assert_shape(caught.body[-1].exc, "persistence_module.store._error(str(exc))")
+        self.assert_shape(caught.body[-1].cause, "exc")
+        _, tree = source("serverware/authority_revocation_planning.py", 64 * 1024)
         helper = definition(tree, "_produce_on_read_configuration")
         legacy, = calls(helper, "program._produce_revocation_plan")
         observed, = calls(helper, "program._produce_observed_revocation_plan")
@@ -350,8 +360,8 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
             keywords = {item.arg: ast.unparse(item.value) for item in call.keywords}
             for name, value in {"request": "owned['request']", "evidence": "owned['evidence']",
                     "context": "actual_context", "manifest": "manifest + authorization",
-                    "verifier_public_key": "configured[3]", "planner_private_key": "private_key",
-                    "planner_public_key": "configured[2]", "query_work": "work", "trace": "trace"}.items():
+                    "verifier_public_key": "verifier_public_key", "planner_private_key": "private_key",
+                    "planner_public_key": "planner_public_key", "query_work": "work", "trace": "trace"}.items():
                 self.assertEqual(keywords[name], value)
         self.assertEqual({item.arg: ast.unparse(item.value) for item in observed.keywords}["root_inventory"], "root_inventory")
         copied, = calls(helper, "authority_query_reads._CopyBudget(work).copy")
@@ -375,7 +385,10 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
             for item in (legacy, observed, copied, validated, bound, *captures):
                 self.assertIn(item, list(ast.walk(scope)))
         self.assertFalse(calls(helper, "persistence_module._run_on_configuration"))
-        self.assert_shape(helper.body[-1].value, "(envelope_bytes, context_bytes, database_now, expected_context)")
+        returned, = [node for node in ast.walk(helper) if isinstance(node, ast.Return)]
+        self.assert_shape(returned.value, "(envelope_bytes, context_bytes, database_now, expected_context)")
+        for scope in scopes:
+            self.assertNotIn(returned, list(ast.walk(scope)))
         for forbidden in ("_ValidationWork", "QueryReadValidationLimits", "json.loads", "time.time_ns", "time.monotonic_ns"):
             self.assertFalse(calls(helper, forbidden))
 
@@ -415,28 +428,39 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertNotIn("produce_observed_and_persist_with_cutoff", service)
 
     def test_shared_read_driver_getters_and_bindings_are_guarded_without_extra_allowance(self):
-        _, tree = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        _, tree = source("serverware/authority_revocation_planning.py", 64 * 1024)
         fetched = definition(tree, "_call", "_ReadResult")
         executed = definition(tree, "execute", "_ReadCursor")
-        guarded_fetch, = calls(fetched, "persistence_module.store._callback")
-        guarded_execute, = calls(executed, "persistence_module.store._callback")
-        self.assert_shape(guarded_fetch, "persistence_module.store._callback(work, lambda: getattr(result, method)(*args))")
-        self.assert_shape(guarded_execute, "persistence_module.store._callback(work, lambda: cursor.execute(*arguments))")
-        for body, target in ((fetched, "result"), (executed, "cursor")):
-            self.assertIn("self._identity is not identity", ast.unparse(body))
-            self.assertIn("self._work is not work", ast.unparse(body))
-            self.assertIn("self._" + target + " is not " + target, ast.unparse(body))
+        guarded_fetch, = calls(fetched, "cursor._call")
+        guarded_execute, = calls(executed, "self._call")
+        self.assert_shape(guarded_fetch, "cursor._call(lambda: getattr(result, method)(*args))")
+        self.assert_shape(guarded_execute, "self._call(lambda: cursor.execute(*arguments))")
+        for expression in ("self._identity is not identity", "self._result is not result", "self._cursor is not cursor"):
+            self.assertIn(expression, ast.unparse(fetched))
+        cursor_call = definition(tree, "_call", "_ReadCursor")
+        required = definition(tree, "_require", "_ReadCursor")
+        self.assertIn("self._identity is not identity", ast.unparse(required))
+        self.assert_shape(calls(required, "zip")[0].args[0],
+            "(self._cursor, self._connection, self._raw, self._work)")
+        self.assert_shape(calls(required, "zip")[0].args[1], "identity")
+        invoke = next(node for node in cursor_call.body if isinstance(node, ast.FunctionDef) and node.name == "invoke")
+        self.assertEqual(len(calls(invoke, "self._require")), 4)
+        self.assertEqual([ast.unparse(item) for item in calls(invoke, "reader.roots._callback")], [
+            "reader.roots._callback(work, reader._require_connection, connection, raw, 2)",
+            "reader.roots._callback(work, reader._require_connection, connection, raw, 2)"])
+        self.assert_shape(cursor_call.body[-1].value, "reader.roots._callback(work, invoke)")
+        for body in (fetched, executed, cursor_call, required):
             self.assertFalse(calls(body, "_ValidationWork"))
         helper = definition(tree, "_produce_on_read_configuration")
-        callbacks = calls(helper, "store._callback")
-        self.assertEqual({ast.unparse(item) for item in callbacks}, {
-            "store._callback(work, lambda: connection.transaction())",
-            "store._callback(work, lambda: connection.cursor())"})
+        callbacks = calls(helper, "reader.roots._callback")
+        for expression in ("reader.roots._callback(work, lambda: connection.transaction())",
+                "reader.roots._callback(work, lambda: connection.cursor())"):
+            self.assertIn(expression, {ast.unparse(item) for item in callbacks})
         connected, = calls(helper, "psycopg.connect")
         self.assert_shape(connected, 'psycopg.connect(read_dsn, row_factory=dict_row, '
             'connect_timeout=timeout, options="-c search_path=pg_catalog")')
-        self.assertEqual({ast.unparse(item) for item in calls(helper, "store._context")}, {
-            "store._context(connection, work)", "store._context(transaction, work)", "store._context(cursor, work)"})
+        self.assertEqual({ast.unparse(item) for item in calls(helper, "reader._context")}, {
+            "reader._context(connection, work)", "reader._context(transaction, work)", "reader._context(cursor, work)"})
 
 
 if __name__ == "__main__":

@@ -71,6 +71,13 @@ second, using the existing file fsync, rename and parent-directory fsync helper.
 It compares both exact readbacks before returning any local observation or
 calling legacy completion.
 
+The private `_install_verified_bundle_with_readback` factor also returns the
+actual bundle/state bytes from those same reads, alongside the unchanged local
+result. The existing helper delegates and keeps its original return shape.
+Both require the caller's exclusive lock; no second read or arbitrary target
+path is introduced. These bytes are inputs for a future configured evidence
+owner, not an authenticated committed-stage or current-root assertion.
+
 State-first ordering can leave the checkpoint ahead of the bundle. The same
 pending candidate can retry; an earlier generation or same-generation fork
 fails. A separately authorized later generation still follows the existing
@@ -111,14 +118,17 @@ only checks call order; it is not the database, registry, planner or witness.
 Neither script has executed. Both enter the isolated source inventory subject
 to the unchanged freeze/controller/dependency prerequisites.
 
-The real completion call is still ID-only, and current generic evidence rows
-assume prior authenticated admission rather than verifying signatures against
-independent purpose pins. Completing the project still requires a versioned
-acyclic installation-evidence contract, independently configured signer and
-measurement/attestation/target/time policy, authenticated committed aggregate
-stage ancestry, receipt admission, exact consumption/replay, planned high-water
-mutation before root derivation, complete query/capacity proofs and actual
-producer/planner/witness/executor integration. See the
+The legacy completion call is still ID-only. The separate
+[successor implementation](webauthn-successor-transitions.md) now provides the
+v2 acyclic evidence contract, shared installation claims, genuine evidence
+signing/consumption, planned high-water effects and private proof acquisition.
+It is not wired into legacy reconciliation. Completing that path still needs
+independently configured signer and measurement/attestation/target/time policy,
+authenticated committed aggregate-stage/current-root ancestry, durable receipt
+admission, signed-plan replay and actual producer/planner/witness/executor
+integration. In particular, the post-readback observation time must not be
+substituted by the earlier local `verifiedAt`, and an error after physical
+installation cannot be handled as a filesystem rollback. See the
 [coordinated authority design](webauthn-authority-integration.md) and
 [startup blocker](authority-transition-startup-blocker.md). Local observations
 must not be relabelled as that missing signed evidence or used to register a

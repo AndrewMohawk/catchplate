@@ -62,6 +62,7 @@ from serverware import authority_transition_registry
 from serverware import authority_transition_webauthn
 from serverware import authority_transition_webauthn_registration
 from serverware import authority_transition_webauthn_trust_stage
+from serverware import authority_transition_webauthn_completion
 from serverware import authority_webauthn_assertion
 from serverware import authority_webauthn_trust_candidate
 from serverware.config import (
@@ -497,6 +498,24 @@ class _TrustStageAcquisition:
 
 
 @dataclass(frozen=True, slots=True)
+class _TrustCompletionAcquisition:
+    """Actual completion observations, not installation or commit authority."""
+
+    request: dict[str, Any]
+    selected_rows: tuple[dict[str, Any], ...]
+    state: PlanningState
+    kernel: authority_transition_core.KernelTransition
+    mutations: tuple[dict[str, Any], ...]
+    work_units: int
+    write_evidence: authority_index_mutation_reader.AcquiredIndexedMutation
+    trace: tuple[dict[str, Any], ...]
+    business_before_roots: tuple[dict[str, Any], ...]
+    authorization_before_roots: tuple[dict[str, Any], ...]
+    before_proofs: tuple[dict[str, Any], ...]
+    counted_before_heads: tuple[authority_index_heads.CapturedIndexHead, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _ProducedRevocationPlan:
     """Original signed/context bytes and cutoff, not persistence authority."""
 
@@ -556,14 +575,19 @@ def _query_trace_key(
 
 
 class PlannerTrace:
-    def __init__(self, *, operation: str, _complete_queries: bool = False) -> None:
+    def __init__(self, *, operation: str, _complete_queries: bool = False,
+                 _counted_writes: bool = False) -> None:
         if (type(_complete_queries) is not bool
                 or _complete_queries and operation not in (authority_complete_query.OPERATION,
-                    authority_complete_query.REGISTRATION_OPERATION, authority_complete_query.STAGE_OPERATION)):
+                    authority_complete_query.REGISTRATION_OPERATION, authority_complete_query.STAGE_OPERATION)
+                or type(_counted_writes) is not bool
+                or _counted_writes and (operation != authority_transition_webauthn_completion.OPERATION
+                                       or _complete_queries)):
             raise AuthorityPlannerError("complete trace scope is not source admitted")
         spec = authority_contract.operation_spec(operation)
         self.operation = operation
         self._complete_queries = _complete_queries
+        self._counted_writes = _counted_writes
         self.business_reads = frozenset(
             set(spec["businessReads"]) | set(spec["businessWrites"])
         )
@@ -577,7 +601,7 @@ class PlannerTrace:
             | set(spec["frameworkPreconditions"])
             | set(spec["frameworkWrites"])
             | ({authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
-                authority_index_reader.NODE_TABLE} if _complete_queries else set())
+                authority_index_reader.NODE_TABLE} if _complete_queries or _counted_writes else set())
         )
         self.allowed_writes = frozenset(
             set(spec["businessWrites"]) | set(spec["frameworkWrites"])
@@ -593,15 +617,20 @@ class PlannerTrace:
         if (table in {authority_index_heads.HEAD_TABLE, authority_index_reader.LEAF_TABLE,
                       authority_index_reader.NODE_TABLE}
                 or isinstance(key, Mapping) and key.get("profile") == authority_index_trace.PRIMARY_READ_PROFILE):
-            if not self._complete_queries:
+            if not self._complete_queries and not self._counted_writes:
                 raise AuthorityPlannerError("complete trace profile has no current planner admission")
             try:
                 if (type(key) is dict
                         and key.get("profile") == authority_index_trace.MUTATION_READ_PROFILE):
                     authority_index_trace.validate_mutation_read_trace(self.operation, table, key)
+                elif self._counted_writes:
+                    if table != authority_index_heads.HEAD_TABLE:
+                        raise AuthorityPlannerError("completion trace cannot admit complete-range reads")
+                    authority_index_heads.validate_head_trace_key(
+                        self.operation, key, include_write_heads=True)
                 else:
                     authority_index_trace.validate_complete_read_trace(self.operation, table, key)
-            except authority_index_trace.IndexTraceError as exc:
+            except (authority_index_trace.IndexTraceError, authority_index_heads.IndexHeadReadError) as exc:
                 raise AuthorityPlannerError("complete trace read is not source closed") from exc
         self._append("read", table, key)
 
@@ -2446,6 +2475,203 @@ def _acquire_trust_stage_transition_on_work(
         raise
 
 
+def _completion_read_callback_on_work(work: _ValidationWork, call: Callable[[], Any]) -> Any:
+    """Guard separately bounded driver/proof calls, not assign them H/B/N cost."""
+    authority_complete_query_batch._SharedLedger(work)
+    limits, metrics = work.limits, work.metrics
+    values = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+    try:
+        return call()
+    finally:
+        authority_complete_query_batch._SharedLedger(work)
+        if (work.limits is not limits or work.metrics != metrics
+                or (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes) != values):
+            raise AuthorityPlannerError("completion read callback changed its shared work")
+
+
+def _acquire_trust_completion_transition_on_work(
+    cursor: Any, *, request: dict[str, Any], manifest: tuple[dict[str, Any], ...],
+    business_before_roots: Any, authorization_before_roots: Any,
+    expected_counted_heads: tuple[dict[str, Any], ...],
+    installation_envelope_bytes: bytes, installed_bundle_bytes: bytes, installed_state_bytes: bytes,
+    installation_target_digest: str, expected_committed_stage: dict[str, Any],
+    installer_public_key: Ed25519PublicKey, expected_installer_identity: dict[str, Any],
+    expected_installer_spki_digest: str, now_epoch_ns: int, deadline_epoch_ns: int,
+    maximum_age_ns: int, maximum_clock_skew_ns: int, query_work: _ValidationWork,
+    trace: PlannerTrace | None = None,
+) -> _TrustCompletionAcquisition:
+    """Acquire and authenticate exact completion inputs before deriving effects.
+
+    Request admission, current primary/count heads, committed-stage authority,
+    installed-original provenance, installer configuration and the read-only
+    MVCC owner are independent caller prerequisites. Four real business PK
+    queries and the common capacity query are not a complete-range family.
+    Their existing SQL/proof bounds remain separate from the shared counted
+    head/write physical ledger; genuine primary verification, evidence
+    consumption and final write evaluation use the same cumulative work.
+    Nothing here signs, persists, executes, installs files or admits a registry.
+    """
+    completion = authority_transition_webauthn_completion
+    operation = completion.OPERATION
+    if type(query_work) is not _ValidationWork:
+        raise AuthorityPlannerError("trust completion requires the actual shared meter")
+    if trace is None:
+        trace = PlannerTrace(operation=operation, _counted_writes=True)
+    if (type(trace) is not PlannerTrace or trace.operation != operation
+            or trace._counted_writes is not True or trace._complete_queries is not False):
+        raise AuthorityPlannerError("trust completion trace identity changed")
+    acquisition = authority_index_reader._ReadAcquisitionBudget(cursor, trace, work=query_work)
+    try:
+        if (type(request) is not dict or type(manifest) is not tuple
+                or type(expected_counted_heads) is not tuple or len(expected_counted_heads) != 3
+                or type(expected_committed_stage) is not dict or type(expected_installer_identity) is not dict
+                or not isinstance(installer_public_key, Ed25519PublicKey)):
+            raise AuthorityPlannerError("trust completion inputs are not exact source values")
+        for raw, maximum in (
+                (installation_envelope_bytes, completion.evidence.MAX_EVIDENCE_BYTES),
+                (installed_bundle_bytes, completion.bundle_core.MAX_INSTALLATION_BYTES),
+                (installed_state_bytes, completion.bundle_core.MAX_STATE_BYTES)):
+            if type(raw) is not bytes or not 2 <= len(raw) <= maximum:
+                raise AuthorityPlannerError("trust completion requires bounded immutable originals")
+        owned = authority_query_reads._CopyBudget(query_work).copy({
+            "request": request, "manifest": manifest,
+            "businessBeforeRoots": business_before_roots, "authorizationBeforeRoots": authorization_before_roots,
+            "expectedCountedHeads": expected_counted_heads, "committedStage": expected_committed_stage,
+            "installerIdentity": expected_installer_identity, "installerSpkiDigest": expected_installer_spki_digest,
+            "installationTargetDigest": installation_target_digest, "nowEpochNs": now_epoch_ns,
+            "deadlineEpochNs": deadline_epoch_ns, "maximumAgeNs": maximum_age_ns,
+            "maximumClockSkewNs": maximum_clock_skew_ns})
+        actual_request = owned["request"]
+        if (actual_request.get("operation") != operation
+                or actual_request.get("handler") != "complete_webauthn_trust_publication"
+                or type(actual_request.get("arguments")) is not dict):
+            raise AuthorityPlannerError("trust completion request identity changed")
+        arguments = actual_request["arguments"]
+        completion._object(arguments, completion._ARGUMENT_FIELDS, "completion arguments")
+        completion._object(owned["committedStage"], completion._STAGE_FIELDS, "committed stage")
+        registration = authority_transition_webauthn_registration
+        for name in ("nowEpochNs", "deadlineEpochNs"):
+            registration._integer(owned[name], name, 1)
+        registration._integer(owned["maximumAgeNs"], "maximum age", 1,
+                              authority_contract.VERIFIER_RESPONSE_MAX_AGE_NS)
+        registration._integer(owned["maximumClockSkewNs"], "clock skew", 0,
+                              authority_contract.VERIFIER_MAX_CLOCK_SKEW_NS)
+        if owned["nowEpochNs"] >= owned["deadlineEpochNs"]:
+            raise AuthorityPlannerError("trust completion acquisition deadline has expired")
+        authority_transition_core.require_digest(owned["installationTargetDigest"], "installation target")
+        authority_transition_core.require_digest(owned["installerSpkiDigest"], "installer SPKI")
+        request_digest = _typed_request_digest(actual_request, work=query_work)
+        if _request_different(request_digest, actual_request.get("requestDigest"), work=query_work):
+            raise AuthorityPlannerError("trust completion request digest changed")
+        query_work.prepare_utf8(operation)
+        query_work.prepare_utf8(request_digest)
+        query_work.charge(hashes=1)
+        actual_operation_id = operation_id(operation, request_digest)
+        if _request_different(actual_operation_id, actual_request.get("operationId"), work=query_work):
+            raise AuthorityPlannerError("trust completion operation id changed")
+        queries = completion.completion_queries(publication_id=arguments["publication_id"],
+            verification_evidence_digest=arguments["verification_evidence_digest"],
+            request_digest=request_digest, work=query_work)
+        queries = authority_audit_capacity.add_capacity_query(operation, queries)
+        with acquisition.read_phase(cursor, trace, query_work):
+            observed_business, observed_authorization, _ = _read_root_set(
+                cursor, operation=operation, manifest=owned["manifest"], trace=trace, work=query_work)
+            authority_revocation_semantics._canonical_equal(
+                (observed_business, observed_authorization),
+                (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"]), work=query_work,
+                label="trust completion database roots differ from independent expectations")
+            database_now = _read_database_now_on_work(cursor, query_work)
+            database_now_ns = registration._now(database_now)
+            if (abs(database_now_ns - owned["nowEpochNs"]) > owned["maximumClockSkewNs"]
+                    or database_now_ns >= owned["deadlineEpochNs"]):
+                raise AuthorityPlannerError("trust completion cutoff differs from admitted live time")
+            captured_heads = authority_index_heads.read_operation_index_heads(cursor,
+                operation=operation, trace=trace, work=query_work, acquisition=acquisition,
+                include_write_heads=True)
+            actual_heads = tuple({"indexId": head.index_id, "indexRevision": head.index_revision,
+                "rootDigest": head.index_root.digest, "leafCount": head.index_root.count}
+                for head in captured_heads)
+            authority_revocation_semantics._canonical_equal(actual_heads, owned["expectedCountedHeads"],
+                work=query_work, label="trust completion counted heads differ from independent expectations")
+            staging = authority_query_staging.StagedQueryProofs(operation=operation,
+                business_before_roots=observed_business, authorization_before_roots=observed_authorization,
+                query_work=query_work)
+            selected, queries, records = _read_bounded_transition_rows(cursor, operation=operation,
+                request=actual_request, queries=queries, manifest=owned["manifest"], trace=trace,
+                query_sources=staging, query_work=query_work)
+            pending = staging.unproved_rows(selected)
+            before_proofs = _completion_read_callback_on_work(query_work,
+                lambda: _derive_multiproofs(cursor, selected_rows=pending,
+                    roots=observed_business + observed_authorization, trace=trace))
+            before_proofs = staging.merge_proofs(selected_rows=selected, remaining_proofs=before_proofs)
+            # Assembly is not authentication. Run the actual primary engine,
+            # clamp its child to remaining work, then use only its owned rows.
+            ledger = authority_complete_query_batch._SharedLedger(query_work)
+            ledger.charge(hashes=authority_contract.TREE_DEPTH + 2)
+            primary_business = authority_complete_query_batch._roots(observed_business)
+            primary_authorization = authority_complete_query_batch._roots(observed_authorization)
+            spec = authority_contract.operation_spec(operation)
+            memberships = authority_complete_query_batch.primary.evaluate_primary_radix_memberships(
+                table_contracts=authority_primary_contract.primary_table_contracts(operation),
+                business_before_roots=primary_business, authorization_before_roots=primary_authorization,
+                selected_rows=selected, before_proofs=before_proofs,
+                limits=authority_complete_query_batch._primary_limits(spec, spec["maximumQueryRows"], ledger))
+            metrics = memberships.result.metrics
+            ledger.charge(hashes=metrics.hash_work, input_bytes=metrics.input_bytes, json_nodes=metrics.json_nodes)
+            if (memberships.result.business_after_roots != primary_business
+                    or memberships.result.authorization_after_roots != primary_authorization
+                    or metrics.mutations != 0 or metrics.recomputed_ancestors != 0):
+                raise AuthorityPlannerError("trust completion membership proof changed its before roots")
+            selected, before_proofs = memberships.selected_rows, memberships.before_proofs
+            authority_audit_capacity._validate_capacity_transition(operation=operation,
+                selected_rows=selected, mutations=(), work=query_work)
+            _, records = authority_query_reads._validate_query_reads(operation,
+                queries=queries, query_reads=records, selected_rows=selected, work=query_work)
+            acquisition.require_idle(cursor, trace, query_work)
+        context = authority_transition_core.KernelContext(operation, arguments, selected,
+            database_now, request_digest, query_reads=records)
+        kernel = completion._kernel_transition_on_work(context,
+            installation_envelope_bytes=installation_envelope_bytes,
+            installed_bundle_bytes=installed_bundle_bytes, installed_state_bytes=installed_state_bytes,
+            installation_target_digest=owned["installationTargetDigest"],
+            expected_committed_stage=owned["committedStage"], installer_public_key=installer_public_key,
+            expected_installer_identity=owned["installerIdentity"],
+            expected_installer_spki_digest=owned["installerSpkiDigest"],
+            maximum_age_ns=owned["maximumAgeNs"], maximum_clock_skew_ns=owned["maximumClockSkewNs"],
+            work=query_work)
+        finalized = authority_audit_capacity._finalize_capacity(context, kernel.mutations, work=query_work)
+        work_units = authority_audit_capacity.transition_work_units(operation=operation,
+            query_work_units=sum(query.work_units for query in queries),
+            kernel_work_units=kernel.work_units, mutations=finalized)
+        authority_audit_capacity.validate_transition_work_units(operation, work_units, finalized)
+        query_work.prepare_copy(finalized)
+        ordered = sorted(finalized, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
+        query_work.prepare_copy(ordered)
+        mutations = tuple(ordered)
+        heads = tuple(authority_indexed_mutation.IndexedMutationHead(
+            item.index_id, item.index_revision, item.index_root) for item in captured_heads)
+        limits = authority_complete_read_write._write_limits(spec,
+            authority_complete_query_batch._SharedLedger(query_work))
+        writer = authority_index_mutation_reader._AcquisitionBudget(shared_acquisition=acquisition, work=query_work)
+        write_evidence = authority_index_mutation_reader._acquire_indexed_primary_batch(cursor,
+            table_contracts=authority_primary_contract.primary_table_contracts(operation),
+            business_before_roots=primary_business, authorization_before_roots=primary_authorization,
+            selected_rows=selected, before_proofs=before_proofs, mutations=mutations,
+            index_before_heads=heads, limits=limits, trace=trace, acquisition_budget=writer)
+        acquisition.require_idle(cursor, trace, query_work)
+        for mutation in mutations:
+            trace.write(mutation["table"], mutation["key"])
+        closed_trace = trace.close(selected_rows=selected, mutation_plan=mutations)
+        state = PlanningState(database_now=database_now,
+            query_work_units=sum(query.work_units for query in queries), query_program=queries, query_reads=records)
+        return _TrustCompletionAcquisition(actual_request, selected, state, kernel,
+            mutations, work_units, write_evidence, closed_trace,
+            observed_business, observed_authorization, before_proofs, captured_heads)
+    except BaseException:
+        acquisition.failed = True
+        raise
+
+
 def _read_bounded_transition_rows(
     cursor: Any,
     *,
@@ -2539,14 +2765,27 @@ def _read_bounded_transition_rows(
             ordering = ", ".join(
                 f"target.{item.column} " + ("DESC" if item.descending else "ASC")
                 for item in resolved_query.order_by)
-            trace.read(query.table, _query_trace_key(operation, query))
-            rows = cursor.execute(
-                "SELECT pg_catalog.to_jsonb(target) AS row_value "
-                f"FROM serverware_metadata.{query.table} AS target "
-                + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
-                + f"ORDER BY {ordering} LIMIT %s",
-                (*parameters, query.maximum_rows + 1),
-            ).fetchall()
+            if operation == authority_transition_webauthn_completion.OPERATION and trace._counted_writes:
+                # This exact-PK successor has no complete collector. Keep its
+                # separately bounded ordinary SQL callbacks from changing the
+                # original proof/kernel allowance, on success or failure.
+                _completion_read_callback_on_work(query_work,
+                    lambda: trace.read(query.table, _query_trace_key(operation, query)))
+                result = _completion_read_callback_on_work(query_work, lambda: cursor.execute(
+                    "SELECT pg_catalog.to_jsonb(target) AS row_value "
+                    f"FROM serverware_metadata.{query.table} AS target "
+                    + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
+                    + f"ORDER BY {ordering} LIMIT %s", (*parameters, query.maximum_rows + 1)))
+                rows = _completion_read_callback_on_work(query_work, lambda: result.fetchall())
+            else:
+                trace.read(query.table, _query_trace_key(operation, query))
+                rows = cursor.execute(
+                    "SELECT pg_catalog.to_jsonb(target) AS row_value "
+                    f"FROM serverware_metadata.{query.table} AS target "
+                    + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
+                    + f"ORDER BY {ordering} LIMIT %s",
+                    (*parameters, query.maximum_rows + 1),
+                ).fetchall()
             if len(rows) > query.maximum_rows:
                 raise AuthorityPlannerError("typed transition query exceeded its manifest bound")
             if query.require_absence and rows:

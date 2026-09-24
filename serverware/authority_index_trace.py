@@ -1,6 +1,7 @@
 """Hash-free admission of exact complete-query physical read markers.
 
-These shapes describe explicit revocation, registration and aggregate staging.
+These shapes describe explicit revocation, registration and aggregate staging,
+plus completion's indexed-write frontier reads (not a complete-range family).
 They do not authenticate a supplied root, projection digest, interval, primary
 key, population or clock. Genuine producers and proof engines still bind those
 values. This module neither enables a public planner nor grants generic table
@@ -163,7 +164,7 @@ def validate_complete_read_trace(operation: str, table: str, key: Any) -> None:
 
 
 def validate_mutation_read_trace(operation: str, table: str, key: Any) -> None:
-    """Check a private complete-query producer's fixed physical marker.
+    """Check a private indexed-write producer's fixed physical marker.
 
     This does not derive targets, prove OLD/NEW, or authenticate before heads.
     The real producer computes the request from genuine primary projections;
@@ -171,7 +172,8 @@ def validate_mutation_read_trace(operation: str, table: str, key: Any) -> None:
     Ordinary complete-read permission is not public v3 writer admission.
     """
     if (type(operation) is not str or operation not in
-            (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION)
+            (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
+             heads.COMPLETION_OPERATION)
             or type(table) is not str or table not in (reader.LEAF_TABLE, reader.NODE_TABLE)):
         raise IndexTraceError("mutation read operation or table is not source admitted")
     _closed(key, _MUTATION_LEAF_FIELDS if table == reader.LEAF_TABLE else _MUTATION_NODE_FIELDS)

@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.78`, implementation only. These helpers do not register the
+Status: source `.79`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -151,6 +151,33 @@ bounded and native calls guard the meter; JSON/CBOR/X.509/EC/RSA internals and n
 allocations are **not** represented by invented hash/byte/node charges. These
 changes do not establish whole-process CPU, memory or deadline guarantees.
 
+## Completion read, effect and write-proof integration
+
+The private completion acquisition uses the four existing exact primary-key
+business queries plus the common audit-capacity query. It does not invent a
+complete-range family. The actual primary proof engine must authenticate all
+selected rows and absences against independently expected roots before the
+completion kernel consumes installation evidence or derives its four effects.
+The common finalizer adds the capacity mutation before write-root derivation.
+
+Completion explicitly captures all three publication index heads: bundle
+digest, status and generation. These must match independent expectations from
+the same checkpoint. The indexed mutation engine then reconstructs primary
+and counted before/after roots, including unchanged index keys whose row
+digest changes. The private trace admits only this write-head inventory and
+source-derived mutation-frontier reads, not complete-range queries or broader
+table access. Existing global and operation bounds remain unchanged.
+Counted-head and write-frontier acquisition share the same physical ledger;
+ordinary primary-key/proof SQL retains its existing separate bounds. Real
+primary-proof evaluation is charged to the remaining shared work allowance,
+not treated as proof of whole-process CPU or all-SQL accounting.
+
+Original installed bundle/state and signed evidence bytes, committed-stage
+ancestry, target and installer pins remain mandatory inputs. The database
+cutoff is joined to independently supplied time/deadline. The acquisition
+returns ordinary observations, not a signed plan, evidence-storage permission,
+authorized commit, registered kernel or physical-installation proof.
+
 ## Aggregate trust-stage integration
 
 The stage manifest now represents the aggregate's real read/write tables and
@@ -217,6 +244,20 @@ to the evidence producer.
 Registry and public operation admission, authorized atomic execution, terminal
 witnessing and recovery remain pending. The generic evidence signer and ordinary
 row/acquisition results cannot fill those gaps or repair service startup.
+
+The evidence-storage integration must use explicit purpose-specific admission
+operations, with a narrow INSERT-only template for the existing 17-column
+receipt row. The existing table-wide default remains UPDATE-only. Admission
+must derive the purpose's semantic claims, genuinely verify the original
+envelope, prove exact-key absence and commit through authenticated root
+maintenance. If a no-op duplicate path is declared, only an identical unused
+verified row may qualify; consumed, revoked or conflicting rows must fail.
+This is remaining implementation, not an enabled operation or new ACL.
+
+The current v9 SQL execution loader accepts its existing v3 plan protocol.
+Successor acquisition outputs cannot enter it by being relabelled as v3.
+Coordinated signed-plan retention, replay and executor admission are required
+before those outputs can authorize a write.
 
 Broad fixtures and full verification remain deferred to the consolidated frozen
 build. Production acceptance additionally requires independently operated

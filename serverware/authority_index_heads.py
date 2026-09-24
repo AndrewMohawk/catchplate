@@ -25,6 +25,7 @@ from serverware.authority_query_read_work import _ValidationWork
 
 READ_PROFILE = "serverware.policyAuthorityCountedHeadRead/v1"
 HEAD_TABLE = "policy_authority_counted_index_heads"
+COMPLETION_OPERATION = "webauthn.trust.complete"
 MAX_HEADS = 11
 _FIELDS = ("index_id", "table_name", "counted_profile", "projection_digest",
            "projection_manifest_digest", "index_revision", "root_digest", "leaf_count")
@@ -62,12 +63,28 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
     Revocation preserves its existing role/potential-write union and no-context
     API. Registration/staging read heads follow their rebound argument family;
     a private transition owner can additionally require every
-    potential source-write profile. No arbitrary index subset is accepted.
+    potential source-write profile. Completion has exact primary-key reads,
+    not a complete-range family: its private writer must explicitly request
+    every potential write head with no family arguments or queries. No
+    arbitrary index subset is accepted.
     """
     if (type(include_write_heads) is not bool
             or type(operation) is not str or not 1 <= len(operation) <= 128
-            or operation not in (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION)):
-        raise IndexHeadReadError("counted head operation has no declared complete roles")
+            or operation not in (complete.OPERATION, complete.REGISTRATION_OPERATION,
+                                 complete.STAGE_OPERATION, COMPLETION_OPERATION)):
+        raise IndexHeadReadError("counted head operation has no declared source inventory")
+    if operation == COMPLETION_OPERATION:
+        if not include_write_heads or arguments is not None or queries is not None:
+            raise IndexHeadReadError("completion heads require explicit write-only source admission")
+        identities = {index_id
+            for table in authority_contract.operation_spec(operation)["businessWrites"]
+            for index_id in projection.index_ids_for_table(table)}
+        # The only indexed completion write is its publication. These three
+        # profiles are maintained together even when some keys are unchanged.
+        if identities != {"webauthn_publication_bundle_digest", "webauthn_publication_status",
+                          "webauthn_publication_generation"}:
+            raise IndexHeadReadError("completion write heads differ from the fixed source inventory")
+        return tuple(sorted(identities))
     if operation != complete.OPERATION or arguments is not None or queries is not None:
         if type(arguments) is not dict or type(queries) is not tuple:
             raise IndexHeadReadError("counted head acquisition requires actual family arguments and queries")

@@ -6,6 +6,12 @@ registry closure, database admission and external authority requirements remain
 unchanged. This document does not authorize registering partial kernels or
 relabeling local verification as signed external evidence.
 
+This design records the original gaps. The current
+[successor implementation status](webauthn-successor-transitions.md) tracks the
+source-only work now implementing its aggregate manifest, queries, signatures,
+row effects and private acquisitions. Those additions do not activate the
+public protocol or remove the independent authority requirements below.
+
 The [startup blocker](authority-transition-startup-blocker.md) and
 [unactivated revocation candidate](webauthn-revocation-candidate.md) identify the
 current seams. Completing them requires the following coordinated producer,
@@ -20,8 +26,9 @@ Trust staging is not just inserting a publication row. The current
 live registration challenges, revokes every affected credential and its
 dependent sessions/grants/approvals, emits the corresponding audits, and stages
 the publication journal. Independent stage/revoke/approval commits would not
-preserve that operation. The reserved stage contract permits only one
-publication mutation and cannot represent this aggregate.
+preserve that operation. The old one-publication-mutation reservation could
+not represent this aggregate; source `.77` replaces it with the aggregate
+manifest and limits described in the successor implementation status.
 
 Use one typed aggregate transaction program, with a deterministic working-state
 view and one final mutation per unique row key. Validate actor, MFA, approval,

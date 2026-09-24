@@ -57,6 +57,11 @@ acquisition and derives classifier roots from the real verifier. Installation
 evidence production and completion now share the original-byte semantic checks.
 Neither addition admits durable evidence, supplies the configured operation or
 physical-installation owner, registers a kernel or repairs startup.
+Source `.79` connects private completion acquisition to its exact primary-key
+reads, independent root/head comparisons, genuine evidence-consuming effects,
+capacity finalization and indexed write proofs. Its three publication heads
+are write-only admission, not a new complete-query family. Signed-plan/executor
+and registry activation remain missing; all four startup gaps remain.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from

@@ -363,7 +363,15 @@ def write_trust_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
 def _install_verified_bundle(
     verified: VerifiedBundle, context: TrustVerificationContext
 ) -> dict[str, Any]:
-    """Install under the caller's exclusive lock; return unsigned local facts.
+    """Install under the caller's exclusive lock; return unsigned local facts."""
+    result, _, _ = _install_verified_bundle_with_readback(verified, context)
+    return result
+
+
+def _install_verified_bundle_with_readback(
+    verified: VerifiedBundle, context: TrustVerificationContext
+) -> tuple[dict[str, Any], bytes, bytes]:
+    """Install under the caller's exclusive lock and retain exact readback bytes.
 
     Validation precedes both writes. State-first ordering retains the existing
     fail-closed recovery boundary: a failed bundle replacement may leave state
@@ -371,6 +379,9 @@ def _install_verified_bundle(
     generations retain the existing monotonicity rules and need their own
     authorization. Neither two-file atomicity nor independent rollback
     authority is claimed.
+
+    The result and bytes are ordinary local observations, not installation
+    authorization or evidence of an independently admitted committed stage.
     """
     previous_state = _state_bytes()
     next_state = plan_rollback(verified, previous_state, context)
@@ -386,7 +397,7 @@ def _install_verified_bundle(
     installed_state = _state_bytes()
     if installed_bytes != verified.installation_bytes or installed_state != expected_state:
         raise WebAuthnTrustError("WebAuthn trust installation readback changed")
-    return {
+    result = {
         "ok": True,
         **verified.info_dict(),
         "root_count": len(verified.roots),
@@ -401,6 +412,7 @@ def _install_verified_bundle(
             "verifiedAt": verified.verified_at.isoformat(),
         },
     }
+    return result, installed_bytes, installed_state
 
 
 def reconcile_trust_publications(

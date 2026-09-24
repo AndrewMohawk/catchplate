@@ -1004,6 +1004,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_trust.py \
 	serverware/webauthn_attestation_core.py \
 	serverware/webauthn_credential_trust.py \
+	serverware/webauthn_trust.py \
 	serverware/webauthn_trust_core.py \
 	schemas/webauthn-trust-bundle.v1.schema.json \
 	serverware/db.py \
@@ -2743,6 +2744,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_installation_production.py \
 				serverware/webauthn_attestation_core.py \
 				serverware/webauthn_credential_trust.py \
+				serverware/webauthn_trust.py \
 				serverware/webauthn_trust_core.py \
 				schemas/webauthn-trust-bundle.v1.schema.json \
 				serverware/authority_transition_webauthn.py \

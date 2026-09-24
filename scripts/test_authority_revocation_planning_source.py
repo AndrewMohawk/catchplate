@@ -102,8 +102,14 @@ class RevocationPlanningSourceTests(unittest.TestCase):
             "persist-measured-plan", "read-persisted-plan", "reserve-execution-envelope"}''')
         self.shape(keywords(admissions[2])["allowed_purposes"], '''
             {"issue-capability", "record-witness-receipt"} if self.role_name == "issuer" else {"execute-v9"}''')
-        self.assertNotIn("authority_revocation_planning", service_text)
-        self.assertNotIn("RevocationObservedPlanner", service_text)
+        # Private measured construction is allowed; the public parser and
+        # legacy purpose dispatch still cannot activate the successor owner.
+        server = definition(service, "AuthorityServer")
+        serve = definition(server, "_serve_connection")
+        for public in (handle, serve):
+            for forbidden in ("authority_revocation_planning", "RevocationObservedPlanner",
+                    "_produce_revocation_observed_plan", "_planner_from_configuration_on_work"):
+                self.assertNotIn(forbidden, ast.unparse(public))
         credentials = definition(process, "_reject_wrong_credentials")
         self.shape(assigned(credentials, "allowed"), '''{
             "verifier": {"SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD"},
@@ -169,16 +175,32 @@ class RevocationPlanningSourceTests(unittest.TestCase):
             "expectedCapabilityId", "expectedPlannerTransactionId", "expectedFence",
             "reservedAtEpochNs", "deadlineEpochNs", "deadlineMonotonicNs", "nowEpochNs",
             "nowMonotonicNs", "expectedApproverPolicyDigest"})
+        raw = definition(self.tree, "_capture_planning_call_inputs")
+        self.assertEqual([item.arg for item in raw.args.kwonlyargs],
+            ["request", "evidence", "context", "root_inventory", "work"])
+        self.assertIsNone(raw.args.kwarg)
+        self.assertIsNone(raw.args.vararg)
+        sequence = [call(raw, name) for name in (
+            "retention.capture._SharedLedger", "retention.plan.contract._object",
+            "authority_query_reads._CopyBudget(work).copy", "observed._capture_root_inventory")]
+        self.assertEqual([node.lineno for node in sequence], sorted(node.lineno for node in sequence))
+        self.shape(sequence[0], "retention.capture._SharedLedger(work)")
+        self.shape(sequence[1], 'retention.plan.contract._object(context, _CALL_CONTEXT, "observed planner caller context")')
+        self.shape(sequence[2], '''authority_query_reads._CopyBudget(work).copy(
+            {"request": request, "evidence": evidence, "context": context})''')
+        self.shape(sequence[3], "observed._capture_root_inventory(root_inventory, work=work)")
+        guards = [node for node in raw.body if isinstance(node, ast.If)]
+        self.assertEqual(len(guards), 1)
+        self.shape(guards[0].test, "type(request) is not dict or type(evidence) is not dict")
+        self.shape(raw.body[-1].value, "(owned, inventory)")
         capture = definition(self.tree, "_capture_planning_inputs")
         sequence = [call(capture, name) for name in (
-            "_validate_configuration", "retention.capture._SharedLedger", "retention.plan.contract._object",
-            "authority_query_reads._CopyBudget(work).copy", "observed._capture_root_inventory",
+            "_validate_configuration", "_capture_planning_call_inputs",
             "retention.plan.contract._request", "observed._validate_partial_context")]
         self.assertEqual([node.lineno for node in sequence], sorted(node.lineno for node in sequence))
-        self.shape(sequence[2], 'retention.plan.contract._object(context, _CALL_CONTEXT, "observed planner caller context")')
-        self.shape(sequence[3], '''authority_query_reads._CopyBudget(work).copy(
-            {"request": request, "evidence": evidence, "context": context})''')
-        self.shape(sequence[4], "observed._capture_root_inventory(root_inventory, work=work)")
+        self.shape(sequence[0], "_validate_configuration(configuration)")
+        self.shape(sequence[1], '''_capture_planning_call_inputs(request=request, evidence=evidence,
+            context=context, root_inventory=root_inventory, work=work)''')
         self.shape(assigned(capture, "actual_context"), '''{**owned["context"],
             "expectedPlannerIdentity": dict(zip(_IDENTITY_FIELDS, configuration[2][4:])),
             "expectedVerifierIdentity": dict(zip(_IDENTITY_FIELDS, configuration[6])),

@@ -75,9 +75,13 @@ def _validate_configuration(configuration):
         raise RevocationPlanningError("observed planner historical policy differs from source bounds")
 
 
-def _capture_planning_inputs(configuration, *, request, evidence, context, root_inventory, work):
-    """Own the caller's nine fields and full inventory before any callback."""
-    _validate_configuration(configuration)
+def _capture_planning_call_inputs(*, request, evidence, context, root_inventory, work):
+    """Own caller graphs before launch, descriptor or key callbacks.
+
+    This is ordinary detached data, not configuration or proof admission. The
+    configured owner repeats this boundary; no reusable owned-input token is
+    accepted. Its actual CopyBudget and full-inventory costs are unchanged.
+    """
     retention.capture._SharedLedger(work)
     if type(request) is not dict or type(evidence) is not dict:
         raise RevocationPlanningError("observed planner request and evidence are not exact objects")
@@ -85,6 +89,14 @@ def _capture_planning_inputs(configuration, *, request, evidence, context, root_
     owned = authority_query_reads._CopyBudget(work).copy({
         "request": request, "evidence": evidence, "context": context})
     inventory = observed._capture_root_inventory(root_inventory, work=work)
+    return owned, inventory
+
+
+def _capture_planning_inputs(configuration, *, request, evidence, context, root_inventory, work):
+    """Own the caller's nine fields and full inventory before any callback."""
+    _validate_configuration(configuration)
+    owned, inventory = _capture_planning_call_inputs(request=request, evidence=evidence,
+        context=context, root_inventory=root_inventory, work=work)
     actual_context = {**owned["context"],
         "expectedPlannerIdentity": dict(zip(_IDENTITY_FIELDS, configuration[2][4:])),
         "expectedVerifierIdentity": dict(zip(_IDENTITY_FIELDS, configuration[6])),

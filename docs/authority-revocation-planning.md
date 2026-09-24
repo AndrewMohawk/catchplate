@@ -1,8 +1,9 @@
 # Planner-only observed revocation production
 
-Source `.56` separates the genuine read transaction from writer persistence.
-It is unbuilt and unexecuted. The new private `RevocationObservedPlanner` does
-not enable a service purpose or any of the unfinished WebAuthn registry gates.
+Source `.56` separated the genuine read transaction from writer persistence;
+`.57` adds measured-configuration construction and a private planner-service
+composition. Both remain unbuilt and unexecuted. `RevocationObservedPlanner`
+does not enable a service purpose or any unfinished WebAuthn registry gate.
 
 ## Credential and ownership boundaries
 
@@ -60,10 +61,35 @@ skew is the source five-second policy. Metadata admission, driver work and
 fixed configuration checks are not whole-process H/B/N accounting. A hostile
 driver's hidden commit-and-BEGIN is not disproved by observed status equality.
 
+## Measured planner composition
+
+The private `AuthorityProcess._produce_revocation_observed_plan` now captures
+the request, evidence, nine-field history, full independent inventory and full
+measured configuration before launch, descriptor or key callbacks. It holds the
+process signer rather than reading it again after callbacks. The active planner
+check precedes reading the planner-only DSN. Generation is obtained last, so no
+descriptor callback interposes before the mapper owns its launch bindings.
+
+The separate configuration mapper checks the complete configuration commitment,
+source revision/query manifest, generation membership, role modes and both
+response/SPKI key pins. It derives the database role/TLS/measurement tuple from
+the planner configuration and the verifier session from the configuration
+digest and verifier measurements. It also checks the actual held signer's public
+key against the admitted planner key without signing. Configuration consistency
+and ordinary constructor objects are not root-signature or launch admission;
+the genuine service loader and descriptor admission remain prerequisites.
+
+Historical policy is identical to the independently configured receiver: exact
+measured WebAuthn challenge age, the lesser of the verifier's internal age and
+the source thirty-second plan limit, and source five-second skew. Planner
+internal-envelope age is a different policy and cannot silently replace these
+retained context fields. Measured finite timeouts must be within 2..300 seconds
+before flooring. All real capture and framing use the same remaining work.
+
 ## Serving and verification work still required
 
-The new owner still needs measured-service construction and authenticated
-original-byte transport. The writer socket is pinned to the planner UID/GID.
+Authenticated original-byte serving and transport remain unfinished. The writer
+socket is pinned to the planner UID/GID.
 The legacy verifier's direct reservation call does not match that topology;
 a successor needs a planner relay that preserves the verifier's authenticated
 originals, or an explicitly reviewed endpoint design. Do not widen DSNs or
@@ -76,6 +102,14 @@ bytes cannot authenticate themselves. Writer role/transaction checks and schema
 ACL installation are not a per-connection TLS, PostgreSQL-version or complete
 privilege-admission proof. That remaining connector work is separate from this
 read-only extraction.
+
+The successor transport's four-MiB limit covers the entire message, not each
+inner value. It cannot carry every otherwise-valid 64-MiB plan plus context in a
+base64 wrapper. An explicit bounded transport profile, preserved authenticated
+verifier headers, writer-response key custody, and durable exact-byte retries
+are still required; the legacy unsigned responses and payload re-signing cannot
+supply them. A combined persist-and-reserve operation also needs one admitted
+outer writer transaction, not two separately committed convenience calls.
 
 Component fixtures cover inert ownership/accounting and explicitly synthetic
 driver guards. The real planner-to-handoff tests remain in the registry-gated

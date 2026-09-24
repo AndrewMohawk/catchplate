@@ -3727,6 +3727,54 @@ class AuthorityProcess:
             evaluation_context_bytes=evaluation_context_bytes, expected_request=owned_request,
             context=owned_context, root_inventory=inventory, work=work)
 
+    def _produce_revocation_observed_plan(self, *, request, evidence, context,
+            root_inventory, work):
+        """Private measured-planner composition, not a serving purpose.
+
+        Root-signed configuration, the descriptor-loaded signer and active
+        planner launch remain upstream admission requirements. Own invocation
+        graphs and the complete configuration before callbacks. The mapper
+        binds the held signer and read identity; the actual owner produces
+        original bytes only after its genuine read scopes close. No writer
+        credential or authenticated transport is introduced by this adapter.
+        """
+        if (self.role_name != "planner"
+                or self.process_mode != "policy-authority-planner"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation planner process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        planner_private_key = self.signing_key
+        if not isinstance(planner_private_key, Ed25519PrivateKey):
+            raise AuthorityServiceError("revocation planner signing key is unavailable")
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_planning
+        from serverware import authority_revocation_planner_configuration
+
+        owned, inventory = authority_revocation_planning._capture_planning_call_inputs(
+            request=request, evidence=evidence, context=context,
+            root_inventory=root_inventory, work=work)
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation planner configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("planner"))
+        read_dsn = authority_revocation_configuration.production._callback(
+            work, lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"))
+        # No other callback may interpose between this generation snapshot and
+        # the factory's real ownership capture of its seven launch bindings.
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        planner = authority_revocation_planner_configuration._planner_from_configuration_on_work(
+            payload=owned_payload, configuration_digest=configuration_digest,
+            generation=generation, read_dsn=read_dsn,
+            planner_private_key=planner_private_key, work=work)
+        return planner.produce_observed(request=owned["request"], evidence=owned["evidence"],
+            context=owned["context"], root_inventory=inventory, work=work)
+
     def _revocation_capability_issuer(self, *, work):
         """Construct the private successor only from this admitted issuer.
 

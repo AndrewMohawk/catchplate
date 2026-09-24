@@ -9,7 +9,7 @@ engine and imports no DB facade, registry, or mocked catalog functions.
 Each test creates random roles/schema and changes database ACLs only inside one
 transaction that is ALWAYS rolled back, including setup/test failures. Variant
 savepoints restore the positive baseline. There is no commit or broad DROP.
-The four tables are deliberately minimal catalog fixtures, not production DDL.
+The six tables are deliberately minimal catalog fixtures, not production DDL.
 These tests exercise the production query against actual ACLs; they do not prove
 installation, mTLS/session admission, schema migration, roots, or production
 authorization. Native execution still requires the separately approved lane.
@@ -42,6 +42,7 @@ DISPOSABLE_CLUSTER_ACKNOWLEDGED = False
 REQUIRED_TABLES = (
     "webauthn_challenges", "webauthn_credentials",
     "webauthn_trust_publication_high_water", "webauthn_trust_publications",
+    "policy_authority_authenticated_table_roots", "policy_authority_counted_index_heads",
 )
 
 
@@ -142,8 +143,14 @@ class AuthorityVerifierReadPostgresTests(unittest.TestCase):
             self.assert_denied()
 
     def test_exact_four_table_positive(self) -> None:
+        # Historical approved ID is retained; the v2 positive baseline is six.
         self.assertEqual(frozenset(REQUIRED_TABLES), authority_contract.VERIFIER_READ_TABLES)
         self.assert_admitted()
+        # A previously valid evidence-only installation cannot satisfy v2.
+        with self.variant():
+            for table in REQUIRED_TABLES[4:]:
+                self.execute("REVOKE SELECT ON {} FROM {}", self.object(table), sql.Identifier(self.role))
+            self.assert_denied()
 
     def test_missing_role_or_namespace_denies(self) -> None:
         self.assert_denied(role="missing_" + uuid.uuid4().hex)
@@ -157,13 +164,14 @@ class AuthorityVerifierReadPostgresTests(unittest.TestCase):
                 self.assert_denied()
 
     def test_required_name_cannot_be_a_view(self) -> None:
-        with self.variant():
-            self.execute("DROP TABLE {}", self.object(REQUIRED_TABLES[0]))
-            self.execute("CREATE VIEW {} AS SELECT id,payload FROM {}",
-                         self.object(REQUIRED_TABLES[0]), self.object("extra"))
-            self.execute("GRANT SELECT ON {} TO {}",
-                         self.object(REQUIRED_TABLES[0]), sql.Identifier(self.role))
-            self.assert_denied()
+        for table in REQUIRED_TABLES:
+            with self.subTest(table=table), self.variant():
+                self.execute("DROP TABLE {}", self.object(table))
+                self.execute("CREATE VIEW {} AS SELECT id,payload FROM {}",
+                             self.object(table), self.object("extra"))
+                self.execute("GRANT SELECT ON {} TO {}",
+                             self.object(table), sql.Identifier(self.role))
+                self.assert_denied()
 
     def test_all_column_select_is_not_full_table_select(self) -> None:
         for table in REQUIRED_TABLES:
@@ -184,25 +192,27 @@ class AuthorityVerifierReadPostgresTests(unittest.TestCase):
                 self.deny_change("GRANT SELECT(id) ON {} TO {}", self.object(table), sql.Identifier(self.role))
 
     def test_table_writes_deny(self) -> None:
-        for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
-            with self.subTest(privilege=privilege):
-                self.deny_change("GRANT " + privilege + " ON {} TO {}",
-                                 self.object(REQUIRED_TABLES[0]), sql.Identifier(self.role))
+        for table in REQUIRED_TABLES:
+            for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+                with self.subTest(table=table, privilege=privilege):
+                    self.deny_change("GRANT " + privilege + " ON {} TO {}",
+                                     self.object(table), sql.Identifier(self.role))
 
     def test_column_only_writes_deny(self) -> None:
-        for privilege in ("INSERT", "UPDATE", "REFERENCES"):
-            with self.subTest(privilege=privilege):
-                self.deny_change("GRANT " + privilege + "(id) ON {} TO {}",
-                                 self.object(REQUIRED_TABLES[0]), sql.Identifier(self.role))
+        for table in REQUIRED_TABLES:
+            for privilege in ("INSERT", "UPDATE", "REFERENCES"):
+                with self.subTest(table=table, privilege=privilege):
+                    self.deny_change("GRANT " + privilege + "(id) ON {} TO {}",
+                                     self.object(table), sql.Identifier(self.role))
 
     def test_table_column_and_schema_grant_options_deny(self) -> None:
-        for statement, target in (
-            ("GRANT SELECT ON {} TO {} WITH GRANT OPTION", self.object(REQUIRED_TABLES[0])),
-            ("GRANT SELECT(id) ON {} TO {} WITH GRANT OPTION", self.object(REQUIRED_TABLES[0])),
-            ("GRANT USAGE ON SCHEMA {} TO {} WITH GRANT OPTION", sql.Identifier(self.schema)),
-        ):
-            with self.subTest(statement=statement):
-                self.deny_change(statement, target, sql.Identifier(self.role))
+        for table in REQUIRED_TABLES:
+            for privilege in ("SELECT", "SELECT(id)"):
+                with self.subTest(table=table, privilege=privilege):
+                    self.deny_change("GRANT " + privilege + " ON {} TO {} WITH GRANT OPTION",
+                                     self.object(table), sql.Identifier(self.role))
+        self.deny_change("GRANT USAGE ON SCHEMA {} TO {} WITH GRANT OPTION",
+                         sql.Identifier(self.schema), sql.Identifier(self.role))
 
     def test_all_three_sequence_privileges_deny(self) -> None:
         for privilege in ("SELECT", "USAGE", "UPDATE"):
@@ -215,13 +225,15 @@ class AuthorityVerifierReadPostgresTests(unittest.TestCase):
                          self.object("extra_function"), sql.Identifier(self.role))
 
     def test_public_allowed_table_select_still_denies(self) -> None:
-        self.deny_change("GRANT SELECT ON {} TO PUBLIC", self.object(REQUIRED_TABLES[0]))
+        for table in REQUIRED_TABLES:
+            with self.subTest(table=table):
+                self.deny_change("GRANT SELECT ON {} TO PUBLIC", self.object(table))
 
     def test_public_column_select_and_write_deny(self) -> None:
-        for privilege in ("SELECT", "INSERT", "UPDATE", "REFERENCES"):
-            with self.subTest(privilege=privilege):
-                self.deny_change("GRANT " + privilege + "(id) ON {} TO PUBLIC",
-                                 self.object(REQUIRED_TABLES[0]))
+        for table in REQUIRED_TABLES:
+            for privilege in ("SELECT", "INSERT", "UPDATE", "REFERENCES"):
+                with self.subTest(table=table, privilege=privilege):
+                    self.deny_change("GRANT " + privilege + "(id) ON {} TO PUBLIC", self.object(table))
 
     def test_public_schema_usage_and_create_deny(self) -> None:
         for privilege in ("USAGE", "CREATE"):

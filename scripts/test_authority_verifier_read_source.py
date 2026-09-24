@@ -24,11 +24,14 @@ from serverware import authority_contract
 from serverware.authority_store import verifier_read_sql as verifier
 
 
-TABLES = frozenset({
+EVIDENCE_TABLES = frozenset({
     "webauthn_challenges", "webauthn_credentials",
     "webauthn_trust_publication_high_water", "webauthn_trust_publications",
 })
-CONTRACT = "serverware.policyAuthorityVerifierRead/v1"
+TABLES = EVIDENCE_TABLES | frozenset({
+    "policy_authority_authenticated_table_roots", "policy_authority_counted_index_heads",
+})
+CONTRACT = "serverware.policyAuthorityVerifierRead/v2"
 
 
 def read_source(relative, maximum=2 * 1024 * 1024):
@@ -101,11 +104,13 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertEqual(ast.dump(node), ast.dump(ast.parse(expression, mode="eval").body))
 
     def test_source_contract_is_exact_four_table_frozen_inventory(self):
+        # Preserve the approved historical ID; v2 has two additional root
+        # tables while the actual WebAuthn evidence SQL remains four-table.
         self.assertEqual(authority_contract.VERIFIER_READ_CONTRACT, CONTRACT)
         self.assertIs(type(authority_contract.VERIFIER_READ_TABLES), frozenset)
         self.assertEqual(authority_contract.VERIFIER_READ_TABLES, TABLES)
         self.assertEqual(authority_contract.SOURCE_REVISION,
-                         "serverware.policyCandidateAuthoritySource/2026-07-30.51")
+                         "serverware.policyCandidateAuthoritySource/2026-07-30.52")
         self.assertTrue(all(type(table) is str for table in authority_contract.VERIFIER_READ_TABLES))
 
     def test_real_helper_returns_fixed_sql_and_exact_separate_parameters(self):
@@ -517,14 +522,17 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
                        if isinstance(node, ast.Constant) and type(node.value) is str]
             for text in strings:
                 actual_tables.update(re.findall(r"(?:FROM|JOIN) serverware_metadata\.([a-z_]+)", text))
-        self.assertEqual(actual_tables, TABLES)
+        self.assertEqual(actual_tables, EVIDENCE_TABLES)
         self.assertEqual(len(calls(reader, "verifier_read_privilege_check")), 1)
         evidence = function(process, "_build_v9_webauthn_evidence")
         self.assertEqual(len(calls(evidence, "_read_webauthn_authority")), 1)
         # Deliberately no assertion that retained historical root/outcome
         # methods have this read closure or that they are now authorized.
-        self.assertTrue(TABLES.isdisjoint({"policy_authority_authenticated_table_roots",
-                                         "policy_authority_writer_capabilities", "credentials"}))
+        self.assertTrue(EVIDENCE_TABLES.isdisjoint({"policy_authority_authenticated_table_roots",
+                                                  "policy_authority_counted_index_heads"}))
+        self.assertTrue(TABLES.isdisjoint({"policy_authority_writer_capabilities", "credentials",
+            "policy_authority_authenticated_tree_nodes", "policy_authority_authenticated_leaves",
+            "policy_authority_counted_index_nodes", "policy_authority_counted_index_leaves"}))
 
 
 if __name__ == "__main__":

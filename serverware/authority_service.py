@@ -3647,6 +3647,47 @@ class AuthorityProcess:
             return self._handle_issue(envelope)
         return self._handle_execute(envelope, purpose=purpose)
 
+    def _read_revocation_root_observations(self, *, work):
+        """Private independent verifier read, not an enabled request purpose.
+
+        Main's real MeasuredConfiguration.load and active launch establish the
+        configuration admission prerequisite. This scalar snapshot does not
+        repeat its signature verification or make a forged dataclass trusted.
+        Returned full roots/heads are observations, not a plan or writer token.
+        """
+        if (self.role_name != "verifier"
+                or self.process_mode != "policy-authority-verifier"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation root verifier process is not configured")
+        configuration = self.configuration
+        payload = configuration.payload
+        if (type(payload) is not dict or type(payload.get("roles")) is not dict
+                or type(payload["roles"].get("verifier")) is not dict):
+            raise AuthorityServiceError("revocation root verifier configuration is not closed data")
+        role = payload["roles"]["verifier"]
+        try:
+            timeout = role["databaseConnectTimeoutSeconds"]
+            # libpq rounds one second up to two and treats zero as unbounded.
+            # Floor only measured values already within its real 2..300 bound.
+            if type(timeout) not in (int, float) or not 2 <= timeout <= 300:
+                raise AuthorityServiceError("revocation root verifier timeout is not bounded")
+            pins = (int(timeout), role["databaseRole"], role["tlsClientDn"],
+                role["tlsClientSerial"], role["tlsIssuerDn"], payload["queryManifestDigest"])
+        except KeyError as exc:
+            raise AuthorityServiceError("revocation root verifier configuration is incomplete") from exc
+        from serverware import authority_revocation_root_reader
+
+        authority_revocation_root_reader._validate_pins(pins)
+        authority_revocation_root_reader.roots._callback(
+            work, authority_launch_guard.require_active, "verifier")
+        dsn = authority_revocation_root_reader.roots._callback(work, _read_dsn_descriptor,
+            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN")
+        reader = authority_revocation_root_reader.RevocationRootReader(
+            dsn=dsn, connect_timeout_seconds=pins[0], database_role=pins[1],
+            tls_client_dn=pins[2], tls_client_serial=pins[3], tls_issuer_dn=pins[4],
+            query_manifest_digest=pins[5])
+        return reader.read(work=work)
+
     def _revocation_capability_issuer(self, *, work):
         """Construct the private successor only from this admitted issuer.
 

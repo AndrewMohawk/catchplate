@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.51"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.52"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -242,10 +242,12 @@ SIGNED_REVOCATION_WIRE_CONTRACT = MappingProxyType({
         "registry-admission", "terminal-witness",
     ),
 })
-# Current measured verifier evidence reads, not planner/business query closure
-# or the retained pre-v9 root/outcome helper inventory.
-VERIFIER_READ_CONTRACT = "serverware.policyAuthorityVerifierRead/v1"
+# Exact verifier evidence plus independent root-observation read surface.
+# This is not planner/business row access or the pre-v9 outcome inventory.
+VERIFIER_READ_CONTRACT = "serverware.policyAuthorityVerifierRead/v2"
 VERIFIER_READ_TABLES = frozenset({
+    "policy_authority_authenticated_table_roots",
+    "policy_authority_counted_index_heads",
     "webauthn_challenges",
     "webauthn_credentials",
     "webauthn_trust_publication_high_water",

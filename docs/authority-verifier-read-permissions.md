@@ -19,8 +19,17 @@ The reads resolve a challenge and credential, join the published trust head and
 publication, and reject a pending trust publication. This is table-level SELECT
 authority; the SQL projections remain narrower than all table columns. The
 planner, issuer and executor have separate identities and permission policies.
+The private successor root reader additionally observes exactly two metadata
+tables: `policy_authority_authenticated_table_roots` and
+`policy_authority_counted_index_heads`. It needs no business rows, primary or
+counted tree nodes/leaves, dependency-manifest tables, or mutation authority.
+Its complete seven business roots, two authorization roots and nine counted
+heads are ordinary independently acquired observations, not an enrolled root
+checkpoint or proof of currentness at a later execution.
+
 Retained pre-v9 root/replay/outcome helpers have no current verifier dispatch
 path and do not justify granting their historical broader table inventory.
+Their manifest-table joins remain outside this six-table permission set.
 
 Previously all four metadata ACL-sealing callers omitted the dedicated verifier
 role and table arguments. The defaults aliased verifier to runtime, skipped the
@@ -31,8 +40,11 @@ failure or a claim that every WebAuthn operation takes this path.
 ## Coordinated source correction
 
 `authority_contract.VERIFIER_READ_CONTRACT` identifies
-`serverware.policyAuthorityVerifierRead/v1`; its frozen `VERIFIER_READ_TABLES`
-contains only the four tables above. The database facade uses that set directly.
+`serverware.policyAuthorityVerifierRead/v2`; its frozen `VERIFIER_READ_TABLES`
+contains only the four evidence tables and two root/head tables above. The
+database facade uses that set directly. An evidence-only v1 installation lacks
+required SELECT permissions and must fail the v2 admission; it is not silently
+accepted as compatible.
 
 Bootstrap, expected-schema construction, receipt repair and fresh v8-to-v9
 migration all pass the dedicated configured verifier role and exact source set.
@@ -42,7 +54,7 @@ from runtime, executor, planner, issuer and authority owner. Separate audit and
 recovery-witness sealers retain their existing policies.
 
 The existing sealer now reaches its dedicated branch: schema USAGE plus SELECT
-on exactly those four tables. Its role, membership, function and relation-ACL
+on exactly those six tables. Its role, membership, function and relation-ACL
 checks remain, followed by the same effective-privilege query used by the live
 read path. This does not provision a role, credential, mTLS identity or service.
 
@@ -56,7 +68,7 @@ identifiers. The query returns at most one violation; any row denies admission.
 
 The query requires the role and namespace to exist, LOGIN without elevated role
 flags, schema USAGE without CREATE or grant options, and no database CREATE/TEMP
-authority or role membership in either direction. All four required relations
+authority or role membership in either direction. All six required relations
 must be real or partitioned tables with full-table SELECT. It rejects:
 
 - Table/column writes or grant options, including on otherwise allowed tables.
@@ -72,11 +84,18 @@ Type-specific CASE branches avoid applying sequence/table inquiries to the
 wrong relation kind. These semantics follow the
 [PostgreSQL 16 privilege inquiry contract](https://www.postgresql.org/docs/16/functions-info.html#FUNCTIONS-INFO-ACCESS-TABLE).
 
-The live verifier retains its repeatable-read/read-only transaction and exact
+The existing WebAuthn evidence reader retains its repeatable-read/read-only transaction and exact
 configured role/client-certificate checks. SSL and LOGIN must be literal true;
 elevated/DDL flags must be literal false. The shared query runs after those
 identity checks and before any business SELECT. No SET ROLE, direct business
 write grant or new database function is introduced.
+
+The separate private root owner uses SERIALIZABLE READ ONLY DEFERRABLE, exact
+current and session role, PostgreSQL version, transaction mode and configured
+TLS checks, followed by the same effective-privilege query before either root
+SELECT. It does not reuse a planner connection, trace or transaction. Its
+service adapter remains private; this grant change does not activate a public
+purpose, a WebAuthn kernel, or the retained pre-v9 root helpers.
 
 This is connection-admission evidence for the metadata namespace, not continuous
 privilege monitoring, an all-database sandbox, proof against a malicious database
@@ -85,7 +104,8 @@ Existing independent trust, signature, source and witness gates remain required.
 
 ## Versioning and pending verification
 
-Source revision `.27` and all 17 v9 DDL revision pins identify this change. The
+Source revision `.52` and all 19 v9 DDL revision pins identify the current
+successor source. The initial four-table correction was revision `.27`. The
 operation manifest binds the read contract and table set; the schema source
 contract and owner verification profile also bind the configured verifier role
 and SHA-256 digest of the exact shared query text. Older recorded contracts and
@@ -97,7 +117,10 @@ guards and contract bindings without executing extracted code or replacing the
 registry. The separate authored native fixture exercises the actual catalog
 query on an externally prepared disposable PostgreSQL 16 cluster; its temporary
 roles, schema and database-ACL changes are transactional and rolled back. Neither
-fixture has run. The native fixture remains behind the approved coverage and
+fixture has run for this source. Historical test IDs are retained while the
+native baseline/subcases cover all six relations and denial of the old
+four-table installation. The separate source assertion still pins the actual
+WebAuthn evidence SQL to its four-table subset. The native fixture remains behind the approved coverage and
 changed-excluded-test gate, not a passing exclusion or manual execution waiver.
 
 Still required: actual sealer and runtime/service verification with separately

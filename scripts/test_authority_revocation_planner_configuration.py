@@ -395,7 +395,7 @@ class RevocationPlannerConfigurationTests(unittest.TestCase):
                     self.assertIs(meter.limits, limits)
                     self.assertTrue(all(start <= used <= ceiling for start, used, ceiling in
                         zip(prior, oracle.units(meter.metrics), maximum)))
-                    self.assertFalse(hasattr(meter, "_shared_ledger_owner"))
+                    self.assertFalse(hasattr(meter, "_revocation_packaging_owner"))
         for mode in ("float", "negative", "limits"):
             meter = self.work()
             if mode == "float": meter.json_nodes = 0.0

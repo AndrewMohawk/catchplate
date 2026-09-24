@@ -55,7 +55,7 @@ Separate audit/recovery and legacy shared-role sealing keep their own policies.
 This is a metadata-namespace check, not an all-database sandbox or continuous
 monitoring against a privileged administrator.
 
-Source revision `.59`, all nineteen v9 DDL revision pins, the schema source
+Source revision `.60`, all nineteen v9 DDL revision pins, the schema source
 contract and the owner verification profile bind this change. The latter two
 include the configured writer role, exact grant inventory, function signatures
 and query digest. Older recorded contracts are not silently accepted.
@@ -80,6 +80,10 @@ owner, alongside PostgreSQL version, fixed role/server-reported TLS identity,
 transaction mode and connection-continuity checks. Its immutable configuration
 now requires independent writer role/TLS pins as a seventh item, with no old-six
 fallback. See [writer connection admission](authority-revocation-writer-connection.md).
+
+Revision `.60` adds the private
+[measured writer-configuration factory](authority-revocation-writer-configuration.md).
+It does not activate a writer request purpose or replace actual connection admission.
 
 Still required: independently configured admission for the latent legacy writer
 routes; authenticated verifier-to-planner-to-writer custody; and real installation,

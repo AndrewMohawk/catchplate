@@ -3775,6 +3775,44 @@ class AuthorityProcess:
         return planner.produce_observed(request=owned["request"], evidence=owned["evidence"],
             context=owned["context"], root_inventory=inventory, work=work)
 
+    def _revocation_planner_persistence(self, *, work):
+        """Construct the private writer owner from admitted measured settings.
+
+        Root-signed configuration load, active writer launch and the exclusive
+        descriptor remain real upstream requirements. Capture the full payload
+        before callbacks; the mapper constructs genuine verification keys and
+        independent database pins, not a successful-verification token. No
+        socket is opened and no plan is accepted by constructing this owner.
+        Any future action adapter must own original bytes and all independent
+        invocation expectations before calling this factory.
+        """
+        if (self.role_name != "planner-writer"
+                or self.process_mode != "policy-authority-planner-writer"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation writer process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_writer_configuration
+
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation writer configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("planner-writer"))
+        persistence_dsn = authority_revocation_configuration.production._callback(
+            work, lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))
+        # Keep the generation snapshot immediately beside its genuine ownership
+        # capture; no descriptor or other callback can interpose here.
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return authority_revocation_writer_configuration._persistence_from_configuration_on_work(
+            payload=owned_payload, configuration_digest=configuration_digest,
+            generation=generation, persistence_dsn=persistence_dsn, work=work)
+
     def _revocation_capability_issuer(self, *, work):
         """Construct the private successor only from this admitted issuer.
 

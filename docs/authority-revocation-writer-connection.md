@@ -60,10 +60,11 @@ failure is potentially indeterminate: it cannot undo a completed commit.
 
 ## Scope that remains unfinished
 
-This checkpoint covers the independently configured private v4 persist, retained
-read and execution-reservation owner. It does not add a public service route or
-construct that owner from measured service configuration yet. It also does not
-combine separate `persist` and `reserve_execution` calls into one transaction.
+The connection checkpoint covers the independently configured private v4
+persist, retained read and execution-reservation owner. Revision `.60` adds
+[measured configuration mapping](authority-revocation-writer-configuration.md)
+and a private service factory, but no serving action or public route. Separate
+`persist` and `reserve_execution` calls still do not share one transaction.
 
 The legacy service still registers `persist-measured-plan`,
 `read-persisted-plan` and `reserve-execution-envelope`. Their current import path

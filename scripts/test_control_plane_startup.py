@@ -2712,7 +2712,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual((len(observed), operation.call_count), (1, 0))
             self.assertEqual(work.metrics, observed[0])
             self.assertIs(work.limits, limits)
-            self.assertFalse(hasattr(work, "_authority_query_batch_owner"))
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
             self.assertEqual(fixture.recorder.releases, 0)
             self.assertIs(fixture.connection.closed, True)
             self.assert_revocation_writer_empty(fixture.recorder)

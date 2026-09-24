@@ -213,7 +213,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 ),
                 CHECK (status = 'completed'),
                 CHECK (length(before_manifest_json) BETWEEN 2 AND 67108864),
@@ -246,7 +246,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(key_columns_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -289,7 +289,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(template_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -342,7 +342,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(evidence_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -380,7 +380,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -460,7 +460,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -601,7 +601,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -660,7 +660,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -740,7 +740,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (historical_expectations_bytes_digest ~ '^sha256:[0-9a-f]{64}$'),
                 CHECK (planner_key_digest ~ '^sha256:[0-9a-f]{64}$'),
                 CHECK (verifier_key_digest ~ '^sha256:[0-9a-f]{64}$'),
-                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.72')
+                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.73')
             );
         CREATE TABLE IF NOT EXISTS
             policy_authority_revocation_writer_acknowledgments (
@@ -778,7 +778,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (generation_digest ~ '^sha256:[0-9a-f]{64}$'),
                 CHECK (writer_response_spki_digest ~ '^sha256:[0-9a-f]{64}$'),
                 CHECK (exact_ack_bytes_digest ~ '^sha256:[0-9a-f]{64}$'),
-                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.72')
+                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.73')
             );
         CREATE TABLE IF NOT EXISTS
             policy_authority_revocation_retained_capabilities (
@@ -862,7 +862,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -913,7 +913,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(state_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -975,7 +975,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -1012,7 +1012,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -1043,7 +1043,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (deleted_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -1088,7 +1088,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -1142,7 +1142,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -1186,7 +1186,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (updated_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
 
@@ -1234,7 +1234,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.73'
             )
         );
 
@@ -1301,7 +1301,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.73'
             )
         );
 
@@ -1361,7 +1361,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.72'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.73'
                 )
             );
     """.replace(

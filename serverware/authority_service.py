@@ -51,6 +51,7 @@ from serverware import authority_planner
 from serverware import authority_transition_registry
 from serverware import authority_transport
 from serverware import authority_revocation_planner_custody_transport as custody_transport
+from serverware import authority_revocation_custody_read_transport as custody_read_transport
 from serverware import authority_revocation_planning_transport as planning_transport
 from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_webauthn_trust
@@ -4218,6 +4219,64 @@ class AuthorityProcess:
             generation=generation, raw5=(intent_bytes, relay_bytes, envelope_bytes,
                 evaluation_context_bytes, historical_expectations_bytes), work=work)
 
+    def _read_revocation_writer_originals(self, *, execution_envelope_id, planner_transaction_id, work):
+        """Retrieve unverified raw6 through the planner, never retry custody.
+
+        The independently held locator must survive the uncertain exchange.
+        Returned bytes still need independently trusted historical keys and
+        genuine replay; they grant no execution or replacement authority.
+        """
+        from serverware import authority_revocation_custody_read_client as client
+
+        custody_read_transport._validate_ids(execution_envelope_id, planner_transaction_id)
+        payload, digest, generation = _revocation_custody_context(self, role_name="verifier", work=work)
+        return client._read_from_planner_on_configuration(payload=payload, configuration_digest=digest,
+            generation=generation, execution_envelope_id=execution_envelope_id,
+            planner_transaction_id=planner_transaction_id, work=work)
+
+    def _relay_revocation_writer_read(self, *, execution_envelope_id, planner_transaction_id, work):
+        """Relay a read-only locator; return unverified originals unchanged."""
+        from serverware import authority_revocation_custody_read_client as client
+
+        custody_read_transport._validate_ids(execution_envelope_id, planner_transaction_id)
+        payload, digest, generation = _revocation_custody_context(self, role_name="planner", work=work)
+        return client._read_from_writer_on_configuration(payload=payload, configuration_digest=digest,
+            generation=generation, execution_envelope_id=execution_envelope_id,
+            planner_transaction_id=planner_transaction_id, work=work)
+
+    def _read_retained_revocation_writer_originals(self, *, execution_envelope_id, planner_transaction_id, work):
+        """Read existing custody under this writer's current admitted identity.
+
+        This is not a write transaction or historical-key admission. Capture
+        measured settings before callbacks, acquire only the held writer DSN,
+        then snapshot generation last. The configured reader returns only after
+        all actual database scopes close normally. Missing rows stay unresolved.
+        """
+        if (type(self) is not AuthorityProcess or self.role_name != "planner-writer"
+                or self.process_mode != "policy-authority-planner-writer"):
+            raise AuthorityServiceError("revocation custody read requires the writer role")
+        measured = self.configuration
+        if type(measured) is not MeasuredConfiguration:
+            raise AuthorityServiceError("revocation custody read configuration is unavailable")
+        payload, digest = measured.payload, measured.digest
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_revocation_custody_read as reader
+
+        custody_read_transport._validate_ids(execution_envelope_id, planner_transaction_id)
+        ledger = configuration.capability.capture._SharedLedger(work)
+        configuration.capability.shape._digest(digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation custody read configuration is not closed data")
+        owned = configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner-writer"))
+        persistence_dsn = configuration.production._callback(work, lambda: _read_dsn_descriptor(
+            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))
+        generation = configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))
+        return reader._read_originals_on_configuration(payload=owned, configuration_digest=digest,
+            generation=generation, persistence_dsn=persistence_dsn,
+            execution_envelope_id=execution_envelope_id, planner_transaction_id=planner_transaction_id, work=work)
+
     def _send_revocation_writer_commitments(self, *, intent_bytes,
             relay_bytes, envelope_bytes, evaluation_context_bytes,
             historical_expectations_bytes, work):
@@ -7948,6 +8007,28 @@ class AuthorityServer:
             custody_transport._check_deadline(deadline_ns)
             custody_transport._send_ack(connection, acknowledgment_bytes, deadline_ns=deadline_ns)
 
+    def _serve_revocation_custody_read(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Peer-checked read-only lookup; no absence-success or mutation route."""
+        process = self.process
+        if (type(process) is not AuthorityProcess or process.role_name not in ("planner", "planner-writer")
+                or process.process_mode != "policy-authority-" + process.role_name):
+            raise AuthorityServiceError("detached custody read has the wrong service role")
+        execution_id, planner_id = custody_read_transport._recv_request(
+            connection, deadline_ns=deadline_ns, prefix=prefix)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        custody_read_transport._check_deadline(deadline_ns)
+        if process.role_name == "planner":
+            originals = process._relay_revocation_writer_read(
+                execution_envelope_id=execution_id, planner_transaction_id=planner_id, work=work)
+        else:
+            originals = process._read_retained_revocation_writer_originals(
+                execution_envelope_id=execution_id, planner_transaction_id=planner_id, work=work)
+        custody_read_transport._check_deadline(deadline_ns)
+        custody_read_transport._send_originals(connection, originals, deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -7959,7 +8040,8 @@ class AuthorityServer:
                 )
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
             detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
-                custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC)
+                custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC,
+                custody_read_transport.REQUEST_MAGIC)
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
@@ -7968,6 +8050,9 @@ class AuthorityServer:
                 return
             if prefix in (custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC):
                 self._serve_revocation_custody(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix == custody_read_transport.REQUEST_MAGIC:
+                self._serve_revocation_custody_read(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

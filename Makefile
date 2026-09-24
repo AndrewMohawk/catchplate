@@ -930,6 +930,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_revocation_planner_custody_transport.py \
 	serverware/authority_revocation_planner_custody_client.py \
 	serverware/authority_revocation_planner_custody_receiver.py \
+	serverware/authority_revocation_custody_read.py \
+	serverware/authority_revocation_custody_read_client.py \
+	serverware/authority_revocation_custody_read_transport.py \
 	serverware/authority_revocation_planner_configuration.py \
 	serverware/authority_revocation_invocation.py \
 	serverware/authority_revocation_issuance.py \
@@ -977,6 +980,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/revocation_execution.py \
 	serverware/authority_store/revocation_writer_request.py \
 	serverware/authority_store/revocation_writer_acknowledgment.py \
+	serverware/authority_store/revocation_custody_read.py \
 	serverware/authority_store/revocation_retained_sql.py \
 	serverware/authority_store/revocation_retention.py \
 	serverware/authority_store/root_transition_sql.py \
@@ -2685,6 +2689,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_planner_custody_transport.py \
 				serverware/authority_revocation_planner_custody_client.py \
 				serverware/authority_revocation_planner_custody_receiver.py \
+				serverware/authority_revocation_custody_read.py \
+				serverware/authority_revocation_custody_read_client.py \
+				serverware/authority_revocation_custody_read_transport.py \
 				serverware/authority_revocation_planner_configuration.py \
 				serverware/authority_transport.py \
 				serverware/authority_revocation_invocation.py \
@@ -2711,6 +2718,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_store/revocation_execution.py \
 				serverware/authority_store/revocation_writer_request.py \
 				serverware/authority_store/revocation_writer_acknowledgment.py \
+				serverware/authority_store/revocation_custody_read.py \
 				serverware/authority_store/revocation_retained_sql.py \
 				serverware/authority_store/executor_v9.py \
 				serverware/authority_revocation_write_trace.py \

@@ -37,8 +37,10 @@ to that fixed composition; `.67` adds the separate
 adds [fixed detached transfer](authority-revocation-writer-transport.md) to the
 writer-only server path. Source `.69` adds a private
 [configured client](authority-revocation-writer-client.md) that derives
-independent expectations and authenticates the original ACK. Configured
-intent/relay production and authenticated historical recovery remain open.
+independent expectations and authenticates the original ACK. Source `.70`
+adds separate [configured intent/relay producers](authority-revocation-writer-producers.md)
+with actual verifier-side root acquisition and original-byte handoff replay.
+Authenticated verifier/planner exchange and historical recovery remain open.
 No API accepts a previously authenticated result in place of original bytes.
 
 ## Two signed controls, three detached bodies

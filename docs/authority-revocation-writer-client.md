@@ -96,7 +96,9 @@ deadline or ACK-verification failure can follow a writer commit; the client
 returns no success bytes and does not retransmit, regenerate or reconcile.
 Historical key resolution and authorized recovery remain separate work.
 
-Configured intent/relay production, the complete public flow, unfinished
+Source `.70` adds separate [configured intent/relay producers](authority-revocation-writer-producers.md),
+including the verifier's actual independent root read and genuine handoff replay.
+Authenticated verifier/planner exchange, the complete public flow, unfinished
 WebAuthn/registry gates and production provisioning remain open. Component
 fixtures use real cryptography and local replay with modeled socket/clock
 observations; source controls bind the private service path without fabricating

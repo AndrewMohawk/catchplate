@@ -87,8 +87,10 @@ to the separate authenticated composition. Source `.68` supplies a
 [fixed detached transfer](authority-revocation-writer-transport.md) and writer-only
 server branch. Source `.69` adds a private [configured client](authority-revocation-writer-client.md)
 with independently derived ACK expectations and measured response-key
-verification. Configured producers, complete serving integration and
-authenticated historical recovery remain unfinished.
+verification. Source `.70` adds separate
+[configured producers](authority-revocation-writer-producers.md); authenticated
+verifier/planner exchange, complete serving integration and historical recovery
+remain unfinished.
 Legacy writer routes and planner-only peer restrictions are
 unchanged. Registry closure and four WebAuthn gates are
 still incomplete. Production Nitro/KMS, signing and independent witness

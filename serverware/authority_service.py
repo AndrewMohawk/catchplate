@@ -3886,6 +3886,120 @@ class AuthorityProcess:
         return planner.produce_observed(request=owned["request"], evidence=owned["evidence"],
             context=owned["context"], root_inventory=inventory, work=work)
 
+    def _produce_revocation_writer_intent(self, *, envelope_bytes, evaluation_context_bytes,
+            expected_request, context, planned_at_epoch_ns, envelope_id,
+            planner_transaction_id, work):
+        """Verify against this process's independent read before intent signing.
+
+        The admitted request/reservation context and fixed IDs remain upstream
+        prerequisites, not caller authority created by this private adapter.
+        No caller root inventory or successful handoff is accepted. Hold the
+        measured configuration and signer once; own invocation graphs before
+        any launch, descriptor or database callback. Acquire actual verifier
+        roots and close their read scopes before the configured replay/sign.
+        This is not a public purpose or an automatic retry/regeneration path.
+        """
+        if (self.role_name != "verifier"
+                or self.process_mode != "policy-authority-verifier"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation intent verifier process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        verifier_private_key = self.signing_key
+        if not isinstance(verifier_private_key, Ed25519PrivateKey):
+            raise AuthorityServiceError("revocation intent verifier signing key is unavailable")
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_observed
+        from serverware import authority_revocation_root_reader
+        from serverware import authority_revocation_writer_producers
+
+        owned_request, owned_context = authority_revocation_writer_producers._capture_intent_call_inputs(
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            expected_request=expected_request, context=context, planned_at_epoch_ns=planned_at_epoch_ns,
+            envelope_id=envelope_id, planner_transaction_id=planner_transaction_id, work=work)
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation intent verifier configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        if (type(owned_payload.get("roles")) is not dict
+                or type(owned_payload["roles"].get("verifier")) is not dict):
+            raise AuthorityServiceError("revocation intent verifier role is not closed data")
+        role = owned_payload["roles"]["verifier"]
+        try:
+            timeout = role["databaseConnectTimeoutSeconds"]
+            if type(timeout) not in (int, float) or not 2 <= timeout <= 300:
+                raise AuthorityServiceError("revocation intent verifier read timeout is not bounded")
+            pins = (int(timeout), role["databaseRole"], role["tlsClientDn"],
+                role["tlsClientSerial"], role["tlsIssuerDn"], owned_payload["queryManifestDigest"])
+        except KeyError as exc:
+            raise AuthorityServiceError("revocation intent verifier read configuration is incomplete") from exc
+        authority_revocation_root_reader._validate_pins(pins)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("verifier"))
+        dsn = authority_revocation_configuration.production._callback(
+            work, lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"))
+        reader = authority_revocation_root_reader.RevocationRootReader(
+            dsn=dsn, connect_timeout_seconds=pins[0], database_role=pins[1],
+            tls_client_dn=pins[2], tls_client_serial=pins[3], tls_issuer_dn=pins[4],
+            query_manifest_digest=pins[5])
+        observed_inventory = reader.read(work=work)
+        inventory = authority_revocation_observed._capture_root_inventory(observed_inventory, work=work)
+        # The genuine reader has exited. Own its observations before the last
+        # callback; the worker then reowns inputs, inventory and launch fields.
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return authority_revocation_writer_producers._produce_intent_on_configuration(
+            payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            expected_request=owned_request, context=owned_context, root_inventory=inventory,
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id,
+            verifier_private_key=verifier_private_key, work=work)
+
+    def _produce_revocation_writer_relay(self, *, intent_bytes, envelope_bytes,
+            evaluation_context_bytes, historical_expectations_bytes, work):
+        """Sign one relay separately from sending or recovering original bytes.
+
+        Root-signed configuration, descriptor-loaded signer and actual active
+        planner launch remain prerequisites. Hold those inputs before callbacks;
+        the configured worker binds its keys and authenticates the original
+        intent before signing. No ACK, socket or persistence result is accepted.
+        """
+        if (self.role_name != "planner"
+                or self.process_mode != "policy-authority-planner"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation relay planner process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        planner_private_key = self.signing_key
+        if not isinstance(planner_private_key, Ed25519PrivateKey):
+            raise AuthorityServiceError("revocation relay planner signing key is unavailable")
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_writer_commitment
+        from serverware import authority_revocation_writer_producers
+
+        authority_revocation_writer_commitment._raw(intent_bytes, authority_contract.MAX_REQUEST_BYTES)
+        authority_revocation_writer_commitment._body_bounds(
+            envelope_bytes, evaluation_context_bytes, historical_expectations_bytes)
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation relay planner configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("planner"))
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return authority_revocation_writer_producers._produce_relay_on_configuration(
+            payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
+            intent_bytes=intent_bytes, envelope_bytes=envelope_bytes,
+            evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes,
+            planner_private_key=planner_private_key, work=work)
+
     def _send_revocation_writer_commitments(self, *, intent_bytes,
             relay_bytes, envelope_bytes, evaluation_context_bytes,
             historical_expectations_bytes, work):

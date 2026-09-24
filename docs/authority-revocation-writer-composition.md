@@ -159,7 +159,9 @@ retained-plan and reserved-execution links and the signed ACK child. The
 prove production key custody. The `.68` fixed transfer supplies bounded original
 byte ingress and raw ACK egress, not a configured end-to-end planner flow.
 Source `.69` adds a separate [configured client](authority-revocation-writer-client.md)
-with independently pinned remote verification. Public execution and historical
+with independently pinned remote verification. Source `.70` supplies separate
+[configured producers](authority-revocation-writer-producers.md), not the missing
+authenticated verifier/planner exchange. Public execution and historical
 acknowledgment lookup remain separate work. A rotated key cannot silently re-sign an old child or
 enroll itself through an ACK. This private path is not a complete authenticated
 RPC retry protocol, and its native durability is unverified. The remaining requirements are in the

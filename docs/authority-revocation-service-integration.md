@@ -145,7 +145,13 @@ authentication and authenticated historical recovery were not supplied by
 [configured planner client](authority-revocation-writer-client.md): genuine
 original-control/plan replay derives independent ACK expectations before one
 transfer, and the exact reply is verified against the measured writer public
-key. Configured producers and historical recovery remain unfinished.
+key. Source `.70` adds separate
+[configured intent and relay producers](authority-revocation-writer-producers.md).
+The verifier acquires its own actual read inventory, owns it before final
+generation binding and genuinely verifies the original handoff before signing.
+The planner authenticates the original intent before separately signing its
+relay. Neither producer sends or regenerates a retry. Authenticated original-byte
+exchange between verifier and planner and historical recovery remain unfinished.
 Socket or deadline failure after commit does not imply rollback or safe retry.
 Post-plan witness binding, current-root one-use execution and atomic terminal
 publication remain incomplete. The four unfinished WebAuthn authority kernels

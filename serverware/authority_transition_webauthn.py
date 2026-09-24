@@ -126,15 +126,30 @@ def cascade_queries(
     *, operation: str, values: Mapping[str, Any], database_now: datetime,
     request_digest: str,
 ) -> tuple[core.Query, ...]:
-    """Explicit-revocation declarations, not aggregate withdrawal authority.
+    """Convert supplied aware time exactly, then use the shared source recipe."""
+    try:
+        cutoff_us = authority_complete_query.cutoff_microseconds(database_now)
+    except authority_complete_query.CompleteQueryError as exc:
+        raise core.TransitionKernelError("revocation complete query binding failed") from exc
+    return cascade_queries_at_cutoff(
+        operation=operation, values=values, cutoff_us=cutoff_us,
+        request_digest=request_digest,
+    )
 
-    The supplied database time is bound as an input, not authenticated by this
-    conversion. A future aggregate operation needs its own roles and budgets.
+
+def cascade_queries_at_cutoff(
+    *, operation: str, values: Mapping[str, Any], cutoff_us: int,
+    request_digest: str,
+) -> tuple[core.Query, ...]:
+    """Declare the explicit-revocation cascade from prepared semantic values.
+
+    Callers retain the existing prepare_revocation_input/_arguments precondition.
+    The signed-int64 cutoff is a supplied input, not authenticated time. This
+    source recipe is not aggregate withdrawal authority or work accounting.
     """
     record_id = values["record_id"]
     queries = [_exact_query(operation, "revoked_credential", "webauthn_credentials", record_id)]
     try:
-        cutoff_us = authority_complete_query.cutoff_microseconds(database_now)
         queries.extend(authority_complete_query.bind_query(
             operation, role, arguments=values, cutoff_us=cutoff_us,
         ) for role in (
@@ -337,8 +352,26 @@ class WebAuthnCredentialRevokeKernel:
         return cascade_queries(operation=self.operation, values=values, database_now=database_now, request_digest=request_digest)
 
     def queries_with_evidence(self, *, arguments: Mapping[str, Any], database_now: datetime, request_digest: str, evidence: Mapping[str, Any]) -> tuple[core.Query, ...]:
+        """Convert supplied aware time and delegate to the cutoff-native recipe."""
+        try:
+            cutoff_us = authority_complete_query.cutoff_microseconds(database_now)
+        except authority_complete_query.CompleteQueryError as exc:
+            raise core.TransitionKernelError("revocation complete query binding failed") from exc
+        return self.queries_with_evidence_at_cutoff(
+            arguments=arguments, cutoff_us=cutoff_us,
+            request_digest=request_digest, evidence=evidence,
+        )
+
+    def queries_with_evidence_at_cutoff(
+        self, *, arguments: Mapping[str, Any], cutoff_us: int,
+        request_digest: str, evidence: Mapping[str, Any],
+    ) -> tuple[core.Query, ...]:
+        """Regenerate the closed business program; assertion IDs remain inputs."""
         values = _arguments(arguments)
-        queries = list(self.queries(arguments=arguments, database_now=database_now, request_digest=request_digest))
+        queries = list(cascade_queries_at_cutoff(
+            operation=self.operation, values=values, cutoff_us=cutoff_us,
+            request_digest=request_digest,
+        ))
         signer = core.require_text(evidence.get("credentialRecordId"), "assertion credential", maximum_bytes=1024)
         challenge = core.require_text(evidence.get("challengeId"), "assertion challenge", maximum_bytes=1024)
         if signer != values["record_id"]:

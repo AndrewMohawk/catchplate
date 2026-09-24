@@ -628,6 +628,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_query_reads_measured.py \
 	scripts/test_authority_query_staging.py \
 	scripts/test_authority_complete_query.py \
+	scripts/test_authority_revocation_query_program.py \
 	scripts/test_authority_complete_query_batch.py \
 	scripts/test_authority_complete_read_write.py \
 	scripts/test_authority_radix_mutation.py \

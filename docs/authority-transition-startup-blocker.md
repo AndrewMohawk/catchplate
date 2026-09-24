@@ -45,6 +45,13 @@ The [explicit-context attestation core](webauthn-attestation-core.md) prepares
 shared registration cryptography for an eventual measured evidence producer.
 It does not itself produce signed authority evidence or fill a missing kernel.
 
+The [counted-storage installation](authority-counted-installation.md) now wires
+fresh-empty PostgreSQL preparation, exact existing-head checks, schema/ACL
+inventories and real primary-trigger maintenance in source `.29`. It remains
+unexecuted. Complete-query planner acquisition, independently admitted roots,
+shared operation budgets and versioned retained evidence are still required;
+this wiring neither enables counted queries nor registers a missing kernel.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

@@ -9,6 +9,7 @@ privileges, catalog behavior, migrations or whole startup admission at runtime.
 from __future__ import annotations
 
 import ast
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -35,6 +36,30 @@ PHASE2 = (
 ADDITIONAL = tuple(sorted((*PHASE2,
     "policy_authority_authorization_dependency_manifests",
     "policy_authority_operation_mutation_templates")))
+COUNTED_COLUMNS = {
+    "policy_authority_counted_index_heads": (
+        "index_id", "table_name", "counted_profile", "projection_digest",
+        "projection_manifest_digest", "index_revision", "root_digest", "leaf_count"),
+    "policy_authority_counted_index_leaves": (
+        "index_id", "projection_digest", "index_key", "primary_id",
+        "primary_key_digest", "primary_row_digest", "index_revision"),
+    "policy_authority_counted_index_nodes": (
+        "index_id", "projection_digest", "depth", "path_prefix", "node_digest",
+        "subtree_count", "index_revision"),
+}
+COUNTED_SIGNATURES = {
+    "serverware_policy_authority_counted_profile": ("text",),
+    "serverware_policy_authority_counted_frame_digest": ("text", "text[]"),
+    "serverware_policy_authority_counted_empty": ("text", "text"),
+    "serverware_policy_authority_counted_leaf": ("text", "text", "text", "text"),
+    "serverware_policy_authority_counted_branch": ("text", "text", "text[]", "bigint[]"),
+    "serverware_policy_authority_counted_expiry_micros": ("text",),
+    "serverware_policy_authority_counted_signed_order": ("bigint",),
+    "serverware_policy_authority_counted_field": ("jsonb", "text", "text"),
+    "serverware_policy_authority_counted_project": ("text", "jsonb"),
+    "serverware_policy_authority_counted_apply_index": ("text", "text", "jsonb", "jsonb"),
+    "serverware_policy_authority_counted_apply_event": ("text", "text", "jsonb", "jsonb"),
+}
 READ_ONLY = "_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES"
 LEGACY_UNIONS = {
     "_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES",
@@ -122,11 +147,15 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertIsInstance(value.args[0], ast.Set)
         members = value.args[0].elts
         stars = [member.value for member in members if isinstance(member, ast.Starred)]
-        self.assertEqual(len(stars), 4)
+        self.assertEqual(len(stars), 5)
         self.assertEqual({node.id for node in stars if isinstance(node, ast.Name)}, LEGACY_UNIONS)
         attributes = [node for node in stars if isinstance(node, ast.Attribute)]
-        self.assertEqual(len(attributes), 1)
-        self.assert_shape(attributes[0], "authority_contract.V9_ADDITIONAL_PROTECTED_TABLES")
+        self.assertEqual(len(attributes), 2)
+        self.assertEqual({ast.dump(node) for node in attributes}, {
+            ast.dump(ast.parse(expression, mode="eval").body)
+            for expression in ("authority_contract.V9_ADDITIONAL_PROTECTED_TABLES",
+                               "authority_contract.POSTGRES_COUNTED_STORE_TABLES")
+        })
         literals = [node for node in members if not isinstance(node, ast.Starred)]
         self.assertTrue(all(isinstance(node, ast.Constant) and type(node.value) is str for node in literals))
         self.assertEqual(len(literals), len(LEGACY_EXPLICIT))
@@ -287,10 +316,14 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assert_shape(function.body[0].value,
             "tuple(dict.fromkeys(_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES + "
             "_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES + authority_contract.V9_ADDITIONAL_PROTECTED_TABLES + "
+            "(authority_contract.POSTGRES_COUNTED_STORE_TABLES if postgres else ()) + "
             "('metadata_audit_outbox', 'rbac_authority_state', 'rbac_role_bindings')))")
+        self.assertEqual([argument.arg for argument in function.args.kwonlyargs], ["postgres"])
+        self.assert_shape(function.args.kw_defaults[0], "False")
         manifest = named_function(self.schema_tree, "_policy_candidate_authority_structure_manifest")
         selection = named_assignment(manifest, "selected_tables", recursive=True)
-        self.assert_shape(selection.value, "tables or _policy_candidate_authority_schema_tables()")
+        self.assert_shape(selection.value,
+            "tables or _policy_candidate_authority_schema_tables(postgres=isinstance(conn, PostgresMetadataConnection))")
 
     def test_source_contract_hash_binds_complete_readonly_and_additional_inventories(self):
         function = named_function(self.schema_tree, "_policy_candidate_authority_source_contract_digest")
@@ -313,6 +346,16 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assert_shape(entries["jitAuthorityRuntimeReadOnlyTables"], "sorted(_JIT_AUTHORITY_RUNTIME_READ_ONLY_TABLES)")
         self.assert_shape(entries["immutableTables"], "list(_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES)")
         self.assert_shape(entries["headTables"], "list(_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES)")
+        self.assert_shape(entries["postgresCountedInstallation"],
+            "counted_installation.counted_installation_contract()")
+        self.assert_shape(entries["postgresCountedMaintenance"],
+            "dict(authority_contract.POSTGRES_COUNTED_MAINTENANCE_CONTRACT)")
+        self.assert_shape(entries["postgresCountedStoreColumns"],
+            "{table: list(columns) for table, columns in authority_contract.POSTGRES_COUNTED_STORE_COLUMNS.items()}")
+        self.assert_shape(entries["postgresCountedFunctionContracts"],
+            "{name: {field: list(value) if isinstance(value, tuple) else value "
+            "for field, value in contract.items()} for name, contract in "
+            "authority_contract.POSTGRES_COUNTED_FUNCTION_CONTRACTS.items()}")
         returned = [node for node in function.body if isinstance(node, ast.Return)]
         self.assertEqual(len(returned), 1)
         self.assert_shape(returned[0].value,
@@ -347,7 +390,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.28")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.29")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -362,6 +405,148 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             if isinstance(node, ast.Constant) and type(node.value) is str]
         self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 17)
         self.assertFalse(any("serverware.policyCandidateAuthoritySource/2026-07-30.26" in value for value in literals))
+
+    def test_counted_custody_is_exact_postgres_only_and_excluded_from_primary_business(self):
+        self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_STORE_COLUMNS), COUNTED_COLUMNS)
+        self.assertEqual(authority_contract.POSTGRES_COUNTED_STORE_TABLES, tuple(COUNTED_COLUMNS))
+        with self.assertRaises(TypeError):
+            authority_contract.POSTGRES_COUNTED_STORE_COLUMNS["extra"] = ()
+        _, storage = read_source("serverware/authority_store/counted_store_sql.py", 128 * 1024)
+        self.assert_shape(named_assignment(storage, "COUNTED_STORE_TABLES").value, repr(tuple(COUNTED_COLUMNS)))
+        for name, table in (("COUNTED_HEAD_COLUMNS", "policy_authority_counted_index_heads"),
+                ("COUNTED_LEAF_COLUMNS", "policy_authority_counted_index_leaves"),
+                ("COUNTED_NODE_COLUMNS", "policy_authority_counted_index_nodes")):
+            self.assert_shape(named_assignment(storage, name).value, repr(COUNTED_COLUMNS[table]))
+        for spec in authority_contract.OPERATIONS.values():
+            for field in ("businessReads", "businessWrites", "authorizationReads"):
+                self.assertTrue(set(COUNTED_COLUMNS).isdisjoint(spec[field]))
+        self.assertTrue(set(COUNTED_COLUMNS).issubset(authority_contract._FRAMEWORK_CUSTODY_TABLES))
+        self.assertTrue(set(COUNTED_COLUMNS).isdisjoint(ADDITIONAL))
+        for name in ("_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES", "_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES"):
+            value = named_assignment(self.db_tree, name).value
+            self.assertTrue(set(COUNTED_COLUMNS).isdisjoint(node.value for node in value.elts))
+        installer = named_function(self.db_tree, "_install_policy_candidate_authority_guards")
+        tracked = named_assignment(installer, "tracked_authenticated_tables", recursive=True)
+        self.assertNotIn("COUNTED", ast.get_source_segment(self.db_source, tracked))
+        self.assert_shape(named_assignment(self.db_tree, "_POLICY_AUTHORITY_FRAMEWORK_CUSTODY_TABLES").value.args[0].right,
+            "set(authority_contract.POSTGRES_COUNTED_STORE_TABLES)")
+
+    def test_counted_eleven_function_signatures_and_security_match_actual_sql_declarations(self):
+        self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_FUNCTION_SIGNATURES), COUNTED_SIGNATURES)
+        observed = {}
+        for relative in ("counted_hash_sql.py", "counted_projection_sql.py", "counted_path_sql.py", "counted_maintenance_sql.py"):
+            source, _ = read_source("serverware/authority_store/" + relative, 256 * 1024)
+            declarations = re.findall(
+                r"CREATE OR REPLACE FUNCTION \{namespace\}\.([a-z_]+)\((.*?)\)(.*?)AS \$counted_[a-z]+\$",
+                source, re.DOTALL)
+            self.assertTrue(declarations)
+            for name, arguments, header in declarations:
+                self.assertNotIn(name, observed)
+                types = tuple(argument.strip().split()[1] for argument in arguments.split(","))
+                observed[name] = types
+                self.assertIn("LANGUAGE plpgsql", header)
+                self.assertIn("SECURITY INVOKER", header)
+                self.assertNotRegex(header, r"\bSTRICT\b")
+                mutation = name in {
+                    "serverware_policy_authority_counted_apply_index", "serverware_policy_authority_counted_apply_event"}
+                projection = relative == "counted_projection_sql.py"
+                self.assertIn("VOLATILE" if mutation else "IMMUTABLE", header)
+                self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_FUNCTION_CONTRACTS[name]), {
+                    "argumentTypes": types, "language": "plpgsql", "securityDefiner": False,
+                    "strict": False, "volatility": "v" if mutation else "i",
+                    "searchPath": ("pg_catalog",) if projection else ("pg_catalog", "$metadata", "pg_temp"),
+                })
+                self.assertIn("SET search_path = pg_catalog" + ("\n" if projection else ", {namespace}, pg_temp\n"), header)
+        self.assertEqual(observed, COUNTED_SIGNATURES)
+
+    def test_counted_owner_checks_include_signatures_invoker_flags_and_no_new_execute_grants(self):
+        owner = named_function(self.db_tree, "_validate_policy_authority_owner_apply_function")
+        types = named_assignment(owner, "counted_functions", recursive=True)
+        self.assert_shape(types.value, "authority_contract.POSTGRES_COUNTED_FUNCTION_CONTRACTS")
+        checks = [node for node in ast.walk(owner) if call_named(node, "any")
+            and 'counted_functions[row["proname"]]' in ast.get_source_segment(self.db_source, node)]
+        self.assertEqual(len(checks), 1)
+        self.assert_shape(checks[0],
+            "any(str(row['argument_types']) != ', '.join(counted_functions[row['proname']]['argumentTypes']) "
+            "or row['prosecdef'] is not counted_functions[row['proname']]['securityDefiner'] "
+            "or row['proisstrict'] is not counted_functions[row['proname']]['strict'] "
+            "or str(row['language_name']) != counted_functions[row['proname']]['language'] "
+            "or str(row['provolatile']) != counted_functions[row['proname']]['volatility'] "
+            "or list(row['proconfig'] or ()) != ['search_path=' + ', '.join("
+            "_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME if part == '$metadata' else part "
+            "for part in counted_functions[row['proname']]['searchPath'])] "
+            "for row in function_rows if row['proname'] in counted_functions)")
+        for name in ("_POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES",
+                "_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS",
+                "_POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES"):
+            self.assertNotIn("COUNTED", ast.get_source_segment(self.db_source, named_assignment(self.db_tree, name)))
+        grant_check = named_assignment(owner, "unexpected_grant", recursive=True)
+        self.assertNotIn("COUNTED", ast.get_source_segment(self.db_source, grant_check))
+        for fragment in ("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ", " FROM PUBLIC"):
+            self.assertIn(fragment, ast.get_source_segment(self.db_source, self.seal))
+        guards = named_function(self.schema_tree, "_policy_candidate_authority_required_guard_names")
+        self.assertTrue(any(isinstance(node, ast.Starred) and ast.dump(node.value) == ast.dump(
+            ast.parse("authority_contract.POSTGRES_COUNTED_FUNCTION_SIGNATURES", mode="eval").body)
+            for node in ast.walk(guards)))
+
+    def test_counted_installation_is_on_actual_postgres_guard_and_shared_scratch_path(self):
+        installer = named_function(self.db_tree, "_install_policy_candidate_authority_guards")
+        calls = [node for node in ast.walk(installer) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "_counted_installation"]
+        self.assertEqual({node.func.attr for node in calls}, {"prepare_counted_store", "counted_functions_sql"})
+        prepare = next(node for node in calls if node.func.attr == "prepare_counted_store")
+        functions = next(node for node in calls if node.func.attr == "counted_functions_sql")
+        self.assert_shape(prepare, "_counted_installation.prepare_counted_store(conn, guard_namespace)")
+        self.assert_shape(functions, "_counted_installation.counted_functions_sql(guard_namespace)")
+        pg_blocks = [node for node in ast.walk(installer) if isinstance(node, ast.If)
+            and ast.dump(node.test) == ast.dump(ast.parse("isinstance(conn, PostgresMetadataConnection)", mode="eval").body)
+            and prepare in tuple(ast.walk(node))]
+        self.assertEqual(len(pg_blocks), 1)
+        namespace = named_assignment(installer, "guard_namespace", recursive=True)
+        primary_calls = [node for node in ast.walk(installer) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "authenticated_tree_functions_sql"]
+        self.assertEqual(len(primary_calls), 1)
+        self.assertLess(namespace.lineno, prepare.lineno)
+        self.assertLess(prepare.lineno, functions.lineno)
+        self.assertLess(functions.lineno, primary_calls[0].lineno)
+        scratch = named_function(self.schema_tree, "_policy_candidate_authority_expected_structure_manifest")
+        shared = [node for node in ast.walk(scratch) if call_named(node, "_install_policy_candidate_authority_guards")]
+        self.assertEqual(len(shared), 2)  # Real PG scratch and unchanged SQLite path.
+        self.assertTrue(any(ast.dump(node) == ast.dump(ast.parse(
+            "_install_policy_candidate_authority_guards(conn)", mode="eval").body) for node in shared))
+        connection = named_function(self.db_tree, "_metadata_pg_connect_with_dsn")
+        inventory = [node for node in ast.walk(connection) if call_named(node, "_policy_candidate_authority_schema_tables")]
+        self.assertEqual(len(inventory), 1)
+        self.assert_shape(inventory[0], "_policy_candidate_authority_schema_tables(postgres=True)")
+
+    def test_counted_source_contract_pins_event_scope_without_activating_v3_queries(self):
+        self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_MAINTENANCE_CONTRACT), {
+            "schema": "serverware.policyAuthorityCountedMaintenanceAdmission/v1",
+            "maximumProfilesPerNormalizedEvent": 3,
+            "workAccounting": "bounded-per-profile-not-whole-operation",
+            "plannerCompleteQueryAdmission": False, "sqliteInstalled": False,
+        })
+        _, contract = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        material = named_assignment(contract, "OPERATION_MANIFEST_DIGEST").value.args[1]
+        fields = {key.value: value for key, value in zip(material.keys, material.values)}
+        self.assert_shape(fields["postgresCountedStoreColumns"],
+            "{table: list(columns) for table, columns in POSTGRES_COUNTED_STORE_COLUMNS.items()}")
+        self.assert_shape(fields["postgresCountedFunctionContracts"],
+            "{name: {field: list(value) if isinstance(value, tuple) else value "
+            "for field, value in contract.items()} for name, contract in POSTGRES_COUNTED_FUNCTION_CONTRACTS.items()}")
+        self.assert_shape(fields["postgresCountedMaintenance"], "dict(POSTGRES_COUNTED_MAINTENANCE_CONTRACT)")
+        source, planner = read_source("serverware/authority_planner.py", 1024 * 1024)
+        reader = named_function(planner, "_read_bounded_transition_rows")
+        self.assertIn('raise AuthorityPlannerError("complete index query acquisition is not available")',
+            ast.get_source_segment(source, reader))
+        self.assert_shape(named_assignment(planner, "PLANNER_RESPONSE_SCHEMA").value,
+            "'serverware.policyAuthorityPlannerResponse/v3'")
+        validation = named_function(self.schema_tree, "_validate_policy_candidate_authority_structure")
+        text = ast.get_source_segment(self.schema_source, validation)
+        self.assertIn("if manifest != expected_manifest:", text)
+        self.assertIn("if contract[field] != value:", text)
+        self.assertIn("POSTGRES_COUNTED_STORE_COLUMNS.items()", text)
 
 
 if __name__ == "__main__":

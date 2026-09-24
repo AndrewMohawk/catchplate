@@ -640,6 +640,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
 	scripts/test_authority_counted_root_transition.py \
+	scripts/test_authority_counted_installation.py \
 	scripts/test_authority_wire_json_source.py \
 	scripts/test_authority_primary_tree_source.py \
 	scripts/test_authority_audit_capacity.py \
@@ -776,6 +777,8 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 # Include package imports, imported independent oracles, and db.py, which the
 # existing native helper reads as source without importing its runtime facade.
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
+	scripts/test_authority_audit_initialization.py \
+	scripts/test_authority_audit_inventory.py \
 	scripts/test_authority_counted_hash_postgres.py \
 	scripts/test_authority_counted_projection_postgres.py \
 	scripts/test_authority_counted_store_postgres.py \
@@ -783,6 +786,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_authority_index_join.py \
 	scripts/test_authority_indexed_mutation.py \
 	scripts/test_authority_index_range.py \
+	scripts/test_authority_primary_tree_postgres.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_radix_proof.py \
 	scripts/test_authority_root_transition_postgres.py \
@@ -790,6 +794,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/__init__.py \
 	serverware/audit_outbox_contract.py \
 	serverware/authority_audit_capacity.py \
+	serverware/authority_audit_initialization.py \
+	serverware/authority_audit_inventory.py \
 	serverware/authority_complete_query.py \
 	serverware/authority_contract.py \
 	serverware/authority_index_contract.py \
@@ -811,6 +817,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/audit_capacity_sql.py \
 	serverware/authority_store/completed_v9_schema_source.py \
 	serverware/authority_store/counted_hash_sql.py \
+	serverware/authority_store/counted_installation.py \
 	serverware/authority_store/counted_projection_sql.py \
 	serverware/authority_store/counted_store_sql.py \
 	serverware/authority_store/counted_path_sql.py \
@@ -2489,6 +2496,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				requirements.proxy-test.lock \
 				serverware_agent_trust/requirements.lock \
 				serverware/authority_counted_root_transition.py \
+				serverware/authority_store/counted_installation.py \
 				serverware/authority_complete_query_batch.py \
 				serverware/authority_complete_read_write.py \
 				serverware/authority_revocation_read_write.py \

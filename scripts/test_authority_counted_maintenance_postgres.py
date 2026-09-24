@@ -3,9 +3,10 @@
 
 An approved external harness supplies direct owned0700-socket PG16/UTF8. All
 DDL, fixture rows and maintenance calls live in one SERIALIZABLE transaction
-and are rolled back. The real renderers are installed without a business-row
-trigger; OLD/NEW are explicit test inputs, not authenticated provenance. The
-independent fixture owner seeds complete trees, not accepted bootstrap heads.
+and are rolled back. Direct-dispatch cases supply explicit OLD/NEW images;
+trigger cases attach the real primary trigger to synthetic business relations
+and let PostgreSQL capture the images. The independent fixture owner seeds
+complete trees, not accepted bootstrap heads or production business schemas.
 
 These authored native component tests establish no installed authority, whole
 transaction work bound, concurrent lock-order guarantee or production grant.
@@ -36,6 +37,7 @@ from serverware.authority_store.counted_store_sql import counted_store_ddl
 from serverware.authority_store.counted_path_sql import counted_path_functions_sql
 from serverware.authority_store.counted_maintenance_sql import counted_maintenance_functions_sql
 from serverware.authority_store.primary_tree_sql import framed_digest_function_sql
+from serverware.authority_store import primary_tree_sql, counted_installation
 from serverware.authority_store.wire_json_sql import wire_json_function_sql
 from serverware import authority_index_mutation_reader as mutation_reader
 from serverware import authority_indexed_mutation as indexed
@@ -45,6 +47,9 @@ import test_authority_counted_store_postgres as storage_oracle
 import test_authority_index_join as profile_oracle
 import test_authority_index_range as tree_oracle
 import test_authority_indexed_mutation as mutation_oracle
+import test_authority_primary_tree_postgres as primary_oracle
+from test_authority_radix_mutation import IndependentTree
+from test_authority_radix_proof import sql_digest, sql_json
 from test_authority_root_transition_postgres import production_digest_functions
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 
@@ -63,6 +68,21 @@ EXPIRIES = {"1970-01-01T00:00:00+00:00": 0,
             "1970-01-01T00:00:00.000001+00:00": 1,
             "1970-01-01T00:00:00.000002+00:00": 2}
 I64 = 2**63 - 1
+
+
+class InstallationConnection:
+    """Only adapt the actual DB driver's placeholder and row interfaces."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    @property
+    def in_transaction(self):
+        return self.connection.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS
+
+    def execute(self, statement, parameters=()):
+        return self.connection.cursor(row_factory=dict_row).execute(
+            statement.replace("?", "%s"), parameters)
 
 
 def image(table, identity="record", **changes):
@@ -203,6 +223,10 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
             (table, operation, None if old is None else Jsonb(old), None if new is None else Jsonb(new))).fetchone()
 
     def apply(self, table, operation, old, new):
+        self.call(table, operation, old, new)
+        self.record_event(table, old, new)
+
+    def record_event(self, table, old, new, *, assert_current=True):
         # The independent revision oracle is separate from SQL and any Python
         # production projection or mutation evaluator.
         changes = {}
@@ -210,7 +234,6 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
             if profile_oracle.descriptor(index_id)["table"] == table:
                 before, after = projected(index_id, old), projected(index_id, new)
                 changes[index_id] = (before, after)
-        self.call(table, operation, old, new)
         if old is not None:
             del self.base[table][old["id"]]
         if new is not None:
@@ -233,7 +256,118 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
                 self.leaf_revisions.pop((index_id, before.key), None)
             if after is not None:
                 self.leaf_revisions[(index_id, after.key)] = revision
+        if assert_current:
+            self.assert_store()
+
+    def create_business_relations(self):
+        # Synthetic complete row shapes isolate trigger provenance/maintenance
+        # from unrelated business FKs and admission. No production SQL is rewritten.
+        for table in BASE_PROFILES:
+            columns = []
+            for name, value in image(table).items():
+                kind = "jsonb" if type(value) is dict else "bigint" if type(value) is int else "text"
+                columns.append(sql.SQL("{} {}{}").format(sql.Identifier(name), sql.SQL(kind),
+                    sql.SQL(" PRIMARY KEY" if name == "id" else "")))
+            self.connection.execute(sql.SQL("CREATE TABLE {} ({})").format(
+                self.object(table), sql.SQL(",").join(columns)))
+
+    def attach_primary_triggers(self, *, create_business=True):
+        if create_business:
+            self.create_business_relations()
+        self.connection.execute(sql.SQL("SET LOCAL search_path TO {}, pg_catalog").format(
+            sql.Identifier(self.schema)))
+        for name, statement in zip(primary_oracle.ALL_TABLES, primary_oracle.production_table_statements()):
+            if name in (primary_oracle.ROOTS, primary_oracle.NODES, primary_oracle.LEAVES, primary_oracle.HISTORY):
+                self.connection.execute(statement)
+        for statement in primary_tree_sql.authenticated_tree_functions_sql(
+                self.namespace, manifest_digest=primary_oracle.MANIFEST):
+            self.connection.execute(statement)
+        self.primary_events = {table: [] for table in BASE_PROFILES}
+        for table in BASE_PROFILES:
+            empty = IndependentTree([], table=table, revision=0)
+            self.connection.execute(sql.SQL(
+                "INSERT INTO {} (table_name,root_revision,root_digest,leaf_count,tree_depth,tree_radix,"
+                "manifest_digest,updated_at_epoch_ns) VALUES (%s,0,%s,0,64,16,%s,0)"
+            ).format(self.object(primary_oracle.ROOTS)), (table, empty.root.root_digest, primary_oracle.MANIFEST))
+            self.connection.execute(sql.SQL(
+                "CREATE TRIGGER component_primary_tree AFTER INSERT OR UPDATE OR DELETE ON {} "
+                "FOR EACH ROW EXECUTE FUNCTION {}('id')"
+            ).format(self.object(table), self.object(primary_oracle.TRIGGER_FUNCTION)))
+        self.assert_trigger_trees()
+
+    def stored_root(self, table):
+        return primary_oracle.AuthorityPrimaryTreePostgresTests.stored_root(self, table)
+
+    def assert_trigger_trees(self):
         self.assert_store()
+        for table in BASE_PROFILES:
+            events = self.primary_events[table]
+            tree = IndependentTree(list(self.base.get(table, {}).values()), table=table, revision=len(events))
+            primary_oracle.AuthorityPrimaryTreePostgresTests.assert_tree(self, tree)
+            rows = self.connection.execute(sql.SQL(
+                "SELECT pg_catalog.to_jsonb(target) FROM {} target ORDER BY id COLLATE \"C\""
+            ).format(self.object(table))).fetchall()
+            self.assertEqual([row[0] for row in rows],
+                [self.base[table][identity] for identity in sorted(self.base.get(table, {}))])
+            journal = self.connection.execute(sql.SQL(
+                "SELECT mutation_operation,mutation_key_digest,mutation_row_digest FROM {} "
+                "WHERE table_name=%s ORDER BY root_revision"
+            ).format(self.object(primary_oracle.HISTORY)), (table,)).fetchall()
+            expected = [(operation,
+                sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", table.encode("ascii"), sql_json(key)),
+                None if row is None else sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+                    table.encode("ascii"), sql_json(row))) for operation, key, row in events]
+            self.assertEqual(journal, expected)
+
+    def execute_business_event(self, table, operation, old, new):
+        if operation == "INSERT":
+            return self.connection.execute(sql.SQL(
+                "INSERT INTO {} AS target SELECT * FROM pg_catalog.jsonb_populate_record(NULL::{},%s) "
+                "RETURNING pg_catalog.to_jsonb(target)"
+            ).format(self.object(table), self.object(table)), (Jsonb(new),)).fetchone()[0]
+        if operation == "DELETE":
+            return self.connection.execute(sql.SQL(
+                "DELETE FROM {} AS target WHERE id=%s RETURNING pg_catalog.to_jsonb(target)"
+            ).format(self.object(table)), (old["id"],)).fetchone()[0]
+        self.assertEqual(operation, "UPDATE")
+        return self.connection.execute(sql.SQL(
+            "UPDATE {} AS target SET {} WHERE id=%s RETURNING pg_catalog.to_jsonb(target)"
+        ).format(self.object(table), sql.SQL(",").join(sql.SQL("{}=%s").format(sql.Identifier(name))
+            for name in new)), (*[Jsonb(value) if type(value) is dict else value for value in new.values()],
+                               old["id"])).fetchone()[0]
+
+    def trigger_event(self, table, operation, old, new):
+        self.assertEqual(self.execute_business_event(table, operation, old, new), old if new is None else new)
+        if operation == "UPDATE" and old["id"] != new["id"]:
+            self.record_event(table, old, None, assert_current=False)
+            self.record_event(table, None, new)
+            events = (("DELETE", {"id": old["id"]}, None), ("INSERT", {"id": new["id"]}, new))
+        else:
+            self.record_event(table, old, new)
+            events = ((operation, {"id": (new if new is not None else old)["id"]}, new),)
+        self.primary_events[table].extend(copy.deepcopy(events))
+        self.assert_trigger_trees()
+
+    def trigger_snapshot(self):
+        names = (*BASE_PROFILES, primary_oracle.ROOTS, primary_oracle.NODES,
+                 primary_oracle.LEAVES, primary_oracle.HISTORY)
+        result = self.snapshot()
+        for table in names:
+            result[table] = primary_oracle.AuthorityPrimaryTreePostgresTests.table_rows(self, table)
+        return result
+
+    @contextmanager
+    def fresh_installation_namespace(self):
+        previous = self.schema, self.namespace
+        self.schema = "counted_installation_" + uuid.uuid4().hex
+        self.namespace = '"' + self.schema + '"'
+        try:
+            self.connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
+            self.connection.execute(sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC").format(sql.Identifier(self.schema)))
+            self.create_business_relations()
+            yield InstallationConnection(self.connection)
+        finally:
+            self.schema, self.namespace = previous
 
     def reject(self, table, operation, old, new, message=None):
         before = self.snapshot()
@@ -505,6 +639,168 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
             for invalid in (None, "unquoted", '"UPPER"', '"bad-name"', '"x"; SELECT 1'):
                 with self.subTest(renderer=renderer.__name__, invalid=invalid), self.assertRaises(ValueError):
                     renderer(invalid)
+
+    def test_trigger_all_six_tables_and_eleven_profiles_update_exact_stores(self):
+        self.seed(revision=0)
+        self.attach_primary_triggers()
+        for table in BASE_PROFILES:
+            with self.subTest(table=table):
+                before = image(table)
+                after = copy.deepcopy(before)
+                after["fixture_payload"]["retained"].append("full-row update")
+                self.trigger_event(table, "INSERT", None, before)
+                self.trigger_event(table, "UPDATE", before, after)
+                self.trigger_event(table, "DELETE", after, None)
+        self.assertEqual(set(self.revisions.values()), {3})
+        self.assertEqual(len(self.snapshot()[LEAVES]), 0)
+        self.assertEqual(len(self.snapshot()[NODES]), 0)
+
+    def test_trigger_same_key_row_update_and_equal_update_keep_exact_revisions(self):
+        self.seed(revision=0)
+        self.attach_primary_triggers()
+        table = "webauthn_credentials"
+        before = image(table, "credential-row")
+        self.trigger_event(table, "INSERT", None, before)
+        leaves = copy.deepcopy(self.snapshot()[LEAVES])
+        after = {**before, "sign_count": before["sign_count"] + 1}
+        self.trigger_event(table, "UPDATE", before, after)
+        updated = self.snapshot()[LEAVES]
+        self.assertEqual(set(updated), set(leaves))
+        self.assertEqual(len(updated), 3)
+        for key in updated:
+            self.assertEqual(updated[key]["primary_key_digest"], leaves[key]["primary_key_digest"])
+            self.assertNotEqual(updated[key]["primary_row_digest"], leaves[key]["primary_row_digest"])
+            self.assertEqual(updated[key]["index_revision"], 2)
+        self.trigger_event(table, "UPDATE", after, after)
+        self.assertEqual(self.stored_root(table).root_revision, 3)
+        self.assertEqual({row["index_revision"] for row in self.snapshot()[LEAVES].values()}, {3})
+
+    def test_trigger_partition_and_membership_moves_match_all_source_profiles(self):
+        self.seed(revision=0)
+        self.attach_primary_triggers()
+        moves = {
+            "webauthn_credentials": {"credential_id": "other-credential", "user_id": "other-user", "revoked_at": "revoked"},
+            "webauthn_challenges": {"user_id": "other-user", "expires_at": "1970-01-01T00:00:00.000002+00:00"},
+            "oidc_browser_sessions": {"bound_webauthn_credential_id": "other-credential", "status": "revoked"},
+            "approval_grants": {"approver_webauthn_credential_id": "other-credential", "state": "revoked"},
+            "control_plane_approvals": {"approver_webauthn_credential_id": "other-credential", "status": "revoked"},
+            "webauthn_trust_publications": {"bundle_digest": "other-bundle", "status": "published", "sequence": 2},
+        }
+        for table, changes in moves.items():
+            with self.subTest(table=table):
+                before = image(table)
+                self.trigger_event(table, "INSERT", None, before)
+                after = {**before, **changes}
+                self.trigger_event(table, "UPDATE", before, after)
+                self.trigger_event(table, "UPDATE", after, before)
+        self.assertEqual(set(self.revisions.values()), {3})
+        self.assertEqual(len(self.snapshot()[LEAVES]), 11)
+
+    def test_trigger_primary_key_change_is_exact_delete_then_insert(self):
+        self.seed(revision=0)
+        self.attach_primary_triggers()
+        for table in BASE_PROFILES:
+            with self.subTest(table=table):
+                before, after = image(table, "old-record"), image(table, "new-record")
+                self.trigger_event(table, "INSERT", None, before)
+                old_keys = {address for address, row in self.snapshot()[LEAVES].items()
+                            if row["primary_id"] == "old-record"
+                            and profile_oracle.descriptor(address[0])["table"] == table}
+                self.trigger_event(table, "UPDATE", before, after)
+                self.assertEqual(self.stored_root(table).root_revision, 3)
+                self.assertFalse(old_keys & set(self.snapshot()[LEAVES]))
+                self.assertEqual([event[0] for event in self.primary_events[table]], ["INSERT", "DELETE", "INSERT"])
+        self.assertEqual(set(self.revisions.values()), {3})
+        self.assertEqual({row["primary_id"] for row in self.snapshot()[LEAVES].values()}, {"new-record"})
+
+    def test_trigger_later_failure_rolls_back_business_primary_and_counted_then_retries(self):
+        self.seed(revision=0)
+        self.attach_primary_triggers()
+        table = "webauthn_credentials"
+        before = image(table)
+        self.trigger_event(table, "INSERT", None, before)
+        after = {**before, "sign_count": before["sign_count"] + 1}
+        snapshot = self.trigger_snapshot()
+        with self.variant():
+            # PostgreSQL orders same-kind triggers by name. This observer raises
+            # only after the real primary/count event has advanced both stores.
+            self.connection.execute(sql.SQL("""
+                CREATE FUNCTION {}() RETURNS trigger LANGUAGE plpgsql AS $failure$
+                BEGIN
+                    IF (SELECT root_revision FROM {} WHERE table_name='webauthn_credentials') IS DISTINCT FROM 2
+                       OR (SELECT count(*) FROM {} WHERE table_name='webauthn_credentials'
+                           AND index_revision=2) <> 3 THEN
+                        RAISE EXCEPTION 'fixture did not reach both stores';
+                    END IF;
+                    RAISE EXCEPTION 'fixture later failure after both stores';
+                END; $failure$
+            """).format(self.object("component_later_failure"), self.object(primary_oracle.ROOTS), self.object(HEADS)))
+            self.connection.execute(sql.SQL(
+                "CREATE TRIGGER zzz_component_later_failure AFTER UPDATE ON {} "
+                "FOR EACH ROW EXECUTE FUNCTION {}()"
+            ).format(self.object(table), self.object("component_later_failure")))
+            with self.assertRaisesRegex(psycopg.errors.RaiseException, "fixture later failure after both stores"):
+                self.execute_business_event(table, "UPDATE", before, after)
+        self.assertEqual(self.trigger_snapshot(), snapshot)
+        self.assert_trigger_trees()
+        self.trigger_event(table, "UPDATE", before, after)
+
+    def test_trigger_missing_required_head_denies_without_inventing_genesis(self):
+        self.seed(revision=0)
+        self.attach_primary_triggers()
+        table = "webauthn_credentials"
+        absent = "webauthn_credential_user_history"
+        self.change_stored(HEADS, absent)
+        snapshot = self.trigger_snapshot()
+        with self.variant():
+            with self.assertRaisesRegex(psycopg.errors.RaiseException, "counted event required head is absent"):
+                self.execute_business_event(table, "INSERT", None, image(table))
+        self.assertEqual(self.trigger_snapshot(), snapshot)
+        self.assertNotIn(absent, self.snapshot()[HEADS])
+        self.assertEqual(len(self.snapshot()[HEADS]), 10)
+        self.assertEqual(self.stored_root(table).root_revision, 0)
+
+    def test_installation_fresh_empty_genesis_and_populated_repeat_preserve_exact_store(self):
+        with self.fresh_installation_namespace() as connection:
+            counted_installation.prepare_counted_store(connection, self.namespace)
+            self.revisions = {name: 0 for name in storage_oracle.INDEX_IDS}
+            self.assert_store()
+            for statement in (*production_digest_functions(self.namespace),
+                              framed_digest_function_sql(self.namespace), wire_json_function_sql(self.namespace),
+                              *counted_installation.counted_functions_sql(self.namespace)):
+                self.connection.execute(statement)
+            self.attach_primary_triggers(create_business=False)
+            row = image("webauthn_credentials")
+            self.trigger_event("webauthn_credentials", "INSERT", None, row)
+            snapshot = self.trigger_snapshot()
+            counted_installation.prepare_counted_store(connection, self.namespace)
+            self.assertEqual(self.trigger_snapshot(), snapshot)
+            self.assert_trigger_trees()
+
+    def test_installation_populated_fresh_and_missing_existing_head_are_never_repaired(self):
+        with self.fresh_installation_namespace() as connection:
+            row = image("webauthn_credentials")
+            self.assertEqual(self.execute_business_event("webauthn_credentials", "INSERT", None, row), row)
+            with self.assertRaisesRegex(counted_installation.CountedInstallationError,
+                    "counted genesis requires empty source tables"):
+                counted_installation.prepare_counted_store(connection, self.namespace)
+            found = self.connection.execute(
+                "SELECT c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname=%s AND c.relname=ANY(%s::text[])",
+                (self.schema, [HEADS, LEAVES, NODES])).fetchall()
+            self.assertEqual(found, [])
+            actual = self.connection.execute(sql.SQL("SELECT pg_catalog.to_jsonb(target) FROM {} target").format(
+                self.object("webauthn_credentials"))).fetchall()
+            self.assertEqual(actual, [(row,)])
+        self.seed(revision=0)
+        self.create_business_relations()
+        self.change_stored(HEADS, "webauthn_credential_user_history")
+        snapshot = self.snapshot()
+        with self.assertRaisesRegex(counted_installation.CountedInstallationError,
+                "counted installation requires the complete eleven-head inventory"):
+            counted_installation.prepare_counted_store(InstallationConnection(self.connection), self.namespace)
+        self.assertEqual(self.snapshot(), snapshot)
+        self.assertEqual(len(snapshot[HEADS]), 10)
 
     def require_absent_reader_namespace(self):
         # This native reader uses the exact production-qualified SQL unchanged.

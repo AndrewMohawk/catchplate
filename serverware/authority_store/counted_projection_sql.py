@@ -2,8 +2,8 @@
 
 Render only; no connection, schema mutation, trigger, bootstrap or grant. These
 functions derive lookup/key/full-row commitments from actual supplied JSONB and
-the eleven source profiles. The future all-row maintenance hook must supply
-the real OLD/NEW records and independently admit heads and transaction effects.
+the eleven source profiles. The primary row-trigger source supplies real
+OLD/NEW records; installed head and transaction admission remain separate.
 JSONB has already lost duplicate fields and normalized some number spellings;
 these functions cannot replace original-byte or installed column admission.
 """

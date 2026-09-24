@@ -7,9 +7,11 @@ evidence. The current tree has a pure [range reconstructor](authority-index-rang
 fixed projection codecs, an actual [primary-row join](authority-index-primary-join.md)
 and separate bounded SQL [range](#bounded-frontier-production) and
 [write-proof](authority-index-mutation-reader.md) readers. They reconstruct
-against supplied roots; they do not authenticate those roots or currentness. There is
-still no installed counted-index schema, authenticated population, all-writer
-maintenance or independently admitted current index/primary root pair. The
+against supplied roots; they do not authenticate those roots or currentness.
+The [installation and all-writer integration](authority-counted-installation.md)
+now connects real bootstrap, expected-schema replay and primary-trigger events
+in source. No runtime installation, authenticated population or independently
+admitted current index/primary root pair has been established. The
 planner still rejects complete-index queries before business/proof SQL. Existing
 startup and verification gates remain closed.
 
@@ -151,8 +153,9 @@ partition map. Exact UTC calendar/microsecond validation and a signed-bit-flip
 ordering codec avoid session-timezone dependence or floating-point integer
 ordering. Nonmembers return no projected leaf, not an unvalidated row.
 
-These are uninstalled invoker functions, not trusted trigger inputs or a schema
-admission. PostgreSQL JSONB has already discarded duplicate fields and normalized
+The [source installer](authority-counted-installation.md) now wires these invoker
+functions to actual OLD/NEW trigger events and schema/ACL inventories; runtime
+installation and admission remain unverified. PostgreSQL JSONB has already discarded duplicate fields and normalized
 some number spellings; the functions do not establish raw-input validity,
 parser/detoast allocation bounds, primary membership or currentness. Real SQL
 and Python parity, native date/Unicode behavior and negative cases remain
@@ -290,11 +293,13 @@ The shared primary trigger normalizes a primary-key-changing UPDATE into a
 DELETE and INSERT. Counted maintenance must use those same two primary events
 and their revision effects; an unchanged-primary-key partition move remains one
 event. The pure evaluator still rejects a key-changing UPDATE. This is the
-required normalization for a future hook, not an installed trigger change.
+normalization now authored in the real trigger, not proof of runtime installation.
 
 The native component now implements the normalized event and actual path
-maintenance below, without attaching that hook or admitting caller-provided
-JSONB as authenticated images. Its 18 native fixture methods remain unrun; the
+maintenance below. The source installer and real primary trigger now attach the
+hook; direct caller-provided JSONB is still not authenticated row provenance.
+The 32 native fixture methods remain unrun, including eight new trigger and
+installer cases. The
 bounded algorithm and its limitations are detailed in the
 [SQL maintenance reference](authority-counted-sql-maintenance.md).
 
@@ -338,7 +343,8 @@ their primary root effects, mutation/work bounds and source permissions.
 The current implementation direction is a dedicated counted-head vector with
 explicitly versioned before/after admission, rather than automatic writes to
 the primary-tracked secondary-head relation. The pure mutation evaluator fixes
-the expected effects, not their SQL installation. Every counted head must be
+the expected effects; the source installer and SQL row trigger now implement
+maintenance, without proving installed behavior. Every counted head must be
 bound to the snapshot, root locks/CAS, receipts and independent checkpoint;
 otherwise separate storage is an unauthenticated shortcut.
 

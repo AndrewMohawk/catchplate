@@ -1,9 +1,10 @@
-"""Uninstalled PostgreSQL counted-index hash definitions, in dependency order.
+"""PostgreSQL counted-index hash definitions, in dependency order.
 
 The eleven profile identities/digests are rendered from current source codecs.
 These immutable invoker functions install no tables, triggers, privileges or
 heads and confer no index-population, checkpoint or operation authority. Their
 closed framing helper does not change the persisted primary-tree hash helper.
+The counted installer consumes these definitions; runtime admission is separate.
 """
 from __future__ import annotations
 

@@ -75,8 +75,9 @@ opens every intersecting nonempty subtree and hashes counts into the computed
 root. The separate [fixed-projection join](authority-index-primary-join.md) now
 defines eleven selectors and rederives each returned leaf from the actual
 primary evaluator's owned verified rows. Both remain unactivated source:
-independently admitted same-checkpoint roots, installed index storage and
-all-writer maintenance are absent. Neither replaces the existing query
+independently admitted same-checkpoint roots remain absent. The
+[storage installer and real all-writer trigger](authority-counted-installation.md)
+are now wired in source, but unbuilt and unexecuted. Neither replaces the existing query
 primitive or enables any missing kernel.
 
 The coordinated index/query manifest must cover at least these fixed selectors:

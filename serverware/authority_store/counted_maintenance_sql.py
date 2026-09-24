@@ -1,10 +1,10 @@
-"""Uninstalled all-profile dispatch for one normalized counted-index event.
+"""All-profile dispatch for one normalized counted-index event.
 
 The dispatcher locks the complete fixed head set before invoking actual path
 maintenance. Direct JSONB calls do not authenticate OLD/NEW images. Production
-use still requires the real primary trigger's normalized event boundary,
-catalog/owner/ACL admission, independently admitted root vectors, all-writer
-integration and operation-global work accounting. No trigger is attached here.
+source now wires the real primary trigger's normalized event boundary and
+catalog/owner/ACL checks. Runtime admission, independently admitted root vectors
+and operation-global work accounting remain due. No trigger is attached here.
 """
 from __future__ import annotations
 

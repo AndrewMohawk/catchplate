@@ -36,6 +36,7 @@ from serverware.authority_store import (
     authority_dispatch as _authority_dispatch,
 )
 from serverware.authority_store import executor_v9 as _authority_executor_v9
+from serverware.authority_store import counted_installation as _counted_installation
 from serverware.authority_store import metadata_schema_source as _metadata_schema_source
 from serverware.authority_store import primary_tree_sql as _primary_tree_sql
 from serverware.authority_store import (
@@ -1697,6 +1698,7 @@ _POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES = frozenset(
         *_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES,
         *_JIT_AUTHORITY_RUNTIME_READ_ONLY_TABLES,
         *authority_contract.V9_ADDITIONAL_PROTECTED_TABLES,
+        *authority_contract.POSTGRES_COUNTED_STORE_TABLES,
         "policy_authority_genesis_preparations",
         "policy_authority_genesis_finalizations",
         "policy_high_water",
@@ -1792,7 +1794,7 @@ _POLICY_AUTHORITY_FRAMEWORK_CUSTODY_TABLES = frozenset(
                 operation
             ],
         )
-    }
+    } | set(authority_contract.POSTGRES_COUNTED_STORE_TABLES)
 )
 _POLICY_AUTHORITY_OPERATION_READ_TABLES = MappingProxyType(
     {
@@ -7378,6 +7380,15 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
         guard_namespace = _policy_candidate_authority_identifier(
             str(guard_namespace_row["schema_name"])
         )
+        # Both real bootstrap and pristine expected-schema replay use this
+        # same transaction-owned path. Populated legacy sources or partial
+        # counted stores cannot be silently initialized with empty heads.
+        try:
+            _counted_installation.prepare_counted_store(conn, guard_namespace)
+        except _counted_installation.CountedInstallationError as exc:
+            raise PolicyCandidateAuthorityError(
+                "counted-index installation requires exact admitted storage"
+            ) from exc
         executor_role_literal = (
             _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE.replace("'", "''")
         )
@@ -7448,6 +7459,8 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
             )
         conn.execute(wire_json_function_sql(guard_namespace))
         conn.execute(audit_capacity_function_sql(guard_namespace))
+        for statement in _counted_installation.counted_functions_sql(guard_namespace):
+            conn.execute(statement)
         conn.execute(
             f"""
             CREATE OR REPLACE FUNCTION {guard_namespace}.serverware_guard_policy_activation_publication()
@@ -19769,7 +19782,7 @@ def _metadata_pg_connect_with_dsn(
                 )
             protected_relations = list(
                 dict.fromkeys(
-                    _policy_candidate_authority_schema_tables()
+                    _policy_candidate_authority_schema_tables(postgres=True)
                     + (
                         "serverware_store_migrations",
                         "policy_high_water",
@@ -20547,6 +20560,7 @@ def _validate_policy_authority_owner_apply_function(
         name: ", ".join(types)
         for name, types in AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
     }
+    counted_functions = authority_contract.POSTGRES_COUNTED_FUNCTION_CONTRACTS
     if (
         server_version_num // 10000
         != _POLICY_AUTHORITY_OWNER_POSTGRES_MAJOR
@@ -20581,6 +20595,20 @@ def _validate_policy_authority_owner_apply_function(
             ]
             for row in function_rows
             if row["proname"] in planner_function_types
+        )
+        or any(
+            str(row["argument_types"])
+            != ", ".join(counted_functions[row["proname"]]["argumentTypes"])
+            or row["prosecdef"] is not counted_functions[row["proname"]]["securityDefiner"]
+            or row["proisstrict"] is not counted_functions[row["proname"]]["strict"]
+            or str(row["language_name"]) != counted_functions[row["proname"]]["language"]
+            or str(row["provolatile"]) != counted_functions[row["proname"]]["volatility"]
+            or list(row["proconfig"] or ()) != ["search_path=" + ", ".join(
+                _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME if part == "$metadata" else part
+                for part in counted_functions[row["proname"]]["searchPath"])
+            ]
+            for row in function_rows
+            if row["proname"] in counted_functions
         )
         or not bool(function_row["prosecdef"])
         or str(function_row["provolatile"]) != "v"

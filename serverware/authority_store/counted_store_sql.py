@@ -1,9 +1,10 @@
-"""Uninstalled PostgreSQL storage for the fixed counted-index profiles.
+"""PostgreSQL storage definitions for the fixed counted-index profiles.
 
 These fresh-table definitions create no heads, privileges, triggers or defaults.
 A head is only a counted-index checkpoint descriptor: association with primary
 roots, complete population and enrollment require a separately admitted vector.
 The dedicated tables are not primary-tree business or authorization tables.
+The separate installer owns fresh-empty preparation and exact restart checks.
 
 DDL enforces local representation, fixed source identity and bounded commitment
 keys. It cannot prove record revisions are at most the locked head revision,

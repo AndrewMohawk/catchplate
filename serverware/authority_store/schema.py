@@ -10,6 +10,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
+from serverware.authority_store import counted_installation
 from serverware.authority_store import metadata_schema_source
 from serverware.authority_store import postgres_trigger_manifest
 from serverware.authority_store.verifier_read_sql import VERIFIER_READ_PRIVILEGE_SQL_DIGEST
@@ -166,6 +167,21 @@ def _policy_candidate_authority_source_contract_digest() -> str:
                 sorted(_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES),
             "v9AdditionalProtectedTables":
                 list(authority_contract.V9_ADDITIONAL_PROTECTED_TABLES),
+            "postgresCountedStoreColumns": {
+                table: list(columns)
+                for table, columns in authority_contract.POSTGRES_COUNTED_STORE_COLUMNS.items()
+            },
+            "postgresCountedFunctionContracts": {
+                name: {
+                    field: list(value) if isinstance(value, tuple) else value
+                    for field, value in contract.items()
+                }
+                for name, contract in authority_contract.POSTGRES_COUNTED_FUNCTION_CONTRACTS.items()
+            },
+            "postgresCountedMaintenance":
+                dict(authority_contract.POSTGRES_COUNTED_MAINTENANCE_CONTRACT),
+            "postgresCountedInstallation":
+                counted_installation.counted_installation_contract(),
             "objectOwnershipContract":
                 "serverware.policyAuthorityObjectOwnership/v1",
             "authorityOwnerRole": _METADATA_STORE_AUTHORITY_OWNER_ROLE,
@@ -793,12 +809,13 @@ def _policy_candidate_authority_table_manifest(
     }
 
 
-def _policy_candidate_authority_schema_tables() -> tuple[str, ...]:
+def _policy_candidate_authority_schema_tables(*, postgres: bool = False) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
             _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
             + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES
             + authority_contract.V9_ADDITIONAL_PROTECTED_TABLES
+            + (authority_contract.POSTGRES_COUNTED_STORE_TABLES if postgres else ())
             + (
                 "metadata_audit_outbox",
                 "rbac_authority_state",
@@ -1000,7 +1017,9 @@ def _policy_candidate_authority_structure_manifest(
     expected_namespace: str | None = None,
     manifest_namespace: str | None = None,
 ) -> dict[str, Any]:
-    selected_tables = tables or _policy_candidate_authority_schema_tables()
+    selected_tables = tables or _policy_candidate_authority_schema_tables(
+        postgres=isinstance(conn, PostgresMetadataConnection),
+    )
     if isinstance(conn, PostgresMetadataConnection):
         expected_namespace = (
             expected_namespace or _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME
@@ -1296,6 +1315,7 @@ def _policy_candidate_authority_required_guard_names(
                 "serverware_policy_authority_canonical_json",
                 *WIRE_JSON_FUNCTION_NAMES,
                 AUDIT_CAPACITY_FUNCTION_NAME,
+                *authority_contract.POSTGRES_COUNTED_FUNCTION_SIGNATURES,
                 "serverware_policy_authority_domain_digest",
                 "serverware_policy_authority_framed_digest",
                 "serverware_policy_authority_authenticated_empty",
@@ -1483,6 +1503,14 @@ def _validate_policy_candidate_authority_structure(
             "candidate-authority structural manifest is missing tables: "
             + ", ".join(missing)
         )
+    if isinstance(conn, PostgresMetadataConnection):
+        for table, expected_columns in authority_contract.POSTGRES_COUNTED_STORE_COLUMNS.items():
+            columns = table_manifests[table]["columns"]
+            if (tuple(column["name"] for column in columns) != expected_columns
+                    or any(column["nullable"] for column in columns)):
+                raise PolicyCandidateAuthorityError(
+                    "counted custody columns are not source exact: " + table
+                )
     for table in (
         _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
         + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES

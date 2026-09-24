@@ -520,6 +520,7 @@ def authenticated_tree_functions_sql(
                 old_key pg_catalog.jsonb;
                 new_key pg_catalog.jsonb;
                 argument_ordinal integer;
+                maintains_counted boolean;
             BEGIN
                 old_row := CASE
                     WHEN TG_OP IN ('UPDATE', 'DELETE')
@@ -531,6 +532,13 @@ def authenticated_tree_functions_sql(
                     THEN pg_catalog.to_jsonb(NEW)
                     ELSE NULL
                 END;
+                -- Fixed source closure, never caller-selected trigger arguments.
+                -- Nonindexed relations do not invoke counted-store functions.
+                maintains_counted := TG_TABLE_NAME IN (
+                    'webauthn_credentials', 'webauthn_challenges',
+                    'oidc_browser_sessions', 'approval_grants',
+                    'control_plane_approvals', 'webauthn_trust_publications'
+                );
                 IF TG_NARGS < 1 THEN
                     RAISE EXCEPTION
                         'authenticated-tree trigger has no key columns';
@@ -558,10 +566,22 @@ def authenticated_tree_functions_sql(
                         serverware_policy_authority_authenticated_apply(
                             TG_TABLE_NAME, old_key, NULL, 'DELETE'
                         );
+                    IF maintains_counted THEN
+                        PERFORM {guard_namespace}.
+                            serverware_policy_authority_counted_apply_event(
+                                TG_TABLE_NAME, 'DELETE', old_row, NULL
+                            );
+                    END IF;
                     PERFORM {guard_namespace}.
                         serverware_policy_authority_authenticated_apply(
                             TG_TABLE_NAME, new_key, new_row, 'INSERT'
                         );
+                    IF maintains_counted THEN
+                        PERFORM {guard_namespace}.
+                            serverware_policy_authority_counted_apply_event(
+                                TG_TABLE_NAME, 'INSERT', NULL, new_row
+                            );
+                    END IF;
                 ELSE
                     PERFORM {guard_namespace}.
                         serverware_policy_authority_authenticated_apply(
@@ -570,6 +590,12 @@ def authenticated_tree_functions_sql(
                             new_row,
                             TG_OP
                         );
+                    IF maintains_counted THEN
+                        PERFORM {guard_namespace}.
+                            serverware_policy_authority_counted_apply_event(
+                                TG_TABLE_NAME, TG_OP, old_row, new_row
+                            );
+                    END IF;
                 END IF;
                 RETURN COALESCE(NEW, OLD);
             END;

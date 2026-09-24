@@ -1,9 +1,10 @@
 # Native counted-index maintenance component
 
-Status: source-implemented, unbuilt and unexecuted. These definitions are not
-installed into the production schema, attached to a business-row trigger, or
-admitted by the planner/executor. Direct fixture JSONB images are component
-inputs, not authenticated OLD/NEW provenance or independently current roots.
+Status: source-implemented, unbuilt and unexecuted. The
+[installation integration](authority-counted-installation.md) now wires these
+definitions into PostgreSQL bootstrap and the real primary-tree row trigger.
+No runtime installation or planner/executor counted-query admission is proven.
+Direct fixture JSONB images remain component inputs, not independently current roots.
 
 ## Fixed event boundary
 
@@ -83,11 +84,17 @@ plan budget or authorize arbitrary multirow legacy writes.
 ## Authored native coverage and remaining integration
 
 [`test_authority_counted_maintenance_postgres.py`](../scripts/test_authority_counted_maintenance_postgres.py)
-contains 18 unrun methods using real definitions in a rollback-owned PG16 schema
-and independently seeded complete trees. They compare all head/leaf/node values
+contains 32 unrun methods using real definitions in rollback-owned PG16 schemas
+and independent complete-tree oracles. The original 18 compare all head/leaf/node values
 and revisions across the eleven profiles, membership/partition moves, equal
 updates, deletion, corruption rejection, overflow and later-profile rollback.
 Their explicit fixture population is not authenticated bootstrap evidence.
+Six reader methods acquire actual production-qualified bounded queries; six
+trigger methods use the real primary row-trigger and counted dispatcher for
+business INSERT/UPDATE/DELETE, including later-failure atomicity. Two installer
+methods cover fresh empty genesis, unchanged populated restart, populated
+fresh-store refusal and missing-head refusal. Synthetic business relations in
+these cases are not the full production foreign-key schema.
 The catalogue check pins its session's identifier-quoting mode and compares the
 exact resulting search-path setting; it does not discard quote or whitespace
 differences to make the assertion pass.
@@ -97,9 +104,10 @@ durability or production-currentness claim follows from these authored cases.
 All tests await the separately admitted source-freeze/preparation workflow.
 
 The remaining coordinated work is described in the
-[storage integration contract](authority-index-storage-integration.md): exact
-canonical/scratch schema and ACL installation; admitted empty genesis or
-bidirectional populated restage; real all-writer OLD/NEW hooks; shared operation
+[storage integration contract](authority-index-storage-integration.md): native
+verification of the authored canonical/scratch schema, ACL installation and
+real all-writer OLD/NEW hooks; independently admitted empty genesis or
+bidirectional populated restage; shared operation
 limits and lock order; versioned primary/counted/query root vectors and receipts;
 and independently operated current-root enrollment/advancement. The existing
 terminal business-result witness is not a current primary/counted-root service.

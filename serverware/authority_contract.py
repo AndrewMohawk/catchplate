@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.28"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.29"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -112,8 +112,65 @@ _VERIFIED_ASSERTION_POLICIES = frozenset(
         "policy-bound-verified-assertion-receipt",
     }
 )
+# PostgreSQL-only derived custody. These are not operation business tables,
+# primary-tracked tables, or additions to SQLite's shared metadata schema.
+POSTGRES_COUNTED_STORE_COLUMNS = MappingProxyType({
+    "policy_authority_counted_index_heads": (
+        "index_id", "table_name", "counted_profile", "projection_digest",
+        "projection_manifest_digest", "index_revision", "root_digest", "leaf_count",
+    ),
+    "policy_authority_counted_index_leaves": (
+        "index_id", "projection_digest", "index_key", "primary_id",
+        "primary_key_digest", "primary_row_digest", "index_revision",
+    ),
+    "policy_authority_counted_index_nodes": (
+        "index_id", "projection_digest", "depth", "path_prefix", "node_digest",
+        "subtree_count", "index_revision",
+    ),
+})
+POSTGRES_COUNTED_STORE_TABLES = tuple(POSTGRES_COUNTED_STORE_COLUMNS)
+POSTGRES_COUNTED_FUNCTION_SIGNATURES = MappingProxyType({
+    "serverware_policy_authority_counted_profile": ("text",),
+    "serverware_policy_authority_counted_frame_digest": ("text", "text[]"),
+    "serverware_policy_authority_counted_empty": ("text", "text"),
+    "serverware_policy_authority_counted_leaf": ("text", "text", "text", "text"),
+    "serverware_policy_authority_counted_branch": ("text", "text", "text[]", "bigint[]"),
+    "serverware_policy_authority_counted_expiry_micros": ("text",),
+    "serverware_policy_authority_counted_signed_order": ("bigint",),
+    "serverware_policy_authority_counted_field": ("jsonb", "text", "text"),
+    "serverware_policy_authority_counted_project": ("text", "jsonb"),
+    "serverware_policy_authority_counted_apply_index": ("text", "text", "jsonb", "jsonb"),
+    "serverware_policy_authority_counted_apply_event": ("text", "text", "jsonb", "jsonb"),
+})
+POSTGRES_COUNTED_FUNCTION_CONTRACTS = MappingProxyType({
+    name: MappingProxyType({
+        "argumentTypes": arguments,
+        "language": "plpgsql",
+        "securityDefiner": False,
+        "strict": False,
+        "volatility": "v" if name in {
+            "serverware_policy_authority_counted_apply_index",
+            "serverware_policy_authority_counted_apply_event",
+        } else "i",
+        "searchPath": ("pg_catalog",) if name in {
+            "serverware_policy_authority_counted_expiry_micros",
+            "serverware_policy_authority_counted_signed_order",
+            "serverware_policy_authority_counted_field",
+            "serverware_policy_authority_counted_project",
+        } else ("pg_catalog", "$metadata", "pg_temp"),
+    })
+    for name, arguments in POSTGRES_COUNTED_FUNCTION_SIGNATURES.items()
+})
+POSTGRES_COUNTED_MAINTENANCE_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityCountedMaintenanceAdmission/v1",
+    "maximumProfilesPerNormalizedEvent": 3,
+    "workAccounting": "bounded-per-profile-not-whole-operation",
+    "plannerCompleteQueryAdmission": False,
+    "sqliteInstalled": False,
+})
 _FRAMEWORK_CUSTODY_TABLES = frozenset(
     {
+        *POSTGRES_COUNTED_STORE_TABLES,
         "policy_authority_authenticated_leaves",
         "policy_authority_authenticated_root_revisions",
         "policy_authority_authenticated_table_roots",
@@ -2185,6 +2242,18 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
         "phase2StoreTables": list(PHASE2_STORE_TABLES),
         "v9AdditionalProtectedTables": list(V9_ADDITIONAL_PROTECTED_TABLES),
+        "postgresCountedStoreColumns": {
+            table: list(columns)
+            for table, columns in POSTGRES_COUNTED_STORE_COLUMNS.items()
+        },
+        "postgresCountedFunctionContracts": {
+            name: {
+                field: list(value) if isinstance(value, tuple) else value
+                for field, value in contract.items()
+            }
+            for name, contract in POSTGRES_COUNTED_FUNCTION_CONTRACTS.items()
+        },
+        "postgresCountedMaintenance": dict(POSTGRES_COUNTED_MAINTENANCE_CONTRACT),
         "verifierReadContract": VERIFIER_READ_CONTRACT,
         "verifierReadTables": sorted(VERIFIER_READ_TABLES),
         "proofPrimitives": sorted(PROOF_PRIMITIVES),

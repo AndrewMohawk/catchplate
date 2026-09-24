@@ -1,4 +1,4 @@
-"""Uninstalled bounded per-profile counted maintenance, not writer authority.
+"""Bounded per-profile counted maintenance, not independent writer authority.
 
 The invoker function uses actual SQL projections and hashes, locks its head and
 rejects corrupt opened caches before writing. A direct JSONB call does not

@@ -45,6 +45,14 @@ fields other than the two configured identities, a planned timestamp and
 existing work. Callers cannot replace manifests, traces, public keys or identity
 pins with per-call values or successful-result objects.
 
+Source `.49` adds `produce_and_persist_with_cutoff`, returning the same retained
+receipt plus the original database instant captured inside acquisition. The
+existing receipt-only method delegates without another copy, clock read or
+work allowance. The pair is published only after persistence and its cleanup
+finish. This preserves local historical custody for later independent replay;
+it is not a current-time attestation or an authenticated cross-role invocation.
+Callers still supply independently retained request/context expectations.
+
 The owner snapshots configuration and captures caller graphs before external
 callbacks. The read identity's three authority digests must match the captured
 planner identity. One six-setting persistence snapshot retains its DSN, timeout,

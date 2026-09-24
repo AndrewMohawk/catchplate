@@ -2131,6 +2131,42 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual((result["exactEnvelopeBytes"], result["evaluationContextBytes"]),
                          (original_envelope, original_context))
 
+    def test_configured_revocation_owner_returns_original_cutoff_only_after_persistence(self):
+        from datetime import timedelta
+        from serverware.authority_store import revocation_retention as store
+
+        fixture, observed = self.revocation_owner_fixture(), []
+        original = self.planner.TypedTransitionPlanningProgram._produce_revocation_plan
+        actual_cutoff = fixture.fixture.database_now
+
+        def produce(program, *args, **kwargs):
+            result = original(program, *args, **kwargs)
+            observed.append(result)
+            self.assertIs(result.database_now, actual_cutoff)
+            return result
+
+        def mutate(event):
+            if event in {"read.cursor.exit", "write.connection.exit"}:
+                object.__setattr__(observed[0], "database_now", actual_cutoff + timedelta(microseconds=1))
+
+        fixture.read.on_event = mutate
+        fixture.write.on_event = mutate
+        with self.revocation_owner_scope(fixture), \
+                patch.object(self.planner.TypedTransitionPlanningProgram, "_produce_revocation_plan",
+                             autospec=True, side_effect=produce), \
+                patch.object(store, "persist_revocation_planner_record",
+                             wraps=store.persist_revocation_planner_record) as persist:
+            retained, database_now = fixture.owner.produce_and_persist_with_cutoff(**fixture.arguments)
+            self.assertIn("write.connection.exit", fixture.events)
+        self.assertEqual(len(observed), 1)
+        self.assertIs(database_now, actual_cutoff)
+        self.assertIs(persist.call_args.kwargs["database_now"], actual_cutoff)
+        self.assertIsNot(observed[0].database_now, actual_cutoff)
+        self.assertEqual(fixture.cursor.clock_reads, 1)
+        self.assertEqual(retained["exactEnvelopeBytes"], observed[0].signed.envelope_bytes)
+        self.assertEqual(retained["evaluationContextBytes"], observed[0].evaluation_context_bytes)
+        self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (0, 2))
+
     def test_configured_revocation_owner_spends_one_cumulative_allowance_and_keeps_prior_work(self):
         from serverware import authority_query_read_work as accounting
         from serverware import authority_revocation_plan as replay

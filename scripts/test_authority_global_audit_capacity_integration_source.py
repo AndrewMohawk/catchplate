@@ -962,7 +962,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
 
     def test_configured_owner_threads_actual_manifest_prefix_and_private_trace_without_reset(self):
         _, tree = source("serverware/authority_revocation_coordinator.py")
-        method = definition(tree, "produce_and_persist", "RevocationPlanningCoordinator")
+        method = definition(tree, "produce_and_persist_with_cutoff", "RevocationPlanningCoordinator")
         self.assertEqual({item.arg for item in method.args.kwonlyargs},
                          {"request", "evidence", "context", "planned_at_epoch_ns", "work"})
         snapshot = call(method, "persistence._snapshot_configuration")
@@ -1009,7 +1009,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
 
     def test_configured_owner_captures_original_bytes_before_cleanup_and_only_then_persists(self):
         _, tree = source("serverware/authority_revocation_coordinator.py")
-        method = definition(tree, "produce_and_persist", "RevocationPlanningCoordinator")
+        method = definition(tree, "produce_and_persist_with_cutoff", "RevocationPlanningCoordinator")
         produced = call(method, "program._produce_revocation_plan")
         persistence = call(method, "persistence_module._run_on_configuration")
         scopes = [node for node in ast.walk(method) if isinstance(node, ast.With)]
@@ -1041,7 +1041,25 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
                           "time.time_ns", "time.monotonic_ns"):
             self.assertFalse(calls(method, forbidden))
         self.assertIsInstance(method.body[-1], ast.Return)
-        self.assertIs(method.body[-1].value, persistence)
+        self.assertEqual(ast.unparse(method.body[-1].value), "(retained, database_now)")
+        self.assertIsInstance(method.body[-2], ast.Assign)
+        self.assertEqual(ast.unparse(method.body[-2].targets[0]), "retained")
+        self.assertIs(method.body[-2].value, persistence)
+
+    def test_configured_owner_receipt_facade_discards_only_the_original_cutoff(self):
+        _, tree = source("serverware/authority_revocation_coordinator.py")
+        method = definition(tree, "produce_and_persist", "RevocationPlanningCoordinator")
+        self.assertEqual({item.arg for item in method.args.kwonlyargs},
+                         {"request", "evidence", "context", "planned_at_epoch_ns", "work"})
+        self.assertEqual(len(method.body), 2)
+        self.assertIsInstance(method.body[0], ast.Assign)
+        self.assertEqual(ast.unparse(method.body[0].targets[0]), "(retained, _)")
+        delegated = call(method, "self.produce_and_persist_with_cutoff")
+        self.assertIs(method.body[0].value, delegated)
+        self.assertEqual(keywords(delegated), {"request": "request", "evidence": "evidence",
+            "context": "context", "planned_at_epoch_ns": "planned_at_epoch_ns", "work": "work"})
+        self.assertIsInstance(method.body[1], ast.Return)
+        self.assertEqual(ast.unparse(method.body[1].value), "retained")
 
 
 if __name__ == "__main__":

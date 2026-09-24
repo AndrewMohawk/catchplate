@@ -111,6 +111,19 @@ class RevocationPlanningCoordinator:
         return configuration
 
     def produce_and_persist(self, *, request, evidence, context, planned_at_epoch_ns, work):
+        retained, _ = self.produce_and_persist_with_cutoff(
+            request=request, evidence=evidence, context=context,
+            planned_at_epoch_ns=planned_at_epoch_ns, work=work)
+        return retained
+
+    def produce_and_persist_with_cutoff(self, *, request, evidence, context,
+                                       planned_at_epoch_ns, work):
+        """Return original custody plus the actual acquisition's database instant.
+
+        This local immutable instant is not a current-clock attestation or an
+        authenticated cross-role invocation. Callers must retain independent
+        request/context expectations; the stored context cannot supply them.
+        """
         read_dsn, timeout, identity, private_key, persistence = self._snapshot_configuration()
         configured = persistence._snapshot_configuration()
         if identity[4:] != configured[4]:
@@ -177,7 +190,8 @@ class RevocationPlanningCoordinator:
         expectations = {argument: owned["context"][name]
                         for name, argument in retention._CONTEXT_PAIRS if name in _CALL_CONTEXT}
         expectations.update(expected_request=owned["request"], database_now=database_now)
-        return persistence_module._run_on_configuration(configured,
+        retained = persistence_module._run_on_configuration(configured,
             store.persist_revocation_planner_record,
             {"envelope_bytes": envelope_bytes, "evaluation_context_bytes": context_bytes,
              "planned_at_epoch_ns": planned_at_epoch_ns}, expectations, work)
+        return retained, database_now

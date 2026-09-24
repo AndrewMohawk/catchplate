@@ -9,6 +9,12 @@ contract's `installedSuccessorIssuer` describes what the schema installer
 defines, not a successful installation observation. `configuredServiceRoute`
 and `publicExecutionEnabled` remain false.
 
+Source `.49` adds a configured private owner using the existing real issuer
+connector, original witness-response transport custody, and a planning return
+path that preserves the acquired database instant. These components are still
+unbuilt and unexecuted. They do not add a service dispatch route or authenticate
+a cross-role invocation.
+
 ## Narrow database authority
 
 The original three issuer function contracts retain their four/five/four `text`
@@ -72,6 +78,48 @@ transaction-status and work-meter changes. This is not protection against a
 hostile in-process driver that secretly commits and begins another transaction;
 the driver and process own that trust boundary.
 
+## Configured owner and original transport
+
+[`RevocationCapabilityIssuer`](../serverware/authority_revocation_issuance.py)
+owns one exact configuration snapshot: planner, verifier and witness public
+keys; planner/verifier identities; issuer session and current admission pins;
+configuration, witness and generation commitments. The existing verifier key
+and identity also authenticate the capability and witness request. The issuer
+receives no signing key. Constructor pins must be independently admitted;
+freezing their handles does not enroll keys or freeze arbitrary key internals.
+
+Each call supplies original capability/request bytes, independently accepted
+execution and preliminary receipt identities, fifteen historical replay inputs
+and the existing cumulative work object. The historical inputs include the
+actual acquisition cutoff; they cannot replace configured keys or identities.
+The owner captures them before opening the real
+`_policy_authority_capability_issuer_pg_connect_raw` connection. There is no DSN
+override or planner-writer fallback. That connector begins and admits its real
+serializable read-write non-deferrable transaction before returning it.
+
+The configured owner holds the outer connection context around the genuine
+store worker and its nested savepoint. A detached closed identity result and
+the original active connection are checked before normal outer commit/close.
+The worker's capture/replay and the owner's additional capture/result checks
+all spend the same remaining allowance. Pre-commit body failures normally use
+rollback/close; a post-open work rejection closes the returned handle. A commit
+or connection-exit failure can leave the outcome indeterminate, and a work
+guard after exit cannot undo an already committed transaction. Context-entry
+failures and a hostile driver's hidden transaction history are not stronger
+guarantees.
+The private explicit-opener fixture seam models an already admitted connection;
+it is not evidence of positive PostgreSQL ACL or mTLS admission.
+
+The service's private `_witness_transition_with_originals` now retains the
+actual framed response before parsing, then returns original request bytes,
+original response bytes and the receipt only after the existing canonical,
+binding and signature checks. Receipt-only and request-pair callers retain
+their old return shapes. No bytes are reconstructed, re-signed or cached, and
+no phase or operation is newly admitted. The separate
+[`produce_and_persist_with_cutoff`](authority-revocation-production.md#configured-read-to-persist-owner)
+path similarly preserves the planner's local database instant. Neither return
+path supplies authenticated cross-role or durable retry authority.
+
 ## Locks, compatibility and remaining work
 
 The new path requires an existing controlled-writer fence, then takes capability
@@ -88,8 +136,9 @@ parent, but rejects an observed successor parent. No public operation opens.
 
 The authored fixtures use genuine local cryptography plus a clearly labelled
 statement/savepoint recorder and source inspection. They are not positive
-PostgreSQL ACL, mTLS or commit evidence, and have not run. Configured service
-composition, post-plan witness binding, current-state one-use execution and
+PostgreSQL ACL, mTLS or commit evidence, and have not run. Authenticated service
+composition and durable independent retry expectations, post-plan witness
+binding, current-state one-use execution and
 atomic terminal publication remain required. Production Nitro/KMS, signing and
 independent witness services are still unprovisioned. Follow [goal.md](../goal.md)
 for the source-freeze and verification prerequisites.

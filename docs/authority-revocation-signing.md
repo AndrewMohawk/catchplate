@@ -24,6 +24,12 @@ phase, public route, cache or signing-key role is added. This is in-memory
 preservation at the send boundary, not durable retention or proof of a live
 witness service.
 
+Source `.49` adds `_witness_transition_with_originals`, preserving the actual
+framed response bytes before parsing and returning them only after those same
+checks. The request-pair helper now delegates and discards only response bytes;
+the receipt-only interface is unchanged. This supplies the producer's original
+receipt transport without reconstructing it from the parsed document.
+
 ## Sign only after genuine replay
 
 The private capability producer accepts five original immutable byte strings:
@@ -81,6 +87,11 @@ narrow definer load/store source and an owner that verifies actual stored
 plan/context/execution bytes, compares mutable bindings, and stores or exactly
 compares original custody. Configured service composition and native verification
 remain required; a produced signature alone still does not authorize storage.
+
+Source `.49` also adds the configured private issuer owner described in that
+contract. It uses the existing issuer database connector, fixed independent
+pins and original historical inputs; authenticated cross-role service dispatch
+and durable independent retry expectations are not yet supplied.
 
 A separate future witness event must bind the actual capability digest,
 retained record, root transition and exact execution request. Current-state

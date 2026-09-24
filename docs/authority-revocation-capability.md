@@ -17,6 +17,12 @@ Its source installer defines two narrow functions without table grants; the
 private owner verifies the loaded originals and compares complete bindings.
 Neither a live installation nor configured service activation has been verified.
 
+Source `.49` adds a configured private issuer owner, keeping the verifier as
+the capability/request signer and the issuer as a separate database role. It
+preserves original witness response bytes and the planner's acquired cutoff
+without opening service dispatch or execution. See the
+[configured owner boundary](authority-revocation-issuance.md#configured-owner-and-original-transport).
+
 The private verifier accepts original signed capability, signed planner,
 evaluation-context, execution-request and signed preliminary witness-request
 bytes. It authenticates the capability and both witness documents, replays the

@@ -1733,6 +1733,19 @@ def _recv_exact(connection: socket.socket, count: int) -> bytes:
 
 
 def _recv_message(connection: socket.socket) -> dict[str, Any]:
+    _encoded, value = _recv_message_with_bytes(connection)
+    return value
+
+
+def _recv_message_with_bytes(
+    connection: socket.socket,
+) -> tuple[bytes, dict[str, Any]]:
+    """Retain the actual framed response before parsing or canonical checks.
+
+    The original immutable bytes are returned only with a bounded canonical
+    object. They are not reconstructed from the parsed value and establish no
+    protocol or signature authority on their own.
+    """
     size = int.from_bytes(_recv_exact(connection, 8), "big")
     if not 2 <= size <= MAX_MESSAGE_BYTES:
         raise AuthorityServiceError("authority message size is invalid")
@@ -1743,7 +1756,7 @@ def _recv_message(connection: socket.socket) -> dict[str, Any]:
         raise AuthorityServiceError("authority message is not JSON") from exc
     if not isinstance(value, dict) or _canonical(value) != encoded:
         raise AuthorityServiceError("authority message is not canonical")
-    return value
+    return encoded, value
 
 
 def _send_message(connection: socket.socket, value: Mapping[str, Any]) -> None:
@@ -1846,11 +1859,30 @@ def _socket_request_bytes(
     expected_peer_uid: int,
     expected_peer_gid: int,
 ) -> dict[str, Any]:
+    _response_bytes, response = _socket_request_bytes_with_response(
+        path,
+        encoded,
+        timeout_seconds=timeout_seconds,
+        expected_peer_uid=expected_peer_uid,
+        expected_peer_gid=expected_peer_gid,
+    )
+    return response
+
+
+def _socket_request_bytes_with_response(
+    path: str,
+    encoded: bytes,
+    *,
+    timeout_seconds: float,
+    expected_peer_uid: int,
+    expected_peer_gid: int,
+) -> tuple[bytes, dict[str, Any]]:
     """Send source-owned original bytes without decoding or re-encoding them.
 
     The caller constructs canonical bytes; this transport grants no protocol
-    or signature authority. Its fixed framing and response checks are the
-    same as the mapping transport, which retains its existing public shape.
+    or signature authority. Preserve the original received bytes through the
+    same fixed framing and canonical response checks as the mapping transport.
+    Every post-open failure still closes the actual socket.
     """
     if type(encoded) is not bytes or not 2 <= len(encoded) <= MAX_MESSAGE_BYTES:
         raise AuthorityServiceError("authority request bytes are not exact and bounded")
@@ -1864,7 +1896,7 @@ def _socket_request_bytes(
                 "authority socket server identity is not exact"
             )
         _send_encoded_message(connection, encoded)
-        return _recv_message(connection)
+        return _recv_message_with_bytes(connection)
     finally:
         connection.close()
 
@@ -4881,11 +4913,36 @@ class AuthorityProcess:
         result_digest: str | None = None,
         predecessor_receipt: Mapping[str, Any] | None = None,
     ) -> tuple[bytes, dict[str, Any]]:
-        """Retain the original sent request only after genuine receipt checks.
+        request_bytes, _response_bytes, receipt = self._witness_transition_with_originals(
+            phase=phase,
+            operation=operation,
+            request_digest=request_digest,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            capability_id=capability_id,
+            result_digest=result_digest,
+            predecessor_receipt=predecessor_receipt,
+        )
+        return request_bytes, receipt
+
+    def _witness_transition_with_originals(
+        self,
+        *,
+        phase: str,
+        operation: str,
+        request_digest: str,
+        deadline_monotonic_ns: int,
+        capability_id: str | None = None,
+        result_digest: str | None = None,
+        predecessor_receipt: Mapping[str, Any] | None = None,
+    ) -> tuple[bytes, bytes, dict[str, Any]]:
+        """Publish original request/response bytes after genuine receipt checks.
 
         This is still the existing witness protocol and preliminary reservation,
-        not a post-plan bind or a v4 service route. No request is reconstructed,
-        re-signed or cached for retry after the transport callback.
+        not a post-plan bind or a v4 service route. Neither transport is rebuilt
+        from a parsed or stored receipt; no request is re-signed or cached for
+        retry after the transport callback. The unchanged closed receipt,
+        request/head bindings, pinned key and actual signature checks precede
+        publication of both original byte strings.
         """
         if (
             phase
@@ -4966,7 +5023,7 @@ class AuthorityProcess:
             ),
         }
         request_bytes = _canonical(request)
-        response = _socket_request_bytes(
+        response_bytes, response = _socket_request_bytes_with_response(
             str(witness["socketPath"]),
             request_bytes,
             timeout_seconds=(
@@ -5094,7 +5151,7 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "external replay witness v2 signature is invalid"
             ) from exc
-        return request_bytes, dict(response)
+        return request_bytes, response_bytes, dict(response)
 
     def _witness_transition_v1_disabled(
         self,

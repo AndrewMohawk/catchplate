@@ -133,23 +133,27 @@ def _policy_candidate_authority_decode_base64url(
 
 def _policy_candidate_authority_source_contract_digest() -> str:
     issuer_functions = set(_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS)
+    issuer_signatures = {
+        **authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES,
+        **authority_contract.REVOCATION_CAPABILITY_ISSUER_FUNCTION_SIGNATURES,
+    }
+    issuer_arguments = {
+        **authority_contract.CAPABILITY_ISSUER_FUNCTION_ARGUMENTS,
+        **authority_contract.REVOCATION_CAPABILITY_ISSUER_FUNCTION_ARGUMENTS,
+    }
     if (
-        _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES != tuple(sorted(
-            authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES.items()
-        ))
-        or set(authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES)
-        != issuer_functions
+        set(authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES)
+        & set(authority_contract.REVOCATION_CAPABILITY_ISSUER_FUNCTION_SIGNATURES)
         or set(authority_contract.CAPABILITY_ISSUER_FUNCTION_ARGUMENTS)
-        != issuer_functions
+        & set(authority_contract.REVOCATION_CAPABILITY_ISSUER_FUNCTION_ARGUMENTS)
+        or _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES != tuple(sorted(
+            issuer_signatures.items()
+        ))
+        or set(issuer_signatures) != issuer_functions
+        or set(issuer_arguments) != issuer_functions
         or any(
-            len(
-                authority_contract
-                .CAPABILITY_ISSUER_FUNCTION_SIGNATURES[function_name]
-            )
-            != len(
-                authority_contract
-                .CAPABILITY_ISSUER_FUNCTION_ARGUMENTS[function_name]
-            )
+            len(issuer_signatures[function_name])
+            != len(issuer_arguments[function_name])
             for function_name in issuer_functions
         )
     ):
@@ -314,10 +318,7 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             },
             "authorityCapabilityIssuerFunctionArguments": {
                 function_name: list(argument_names)
-                for function_name, argument_names in sorted(
-                    authority_contract
-                    .CAPABILITY_ISSUER_FUNCTION_ARGUMENTS.items()
-                )
+                for function_name, argument_names in sorted(issuer_arguments.items())
             },
             "offlineMigrationReceiptProducers": {
                 contract_id: {

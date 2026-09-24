@@ -76,12 +76,11 @@ HSM, service-role or production evidence. The witness transport fixture checks
 actual source structure without importing active service/registry code; it does
 not establish successful socket traffic. All fixtures remain unexecuted.
 
-The configured issuer owner and narrow definer load/store functions are still
-required. They must load actual stored plan/context/execution bytes, preserve
-independent expectations, verify the signed capability, compare every mutable
-reservation binding, and atomically store or exactly compare original custody
-rows. They must also reconcile the conflicting existing lock orders described
-in the [issuer database boundary](authority-issuer-database-boundary.md).
+Source `.48` adds [private issuer custody](authority-revocation-issuance.md):
+narrow definer load/store source and an owner that verifies actual stored
+plan/context/execution bytes, compares mutable bindings, and stores or exactly
+compares original custody. Configured service composition and native verification
+remain required; a produced signature alone still does not authorize storage.
 
 A separate future witness event must bind the actual capability digest,
 retained record, root transition and exact execution request. Current-state

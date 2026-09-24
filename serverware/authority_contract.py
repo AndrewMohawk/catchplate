@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.47"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.48"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -371,7 +371,8 @@ REVOCATION_CAPABILITY_CUSTODY_CONTRACT = MappingProxyType({
     "schema": "serverware.policyAuthorityRevocationCapabilityCustody/v1",
     "operation": "webauthn.credential.revoke", "capabilityProtocol": "revocation-v4",
     "planProtocol": "revocation-v4", "postgresOnly": True, "sqliteAdmission": False,
-    "installedSuccessorIssuer": False, "publicExecutionEnabled": False,
+    "installedSuccessorIssuer": True, "publicExecutionEnabled": False,
+    "configuredServiceRoute": False, "issuerInterface": "private-load6-store8",
     "retainedTable": REVOCATION_RETAINED_CAPABILITY_TABLE,
     "retainedColumns": REVOCATION_RETAINED_CAPABILITY_COLUMNS,
     "identityImmutableColumns": WRITER_CAPABILITY_IMMUTABLE_COLUMNS,
@@ -380,7 +381,7 @@ REVOCATION_CAPABILITY_CUSTODY_CONTRACT = MappingProxyType({
     "maxSignedCapabilityBytes": 4 * 1024 * 1024, "maxSignedWitnessRequestBytes": 64 * 1024,
     "parentBinding": "symmetric-deferred-five-column-foreign-keys",
     "plannerBinding": "retained-plan-composite-foreign-key",
-    "plannerCapabilityBinding": "genuine-verifier-and-future-issuer-comparison",
+    "plannerCapabilityBinding": "genuine-verifier-and-private-issuer-comparison",
     "executionBinding": "primary-key-only-mutable-envelope",
     "issuerTablePrivileges": (),
     "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
@@ -557,6 +558,30 @@ CAPABILITY_ISSUER_FUNCTION_ARGUMENTS = MappingProxyType(
             "supplied_witness_receipt_digest",
             "supplied_issuer_measurement_digest",
             "supplied_issuer_attestation_receipt_digest",
+        ),
+    }
+)
+REVOCATION_CAPABILITY_ISSUER_FUNCTION_SIGNATURES = MappingProxyType(
+    {
+        "serverware_policy_authority_load_revocation_issuance": ("text",) * 6,
+        "serverware_policy_authority_issue_revocation_capability": ("text",) * 8,
+    }
+)
+REVOCATION_CAPABILITY_ISSUER_FUNCTION_ARGUMENTS = MappingProxyType(
+    {
+        "serverware_policy_authority_load_revocation_issuance": (
+            "supplied_planner_transaction_id", "supplied_execution_envelope_id",
+            "supplied_capability_id", "supplied_issuer_measurement_digest",
+            "supplied_issuer_attestation_receipt_digest",
+            "supplied_issuer_credential_issuance_digest",
+        ),
+        "serverware_policy_authority_issue_revocation_capability": (
+            "supplied_original_capability_base64url",
+            "supplied_original_witness_request_base64url",
+            "supplied_capability_record_digest", "supplied_signer_key_digest",
+            "supplied_witness_key_digest", "supplied_issuer_measurement_digest",
+            "supplied_issuer_attestation_receipt_digest",
+            "supplied_issuer_credential_issuance_digest",
         ),
     }
 )
@@ -2552,6 +2577,18 @@ OPERATION_MANIFEST_DIGEST = _digest(
             function_name: list(argument_names)
             for function_name, argument_names in sorted(
                 CAPABILITY_ISSUER_FUNCTION_ARGUMENTS.items()
+            )
+        },
+        "revocationCapabilityIssuerFunctionSignatures": {
+            function_name: list(argument_types)
+            for function_name, argument_types in sorted(
+                REVOCATION_CAPABILITY_ISSUER_FUNCTION_SIGNATURES.items()
+            )
+        },
+        "revocationCapabilityIssuerFunctionArguments": {
+            function_name: list(argument_names)
+            for function_name, argument_names in sorted(
+                REVOCATION_CAPABILITY_ISSUER_FUNCTION_ARGUMENTS.items()
             )
         },
         "offlineMigrationReceiptProducers": {

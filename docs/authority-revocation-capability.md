@@ -3,14 +3,19 @@
 ## Status and boundary
 
 Source `.45` adds an inactive original-byte capability verifier and PostgreSQL
-custody schema. The source is **unbuilt and unexecuted**. It does not install a
-successor issuer or executor, grant issuer table privileges, open a public
-revocation route, or establish an independently operated witness service.
+custody schema. The source is **unbuilt and unexecuted**. That checkpoint did
+not install a successor issuer or executor, grant issuer table privileges,
+open a public route, or establish an independently operated witness service.
 
 Source `.47` adds a private producer that signs only after genuine retained and
 witness verification, plus original witness-request preservation in the service;
 see [original-byte signing](authority-revocation-signing.md). The producer is
 not a configured issuer or storage path, and does not open these gates.
+
+Source `.48` adds [private issuer load/store custody](authority-revocation-issuance.md).
+Its source installer defines two narrow functions without table grants; the
+private owner verifies the loaded originals and compares complete bindings.
+Neither a live installation nor configured service activation has been verified.
 
 The private verifier accepts original signed capability, signed planner,
 evaluation-context, execution-request and signed preliminary witness-request
@@ -140,17 +145,13 @@ They are not cryptographic admission, live ACLs or top-level commit evidence.
 The existing serializer method additionally pins the credential-binding recipe
 against the real SQL helper. All controls remain authored and unexecuted.
 
-The next private issuer boundary must preserve original signed transport and
-establish its serializable writer transaction before the first database read.
 Source `.46` corrects the existing connector's pre-read transaction setup and
 the installed-five-argument versus granted-four-argument mismatch; see the
-[issuer database boundary](authority-issuer-database-boundary.md). The connector
-still forbids direct table authority, and the planner-writer-only retained
-reader is not an issuer API. Narrow source-fixed definer load/store functions
-still need coordinated signature/owner/search-path/EXECUTE admission, without
-table grants. Successor lock order
-must reconcile the current executor's fence/capability/execution/planner order
-with the private reservation's planner/execution order before activation.
+[issuer database boundary](authority-issuer-database-boundary.md). Source `.48`
+adds private original-byte custody and exact load/store EXECUTE admission,
+without borrowing the planner-writer-only retained reader. Its fence-first
+locking, capability NOWAIT and bounded conflict denial still require native
+concurrency verification before activation.
 
 Configured successor issuance/storage/replay boundaries, post-plan witness binding,
 current roots and deadlines, mixed-root SQL execution, atomic terminal

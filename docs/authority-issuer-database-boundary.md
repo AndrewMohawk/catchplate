@@ -8,6 +8,10 @@ connector and service handlers, not a new v4 issuance route. The source remains
 **unbuilt and unexecuted**. No live grants, mTLS admission, database commit or
 production deployment have been verified.
 
+Source `.48` extends the exact inventory with two private revocation functions
+and an original-byte owner; see [private issuer custody](authority-revocation-issuance.md).
+This does not activate a configured successor service route or a public gate.
+
 ## One exact function inventory
 
 The existing immutable contract declares these three functions:
@@ -24,12 +28,13 @@ issuer catalog check assumed four arguments for every function, disagreeing
 with that installed definition.
 
 The database facade now derives one sorted immutable signature tuple from the
-existing contract. The schema sealer requires its exact tuple shape, names,
+original contract and the separate six/eight-argument revocation contract.
+The original three function signatures remain unchanged. The schema sealer requires exact shape, names,
 types, order and contents before database callbacks. Metadata and expected-v9
 schemas cannot omit it; unrelated schema sealers retain their empty default.
 Bootstrap, expected-schema replay, reviewed completed-v9 repair and v8-to-v9
 migration pass the same signature inventory. Source-contract hashing binds
-that actual inventory and checks it against the original contract maps.
+that actual inventory and checks both disjoint source contract maps.
 
 GRANT statements use each function's real argument types. Issuer and executor
 grant checks compare type-only identities using `oidvectortypes(proargtypes)`;
@@ -40,8 +45,9 @@ fail closed. Issuer catalog validation additionally requires SECURITY DEFINER,
 non-STRICT, VOLATILE and the exact source search path. Existing owner, language,
 object and implementation-manifest validation remains in force.
 
-No callable function, role, table grant or operation is added. An issuer must
-still have no direct table/sequence privileges or inherited role authority.
+The `.46` correction added no callable function; `.48` adds only the two narrow
+revocation functions. No role, table grant or public operation is added. An issuer
+must still have no direct table/sequence privileges or inherited role authority.
 
 ## Transaction ownership
 
@@ -105,15 +111,15 @@ still apply; fixture counts are not passing evidence.
 ## Successor work still required
 
 The private [signed capability/v4 verifier and custody schema](authority-revocation-capability.md)
-still need original-byte issuer load/store/replay integration through narrow
-source-fixed definer functions. Planner-writer readers cannot be relabeled as
-issuer access, and stored context cannot supply its own independent authority.
-Mutable execution bindings and planner capability identity need explicit
-comparison under a coordinated lock order.
+now have original-byte load/store source integration in `.48`. Planner-writer
+readers are not relabeled as issuer access, and stored context cannot supply its
+own independent authority. The new owner explicitly compares mutable execution
+bindings and planner capability identity; native concurrency/admission and
+configured service composition remain unverified and required.
 
 Source `.47` adds [private capability signing and original witness-request
-preservation](authority-revocation-signing.md). It does not add issuer database
-functions or grants. A produced signature remains input to independent issuer
+preservation](authority-revocation-signing.md). That checkpoint did not add issuer
+database functions or grants. A produced signature remains input to independent issuer
 verification and transactional custody, not a successful storage observation.
 
 The post-plan witness event, current-state/one-use execution, atomic terminal

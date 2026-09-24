@@ -127,7 +127,8 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
         self.assert_shape(assignment(self.db,
             "_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES").value,
             "tuple((function_name, tuple(argument_types)) for function_name, argument_types "
-            "in sorted(authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES.items()))")
+            "in sorted({**authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES, "
+            "**authority_contract.REVOCATION_CAPABILITY_ISSUER_FUNCTION_SIGNATURES}.items()))")
         self.assert_shape(assignment(self.db,
             "_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS").value,
             "frozenset(function_name for function_name, _argument_types "
@@ -175,7 +176,7 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
                 {0, len(_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES)}
             or any(type(entry) is not tuple or len(entry) != 2
                 or type(entry[0]) is not str or len(entry[0]) > 63
-                or type(entry[1]) is not tuple or len(entry[1]) not in {4, 5}
+                or type(entry[1]) is not tuple or len(entry[1]) not in {4, 5, 6, 8}
                 or any(type(argument) is not str or argument != 'text' for argument in entry[1])
                 for entry in authority_capability_issuer_function_signatures)
             or ((authority_capability_issuer_function_signatures or schema in

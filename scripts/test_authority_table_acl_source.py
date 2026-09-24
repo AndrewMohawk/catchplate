@@ -393,7 +393,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.47")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.48")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -812,13 +812,14 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "schema": "serverware.policyAuthorityRevocationCapabilityCustody/v1",
             "operation": "webauthn.credential.revoke", "capabilityProtocol": "revocation-v4",
             "planProtocol": "revocation-v4", "postgresOnly": True, "sqliteAdmission": False,
-            "installedSuccessorIssuer": False, "publicExecutionEnabled": False,
+            "installedSuccessorIssuer": True, "publicExecutionEnabled": False,
+            "configuredServiceRoute": False, "issuerInterface": "private-load6-store8",
             "retainedTable": "policy_authority_revocation_retained_capabilities", "retainedColumns": columns,
             "identityImmutableColumns": identity, "reservationImmutableOnceSet": reservation,
             "terminalColumns": terminal, "maxSignedCapabilityBytes": 4194304, "maxSignedWitnessRequestBytes": 65536,
             "parentBinding": "symmetric-deferred-five-column-foreign-keys",
             "plannerBinding": "retained-plan-composite-foreign-key",
-            "plannerCapabilityBinding": "genuine-verifier-and-future-issuer-comparison",
+            "plannerCapabilityBinding": "genuine-verifier-and-private-issuer-comparison",
             "executionBinding": "primary-key-only-mutable-envelope", "issuerTablePrivileges": (),
             "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
             "authorityExclusions": ("signature-verification", "key-enrollment", "currentness", "execution", "witness"),

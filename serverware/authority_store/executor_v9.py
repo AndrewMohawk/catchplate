@@ -449,6 +449,13 @@ def install_authority_v9_executor(
             WHERE capability_id = capability_value->>'capabilityId'
             FOR UPDATE;
             IF FOUND THEN
+                IF existing_capability.capability_protocol
+                        IS DISTINCT FROM 'v3'
+                    OR existing_capability.capability_record_digest IS NOT NULL
+                THEN
+                    RAISE EXCEPTION
+                        'legacy writer issuer requires v3 capability protocol';
+                END IF;
                 IF (
                     existing_capability.capability_digest IS DISTINCT FROM
                         computed_capability_digest
@@ -651,6 +658,20 @@ def install_authority_v9_executor(
                     RAISE EXCEPTION
                         'terminal witness v2 digest was reused';
                 END IF;
+                -- Preserve a historical v3 receipt retry when its parent is
+                -- absent, but never return through this API for v4 custody.
+                IF EXISTS (
+                    SELECT 1
+                    FROM {namespace}.policy_authority_writer_capabilities
+                    WHERE capability_id = receipt_value->>'capabilityId'
+                      AND (
+                          capability_protocol IS DISTINCT FROM 'v3'
+                          OR capability_record_digest IS NOT NULL
+                      )
+                ) THEN
+                    RAISE EXCEPTION
+                        'legacy witness recorder requires v3 capability protocol';
+                END IF;
                 RETURN computed_receipt_digest;
             END IF;
             SELECT * INTO capability
@@ -660,6 +681,12 @@ def install_authority_v9_executor(
             IF NOT FOUND THEN
                 RAISE EXCEPTION
                     'terminal witness v2 capability is absent';
+            END IF;
+            IF capability.capability_protocol IS DISTINCT FROM 'v3'
+                OR capability.capability_record_digest IS NOT NULL
+            THEN
+                RAISE EXCEPTION
+                    'legacy witness recorder requires v3 capability protocol';
             END IF;
             SELECT * INTO reservation
             FROM {namespace}.policy_authority_external_witness_receipts
@@ -846,6 +873,12 @@ def install_authority_v9_executor(
             FROM {namespace}.policy_authority_writer_capabilities
             WHERE capability_id = supplied_capability_id
             FOR UPDATE;
+            IF capability.capability_protocol IS DISTINCT FROM 'v3'
+                OR capability.capability_record_digest IS NOT NULL
+            THEN
+                RAISE EXCEPTION
+                    'legacy authority executor requires v3 capability protocol';
+            END IF;
             IF capability.operation <> expected_operation THEN
                 RAISE EXCEPTION
                     'authority v9 operation wrapper binding changed';
@@ -3622,6 +3655,15 @@ def fail_authority_v9_transaction(
             "WHERE capability_id = %s FOR UPDATE",
             (capability_id,),
         ).fetchone()
+        if capability is None:
+            raise _db_value("MetadataStoreError")(
+                "authority v9 failure binding is absent"
+            )
+        if (capability.get("capability_protocol") != "v3"
+                or capability.get("capability_record_digest") is not None):
+            raise _db_value("MetadataStoreError")(
+                "legacy authority failure worker requires v3 capability protocol"
+            )
         envelope = cursor.execute(
             "SELECT * FROM serverware_metadata."
             "policy_authority_execution_envelopes "

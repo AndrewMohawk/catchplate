@@ -36,6 +36,7 @@ from serverware.authority_store import (
     authority_dispatch as _authority_dispatch,
 )
 from serverware.authority_store import executor_v9 as _authority_executor_v9
+from serverware.authority_store import revocation_capability_sql as _revocation_capability_sql
 from serverware.authority_store import counted_installation as _counted_installation
 from serverware.authority_store import metadata_schema_source as _metadata_schema_source
 from serverware.authority_store import primary_tree_sql as _primary_tree_sql
@@ -1734,7 +1735,10 @@ _POLICY_AUTHORITY_EXECUTOR_FUNCTIONS = frozenset(
 _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES = tuple(
     (function_name, tuple(argument_types))
     for function_name, argument_types in sorted(
-        authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES.items()
+        {
+            **authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES,
+            **authority_contract.REVOCATION_CAPABILITY_ISSUER_FUNCTION_SIGNATURES,
+        }.items()
     )
 )
 _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS = frozenset(
@@ -3576,7 +3580,7 @@ def _seal_postgres_schema_acl(
         or any(
             type(entry) is not tuple or len(entry) != 2
             or type(entry[0]) is not str or len(entry[0]) > 63
-            or type(entry[1]) is not tuple or len(entry[1]) not in {4, 5}
+            or type(entry[1]) is not tuple or len(entry[1]) not in {4, 5, 6, 8}
             or any(type(argument) is not str or argument != "text" for argument in entry[1])
             for entry in authority_capability_issuer_function_signatures
         )
@@ -18935,6 +18939,28 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 authority_contract.OPERATION_MANIFEST_DIGEST
             ),
         )
+        if (
+            _revocation_capability_sql.POSTGRES_MAJOR
+                != _POLICY_AUTHORITY_OWNER_POSTGRES_MAJOR
+            or _revocation_capability_sql.LOCK_TIMEOUT
+                != _POLICY_AUTHORITY_OWNER_LOCK_TIMEOUT
+            or _revocation_capability_sql.STATEMENT_TIMEOUT
+                != _POLICY_AUTHORITY_OWNER_STATEMENT_TIMEOUT
+        ):
+            raise PolicyCandidateAuthorityError(
+                "revocation issuer SQL limits are not source exact"
+            )
+        conn.execute(_revocation_capability_sql.revocation_capability_functions_sql(
+            guard_namespace,
+            issuer_role=_METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE,
+            owner_role=_METADATA_STORE_AUTHORITY_OWNER_ROLE,
+            issuer_measurement_digest=capability_issuer_measurement_digest,
+            issuer_attestation_receipt_digest=capability_issuer_attestation_receipt_digest,
+            issuer_credential_issuance_digest=capability_issuer_credential_issuance_digest,
+            issuer_tls_client_dn=capability_issuer_tls_client_dn,
+            issuer_tls_client_serial=capability_issuer_tls_client_serial,
+            issuer_tls_issuer_dn=capability_issuer_tls_issuer_dn,
+        ))
         return
 
     _execute_metadata_schema_statements(

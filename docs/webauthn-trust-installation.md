@@ -2,8 +2,9 @@
 
 Status: source implementation and review only; no build, interpreter or test
 has executed this revision. This is a prerequisite of authenticated trust
-completion, not the missing `webauthn.trust.complete` authority implementation.
-All four kernel/startup blockers remain.
+completion, not an activated `webauthn.trust.complete` authority path. The
+[startup inventory](authority-transition-startup-blocker.md) still has six
+missing registered kernels, including the two evidence-admission operations.
 
 ## Actual path and explicit inputs
 
@@ -75,8 +76,9 @@ The private `_install_verified_bundle_with_readback` factor also returns the
 actual bundle/state bytes from those same reads, alongside the unchanged local
 result. The existing helper delegates and keeps its original return shape.
 Both require the caller's exclusive lock; no second read or arbitrary target
-path is introduced. These bytes are inputs for a future configured evidence
-owner, not an authenticated committed-stage or current-root assertion.
+path is introduced. These bytes can feed the source-implemented private
+evidence admission/read owner; they are not an authenticated committed-stage
+or current-root assertion, and legacy reconciliation does not call that owner.
 
 State-first ordering can leave the checkpoint ahead of the bundle. The same
 pending candidate can retry; an earlier generation or same-generation fork
@@ -107,6 +109,23 @@ bootstrap semantics; it is not independent rollback protection. Recovery still
 rejects an expired predecessor. No-pending reconciliation still does not prove
 that a caller's expected publication completed after a lost response.
 
+## Purpose-specific configuration (.84)
+
+Signed service configuration v2 now optionally carries the closed
+`webauthnEvidenceAdmission` policy. Its installation slot explicitly pins the
+`trust-installation` purpose, raw Ed25519 public key and matching SPKI digest,
+signer identity, installation target digest and source-bounded age/skew. An
+absent block or null slot leaves installation evidence admission disabled;
+neither a generic verifier key nor the local bundle signer supplies a default.
+
+The private planner service factory and measured configuration mapper construct
+the actual `EvidenceAdmissionPlanner` from the same owned configuration and
+launch bindings. That factory opens no connection. Its read-only acquisition
+genuinely verifies selected rows and original installation evidence before
+deriving proposed INSERT/no-op effects and roots, but persists nothing and
+does not activate the registry or a serving route. This is unexecuted source,
+not provisioned signer/target authority or completed installation admission.
+
 ## Authored tests and remaining authority work
 
 `test_webauthn_trust_core.py` has 22 authored methods for actual local signatures, explicit context,
@@ -122,13 +141,15 @@ The legacy completion call is still ID-only. The separate
 [successor implementation](webauthn-successor-transitions.md) now provides the
 v2 acyclic evidence contract, shared installation claims, genuine evidence
 signing/consumption, planned high-water effects and private proof acquisition.
-It is not wired into legacy reconciliation. Completing that path still needs
-independently configured signer and measurement/attestation/target/time policy,
+It is not wired into legacy reconciliation. The `.84` optional signed policy
+and private configured factory supply the source configuration seam; completing
+that path still needs independently provisioned signer/target authority,
 authenticated committed aggregate-stage/current-root ancestry, durable receipt
-admission, signed-plan replay and actual producer/planner/witness/executor
-integration. In particular, the post-readback observation time must not be
-substituted by the earlier local `verifiedAt`, and an error after physical
-installation cannot be handled as a filesystem rollback. See the
+admission, retained semantic signed-plan replay and actual
+producer/planner/witness/executor integration. In particular, the post-readback
+observation time must not be substituted by the earlier local `verifiedAt`, and
+an error after physical installation cannot be handled as a filesystem
+rollback. See the
 [coordinated authority design](webauthn-authority-integration.md) and
 [startup blocker](authority-transition-startup-blocker.md). Local observations
 must not be relabelled as that missing signed evidence or used to register a

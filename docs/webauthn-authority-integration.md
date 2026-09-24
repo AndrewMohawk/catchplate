@@ -15,6 +15,25 @@ source-only work now implementing its aggregate manifest, queries, signatures,
 row effects and private acquisitions. Those additions do not activate the
 public protocol or remove the independent authority requirements below.
 
+Source `.84` adds optional purpose-specific policy to signed service
+configuration v2: `webauthnEvidenceAdmission`, schema
+`serverware.policyAuthorityWebAuthnEvidenceAdmissionPolicy/v1`. Its closed
+`registration` and `installation` slots pin an explicit canonical raw Ed25519
+public key and matching SPKI digest, signer identity, and bounded age/skew.
+Registration RP/origin must equal the existing WebAuthn configuration;
+installation pins a target digest. An absent block or null purpose grants no
+authority for that purpose. No generic role key is substituted.
+
+The loader and artifact generator validate that optional extension. The private
+planner service factory `_webauthn_evidence_planner` owns the full payload before
+launch/descriptor callbacks and captures generation last. The purpose-specific
+mapper checks the actual configuration commitment and launch membership on the
+same work, then constructs the real `EvidenceAdmissionPlanner` read owner.
+Construction opens no SQL and enables no route or kernel. Its actual acquisition
+still encounters the registry gate and returns proposed row/root observations,
+not persisted evidence. These additions are unbuilt and unexecuted; provisioning,
+independent root/time admission and the activation evidence below remain required.
+
 The [startup blocker](authority-transition-startup-blocker.md) and
 [unactivated revocation candidate](webauthn-revocation-candidate.md) identify the
 current seams. Completing them requires the following coordinated producer,
@@ -262,7 +281,8 @@ Completion's four business rows/mutations remain allocated to publication,
 high-water, audit and external evidence. Source `.25` explicitly grants one
 additional selected aggregate row and counter mutation, its UPDATE/proof
 permission and actual framework work allowance: total 5 / 5 / 130. This does
-not implement the missing completion kernel, initializer or evidence authority.
+not activate completion or provide the initializer or evidence authority; the
+successor's private kernel and acquisition remain unregistered source work.
 
 Keep the digest meanings distinct: `bundleDigest` commits the unsigned bundle;
 `payloadDigest` commits the approved control-plane mutation payload, not just
@@ -270,9 +290,12 @@ that bundle; the canonical envelope digest also includes its bundle signature.
 The reserved verification statement does not bind exact installed file bytes,
 an independently configured target, or committed aggregate-stage/root ancestry.
 It therefore needs a new closed version, not a reinterpretation of the reserved
-v1 fields. Purpose-specific verifier key/measurement/attestation/target/time
-pins and authenticated evidence admission remain missing; the local bundle
-signing key and generic receipt structure checks are not substitutes.
+v1 fields. The successor now supplies v2 evidence semantics and private
+admission acquisition, with purpose-specific key/identity/target/time policy
+and a configured read factory in `.84`. Independently provisioned authority,
+durable admission and its authenticated root transition, retained semantic
+replay and terminal integration remain required. The local bundle signing key
+and generic receipt structure checks are not substitutes.
 
 An installed-but-uncompleted crash remains a pending, reconciliable operation;
 a local file alone does not publish authority. Retry verifies the same stage,

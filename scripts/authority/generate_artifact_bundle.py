@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
 from serverware import authority_transition_registry
+from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware.authority_artifact_spec import (
     ARTIFACT_BUNDLE_SCHEMA,
     AUTHORITY_SCHEMA_VERSION,
@@ -685,6 +686,9 @@ def _validate_configuration_document(
         expected_envelope_schema = SERVICE_CONFIGURATION_SCHEMA
         expected_payload_schema = SERVICE_CONFIGURATION_PAYLOAD_SCHEMA
         expected_fields = SERVICE_CONFIGURATION_FIELDS
+        if (isinstance(envelope["payload"], Mapping)
+                and evidence_policy.FIELD in envelope["payload"]):
+            expected_fields = expected_fields | {evidence_policy.FIELD}
     payload = _closed(
         envelope["payload"],
         name=f"{role} configuration payload",
@@ -855,6 +859,15 @@ def _validate_configuration_document(
             raise GeneratorError(
                 "credential-issuance and attestation digests are not distinct"
             )
+        if evidence_policy.FIELD in payload:
+            try:
+                evidence_policy.validate_policy(
+                    payload[evidence_policy.FIELD], webauthn=payload["webauthn"]
+                )
+            except ValueError as exc:
+                raise GeneratorError(
+                    "authority WebAuthn evidence admission policy is invalid"
+                ) from exc
 
 
 def _validate_required_role_manifests(

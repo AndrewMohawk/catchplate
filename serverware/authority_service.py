@@ -54,6 +54,7 @@ from serverware import authority_revocation_planner_custody_transport as custody
 from serverware import authority_revocation_custody_read_transport as custody_read_transport
 from serverware import authority_revocation_planning_transport as planning_transport
 from serverware import authority_revocation_writer_transport as writer_transport
+from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
     verifier_read_privilege_check,
@@ -1061,7 +1062,10 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) != required_payload_fields
+            set(payload) not in (
+                required_payload_fields,
+                required_payload_fields | {evidence_policy.FIELD},
+            )
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
             or role not in PROCESS_MODES
@@ -1118,6 +1122,15 @@ class MeasuredConfiguration:
         )
         configuration._verify_generation_binding()
         configuration._verify_role_topology()
+        if evidence_policy.FIELD in payload:
+            try:
+                evidence_policy.validate_policy(
+                    payload[evidence_policy.FIELD], webauthn=payload["webauthn"]
+                )
+            except ValueError as exc:
+                raise AuthorityServiceError(
+                    "authority WebAuthn evidence admission policy is invalid"
+                ) from exc
         configuration._verify_runtime_closure()
         configuration._verify_attestation(role=role)
         return configuration
@@ -3880,6 +3893,50 @@ class AuthorityProcess:
         return verifier.verify_handoff(envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes, expected_request=owned_request,
             context=owned_context, root_inventory=inventory, work=work)
+
+    def _webauthn_evidence_planner(self, *, purpose, work):
+        """Construct one private purpose-pinned read owner, without opening SQL.
+
+        The real signed-configuration load and active planner launch remain
+        upstream admission requirements; a constructed configuration dataclass
+        is not their substitute. Own the full payload before launch/descriptor
+        callbacks and take the generation snapshot last. The fixed mapper
+        derives evidence keys and policy only from that same owned payload.
+        This factory accepts no request, key, target, policy or read override,
+        and does not enable an operation, registry entry or serving route.
+        """
+        if type(purpose) is not str or purpose not in ("registration", "installation"):
+            raise AuthorityServiceError("WebAuthn evidence purpose is not supported")
+        if (self.role_name != "planner"
+                or self.process_mode != "policy-authority-planner"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("WebAuthn evidence planner process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        from serverware import authority_revocation_configuration
+        from serverware import authority_webauthn_evidence_configuration
+
+        mapper = (
+            authority_webauthn_evidence_configuration._registration_planner_from_configuration_on_work
+            if purpose == "registration" else
+            authority_webauthn_evidence_configuration._installation_planner_from_configuration_on_work
+        )
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("WebAuthn evidence planner configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("planner"))
+        read_dsn = authority_revocation_configuration.production._callback(
+            work, lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"))
+        # No callback may interpose before the mapper owns the seven actual
+        # launch-generation bindings from this final snapshot.
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return mapper(payload=owned_payload, configuration_digest=configuration_digest,
+            generation=generation, read_dsn=read_dsn, work=work)
 
     def _produce_revocation_observed_plan(self, *, request, evidence, context,
             root_inventory, work):

@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.83`, implementation only. These helpers do not register the
+Status: source `.84`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -134,13 +134,48 @@ producer now uses the same lifecycle body. Results return only after cursor,
 transaction and connection exits plus the closed-handle check; cleanup failure
 cannot return a successful acquisition. No writer or signer is opened.
 
-These are explicit independently supplied configuration pins, not values
-derived from an admitted measured configuration. The current signed service
-configuration has no purpose-scoped evidence signer/target contract; generic
-verifier or planner keys must not be substituted for it. A coordinated mapper,
-active service launch and operation authorization remain required. Connection
-guards cannot detect a hostile driver's hidden commit-and-BEGIN, and read-only
-mode alone does not prove independent root currentness or physical readback.
+The private measured-configuration mapper now derives these pins from the
+optional signed policy described below. Its actual service factory requires
+the planner role/mode and active launch, holds the complete configuration
+before descriptor callbacks, reads only the protected planner read descriptor,
+then captures generation immediately before mapping. The mapper owns and
+recomputes the full configuration commitment and checks active-generation
+membership on the original work allowance. It also requires the selected
+operation in the owned signed planner allowlist before key reconstruction or
+owner construction. Neither a constructed configuration dataclass nor a
+caller-created dictionary supplies root-signature or launch admission.
+
+Connection guards cannot detect a hostile driver's hidden commit-and-BEGIN,
+and read-only mode alone does not prove independent root currentness or physical
+readback. Request/root and physical-installation admission, serving integration,
+durable replay and operation activation remain separate unfinished boundaries.
+
+## Optional signed evidence policy
+
+Service configuration may contain exactly one additional known field,
+`webauthnEvidenceAdmission`, with schema
+`serverware.policyAuthorityWebAuthnEvidenceAdmissionPolicy/v1` and closed
+`registration` and `installation` slots. An absent extension grants neither
+purpose; a null slot disables that purpose. A present null extension is invalid.
+The old closed payload shape remains supported; arbitrary extension fields do
+not. No default signer, role-key alias or installation target is inferred.
+
+Each enabled slot fixes the actual operation and evidence purpose, canonical
+raw32 Ed25519 public key, its genuine SPKI digest, the independent signer's
+session/measurement/attestation-receipt identity and age/skew bounds. Registration
+also fixes RP ID and origin exactly equal to the surrounding WebAuthn settings;
+installation fixes the target digest. Both complete input graphs are owned
+before actual key reconstruction and DER/SPKI checks. Configuration-loader
+validation has a separate bounded meter; the measured mapper uses only its
+existing work allowance and never calls that standalone wrapper.
+
+The service loader and artifact generator validate the extension. The actual
+service still verifies the surrounding root signature; artifact validation is
+not a substitute for that admission. Full canonical configuration bytes,
+digest and generation membership bind the extension, requiring configuration
+resigning and regenerated bindings. Merely adding a policy does not add a
+service operation, registry kernel, handler, permission, SQL write or signer.
+Independent infrastructure and evidence signers remain unprovisioned.
 
 ## Retained evidence and consumption
 

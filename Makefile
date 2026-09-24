@@ -983,6 +983,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/revocation_custody_read.py \
 	serverware/authority_store/revocation_retained_sql.py \
 	serverware/authority_store/revocation_retention.py \
+	serverware/authority_store/webauthn_evidence_retention.py \
 	serverware/authority_store/root_transition_sql.py \
 	serverware/authority_store/schema.py \
 	serverware/authority_store/v9_schema_source.py \
@@ -2748,6 +2749,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_store/revocation_capability.py \
 				serverware/authority_store/revocation_capability_sql.py \
 				serverware/authority_store/revocation_retention.py \
+				serverware/authority_store/webauthn_evidence_retention.py \
 				serverware/authority_store/revocation_counted_sql.py \
 				serverware/authority_store/revocation_execution.py \
 				serverware/authority_store/revocation_writer_request.py \

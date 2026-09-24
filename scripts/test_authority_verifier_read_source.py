@@ -110,7 +110,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertIs(type(authority_contract.VERIFIER_READ_TABLES), frozenset)
         self.assertEqual(authority_contract.VERIFIER_READ_TABLES, TABLES)
         self.assertEqual(authority_contract.SOURCE_REVISION,
-                         "serverware.policyCandidateAuthoritySource/2026-07-30.88")
+                         "serverware.policyCandidateAuthoritySource/2026-07-30.89")
         self.assertTrue(all(type(table) is str for table in authority_contract.VERIFIER_READ_TABLES))
 
     def test_real_helper_returns_fixed_sql_and_exact_separate_parameters(self):
@@ -330,12 +330,13 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
             ast.dump(ast.parse("_AUDIT_POSTGRES_SCHEMA", mode="eval").body),
             ast.dump(ast.parse("_RECOVERY_WITNESS_POSTGRES_SCHEMA", mode="eval").body),
         })
-        # Source-only migration closure: no existing retained sidecar is
+        # Source-only migration closure: neither retained sidecar is
         # adopted as a v8 input or through the historical receipt repair.
-        sidecar = "policy_authority_revocation_retained_plans"
         new_tables = assignment(migration, "_V9_NEW_TABLES").value
         self.assertIsInstance(new_tables, ast.Call)
-        self.assertEqual(sum(item.value == sidecar for item in new_tables.args[0].elts), 1)
+        for sidecar in ("policy_authority_revocation_retained_plans",
+                        "policy_authority_webauthn_evidence_retained_plans"):
+            self.assertEqual(sum(item.value == sidecar for item in new_tables.args[0].elts), 1)
         source_tables = ast.get_source_segment(migration_source,
             assignment(migration, "_MIGRATION_TABLES"))
         self.assertIn("- _V9_NEW_TABLES", source_tables)
@@ -534,7 +535,8 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
                                                   "policy_authority_counted_index_heads"}))
         self.assertTrue(TABLES.isdisjoint({"policy_authority_writer_capabilities", "credentials",
             "policy_authority_authenticated_tree_nodes", "policy_authority_authenticated_leaves",
-            "policy_authority_counted_index_nodes", "policy_authority_counted_index_leaves"}))
+            "policy_authority_counted_index_nodes", "policy_authority_counted_index_leaves",
+            "policy_authority_webauthn_evidence_retained_plans"}))
 
 
 if __name__ == "__main__":

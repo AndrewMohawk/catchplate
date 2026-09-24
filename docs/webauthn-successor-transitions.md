@@ -1,8 +1,8 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.88`, implementation only. Configured evidence-admission plan
-owners now preserve original historical context alongside the signed plan and
-detached inputs, with genuine three-original replay against independent pins.
+Status: source `.89`, implementation only. Evidence-plan storage now has a
+separate immutable PostgreSQL custody table and private three-original
+write/read APIs with genuine replay against independent historical pins.
 These helpers do not register missing kernels or repair service startup. They
 are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
@@ -373,6 +373,53 @@ transport ceilings grant no replacement budget. These are custody inputs and
 replay mechanics, not durable storage. No SQL, table, privilege, execution
 reservation, handler registration or serving route is added by this batch.
 
+## PostgreSQL plan custody
+
+Source `.89` adds `policy_authority_webauthn_evidence_retained_plans`, a separate
+twenty-column immutable metadata table. Its sole primary key is the complete
+retained-record digest. It stores all three original byte strings as canonical
+base64url, their byte counts/hashes, planner/evidence key fingerprints, plan and
+request/configuration bindings, source revision and the first retention time.
+The source contract and schema fingerprint bind this exact inventory.
+Content addressing is not a logical-attempt reservation or exactly-once
+execution: different authenticated records can describe the same operation.
+No v3/v4 parent, capability or fence is invented for these records.
+
+The private `persist_webauthn_evidence_plan_record` and
+`read_webauthn_evidence_plan_record` APIs take independent historical expectations
+and actual pinned public keys. Both perform genuine three-original replay;
+neither accepts a successful-verification carrier as authority. They require
+the actual PostgreSQL facade and an existing SERIALIZABLE, read-write,
+non-deferrable planner-writer transaction. Connection/transaction continuity,
+driver callbacks and cleanup remain guarded on the existing work allowance.
+
+Writes keep insertion and complete readback inside a nested savepoint. The
+live storage window is clipped to the unchanged original deadline and signed
+plan expiry; current freshness checks do not rewrite historical issuance,
+evaluation time or cutoff. An identical content-addressed retry compares every
+immutable field, preserves the first stored timestamp and still passes current
+write freshness. Stored timestamps are also validated against their original
+interval. Historical reads reverify the original material without sampling a
+new clock or treating an absent record as rollback/retry authority.
+
+Returning from these helpers is not a durable commit receipt. The outer
+transaction remains caller-owned; post-savepoint failures require caller abort,
+and a post-exit check cannot undo a commit already made by a driver. Observed
+transaction identity cannot detect a hostile driver's hidden commit-and-BEGIN.
+No business evidence row, root transition, execution reservation or terminal
+witness is created by retaining a plan.
+
+The new table has source-fixed SELECT/INSERT-only planner-writer privileges;
+runtime/executor access follows the existing read-only immutable-table rules.
+Generic immutable guards reject UPDATE/DELETE, while role ACLs deny TRUNCATE.
+SQLite explicitly rejects insertion. Existing destructive migration paths
+reject this custody table and require a separately reviewed migration instead
+of dropping or synthesizing retained originals. No schema or grant has been
+installed, and no transaction has been executed in this implementation batch.
+
+Configured cross-process custody ownership, authenticated historical recovery,
+capability/current-root admission and authorized atomic execution remain open.
+
 ## Retained evidence and consumption
 
 The v2 custody projection uses the existing
@@ -583,8 +630,8 @@ witnessing and recovery remain pending. The generic evidence signer and ordinary
 row/acquisition results cannot fill those gaps or repair service startup.
 
 The evidence-storage integration must connect the private authenticated
-acquisitions and genuine three-original signed-plan replay to durable retention and an
-authorized atomic commit through authenticated root maintenance. The identical
+acquisitions and three-original plan custody to configured transaction ownership
+and an authorized business commit through authenticated root maintenance. The identical
 unused verified-row no-op requires an explicit empty-mutation policy when its
 configured kernel is eventually registered. No placeholder handler, keyless
 kernel, new ACL or disabled closure check supplies this remaining integration.

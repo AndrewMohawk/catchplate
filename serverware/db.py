@@ -73,6 +73,10 @@ from serverware.authority_store.executor_v9 import (
     reserve_authority_planner_transaction,
     terminalize_authority_execution_envelope,
 )
+from serverware.authority_store.webauthn_evidence_retention import (
+    persist_webauthn_evidence_plan_record,
+    read_webauthn_evidence_plan_record,
+)
 from serverware.authority_store.metadata_schema import (
     _execute_metadata_schema_statements,
     _metadata_table_exists,
@@ -1510,6 +1514,7 @@ _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES = (
     "policy_authority_consumed_envelopes",
     "policy_authority_writer_receipts",
     "policy_authority_webauthn_assertion_evidence",
+    "policy_authority_webauthn_evidence_retained_plans",
     "policy_authority_authorization_projections",
     "policy_authority_revocation_retained_plans",
     "policy_authority_revocation_writer_requests",
@@ -6501,6 +6506,10 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "writer acknowledgment custody requires a separately reviewed migration"
                 )
+            if _metadata_table_exists(conn, authority_contract.WEBAUTHN_EVIDENCE_RETAINED_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "retained WebAuthn evidence storage requires a separately reviewed migration"
+                )
             for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
                 if _metadata_table_exists(conn, table):
                     conn.execute(
@@ -6863,6 +6872,10 @@ def _prepare_policy_candidate_authority_schema(
     if _metadata_table_exists(conn, authority_contract.REVOCATION_WRITER_ACK_TABLE):
         raise PolicyCandidateAuthorityError(
             "writer acknowledgment custody requires a separately reviewed migration"
+        )
+    if _metadata_table_exists(conn, authority_contract.WEBAUTHN_EVIDENCE_RETAINED_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "retained WebAuthn evidence storage requires a separately reviewed migration"
         )
     for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
         if _metadata_table_exists(conn, table):

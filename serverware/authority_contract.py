@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.88"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.89"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -400,6 +400,44 @@ REVOCATION_RETENTION_CONTRACT = MappingProxyType({
     "authorityExclusions": ("stored-context", "key-enrollment", "currentness", "execution", "witness"),
 })
 
+# Separate content-addressed custody for three original evidence-plan bodies.
+# This table is framework metadata, not a business mutation target, planner
+# reservation, capability, or a new protocol value in the existing v3/v4 rows.
+WEBAUTHN_EVIDENCE_RETAINED_TABLE = "policy_authority_webauthn_evidence_retained_plans"
+WEBAUTHN_EVIDENCE_RETAINED_COLUMNS = (
+    "retained_record_digest", "plan_protocol", "operation", "operation_id", "request_digest",
+    "configuration_digest", "plan_digest", "exact_envelope_base64url",
+    "exact_envelope_bytes_digest", "exact_envelope_byte_count", "original_inputs_base64url",
+    "original_inputs_bytes_digest", "original_inputs_byte_count", "evaluation_context_base64url",
+    "evaluation_context_bytes_digest", "evaluation_context_byte_count", "planner_key_digest",
+    "evidence_key_digest", "source_revision", "retained_at_epoch_ns",
+)
+WEBAUTHN_EVIDENCE_RETENTION_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityWebAuthnEvidenceRetention/v1",
+    "planProtocol": "webauthn-evidence-admission-v1",
+    "operations": ("webauthn.registration.evidence.admit", "webauthn.trust.installation.admit"),
+    "retainedTable": WEBAUTHN_EVIDENCE_RETAINED_TABLE,
+    "retainedColumns": WEBAUTHN_EVIDENCE_RETAINED_COLUMNS,
+    "primaryKey": ("retained_record_digest",),
+    "identityScope": "content-addressed-original-plan-inputs-context-and-key-pins",
+    "recordSchema": "serverware.policyAuthorityWebAuthnEvidenceAdmissionRetainedPlan/v1",
+    "contextSchema": "serverware.policyAuthorityWebAuthnEvidencePlanEvaluationContext/v1",
+    "contextFields": 20, "recordHeaderFields": 16,
+    "maxEnvelopeBytes": 64 * 1024 * 1024,
+    "maxOriginalInputsBytes": 64 * 1024 * 1024,
+    "maxContextBytes": 64 * 1024 * 1024,
+    "workOwnership": "existing-invocation-remaining-allowance/v1",
+    "postgresOnly": True, "sqliteAdmission": False,
+    "plannerPrivileges": ("SELECT", "INSERT"), "executorPrivileges": ("SELECT",),
+    "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
+    "retry": "full-original-byte-and-header-equality-preserve-first-timestamp",
+    "transactionOwnership": "caller-owned-serializable-writer-with-nested-savepoint",
+    "parentBinding": None, "publicExecutionEnabled": False,
+    "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
+    "authorityExclusions": ("stored-context", "key-enrollment", "historical-provenance", "currentness",
+        "logical-attempt-reservation", "capability", "outer-commit", "execution", "witness"),
+})
+
 REVOCATION_RETAINED_CAPABILITY_TABLE = "policy_authority_revocation_retained_capabilities"
 REVOCATION_RETAINED_CAPABILITY_COLUMNS = (
     "capability_id", "capability_protocol", "capability_record_digest", "planner_transaction_id",
@@ -528,6 +566,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         REVOCATION_WRITER_REQUEST_TABLE,
         REVOCATION_WRITER_ACK_TABLE,
         REVOCATION_RETAINED_CAPABILITY_TABLE,
+        WEBAUTHN_EVIDENCE_RETAINED_TABLE,
         "policy_authority_query_dependency_manifests",
         "policy_authority_schema_contracts",
         "policy_authority_verifier_capabilities",
@@ -2673,6 +2712,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "plannerQueryBookkeeping": dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT),
         "plannerCompleteAcquisition": dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT),
         "revocationRetention": dict(REVOCATION_RETENTION_CONTRACT),
+        "webauthnEvidenceRetention": dict(WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
         "revocationWriterRequestCustody": dict(REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT),
         "revocationWriterAckCustody": dict(REVOCATION_WRITER_ACK_CUSTODY_CONTRACT),
         "revocationCapabilityCustody": dict(REVOCATION_CAPABILITY_CUSTODY_CONTRACT),

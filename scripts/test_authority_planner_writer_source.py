@@ -36,6 +36,7 @@ TABLE_PRIVILEGES = {
     "policy_authority_query_dependency_manifests": frozenset({"SELECT"}),
     "policy_authority_authenticated_table_roots": frozenset({"SELECT"}),
     "policy_authority_webauthn_assertion_evidence": frozenset({"SELECT", "INSERT"}),
+    "policy_authority_webauthn_evidence_retained_plans": frozenset({"SELECT", "INSERT"}),
     "policy_authority_writer_capabilities": frozenset({"SELECT", "UPDATE"}),
 }
 FUNCTION_SIGNATURES = (
@@ -118,8 +119,9 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
     def test_exact_eleven_table_privileges_are_immutable_and_do_not_grant_business_writes(self):
         self.assertIs(type(writer.PLANNER_WRITER_TABLE_PRIVILEGES), MappingProxyType)
         self.assertEqual(dict(writer.PLANNER_WRITER_TABLE_PRIVILEGES), TABLE_PRIVILEGES)
-        # Historical test ID retained; request/ACK custody add tables 12/13.
-        self.assertEqual(len(TABLE_PRIVILEGES), 13)
+        # Historical test ID retained; request/ACK custody add tables 12/13,
+        # and separate WebAuthn evidence raw3 custody adds table 14.
+        self.assertEqual(len(TABLE_PRIVILEGES), 14)
         self.assertTrue(all(type(name) is str and type(value) is frozenset
                             for name, value in writer.PLANNER_WRITER_TABLE_PRIVILEGES.items()))
         with self.assertRaises(TypeError):

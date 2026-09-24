@@ -20,6 +20,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         cls.text, cls.persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
         cls.owner = definition(cls.persistence, "RevocationPlannerPersistence")
         cls.method = definition(cls.owner, "persist_and_reserve_execution")
+        cls.fixed = definition(cls.persistence, "_persist_and_reserve_on_configuration")
         cls.operation = definition(cls.persistence, "_persist_and_reserve_on_connection")
         _, cls.store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
         _, cls.execution = source("serverware/authority_store/revocation_execution.py", 64 * 1024)
@@ -38,6 +39,28 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertIsNone(method.args.vararg)
         self.shape(method.body[1].value, "self._snapshot_configuration()")
         self.assertIs(assigned(method, "configuration"), method.body[1].value)
+        delegated = call(method, "_persist_and_reserve_on_configuration")
+        self.shape(delegated, '''_persist_and_reserve_on_configuration(configuration,
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id, work=work, **expectations)''')
+        self.assertEqual(len(method.body), 3)
+        self.assertIs(method.body[-1].value, delegated)
+        self.assertEqual([ast.unparse(node) for node in ast.walk(method)
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+            and node.value.id == "self"], ["self._snapshot_configuration"])
+        self.assertFalse(calls(method, "_run_on_configuration"))
+        # The historical ID now follows the real fixed-tuple continuation.
+        # Its original checks and work schedule remain shared by both entries.
+        method = self.fixed
+        self.assertEqual([item.arg for item in method.args.args], ["configuration"])
+        self.assertEqual([item.arg for item in method.args.kwonlyargs], [
+            "envelope_bytes", "evaluation_context_bytes", "planned_at_epoch_ns",
+            "envelope_id", "planner_transaction_id", "work"])
+        self.assertTrue(all(value is None for value in method.args.kw_defaults))
+        self.assertEqual(method.args.kwarg.arg, "expectations")
+        self.assertIsNone(method.args.vararg)
+        self.shape(method.body[1].value, "_validate_configuration(configuration)")
         originals = method.body[2]
         self.assertIsInstance(originals, ast.For)
         self.assertEqual([item.id for item in originals.target.elts], ["raw", "maximum"])
@@ -70,7 +93,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertEqual([node.lineno for node in order], sorted(node.lineno for node in order))
         self.assertEqual([ast.unparse(node) for node in ast.walk(method)
             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
-            and node.value.id == "self"], ["self._snapshot_configuration"])
+            and node.value.id == "self"], [])
         for spelling in ("self._run", "self.persist", "self.reserve_execution", "_connect",
                 "store._callback", "store._owned_expectations", "retention._verify_record_on_work"):
             self.assertFalse(calls(method, spelling))
@@ -181,7 +204,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
                     == prefix + "_context(" + prefix + "_callback(work, raw.transaction), work)"]
             self.assertEqual(len(transactions), 1)
             self.assertLess(transactions[0].end_lineno, function.body[-1].lineno)
-        for function in (self.method, self.operation, runner):
+        for function in (self.method, self.fixed, self.operation, runner):
             self.assertFalse(any(isinstance(node, ast.Attribute) and node.attr in {
                 "commit", "rollback", "sign", "verify", "time_ns", "monotonic_ns"} for node in ast.walk(function)))
             for spelling in ("_ValidationWork", "QueryReadValidationLimits", "retention.capture._PackagingLedger"):
@@ -300,7 +323,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
             for spelling in ("persist_and_reserve_execution", "_persist_and_reserve_on_connection",
                     "_persist_and_reserve_revocation_plan"):
                 self.assertNotIn(spelling, ast.unparse(function))
-        for function in (self.method, self.operation):
+        for function in (self.method, self.fixed, self.operation):
             for spelling in ("_socket_request", "_socket_request_bytes", "_socket_request_revocation_bytes",
                     "_recv_message", "_recv_revocation_invocation_bytes", "time.time_ns", "time.monotonic_ns"):
                 self.assertFalse(calls(function, spelling))

@@ -115,6 +115,10 @@ configuration before invoking this owner. It adds no serving purpose, peer
 permission, public transport or capability issuance path. Authenticated
 verifier-to-planner-to-writer custody remains unfinished; source `.63` adds only
 the pure [detached commitment contract](authority-revocation-writer-commitment.md).
+Source `.64` adds a private [authenticated writer composition](authority-revocation-writer-composition.md)
+and factors this owner's existing body into a fixed-configuration helper. The
+public API still snapshots once; the authenticated path holds the same tuple
+through signature checks and the atomic suffix, without a post-callback resnapshot.
 Serving integration, detached-body transfer, durable original retry/acknowledgment
 bytes and writer response-key custody remain unfinished. Registry closure and
 the four WebAuthn authority gates remain incomplete. Production Nitro/KMS, signing and independent

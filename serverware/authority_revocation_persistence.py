@@ -135,6 +135,44 @@ def _persist_and_reserve_on_connection(*, envelope_bytes, evaluation_context_byt
     return retained_receipt, execution_reservation
 
 
+def _persist_and_reserve_on_configuration(configuration, *, envelope_bytes,
+        evaluation_context_bytes, planned_at_epoch_ns, envelope_id,
+        planner_transaction_id, work, **expectations):
+    """Use one held configuration through preflight and genuine atomic custody.
+
+    This fixed private continuation accepts no operation or opener override.
+    The public owner and authenticated writer composition supply their one
+    captured seven-tuple; later callbacks cannot make this path resnapshot a
+    mutable owner. Configuration validation is bounded local metadata work.
+    Original-byte admission, the charged ID join, capture and both replays
+    retain the public atomic method's existing order and accounting.
+    """
+    _validate_configuration(configuration)
+    for raw, maximum in ((envelope_bytes, retention.plan.contract.MAX_PAYLOAD_BYTES),
+                         (evaluation_context_bytes, retention.MAX_CONTEXT_BYTES)):
+        if type(raw) is not bytes or not 2 <= len(raw) <= maximum:
+            raise ValueError("atomic revocation custody requires source-bounded original bytes")
+    if type(planned_at_epoch_ns) is not int or not 1 <= planned_at_epoch_ns <= 2**63 - 1:
+        raise ValueError("atomic revocation planned timestamp is not a positive int64")
+    retention.plan.contract._digest(envelope_id)
+    retention.plan.contract._digest(planner_transaction_id)
+    if (len(expectations) != len(_CALL_INPUTS)
+            or any(type(name) is not str for name in expectations)
+            or set(expectations) != _CALL_INPUTS):
+        raise ValueError("atomic revocation custody requires exactly fifteen external expectations")
+    expected_planner_transaction_id = expectations["expected_planner_transaction_id"]
+    retention.plan.contract._digest(expected_planner_transaction_id)
+    retention.capture._SharedLedger(work)
+    retention.plan._same(planner_transaction_id, expected_planner_transaction_id, work,
+        "atomic revocation planner transaction differs from its independent expectation")
+    # No callback intervenes between the fixed immutable argument scaffold
+    # and the existing runner's full ownership capture before connection.
+    return _run_on_configuration(configuration, _persist_and_reserve_on_connection,
+        {"envelope_bytes": envelope_bytes, "evaluation_context_bytes": evaluation_context_bytes,
+         "planned_at_epoch_ns": planned_at_epoch_ns, "envelope_id": envelope_id,
+         "planner_transaction_id": planner_transaction_id}, expectations, work)
+
+
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
 class RevocationPlannerPersistence:
     """Independently configured keys, not keys enrolled by a retained record.
@@ -218,29 +256,10 @@ class RevocationPlannerPersistence:
         connection exit; a post-commit failure cannot promise rollback.
         """
         configuration = self._snapshot_configuration()
-        for raw, maximum in ((envelope_bytes, retention.plan.contract.MAX_PAYLOAD_BYTES),
-                             (evaluation_context_bytes, retention.MAX_CONTEXT_BYTES)):
-            if type(raw) is not bytes or not 2 <= len(raw) <= maximum:
-                raise ValueError("atomic revocation custody requires source-bounded original bytes")
-        if type(planned_at_epoch_ns) is not int or not 1 <= planned_at_epoch_ns <= 2**63 - 1:
-            raise ValueError("atomic revocation planned timestamp is not a positive int64")
-        retention.plan.contract._digest(envelope_id)
-        retention.plan.contract._digest(planner_transaction_id)
-        if (len(expectations) != len(_CALL_INPUTS)
-                or any(type(name) is not str for name in expectations)
-                or set(expectations) != _CALL_INPUTS):
-            raise ValueError("atomic revocation custody requires exactly fifteen external expectations")
-        expected_planner_transaction_id = expectations["expected_planner_transaction_id"]
-        retention.plan.contract._digest(expected_planner_transaction_id)
-        retention.capture._SharedLedger(work)
-        retention.plan._same(planner_transaction_id, expected_planner_transaction_id, work,
-            "atomic revocation planner transaction differs from its independent expectation")
-        # No callback intervenes between the fixed immutable argument scaffold
-        # and the existing runner's full ownership capture before connection.
-        return _run_on_configuration(configuration, _persist_and_reserve_on_connection,
-            {"envelope_bytes": envelope_bytes, "evaluation_context_bytes": evaluation_context_bytes,
-             "planned_at_epoch_ns": planned_at_epoch_ns, "envelope_id": envelope_id,
-             "planner_transaction_id": planner_transaction_id}, expectations, work)
+        return _persist_and_reserve_on_configuration(configuration,
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id, work=work, **expectations)
 
     def read(self, *, planner_transaction_id, work, **expectations):
         retention.plan.contract._digest(planner_transaction_id)

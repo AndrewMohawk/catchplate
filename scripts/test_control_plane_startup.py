@@ -2146,6 +2146,48 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             "total": oracle.add(prefix, atomic["total"]),
             "admission": oracle.add(prefix, atomic["admission"])}
 
+    def revocation_composition_fixture(self, *, work=None, recorder=None):
+        """Actual gated writer driver with genuine detached originals.
+
+        This extends the existing db/registry lane, not a forged measured
+        service process. Driver/catalog/clock observations remain synthetic;
+        the real composition, admission query and both proof workers run.
+        """
+        import test_authority_revocation_writer_composition as composition_oracle
+
+        fixture = self.revocation_action_fixture(work=work, recorder=recorder)
+        fixture.detached = composition_oracle.CompositionFixture()
+        fixture.source = fixture.detached.action
+        fixture.expected, fixture.fixture = fixture.source.plan, fixture.source.plan.semantic
+        fixture.arguments = {**fixture.source.supplied(), "work": fixture.arguments["work"]}
+        return fixture
+
+    def run_revocation_composition_components(self, fixture, *, after_preparation=None):
+        from serverware import authority_revocation_writer_composition as composition
+        import test_authority_revocation_writer_composition as composition_oracle
+
+        work = fixture.arguments["work"]
+        owner, fixed, arguments = composition_oracle.prepare_components(fixture.detached, work)
+        fixture.persistence = owner
+        if after_preparation is not None:
+            # Test-only observation between genuine components, never a
+            # callback authority accepted by the production worker.
+            composition.configuration_capture.production._callback(work, lambda: after_preparation(owner, arguments))
+        return composition._persist_commitments_on_configuration(fixed, work=work, **arguments)
+
+    def revocation_composition_work(self, fixture, *, retry=False):
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_writer_composition as composition_oracle
+
+        observed = composition_oracle.independent_prefix_work(fixture.detached)
+        # The actual public atomic factor already contains its ID comparison;
+        # do not add the sentinel fixture's counted preflight a second time.
+        prefix = oracle.add(observed["preparation"], observed["before_atomic"])
+        atomic = self.revocation_atomic_work(fixture, retry=retry)
+        return {"prefix": prefix, "atomic": atomic,
+            "total": oracle.add(prefix, atomic["total"]),
+            "admission": oracle.add(prefix, atomic["admission"])}
+
     def assert_revocation_writer_empty(self, recorder):
         self.assertEqual((recorder.parent, recorder.sidecar), (None, None))
         self.assertEqual((recorder.assertions, recorder.projections), ({}, {}))
@@ -3546,6 +3588,226 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                     oracle.add(prior, new["total"]), oracle.units(work.metrics), limits)))
             self.assertTrue(all(call.kwargs["work"] is work for call in replay.call_args_list))
             self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_detached_writer_composition_authenticates_then_replays_on_actual_gated_writer(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_composition as composition
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_reservation as reservation_oracle
+
+        for retry in (False, True):
+            fixture = self.revocation_composition_fixture()
+            if retry:
+                fixture.recorder.seed(fixture.expected, fixture.expected.now_epoch_ns)
+                identity = fixture.arguments["envelope_id"]
+                fixture.recorder.envelopes[identity] = reservation_oracle.expected_envelope(fixture.expected, identity)
+            expected, meter = self.revocation_composition_work(fixture, retry=retry), fixture.arguments["work"]
+            clocks, seen = [], []
+            verify = composition.commitment._verify_commitments_on_work
+
+            def authenticate(**arguments):
+                self.assertEqual(clocks, ["monotonic", "epoch"])
+                self.assertEqual(fixture.connected, [])
+                self.assertIs(arguments["work"], meter)
+                result = verify(**arguments)
+                seen.append(result)
+                return result
+
+            with self.subTest(retry=retry), self.revocation_owner_scope(fixture), \
+                    patch.object(composition.time, "monotonic_ns", side_effect=lambda: clocks.append("monotonic") or fixture.expected.now_monotonic_ns), \
+                    patch.object(composition.time, "time_ns", side_effect=lambda: clocks.append("epoch") or fixture.expected.now_epoch_ns), \
+                    patch.object(composition.commitment, "_verify_commitments_on_work", side_effect=authenticate) as authentication, \
+                    patch.object(Ed25519PublicKey, "from_public_bytes", wraps=Ed25519PublicKey.from_public_bytes) as keys, \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                    patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+                receipt, row = self.run_revocation_composition_components(fixture)
+            self.assertEqual((authentication.call_count, replay.call_count, proof.call_count), (1, 2, 2))
+            self.assertEqual(seen[0].metrics.signature_verifications, 2)
+            # Reuse the mapper's keys: new custody additionally invokes the
+            # real db SPKI-loader and current receipt constructor; retry does
+            # neither. No configured/live-key success result is substituted.
+            self.assertEqual(keys.call_count, 2 if retry else 4)
+            self.assertEqual(row, self.assert_revocation_atomic_rows(fixture))
+            self.assertEqual(receipt["exactEnvelopeBytes"], fixture.source.arguments["envelope_bytes"])
+            self.assertEqual(receipt["evaluationContextBytes"], fixture.source.arguments["evaluation_context_bytes"])
+            self.assertEqual((fixture.recorder.releases, fixture.recorder.rollbacks), (4, 0))
+            self.assertEqual(fixture.connected, [fixture.source.configuration.persistence_dsn])
+            self.assertEqual(expected["prefix"][0], 12)
+            self.assertEqual(oracle.units(meter.metrics), expected["total"])
+            for call in replay.call_args_list:
+                self.assertIs(call.kwargs["work"], meter)
+                self.assertEqual(call.kwargs["database_now"], fixture.source.expectations["database_now"])
+            self.assertIs(fixture.write.closed, True)
+
+    def test_detached_writer_rejections_precede_connect_and_late_replay_restores_all_five_sets(self):
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+
+        for mode in ("signature", "body", "policy", "writer_age"):
+            fixture = self.revocation_composition_fixture()
+            if mode == "signature":
+                fixture.detached.relay["signature"] = "A" * 86
+                fixture.detached.relay_bytes = oracle.wire(fixture.detached.relay)
+            elif mode == "body": fixture.source.arguments["envelope_bytes"] += b" "
+            elif mode == "policy":
+                fixture.source.expectations["maximum_assertion_age_ns"] += 1
+                fixture.detached.rebuild()
+            else:
+                fixture.source.configuration.payload["roles"]["planner-writer"]["maximumInternalAgeNs"] = 1
+                fixture.detached.refresh_configuration()
+            with self.subTest(mode=mode), self.revocation_owner_scope(fixture), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                with self.assertRaises(ValueError): self.run_revocation_composition_components(fixture)
+            self.assertEqual((fixture.connected, replay.call_count, fixture.recorder.statements), ([], 0, []))
+            self.assertEqual(fixture.recorder.snapshot(), (None, None, {}, {}, {}))
+
+        fixture, changed = self.revocation_composition_fixture(), []
+        before = fixture.recorder.snapshot()
+
+        def corrupt_original(event):
+            if event == "write.transaction3.exit":
+                false = copy.deepcopy(fixture.expected.envelope)
+                false["signatureBase64Url"] = "A" * 86
+                fixture.recorder.sidecar["exact_envelope_base64url"] = oracle.encoded(oracle.wire(false))
+                changed.append(event)
+
+        fixture.write.on_event = corrupt_original
+        with self.revocation_owner_scope(fixture), \
+                patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+            with self.assertRaises(retention.RevocationRetentionError): self.run_revocation_composition_components(fixture)
+        self.assertEqual((len(changed), replay.call_count, proof.call_count), (1, 2, 1))
+        recorder_state = fixture.recorder.snapshot()
+        self.assertEqual(recorder_state, before)
+        self.assertEqual(recorder_state, (None, None, {}, {}, {}))
+        self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (3, 1))
+        self.assertIs(fixture.write.closed, True)
+
+    def test_detached_writer_fixed_snapshot_survives_owner_and_config_alias_changes(self):
+        from serverware import authority_revocation_writer_composition as composition
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+
+        for stage in ("clock", "connect"):
+            fixture, changed = self.revocation_composition_fixture(), []
+            expected, held = self.revocation_composition_work(fixture), {}
+            original_claims = copy.deepcopy(fixture.source.expectations)
+            dsn, connect = fixture.source.configuration.persistence_dsn, fixture.connect
+
+            def hold(owner, arguments):
+                held.update(owner=owner, arguments=arguments)
+
+            def mutate():
+                fixture.source.configuration.payload.clear()
+                fixture.source.expectations["expected_request"].clear()
+                fixture.source.expectations["expected_before"].clear()
+                held["arguments"]["owned_payload"].clear()
+                object.__setattr__(held["owner"], "persistence_dsn", "postgresql://retarget.invalid/db")
+                object.__setattr__(held["owner"], "planner_public_key", fixture.expected.other_key.public_key())
+                object.__setattr__(held["owner"], "_database_identity", ("wrong", "x", "y", "z"))
+                changed.append(stage)
+
+            def monotonic():
+                if stage == "clock" and not changed: mutate()
+                return fixture.expected.now_monotonic_ns
+
+            def open_connection(*args, **kwargs):
+                result = connect(*args, **kwargs)
+                if stage == "connect": mutate()
+                return result
+
+            fixture.connect = open_connection
+            with self.subTest(stage=stage), self.revocation_owner_scope(fixture), \
+                    patch.object(composition.time, "monotonic_ns", side_effect=monotonic), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                self.run_revocation_composition_components(fixture, after_preparation=hold)
+            self.assertEqual(changed, [stage])
+            self.assertEqual(fixture.connected, [dsn])
+            self.assertEqual(replay.call_count, 2)
+            for call in replay.call_args_list:
+                for name in original_claims: self.assertEqual(call.kwargs[name], original_claims[name])
+            self.assert_revocation_atomic_rows(fixture)
+            self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
+
+    def test_detached_writer_full_exact_prior_and_each_short_budget_keep_genuine_proof_children(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_reservation as reservation_oracle
+
+        for retry in (False, True):
+            for prior, axis in (((0, 0, 0), None), ((3, 17, 11), None),
+                                ((3, 17, 11), 0), ((3, 17, 11), 1), ((3, 17, 11), 2)):
+                fixture = self.revocation_composition_fixture()
+                if retry:
+                    fixture.recorder.seed(fixture.expected, fixture.expected.now_epoch_ns)
+                    identity = fixture.arguments["envelope_id"]
+                    fixture.recorder.envelopes[identity] = reservation_oracle.expected_envelope(fixture.expected, identity)
+                before, expected = fixture.recorder.snapshot(), self.revocation_composition_work(fixture, retry=retry)
+                limits = list(oracle.add(prior, expected["admission"]))
+                if axis is not None: limits[axis] -= 1
+                work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+                work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+                fixture.arguments["work"] = work
+                entering = work.limits
+                with self.subTest(retry=retry, prior=prior, axis=axis), self.revocation_owner_scope(fixture), \
+                        patch.object(retention.plan.retained._PackagingLedger, "__init__",
+                            side_effect=AssertionError("replacement outer proof allowance")), \
+                        patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+                    if axis is None:
+                        self.run_revocation_composition_components(fixture)
+                        self.assert_revocation_atomic_rows(fixture)
+                        self.assertEqual(proof.call_count, 2)
+                        self.assertEqual(oracle.units(work.metrics), oracle.add(prior, expected["total"]))
+                    else:
+                        with self.assertRaises(ValueError): self.run_revocation_composition_components(fixture)
+                        self.assertEqual(fixture.recorder.snapshot(), before)
+                self.assertIs(work.limits, entering)
+                self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_detached_writer_retry_reauthenticates_originals_and_preserves_first_custody(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_composition as composition
+        import test_authority_revocation_plan as oracle
+
+        for axis in (None, 0, 1, 2):
+            first = self.revocation_composition_fixture()
+            second = self.revocation_composition_fixture(recorder=first.recorder)
+            # Repeat all five exact originals and the original planned time.
+            # Atomic row retry is not a durable journal for signed controls.
+            originals = first.detached.originals()
+            self.assertEqual(second.detached.originals(), originals)
+            self.assertEqual(second.source.arguments["planned_at_epoch_ns"],
+                             first.source.arguments["planned_at_epoch_ns"])
+            new, retry, prior = self.revocation_composition_work(first), self.revocation_composition_work(second, retry=True), (3, 17, 11)
+            limits = list(oracle.add(prior, new["total"], retry["admission"]))
+            self.assertTrue(all(later > earlier for earlier, later in zip(oracle.add(prior, new["admission"]), limits)))
+            if axis is not None: limits[axis] -= 1
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            first.arguments["work"] = second.arguments["work"] = work
+            with self.subTest(axis=axis), \
+                    patch.object(composition.commitment, "_verify_commitments_on_work",
+                        wraps=composition.commitment._verify_commitments_on_work) as authenticate, \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                with self.revocation_owner_scope(first): original = self.run_revocation_composition_components(first)
+                self.assertEqual(oracle.units(work.metrics), oracle.add(prior, new["total"]))
+                stored = first.recorder.snapshot()
+                with self.revocation_owner_scope(second):
+                    if axis is None: self.assertEqual(self.run_revocation_composition_components(second), original)
+                    else:
+                        with self.assertRaises(ValueError): self.run_revocation_composition_components(second)
+            self.assertEqual(first.recorder.snapshot(), stored)
+            for call in authenticate.call_args_list:
+                for name, value in originals.items(): self.assertEqual(call.kwargs[name], value)
+            if axis is None:
+                self.assertEqual((authenticate.call_count, replay.call_count), (2, 4))
+                self.assertEqual(oracle.units(work.metrics), oracle.add(prior, new["total"], retry["total"]))
+                self.assertEqual((first.recorder.rollbacks, first.recorder.releases), (0, 8))
+            self.assertTrue(all(call.kwargs["work"] is work for call in replay.call_args_list))
             self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
 
     def test_private_original_wire_replays_actual_production_with_external_expectations(self):

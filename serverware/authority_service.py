@@ -3863,6 +3863,62 @@ class AuthorityProcess:
             configuration_digest=configuration_digest, work=work)
         return persistence.persist_and_reserve_execution(**arguments, work=work, **owned)
 
+    def _persist_and_reserve_revocation_commitments(self, *, intent_bytes,
+            relay_bytes, envelope_bytes, evaluation_context_bytes,
+            historical_expectations_bytes, work):
+        """Private detached-control composition, not a transport or purpose.
+
+        Root-signed configuration and active writer launch remain real upstream
+        requirements. Hold the original byte references and own the complete
+        measured payload before callbacks. The mapper binds its held generation
+        fields to the actual generation-last launch snapshot; no second launch
+        read or incoming generation claim supplies those expectations.
+
+        The worker authenticates both original controls with this same owner's
+        keys, checks historical policy against captured configuration and uses
+        the same fixed owner tuple for genuine atomic custody. Neither returned
+        claims nor constructed owners are admission tokens. Control/history
+        custody, transport, ACKs and public dispatch remain unimplemented.
+        """
+        if (self.role_name != "planner-writer"
+                or self.process_mode != "policy-authority-planner-writer"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation writer process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_writer_composition
+
+        authority_revocation_writer_composition._validate_originals(
+            intent_bytes=intent_bytes, relay_bytes=relay_bytes,
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation writer configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        if (type(owned_payload.get("roles")) is not dict
+                or type(owned_payload["roles"].get("planner-writer")) is not dict):
+            raise AuthorityServiceError("revocation writer configuration has no exact writer role")
+        generation_sequence = owned_payload["generationSequence"]
+        generation_digest = owned_payload["generationDigest"]
+        maximum_age_ns = owned_payload["roles"]["planner-writer"]["maximumInternalAgeNs"]
+        authority_revocation_configuration.capability.shape._integer(generation_sequence, minimum=1)
+        authority_revocation_configuration.capability.shape._digest(generation_digest)
+        authority_revocation_configuration.capability.shape._integer(maximum_age_ns, minimum=1)
+        persistence = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
+            configuration_digest=configuration_digest, work=work)
+        configuration_snapshot = persistence._snapshot_configuration()
+        return authority_revocation_writer_composition._persist_commitments_on_configuration(
+            configuration_snapshot, intent_bytes=intent_bytes, relay_bytes=relay_bytes,
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes,
+            owned_payload=owned_payload, configuration_digest=configuration_digest,
+            generation_sequence=generation_sequence, generation_digest=generation_digest,
+            maximum_age_ns=maximum_age_ns, work=work)
+
     def _revocation_capability_issuer(self, *, work):
         """Construct the private successor only from this admitted issuer.
 

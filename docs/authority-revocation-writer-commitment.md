@@ -11,8 +11,8 @@ signer, durable acknowledgment or public route is activated.
 
 Correct signatures authenticate sender claims. They do not prove a valid plan,
 database durability, current roots, clock truth or independently operated keys.
-The genuine [measured writer action](authority-revocation-writer-action.md),
-its policy comparison and both atomic persistence replays remain required.
+Measured configuration, the [historical-policy comparison](authority-revocation-writer-action.md#policy-must-agree-not-be-replaced)
+and both genuine atomic persistence replays remain required.
 An ordinary returned object is not a transferable proof or admission token.
 
 ```mermaid
@@ -27,7 +27,10 @@ flowchart LR
     W --> A[Separate measured policy and genuine atomic replay]
 ```
 
-The last arrow is a required integration boundary, not an enabled service path.
+Source `.64` supplies that last arrow through the private
+[authenticated writer composition](authority-revocation-writer-composition.md),
+with one held key/configuration tuple, current clocks and genuine atomic replay.
+It remains unexecuted and is not an enabled service path.
 No API accepts a previously authenticated result in place of original bytes.
 
 ## Two signed controls, three detached bodies
@@ -106,9 +109,9 @@ source-pinned five-second skew. Both controls are checked. Signed historical
 `now` values and the database cutoff never replace those current clocks.
 
 The signed historical assertion-age, plan-age and skew values remain unchanged.
-The separate `.62` action must compare them with the same owned full measured
-configuration used to construct its writer. A valid commitment signature does
-not waive that comparison or let a caller widen policy.
+The separate `.62` action and `.64` authenticated composition compare them with
+the same full measured configuration used to construct the writer. A valid
+commitment signature does not waive that comparison or let a caller widen policy.
 
 ## Ownership, keys and work
 

@@ -236,7 +236,13 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
     def test_action_suffix_keeps_genuine_atomic_capture_and_two_original_byte_replays(self):
         _, persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
         atomic = definition(definition(persistence, "RevocationPlannerPersistence"), "persist_and_reserve_execution")
-        runner = call(atomic, "_run_on_configuration")
+        self.shape(call(atomic, "_persist_and_reserve_on_configuration"),
+            '''_persist_and_reserve_on_configuration(configuration,
+                envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+                planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+                planner_transaction_id=planner_transaction_id, work=work, **expectations)''')
+        fixed = definition(persistence, "_persist_and_reserve_on_configuration")
+        runner = call(fixed, "_run_on_configuration")
         self.shape(runner.args[1], "_persist_and_reserve_on_connection")
         self.shape(runner.args[-2], "expectations")
         self.shape(runner.args[-1], "work")

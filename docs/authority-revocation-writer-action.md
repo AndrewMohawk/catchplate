@@ -110,6 +110,10 @@ native PostgreSQL durability or a real socket exchange. Follow the
 Source `.63` adds a pure [detached writer commitment](authority-revocation-writer-commitment.md)
 contract with verifier intent and planner relay signatures. It does not connect
 this action to serving ingress or replace its measured-policy and proof checks.
+Source `.64` adds a separate private [authenticated writer composition](authority-revocation-writer-composition.md)
+that maps keys, verifies original controls, compares authenticated history and
+invokes atomic custody using one held writer-configuration tuple. This action's
+existing independent-input API and policy-before-mapper order remain unchanged.
 Authenticated end-to-end custody, durable exact retry and acknowledgment bytes,
 writer response-key custody and detached-body transport remain unfinished.
 The method does not enable public dispatch, alter

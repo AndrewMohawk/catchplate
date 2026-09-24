@@ -389,9 +389,18 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
         for dispatcher in (handle, served):
             for forbidden in ("authorize-revocation-writer-custody", "relay-revocation-writer-custody",
                     "authority_revocation_writer_commitment", "_verify_commitments_on_work",
+                    "authority_revocation_writer_composition", "_persist_commitments_on_configuration",
+                    "_persist_and_reserve_revocation_commitments",
                     "_persist_and_reserve_revocation_plan", "_recv_revocation_invocation_bytes"):
                 self.assertNotIn(forbidden, ast.unparse(dispatcher))
-        self.assertNotIn("authority_revocation_writer_commitment", service_text)
+        # A fixed private composition may now use these original controls;
+        # neither legacy public dispatcher accepts their purpose or carrier.
+        private = definition(process, "_persist_and_reserve_revocation_commitments")
+        self.assertEqual([item.arg for item in private.args.kwonlyargs], [
+            "intent_bytes", "relay_bytes", "envelope_bytes", "evaluation_context_bytes",
+            "historical_expectations_bytes", "work"])
+        self.assertIsNone(private.args.kwarg)
+        self.assertFalse(calls(service, "self._persist_and_reserve_revocation_commitments"))
         peer, = [node for node in ast.walk(served) if isinstance(node, ast.If)
                  and ast.unparse(node.test) == "uid != self.peer_uid or gid != self.peer_gid"]
         self.assertLess(peer.lineno, call(served, "self.process.handle").lineno)

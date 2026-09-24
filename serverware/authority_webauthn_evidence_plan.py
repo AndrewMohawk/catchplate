@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 from serverware import authority_webauthn_evidence as evidence
 from serverware import authority_webauthn_evidence_input_wire as inputs_wire
+from serverware import authority_webauthn_evidence_plan_clock as clock
 from serverware import authority_webauthn_evidence_plan_contract as contract
 from serverware import authority_webauthn_evidence_plan_reads as reads_wire
 from serverware import authority_webauthn_evidence_proofs as proofs
@@ -85,13 +86,18 @@ def _bind(payload, expected, work):
             "configurationDigest", "plannerIdentity", "plannerSpkiDigest", "databaseCutoffUs"):
         evidence.plan._same(payload[name], expected[name], work,
             "evidence plan differs from independent " + name)
+    return _fresh(payload, expected, expected["nowEpochNs"])
+
+
+def _fresh(payload, expected, now):
+    """Check held historical times without recopying or retiming the plan."""
     issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
-    now, skew = expected["nowEpochNs"], expected["maximumClockSkewNs"]
+    skew = expected["maximumClockSkewNs"]
     cutoff = inputs_wire._from_epoch_us(payload["databaseCutoffUs"])
     cutoff_ns = replay.registration.registration._now(cutoff)
     if (issued > now + skew or now - issued > expected["maximumPlanAgeNs"]
             or now >= expires or expires - issued > expected["maximumPlanAgeNs"]
-            or expires > expected["deadlineEpochNs"] or cutoff_ns >= expires
+            or now >= expected["deadlineEpochNs"] or expires > expected["deadlineEpochNs"] or cutoff_ns >= expires
             or abs(cutoff_ns - issued) > skew):
         raise WebAuthnEvidencePlanError("evidence plan times differ from independent freshness and cutoff")
     return cutoff
@@ -147,19 +153,28 @@ def _replay_owned(payload, expected, inputs_bytes, evidence_public_key, work):
 
 
 def _produce_on_work(*, payload, inputs_bytes, expectations, planner_private_key,
-        planner_public_key, evidence_public_key, work):
+        planner_public_key, evidence_public_key, live_window, work):
     """Reverify raw proof/semantic inputs before signing one actual plan.
 
     A supplied payload or claimed acquisition never substitutes for replay.
     Key/configuration provenance and the independent expectation admission
     remain external; this private primitive opens no serving or persistence path.
+    The mandatory live window comes from the configured producer. Actual time
+    is checked around replay/signing and after final encoding, without changing
+    the signed historical issue time, database cutoff or original deadline.
     """
     if (not isinstance(planner_private_key, Ed25519PrivateKey)
             or not isinstance(planner_public_key, Ed25519PublicKey)
             or not isinstance(evidence_public_key, Ed25519PublicKey)):
         raise WebAuthnEvidencePlanError("evidence plan production needs actual independently admitted Ed25519 keys")
+    live_window = clock._validate(live_window)
     payload, expected = _capture(payload, expectations, inputs_bytes, work)
+    if (live_window[3] != expected["deadlineEpochNs"]
+            or live_window[5] != expected["maximumPlanAgeNs"]
+            or live_window[6] != expected["maximumClockSkewNs"]):
+        raise WebAuthnEvidencePlanError("evidence plan live window differs from independent time bounds")
     _bind(payload, expected, work)
+    _fresh(payload, expected, clock._check_on_work(live_window, work=work))
     evidence.keys._public_binding(planner_public_key, expected["plannerSpkiDigest"], work)
     evidence.keys._pair_on_work(planner_private_key, planner_public_key, work)
     _replay_owned(payload, expected, inputs_bytes, evidence_public_key, work)
@@ -178,7 +193,9 @@ def _produce_on_work(*, payload, inputs_bytes, expectations, planner_private_key
     if (work.limits.max_input_bytes - work.input_bytes < payload_size
             or work.limits.max_json_nodes - work.json_nodes < payload_nodes):
         raise WebAuthnEvidencePlanError("evidence plan cannot reserve its post-sign measurement")
+    _fresh(payload, expected, clock._check_on_work(live_window, work=work))
     signature = evidence.production._sign_and_verify(planner_private_key, planner_public_key, message, work)
+    _fresh(payload, expected, clock._check_on_work(live_window, work=work))
     if work.measure(payload) != (payload_size, payload_nodes):
         raise WebAuthnEvidencePlanError("evidence plan size changed during signing")
     if evidence.plan.core.canonical_bytes(payload) != payload_bytes:
@@ -189,6 +206,7 @@ def _produce_on_work(*, payload, inputs_bytes, expectations, planner_private_key
         "payload": payload, "signatureBase64Url": encoded})
     if len(original) != size:
         raise WebAuthnEvidencePlanError("signed evidence plan output changed after sizing")
+    _fresh(payload, expected, clock._check_on_work(live_window, work=work))
     return original
 
 

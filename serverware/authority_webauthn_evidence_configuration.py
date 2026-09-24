@@ -45,13 +45,21 @@ def _require_enabled_operation(planner, operation, work):
         raise WebAuthnEvidenceConfigurationError("evidence operation is not enabled by the signed planner policy")
 
 
-def _planner_from_configuration_on_work(*, purpose, payload, configuration_digest,
-                                       generation, read_dsn, work):
+def _planner_from_owned_configuration_on_work(*, purpose, owned_payload, read_dsn, work):
+    """Continue only from this invocation's actual full configuration capture.
+
+    The private fixed mapper caller must already have owned and checked the
+    complete configuration commitment and launch generation. This factor does
+    not recapture a borrowed graph, admit a configuration or open a database.
+    It keeps the same closed allowlist/purpose policy and actual key mapping.
+    """
     try:
+        configuration.capability.capture._SharedLedger(work)
         if type(purpose) is not str or purpose not in ("registration", "installation"):
             raise WebAuthnEvidenceConfigurationError("evidence configuration purpose is not source fixed")
-        owned, _launch = configuration._capture_configuration_on_work(payload=payload,
-            configuration_digest=configuration_digest, generation=generation, work=work)
+        if type(owned_payload) is not dict:
+            raise WebAuthnEvidenceConfigurationError("owned evidence configuration is not an exact object")
+        owned = owned_payload
         reader._bounded_text(read_dsn, 65536)
         if "\n" in read_dsn or "\r" in read_dsn:
             raise WebAuthnEvidenceConfigurationError("evidence planner DSN is not one descriptor value")
@@ -96,6 +104,21 @@ def _planner_from_configuration_on_work(*, purpose, payload, configuration_diges
             rp_id=selected["rpId"] if purpose == "registration" else None,
             origin=selected["origin"] if purpose == "registration" else None,
             installation_target_digest=selected["installationTargetDigest"] if purpose == "installation" else None)
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
+        if isinstance(exc, WebAuthnEvidenceConfigurationError):
+            raise
+        raise WebAuthnEvidenceConfigurationError("evidence planner configuration failed") from exc
+
+
+def _planner_from_configuration_on_work(*, purpose, payload, configuration_digest,
+                                       generation, read_dsn, work):
+    try:
+        if type(purpose) is not str or purpose not in ("registration", "installation"):
+            raise WebAuthnEvidenceConfigurationError("evidence configuration purpose is not source fixed")
+        owned, _launch = configuration._capture_configuration_on_work(payload=payload,
+            configuration_digest=configuration_digest, generation=generation, work=work)
+        return _planner_from_owned_configuration_on_work(purpose=purpose,
+            owned_payload=owned, read_dsn=read_dsn, work=work)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, WebAuthnEvidenceConfigurationError):
             raise

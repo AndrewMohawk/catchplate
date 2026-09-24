@@ -7,8 +7,9 @@ expectations and signing/key provenance remain independently admitted inputs.
 
 This adapter captures every mutable field it uses before codecs or key/native
 callbacks. It preserves the original input bytes and spends only the caller's
-remaining work. No SQL, persistence, clock sample, operation activation or
-replacement allowance is introduced. The real acquisition/planner import gate
+remaining work and holds the configured producer's mandatory live clock window
+through actual signing and final encoding. No SQL, persistence, operation
+activation or replacement allowance is introduced. The real acquisition/planner import gate
 is retained lazily, not replaced by an accepted result or registry placeholder.
 """
 from __future__ import annotations
@@ -54,9 +55,10 @@ def _roots(values, tables):
 
 
 def _produce_from_acquisition_on_work(acquisition, *, expectations,
-        planner_private_key, planner_public_key, evidence_public_key, work):
+        planner_private_key, planner_public_key, evidence_public_key, live_window, work):
     """Replay actual raw acquisition data before returning signed originals."""
     ledger = evidence.capture._SharedLedger(work)
+    live_window = plan.clock._validate(live_window)
     # This imports the genuine planner/registry boundary. An unavailable
     # registered program remains a real failure, not a synthetic success.
     from serverware import authority_webauthn_evidence_acquisition as acquired
@@ -144,5 +146,6 @@ def _produce_from_acquisition_on_work(acquisition, *, expectations,
     contract.validate_payload_shape(payload)
     original = plan._produce_on_work(payload=payload, inputs_bytes=inputs_bytes,
         expectations=expected, planner_private_key=planner_private_key,
-        planner_public_key=planner_public_key, evidence_public_key=evidence_public_key, work=work)
+        planner_public_key=planner_public_key, evidence_public_key=evidence_public_key,
+        live_window=live_window, work=work)
     return _ProducedEvidencePlan(original, inputs_bytes)

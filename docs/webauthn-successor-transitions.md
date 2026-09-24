@@ -1,7 +1,8 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.86`, implementation only. Separate signed evidence-admission
-plans now compose genuine exact-PK proof and original-input semantic replay.
+Status: source `.87`, implementation only. Configured evidence-admission plan
+owners now join real read acquisition, exact-PK proof and original-input replay,
+and genuine signing within one live epoch/monotonic window.
 These helpers do not register missing kernels or repair service startup. They
 are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
@@ -278,6 +279,58 @@ terminal witnessing or recovery. Historical trust/configuration admission,
 configured serving and the durable protocol integration still remain separate;
 no database-schema, privilege, registry or execution-loader activation is supplied here.
 
+## Configured live plan production
+
+Source `.87` adds the private `EvidenceAdmissionPlanOwner`. It holds one genuine
+configured read owner plus independent planner signing key, public pin,
+identity and configuration digest. Registration and installation methods accept
+their existing original inputs and independently admitted request/root/deadline
+expectations, not replacement keys, policies, clocks or database descriptors.
+The maximum plan age is exactly the selected signed evidence policy's
+`maximumAgeNs`; there is no new policy field or per-call age override.
+
+The private service factory holds the descriptor-loaded planner signer and
+owns the measured configuration before active-launch/descriptor callbacks,
+with generation captured last. Its mapper validates the full configuration
+commitment and launch bindings, then uses the same owned graph for the actual
+operation allowlist and purpose policy. Planner key, response-SPKI equality,
+identity and genuine private/public pairing are checked separately from the
+evidence-purpose key. Construction does not open a database or sign a plan.
+
+Each call holds all original bytes and captures variable graphs before clock,
+native, key or SQL callbacks. It reconstructs a private actual read owner from
+the held configuration and calls the fixed genuine acquisition method; signing
+starts only after every read scope exits normally and its connection closes.
+The actual database cutoff and original-input commitment come from that local
+acquisition. Request and root expectations remain independently held inputs,
+not authority derived from an acquisition carrier.
+
+`authority_webauthn_evidence_plan_clock.py` opens one immutable window. Actual
+epoch samples are bracketed by actual monotonic samples, and the earliest
+opening bracket fixes a conservative monotonic deadline. The epoch deadline
+is clipped to the admitted caller deadline, the original evidence expiry and
+the configured age. Decoding the original expiry only narrows this bound;
+acquisition and signed-plan production still authenticate the same bytes.
+Every check enforces both deadlines and bracket-aware epoch/monotonic drift,
+including with zero allowed skew. Clock callbacks preserve the existing work
+on success and failure. The window cannot be renewed during replay or signing.
+
+The actual plan producer requires that same window and joins its deadline,
+age and skew to the held expectations. It samples after input ownership,
+immediately before signing after expensive replay/output reservations, after
+the signature operation, and after final envelope encoding. The owner also
+checks before returning the two original byte strings. Fresh checks do not
+rewrite signed issuance, original evidence time or historical database cutoff;
+standalone retained-plan verification remains historical and independent.
+
+An expired post-sign check withholds output but cannot undo a signature already
+computed. No SQL write, persistence, sending or automatic retry occurs here.
+Local samples cannot prevent suspension after the last check and are not a
+trusted hardware clock or process watchdog. This is configured private source
+composition, not a serving route, historical admission, durable custody,
+execution capability or completed registry activation. Existing schemas,
+permissions, work allowances and release gates remain unchanged.
+
 ## Retained evidence and consumption
 
 The v2 custody projection uses the existing
@@ -474,8 +527,8 @@ and existing input/resource ceilings are unchanged.
 
 ## Admission and execution still required
 
-Admission has a configured read-only owner and purpose-scoped measured
-configuration mapper, but no durable evidence INSERT owner. Final registration
+Admission has configured read-only and live plan-production owners with
+purpose-scoped measured configuration, but no durable evidence INSERT owner. Final registration
 still needs its configured acquisition owner. Caller-supplied current roots, signer
 pins and request authority remain independent prerequisites, not values
 authenticated by copying.

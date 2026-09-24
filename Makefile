@@ -671,6 +671,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_planner_configuration.py \
 	scripts/test_authority_revocation_planner_configuration_source.py \
 	scripts/test_authority_revocation_coordinator_source.py \
+	scripts/test_authority_revocation_atomic_source.py \
 	scripts/test_authority_revocation_writer_connection_source.py \
 	scripts/test_authority_revocation_writer_configuration.py \
 	scripts/test_authority_revocation_writer_configuration_source.py \

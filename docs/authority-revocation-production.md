@@ -22,6 +22,10 @@ exact-context API described below remains available.
 Source `.54` adds private [verifier-side handoff admission](authority-revocation-handoff.md),
 using the existing v4 signature to authenticate the cutoff before genuine
 retained replay against independently owned request/context/root values.
+Source `.61` adds private configured
+[atomic retention and execution reservation](authority-revocation-atomic.md),
+with a common savepoint around both genuine store calls. It does not connect
+this producer to an authenticated writer service or activate execution.
 These implementations are **unbuilt and
 unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
 deployed release.

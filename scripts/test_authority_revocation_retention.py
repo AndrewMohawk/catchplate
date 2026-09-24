@@ -632,6 +632,94 @@ class RevocationRetentionTests(unittest.TestCase):
             self.assertEqual(oracle.units(work.metrics), final)
             self.assertIs(work.limits, entering)
 
+    def test_atomic_custody_rejects_raw_shapes_closed_inputs_and_independent_ids_before_runner(self):
+        fixture = self.fixture()
+        configured, expectations = self.coordinator_fixture(fixture)
+        original = {"envelope_bytes": oracle.wire(fixture.envelope),
+            "evaluation_context_bytes": oracle.wire(record_context(fixture)),
+            "planned_at_epoch_ns": fixture.now_epoch_ns,
+            "envelope_id": oracle.sha(b"atomic independent execution id"),
+            "planner_transaction_id": fixture.planner_transaction_id, **expectations}
+        variants = [({name: value}, (0, 0, 0)) for name, value in (
+            ("envelope_bytes", bytearray(original["envelope_bytes"])),
+            ("envelope_bytes", b"x"), ("evaluation_context_bytes", memoryview(b"{}")),
+            ("evaluation_context_bytes", b""), ("planned_at_epoch_ns", True),
+            ("planned_at_epoch_ns", 0), ("planned_at_epoch_ns", 2**63),
+            ("envelope_id", True), ("envelope_id", "SHA256:" + "a" * 64),
+            ("planner_transaction_id", None), ("expected_planner_transaction_id", False),
+            ("planner_public_key", fixture.other_key.public_key()),
+            ("writer_database_identity", WRITER_DATABASE_IDENTITY), ("verified_record", {}))]
+        other = oracle.sha(b"different independent planner transaction")
+        variants.extend((({"planner_transaction_id": other},
+                          oracle.canonical_comparison(other, fixture.planner_transaction_id)),
+                         ({"expected_planner_transaction_id": other},
+                          oracle.canonical_comparison(fixture.planner_transaction_id, other))))
+        for changed, spent in variants:
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            with self.subTest(fields=tuple(changed)), \
+                    patch.object(coordinator, "_run_on_configuration",
+                                 side_effect=AssertionError("invalid atomic inputs reached runner")) as run:
+                with self.assertRaises(ValueError):
+                    configured.persist_and_reserve_execution(**{**original, **changed}, work=work)
+            self.assertEqual(run.call_count, 0)
+            self.assertEqual(oracle.units(work.metrics), spent)
+        for missing in ("expected_request", "database_now"):
+            with self.subTest(missing=missing), patch.object(coordinator, "_run_on_configuration",
+                    side_effect=AssertionError("open input closure reached runner")) as run:
+                with self.assertRaises(ValueError):
+                    configured.persist_and_reserve_execution(
+                        **{name: value for name, value in original.items() if name != missing},
+                        work=accounting._ValidationWork(accounting.QueryReadValidationLimits()))
+            self.assertEqual(run.call_count, 0)
+        for target, field, attribute in ((retention.plan.contract, "envelope_bytes", "MAX_PAYLOAD_BYTES"),
+                                          (retention, "evaluation_context_bytes", "MAX_CONTEXT_BYTES")):
+            with self.subTest(bound=attribute), patch.object(target, attribute, len(original[field]) - 1), \
+                    patch.object(coordinator, "_run_on_configuration",
+                                 side_effect=AssertionError("oversize original reached runner")) as run:
+                with self.assertRaises(ValueError):
+                    configured.persist_and_reserve_execution(**original,
+                        work=accounting._ValidationWork(accounting.QueryReadValidationLimits()))
+            self.assertEqual(run.call_count, 0)
+
+    def test_atomic_preconnection_join_is_metered_without_fresh_allowance_or_success_stub(self):
+        fixture = self.fixture()
+        configured, expectations = self.coordinator_fixture(fixture)
+        supplied = {"envelope_bytes": oracle.wire(fixture.envelope),
+            "evaluation_context_bytes": oracle.wire(record_context(fixture)),
+            "planned_at_epoch_ns": fixture.now_epoch_ns,
+            "envelope_id": oracle.sha(b"atomic independent execution id"),
+            "planner_transaction_id": fixture.planner_transaction_id, **expectations}
+        prior, joined = (1, 7, 5), oracle.canonical_comparison(
+            fixture.planner_transaction_id, fixture.planner_transaction_id)
+        self.assertEqual(joined, (0, 438, 4))
+        stopped = RuntimeError("intentional negative stop at actual runner boundary")
+        for dimension in (None, 1, 2):
+            limits = list(oracle.add(prior, joined))
+            if dimension is not None:
+                limits[dimension] -= 1
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            entering = work.limits
+            # This never returns a fake connection or successful authority.
+            # The exact case proves only preflight arrival; startup owns the
+            # genuine writer/two-replay positive and complete H/B/N oracle.
+            with self.subTest(dimension=dimension), patch.object(coordinator, "_run_on_configuration",
+                    side_effect=stopped) as run, patch.object(accounting._ValidationWork, "__init__",
+                    side_effect=AssertionError("preflight replaced caller work")):
+                with self.assertRaises(RuntimeError if dimension is None else ValueError) as raised:
+                    configured.persist_and_reserve_execution(**supplied, work=work)
+            self.assertEqual(run.call_count, 1 if dimension is None else 0)
+            if dimension is None:
+                self.assertIs(raised.exception, stopped)
+                self.assertEqual(oracle.units(work.metrics), oracle.add(prior, joined))
+                self.assertIs(run.call_args.args[0][6], WRITER_DATABASE_IDENTITY)
+                self.assertIs(run.call_args.args[-1], work)
+            else:
+                self.assertTrue(all(start <= used <= maximum for start, used, maximum
+                    in zip(prior, oracle.units(work.metrics), limits)))
+            self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
     def test_connect_meter_failure_closes_returned_connection_without_repair_or_error_replacement(self):
         class StoreError(ValueError):
             pass

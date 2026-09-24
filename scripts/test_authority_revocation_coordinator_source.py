@@ -70,7 +70,8 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(self.owner.decorator_list[0],
                          "dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)")
         self.assertEqual({node.name for node in self.owner.body if isinstance(node, ast.FunctionDef)},
-                         {"__init__", "_snapshot_configuration", "_inputs", "_run", "persist", "read", "reserve_execution"})
+                         {"__init__", "_snapshot_configuration", "_inputs", "_run", "persist", "read",
+                          "reserve_execution", "persist_and_reserve_execution"})
 
     def test_constructor_pins_real_keys_and_copies_exact_identity_scalars(self):
         constructor = self.method("__init__")

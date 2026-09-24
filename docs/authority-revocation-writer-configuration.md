@@ -60,10 +60,12 @@ historical age/skew policy needs an explicit join to measured configuration;
 this factory neither derives those inputs from a retained record nor configures
 them on the seven-item owner.
 
+Source `.61` adds private [atomic retain-and-reserve](authority-revocation-atomic.md)
+to the configured owner, without connecting it to a service action.
 Authenticated verifier-to-planner-to-writer custody, exact retry/acknowledgment
-bytes, writer response-key custody, the whole-message size contract and atomic
-retain-plus-reserve remain unfinished. Legacy writer routes and planner-only
-peer restrictions are unchanged. Registry closure and four WebAuthn gates are
+bytes, writer response-key custody and the whole-message size contract remain
+unfinished. Legacy writer routes and planner-only peer restrictions are
+unchanged. Registry closure and four WebAuthn gates are
 still incomplete. Production Nitro/KMS, signing and independent witness
 services are unprovisioned.
 

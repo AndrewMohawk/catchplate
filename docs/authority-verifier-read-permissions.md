@@ -104,7 +104,7 @@ Existing independent trust, signature, source and witness gates remain required.
 
 ## Versioning and pending verification
 
-Source revision `.60` and all 19 v9 DDL revision pins identify the current
+Source revision `.61` and all 19 v9 DDL revision pins identify the current
 successor source. The initial four-table correction was revision `.27`. The
 operation manifest binds the read contract and table set; the schema source
 contract and owner verification profile also bind the configured verifier role

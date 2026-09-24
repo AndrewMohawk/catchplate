@@ -2018,6 +2018,84 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         return types.SimpleNamespace(identity=identity, recorder=recorder, cursor=cursor,
             connection=connection, work=work, events=events)
 
+    def revocation_atomic_fixture(self, *, work=None, recorder=None):
+        """Original independent proof bytes plus the real configured writer.
+
+        Reuse the policy-correct independent fixture, not a producer's output
+        or observed meter. Only driver/catalog observations and five-set SQL
+        storage are modeled. The actual db import/registry gate, facade,
+        writer admission and both cryptographic store workers stay real.
+        """
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_reservation as reservation_oracle
+        import test_authority_revocation_retention as record_oracle
+        import test_authority_revocation_wire as wire_oracle
+
+        fixture = self.revocation_owner_fixture(work=work)
+        fixture.recorder = reservation_oracle.Recorder() if recorder is None else recorder
+        fixture.recorder.role = fixture.writer_identity[0]
+        fixture.write_cursor = _RevocationOwnerWriteCursor(fixture.recorder, fixture.writer_identity)
+        fixture.write = _RevocationOwnerConnection("write", fixture.write_cursor,
+            fixture.events, recorder=fixture.recorder)
+        pins = wire_oracle.expectations(fixture.expected)
+        for name in ("planner_public_key", "verifier_public_key",
+                     "expected_planner_identity", "expected_verifier_identity"):
+            pins.pop(name)
+        fixture.arguments = {"envelope_bytes": oracle.wire(fixture.expected.envelope),
+            "evaluation_context_bytes": oracle.wire(record_oracle.record_context(fixture.expected)),
+            "planned_at_epoch_ns": fixture.expected.now_epoch_ns,
+            "envelope_id": oracle.sha(b"configured atomic revocation execution"),
+            "planner_transaction_id": fixture.expected.planner_transaction_id,
+            "work": fixture.arguments["work"], **pins}
+
+        def connect(dsn, **options):
+            self.assertEqual(dsn, fixture.persistence.persistence_dsn)
+            self.assertEqual(set(options), {"row_factory", "connect_timeout", "options", "autocommit"})
+            self.assertEqual((options["connect_timeout"], options["options"]),
+                             (5, "-c search_path=pg_catalog"))
+            self.assertIs(options["autocommit"], False)
+            fixture.connected.append(dsn)
+            fixture.events.append("connect.write")
+            return fixture.write
+
+        fixture.connect = connect
+        return fixture
+
+    def revocation_atomic_work(self, fixture, *, retry=False):
+        """Literal sequential composition, including both shifted proof peaks."""
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_persistence as persistence_oracle
+        import test_authority_revocation_reservation as reservation_oracle
+        import test_authority_revocation_wire as wire_oracle
+
+        expected = fixture.expected
+        external = {name: value for name, value in wire_oracle.expectations(expected).items()
+            if name not in {"planner_public_key", "verifier_public_key", "database_now"}}
+        joined = oracle.canonical_comparison(expected.planner_transaction_id, expected.planner_transaction_id)
+        self.assertEqual(joined, (0, 438, 4))
+        prefix = oracle.add(joined, oracle.graph_cost(external, 1, 1))
+        persisted = persistence_oracle.independent_store_metrics(expected, expected.now_epoch_ns,
+            mode="retry" if retry else "new")
+        reserved = reservation_oracle.independent_reservation_work(expected, fixture.arguments["envelope_id"])
+        total = oracle.add(prefix, persisted["total"], reserved["total"])
+        peaks = (total, oracle.add(prefix, persisted["admission"]),
+                 oracle.add(prefix, persisted["total"], reserved["admission"]))
+        return {"total": total, "admission": tuple(max(values) for values in zip(*peaks)),
+            "prefix": prefix, "persisted": persisted, "reserved": reserved}
+
+    def assert_revocation_atomic_rows(self, fixture):
+        import test_authority_revocation_persistence as persistence_oracle
+        import test_authority_revocation_reservation as reservation_oracle
+
+        parent, sidecar = persistence_oracle.expected_rows(fixture.expected, fixture.expected.now_epoch_ns)
+        assertion, projection = persistence_oracle.expected_authorization_rows(fixture.expected)
+        row = reservation_oracle.expected_envelope(fixture.expected, fixture.arguments["envelope_id"])
+        self.assertEqual(fixture.recorder.snapshot(), (parent, sidecar,
+            {assertion["assertion_evidence_digest"]: assertion},
+            {projection["authorization_projection_digest"]: projection},
+            {fixture.arguments["envelope_id"]: row}))
+        return row
+
     def assert_revocation_writer_empty(self, recorder):
         self.assertEqual((recorder.parent, recorder.sidecar), (None, None))
         self.assertEqual((recorder.assertions, recorder.projections), ({}, {}))
@@ -2850,6 +2928,387 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertIs(fixture.write.closed, True)
                 for name in ("write.transaction2.exit", "write.transaction1.exit", "write.connection.exit"):
                     self.assertEqual(fixture.events.count(name), 1)
+                self.assertNotIn("write.close", fixture.events)
+
+    def test_atomic_revocation_custody_replays_twice_in_one_four_manager_writer(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware.authority_store import revocation_execution as reservation
+        from serverware.authority_store import revocation_retention as store
+        import test_authority_revocation_plan as oracle
+
+        fixture = self.revocation_atomic_fixture()
+        expected, work = self.revocation_atomic_work(fixture), fixture.arguments["work"]
+        with self.revocation_owner_scope(fixture), \
+                patch.object(store, "persist_revocation_planner_record",
+                             wraps=store.persist_revocation_planner_record) as persist, \
+                patch.object(reservation, "reserve_revocation_execution_envelope",
+                             wraps=reservation.reserve_revocation_execution_envelope) as reserve, \
+                patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+            result = fixture.persistence.persist_and_reserve_execution(**fixture.arguments)
+        self.assertIs(type(result), tuple)
+        self.assertEqual(len(result), 2)
+        receipt, row = result
+        self.assertEqual((persist.call_count, reserve.call_count, replay.call_count, proof.call_count), (1, 1, 2, 2))
+        self.assertIs(persist.call_args.kwargs["connection"], reserve.call_args.kwargs["connection"])
+        self.assertIs(persist.call_args.kwargs["work"], work)
+        self.assertIs(reserve.call_args.kwargs["work"], work)
+        for call in replay.call_args_list:
+            self.assertIs(call.kwargs["work"], work)
+            self.assertEqual(call.kwargs["envelope_bytes"], fixture.arguments["envelope_bytes"])
+            self.assertEqual(call.kwargs["evaluation_context_bytes"], fixture.arguments["evaluation_context_bytes"])
+        self.assertIs(replay.call_args_list[0].kwargs["envelope_bytes"], fixture.arguments["envelope_bytes"])
+        self.assertEqual(receipt["exactEnvelopeBytes"], fixture.arguments["envelope_bytes"])
+        self.assertEqual(receipt["evaluationContextBytes"], fixture.arguments["evaluation_context_bytes"])
+        self.assertEqual(receipt["plannedAtEpochNs"], fixture.expected.now_epoch_ns)
+        self.assertEqual(row, self.assert_revocation_atomic_rows(fixture))
+        self.assertEqual(oracle.units(work.metrics), expected["total"])
+        self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases, fixture.write.transactions), (0, 4, 4))
+        self.assertEqual(fixture.connected, [fixture.persistence.persistence_dsn])
+        self.assertEqual(fixture.write_cursor.phase, 3)
+        self.assertEqual([sql for sql, _ in fixture.write_cursor.calls[:3]], [
+            "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE",
+            fixture.write_cursor.identity_sql, fixture.write_cursor.privilege_sql])
+        for name in ("transaction1", "transaction2", "transaction3", "transaction4"):
+            self.assertEqual(fixture.events.count("write." + name + ".exit"), 1)
+        self.assertLess(fixture.events.index("write.transaction3.exit"), fixture.events.index("write.transaction4.enter"))
+        self.assertEqual(fixture.write.info.transaction_status, 0)
+        self.assertIs(fixture.write.closed, True)
+        self.assertNotIn("connect.read", fixture.events)
+
+    def test_atomic_revocation_second_stage_failures_restore_all_five_sets(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import db
+        from serverware.authority_store import planner_connection as admission
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_reservation as reservation_oracle
+
+        for target in ("missing", "terminal", "expiry", "signature"):
+            fixture, changed, returned = self.revocation_atomic_fixture(), [], []
+            before = fixture.recorder.snapshot()
+            current = [fixture.expected.now_epoch_ns]
+            if target == "missing":
+                fixture.recorder.missing_envelope_read = True
+
+            def sql_callback(sql, parameters):
+                if " FROM " + reservation_oracle.TABLE in sql:
+                    changed.append(target)
+                    if target == "terminal":
+                        fixture.recorder.envelopes[fixture.arguments["envelope_id"]]["terminal_at_epoch_ns"] = 1
+                    elif target == "expiry":
+                        current[0] = fixture.expected.deadline_epoch_ns + 1
+
+            def exit_callback(event):
+                if target == "signature" and event == "write.transaction3.exit":
+                    false_envelope = copy.deepcopy(fixture.expected.envelope)
+                    false_envelope["signatureBase64Url"] = "A" * 86
+                    raw = oracle.wire(false_envelope)
+                    self.assertEqual(len(raw), len(fixture.arguments["envelope_bytes"]))
+                    fixture.recorder.sidecar["exact_envelope_base64url"] = oracle.encoded(raw)
+                    changed.append(target)
+
+            fixture.recorder.callback, fixture.write.on_event = sql_callback, exit_callback
+            with self.subTest(target=target), self.revocation_owner_scope(fixture), \
+                    patch.object(admission.time, "time_ns", side_effect=lambda: current[0]), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                    patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+                with self.assertRaises(retention.RevocationRetentionError if target == "signature"
+                                       else db.MetadataStoreError):
+                    returned.append(fixture.persistence.persist_and_reserve_execution(**fixture.arguments))
+            self.assertEqual((returned, replay.call_count), ([], 2))
+            self.assertEqual(proof.call_count, 1 if target == "signature" else 2)
+            self.assertEqual(changed, [target])
+            self.assertEqual(fixture.recorder.snapshot(), before)
+            self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (3, 1))
+            self.assertEqual(fixture.write.transactions, 4)
+            self.assertIs(fixture.write.closed, True)
+            self.assertEqual(fixture.write.info.transaction_status, 0)
+
+    def test_atomic_revocation_common_savepoint_survives_a_caught_second_stage_error(self):
+        from serverware import authority_revocation_persistence as persistence
+        from serverware import authority_revocation_retention as retention
+        from serverware import db
+
+        fixture, caught = self.revocation_atomic_fixture(), []
+        fixture.recorder.missing_envelope_read = True
+        before = fixture.recorder.snapshot()
+        names = ("envelope_bytes", "evaluation_context_bytes", "planned_at_epoch_ns", "envelope_id", "planner_transaction_id")
+        arguments = {name: fixture.arguments[name] for name in names}
+        expectations = {name: value for name, value in fixture.arguments.items() if name not in (*names, "work")}
+
+        def catch_inside_outer(**supplied):
+            try:
+                persistence._persist_and_reserve_on_connection(**supplied)
+            except db.MetadataStoreError as error:
+                caught.append(error)
+            else:
+                self.fail("missing reserved row unexpectedly succeeded")
+            self.assertEqual(fixture.recorder.snapshot(), before)
+            self.assertEqual(fixture.write.info.transaction_status, 2)
+            self.assertIs(supplied["connection"].in_transaction, True)
+            # No fabricated success/receipt leaves this negative-only driver
+            # composition. Its enclosing real owner can complete normally.
+
+        with self.revocation_owner_scope(fixture), \
+                patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+            result = persistence._run_on_configuration(fixture.persistence._snapshot_configuration(),
+                catch_inside_outer, arguments, expectations, fixture.arguments["work"])
+        self.assertIsNone(result)
+        self.assertEqual((len(caught), replay.call_count), (1, 2))
+        self.assertEqual(fixture.recorder.snapshot(), before)
+        self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (2, 2))
+        self.assertEqual(fixture.write.info.transaction_status, 0)
+        self.assertIs(fixture.write.closed, True)
+
+    def test_atomic_revocation_retry_preserves_original_custody_and_still_requires_freshness(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import db
+        from serverware.authority_store import planner_connection as admission
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_reservation as reservation_oracle
+
+        for target in ("identical", "expired", "consumed", "terminal"):
+            fixture = self.revocation_atomic_fixture()
+            fixture.recorder.seed(fixture.expected, fixture.expected.now_epoch_ns)
+            identity = fixture.arguments["envelope_id"]
+            fixture.recorder.envelopes[identity] = reservation_oracle.expected_envelope(fixture.expected, identity)
+            if target == "consumed":
+                fixture.recorder.parent["status"] = "consumed"
+            elif target == "terminal":
+                response = oracle.wire({"status": "committed"})
+                receipt_bytes = oracle.wire({"status": "committed", "envelopeId": identity})
+                fixture.recorder.envelopes[identity].update(status="committed",
+                    exact_response_base64url=oracle.encoded(response),
+                    exact_response_bytes_digest=oracle.sha(response), exact_response_byte_count=len(response),
+                    terminal_at_epoch_ns=fixture.expected.now_epoch_ns,
+                    result_digest=fixture.expected.payload["expectedResultDigest"],
+                    terminal_receipt_json=receipt_bytes.decode("ascii"),
+                    terminal_receipt_digest=oracle.sha(receipt_bytes))
+                # Existing table lifecycle/nullability shape, not a claim
+                # that synthetic terminal data passed an executor/verifier.
+            before = fixture.recorder.snapshot()
+            fixture.arguments["planned_at_epoch_ns"] += 1
+            expected = self.revocation_atomic_work(fixture, retry=True)
+            now = fixture.expected.deadline_epoch_ns + 1 if target == "expired" else fixture.expected.now_epoch_ns
+            with self.subTest(target=target), self.revocation_owner_scope(fixture), \
+                    patch.object(admission.time, "time_ns", return_value=now), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                if target == "identical":
+                    receipt, row = fixture.persistence.persist_and_reserve_execution(**fixture.arguments)
+                    self.assertEqual(receipt["plannedAtEpochNs"], fixture.expected.now_epoch_ns)
+                    self.assertEqual(receipt["exactEnvelopeBytes"], fixture.arguments["envelope_bytes"])
+                    self.assertEqual(receipt["evaluationContextBytes"], fixture.arguments["evaluation_context_bytes"])
+                    self.assertEqual(row, before[4][identity])
+                    self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
+                else:
+                    with self.assertRaises(db.MetadataStoreError):
+                        fixture.persistence.persist_and_reserve_execution(**fixture.arguments)
+            self.assertEqual(fixture.recorder.snapshot(), before)
+            self.assertEqual(replay.call_count, 1 if target == "expired" else 2)
+            self.assertFalse(any(sql.startswith("UPDATE ") for sql, _ in fixture.recorder.statements))
+            self.assertIs(fixture.write.closed, True)
+
+    def test_atomic_revocation_captures_original_inputs_and_configuration_before_callbacks(self):
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+
+        for stage in ("connect", "between"):
+            fixture, changed = self.revocation_atomic_fixture(), []
+            original_dsn = fixture.persistence.persistence_dsn
+            original_request = copy.deepcopy(fixture.arguments["expected_request"])
+            original_before = copy.deepcopy(fixture.arguments["expected_before"])
+            expected = self.revocation_atomic_work(fixture)
+            connect = fixture.connect
+
+            def mutate():
+                fixture.arguments["expected_request"].clear()
+                fixture.arguments["expected_before"].clear()
+                object.__setattr__(fixture.persistence, "persistence_dsn", "postgresql://changed.invalid/metadata")
+                object.__setattr__(fixture.persistence, "planner_public_key", fixture.expected.other_key.public_key())
+                object.__setattr__(fixture.persistence, "_database_identity",
+                    ("serverware_policy_authority_planner_writer", "changed", "29", "changed issuer"))
+                changed.append(stage)
+
+            def open_connection(*args, **kwargs):
+                connection = connect(*args, **kwargs)
+                if stage == "connect":
+                    mutate()
+                return connection
+
+            def exit_callback(event):
+                if stage == "between" and event == "write.transaction3.exit":
+                    mutate()
+
+            fixture.connect, fixture.write.on_event = open_connection, exit_callback
+            with self.subTest(stage=stage), self.revocation_owner_scope(fixture), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                fixture.persistence.persist_and_reserve_execution(**fixture.arguments)
+            self.assertEqual(changed, [stage])
+            self.assertEqual(fixture.connected, [original_dsn])
+            self.assertEqual(replay.call_count, 2)
+            for call in replay.call_args_list:
+                self.assertEqual(call.kwargs["expected_request"], original_request)
+                self.assertEqual(call.kwargs["expected_before"], original_before)
+                self.assertEqual(call.kwargs["planner_public_key"].public_bytes(Encoding.Raw, PublicFormat.Raw),
+                                 fixture.expected.key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+            self.assert_revocation_atomic_rows(fixture)
+            self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
+
+    def test_atomic_revocation_between_store_driver_changes_restore_original_outer_snapshot(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_connection as writer
+
+        for target in ("meter", "raw"):
+            fixture, changed = self.revocation_atomic_fixture(), []
+            before, work = fixture.recorder.snapshot(), fixture.arguments["work"]
+
+            def exit_callback(event):
+                if event == "write.transaction3.exit":
+                    if target == "meter":
+                        work.charge(json_nodes=1)
+                    else:
+                        fixture.write.pgconn = object()
+                    changed.append(work.metrics)
+
+            fixture.write.on_event = exit_callback
+            with self.subTest(target=target), self.revocation_owner_scope(fixture), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                with self.assertRaises(writer.RevocationWriterConnectionError):
+                    fixture.persistence.persist_and_reserve_execution(**fixture.arguments)
+            self.assertEqual((len(changed), replay.call_count), (1, 1))
+            self.assertEqual(work.metrics, changed[0])
+            self.assertEqual(fixture.recorder.snapshot(), before)
+            self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (2, 1))
+            self.assertEqual(fixture.write.transactions, 3)
+            self.assertEqual(fixture.write.info.transaction_status, 0)
+            self.assertIs(fixture.write.closed, True)
+
+    def test_atomic_revocation_exact_prior_and_each_short_composed_budget_use_real_proof_children(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_reservation as reservation_oracle
+
+        for retry in (False, True):
+            for prior, dimension in (((0, 0, 0), None), ((2, 23, 7), None),
+                                     ((2, 23, 7), 0), ((2, 23, 7), 1), ((2, 23, 7), 2)):
+                fixture = self.revocation_atomic_fixture()
+                if retry:
+                    fixture.recorder.seed(fixture.expected, fixture.expected.now_epoch_ns)
+                    identity = fixture.arguments["envelope_id"]
+                    fixture.recorder.envelopes[identity] = reservation_oracle.expected_envelope(fixture.expected, identity)
+                before = fixture.recorder.snapshot()
+                expected = self.revocation_atomic_work(fixture, retry=retry)
+                limits = list(oracle.add(prior, expected["admission"]))
+                if dimension is not None:
+                    limits[dimension] -= 1
+                work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+                work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+                fixture.arguments["work"] = work
+                entering = work.limits
+                # A genuine mixed proof allocates its remaining-clamped child.
+                # Only replacement OUTER packaging ledgers are forbidden.
+                with self.subTest(retry=retry, prior=prior, dimension=dimension), \
+                        self.revocation_owner_scope(fixture), \
+                        patch.object(retention.plan.retained._PackagingLedger, "__init__",
+                                     side_effect=AssertionError("replacement outer allowance")), \
+                        patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+                    if dimension is None:
+                        fixture.persistence.persist_and_reserve_execution(**fixture.arguments)
+                        self.assert_revocation_atomic_rows(fixture)
+                        self.assertEqual(proof.call_count, 2)
+                        self.assertEqual(oracle.units(work.metrics), oracle.add(prior, expected["total"]))
+                    else:
+                        with self.assertRaises(ValueError):
+                            fixture.persistence.persist_and_reserve_execution(**fixture.arguments)
+                        self.assertEqual(fixture.recorder.snapshot(), before)
+                        self.assertTrue(all(start <= used <= maximum for start, used, maximum
+                            in zip(prior, oracle.units(work.metrics), limits)))
+                self.assertIs(work.limits, entering)
+                self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_atomic_revocation_repeated_call_spends_new_then_retry_work_without_cached_authority(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+
+        for dimension in (None, 0, 1, 2):
+            first = self.revocation_atomic_fixture()
+            second = self.revocation_atomic_fixture(recorder=first.recorder)
+            new, retry, prior = self.revocation_atomic_work(first), self.revocation_atomic_work(second, retry=True), (2, 23, 7)
+            first_peak = oracle.add(prior, new["admission"])
+            limits = list(oracle.add(prior, new["total"], retry["admission"]))
+            self.assertTrue(all(later > earlier for earlier, later in zip(first_peak, limits)))
+            if dimension is not None:
+                limits[dimension] -= 1
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            entering, results = work.limits, []
+            first.arguments["work"] = second.arguments["work"] = work
+            second.arguments["planned_at_epoch_ns"] += 1
+            with self.subTest(dimension=dimension), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                    patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+                with self.revocation_owner_scope(first):
+                    results.append(first.persistence.persist_and_reserve_execution(**first.arguments))
+                self.assert_revocation_atomic_rows(first)
+                before_second = first.recorder.snapshot()
+                self.assertEqual(oracle.units(work.metrics), oracle.add(prior, new["total"]))
+                with self.revocation_owner_scope(second):
+                    if dimension is None:
+                        results.append(second.persistence.persist_and_reserve_execution(**second.arguments))
+                    else:
+                        with self.assertRaises(ValueError):
+                            second.persistence.persist_and_reserve_execution(**second.arguments)
+            self.assertEqual(first.recorder.snapshot(), before_second)
+            if dimension is None:
+                self.assertEqual(results[0], results[1])
+                self.assertEqual((replay.call_count, proof.call_count), (4, 4))
+                self.assertEqual(oracle.units(work.metrics), oracle.add(prior, new["total"], retry["total"]))
+                self.assertEqual((first.recorder.rollbacks, first.recorder.releases), (0, 8))
+            else:
+                self.assertEqual(len(results), 1)
+                self.assertTrue(all(start <= used <= maximum for start, used, maximum in zip(
+                    oracle.add(prior, new["total"]), oracle.units(work.metrics), limits)))
+            self.assertTrue(all(call.kwargs["work"] is work for call in replay.call_args_list))
+            self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_atomic_revocation_post_exit_errors_do_not_claim_completed_commit_rollback(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_connection as writer
+
+        for event in ("write.transaction1.exit", "write.connection.exit"):
+            for mutation in (False, True):
+                fixture, returned, changed = self.revocation_atomic_fixture(), [], []
+                work = fixture.arguments["work"]
+                failure = RuntimeError("synthetic atomic post-completion driver failure")
+
+                def exit_callback(observed):
+                    if observed == event:
+                        if mutation:
+                            work.charge(json_nodes=1)
+                            changed.append(work.metrics)
+                        else:
+                            raise failure
+
+                fixture.write.on_event = exit_callback
+                with self.subTest(event=event, mutation=mutation), self.revocation_owner_scope(fixture), \
+                        patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                    with self.assertRaises(writer.RevocationWriterConnectionError if mutation else RuntimeError) as raised:
+                        returned.append(fixture.persistence.persist_and_reserve_execution(**fixture.arguments))
+                self.assertEqual((returned, replay.call_count), ([], 2))
+                if mutation:
+                    self.assertEqual(changed, [work.metrics])
+                else:
+                    self.assertIs(raised.exception, failure)
+                self.assert_revocation_atomic_rows(fixture)
+                self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (0, 4))
+                self.assertEqual(fixture.write.info.transaction_status, 0)
+                self.assertIs(fixture.write.closed, True)
+                for scope in ("transaction1", "transaction2", "transaction3", "transaction4", "connection"):
+                    self.assertEqual(fixture.events.count("write." + scope + ".exit"), 1)
                 self.assertNotIn("write.close", fixture.events)
 
     def test_private_original_wire_replays_actual_production_with_external_expectations(self):

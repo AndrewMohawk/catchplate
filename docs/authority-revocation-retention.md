@@ -224,6 +224,11 @@ invocation. Guarded driver handles retain physical connection identity and activ
 transaction observations through custody; this is not independent database
 enrollment or proof against a hostile driver's hidden commit-and-BEGIN. See
 [writer connection admission](authority-revocation-writer-connection.md).
+Source `.61` also provides private configured
+[atomic retention and execution reservation](authority-revocation-atomic.md).
+One common savepoint contains both genuine store calls, with reservation
+rereading and verifying the original stored evidence rather than trusting the
+retention receipt. Separate owner calls retain their separate transactions.
 The legacy `PlannerPersistence`
 API and service routes remain unchanged. Actual database startup still depends
 on resolving the missing registered kernels; a registry-free verifier does not

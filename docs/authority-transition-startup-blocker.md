@@ -139,6 +139,15 @@ No table shape, grant or registry admission expands; the existing v3-only SQL
 loader and service replay still require coordinated successor consumers.
 This is authored, unexecuted custody integration, not four-kernel completion.
 
+Source `.42` adds the private retained-byte SQL integrity binder described in
+the [retention contract](authority-revocation-retention.md#private-sql-integrity-binder).
+It joins a caller-locked planner record to its immutable sidecar and returns
+raw bound observations, not signature/proof success or execution authority.
+Independent key/request/context admission, actual Ed25519 and complete-proof
+verification, current locked primary/counted roots and writer reservation
+remain consumer prerequisites. No v3 executor, reservation, service replay
+or registry gate opens; the component and its native controls are unexecuted.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

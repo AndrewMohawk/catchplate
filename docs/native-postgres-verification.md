@@ -25,19 +25,19 @@ supply independent approval, installed controller identity or cleanup proof.
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
 defines `serverware.nativePostgresInventory/v1`, fourteen ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 266`. Each record contains an
+`NativePostgresSuite` records and `TOTAL_TESTS = 274`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 266 native SQL tests.
+methods contained in these fixtures; it is not a count of 274 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
 | 00 | `test_webauthn_trust_projection_postgres.py` | 12 | 300 s | No |
 | 01 | `test_postgres_trigger_manifest.py` | 5 | 300 s | No |
 | 02 | `test_authority_mutation_postgres.py` | 14 | 300 s | No |
-| 03 | `test_authority_root_transition_postgres.py` | 31 | 300 s | No |
+| 03 | `test_authority_root_transition_postgres.py` | 39 | 300 s | No |
 | 04 | `test_authority_primary_tree_postgres.py` | 9 | 300 s | No |
 | 05 | `test_authority_audit_initialization_postgres.py` | 31 | 300 s | No |
 | 06 | `test_authority_audit_initialization_store_postgres.py` | 36 | 900 s | Yes |
@@ -49,7 +49,25 @@ methods contained in these fixtures; it is not a count of 266 native SQL tests.
 | 12 | `test_authority_counted_store_postgres.py` | 10 | 300 s | No |
 | 13 | `test_authority_counted_maintenance_postgres.py` | 32 | 300 s | No |
 
-Four further custody methods cover the existing thirty-five-column assertion
+Eight further retained-binding methods use independently constructed, genuinely
+signed v4 fixture bytes and a real Python raw-replay sanity check, then invoke
+the separate production SQL binder against caller-locked parent and actual
+sidecar rows under full v9 DDL. They compare original envelope/context/payload
+bytes, the mixed transition and its primary subdocument, the retained header,
+and the nine-frame Snapshot/v4 digest. Fresh byte anchors do not hide aliases,
+duplicate decoded keys, changed closed fields, parent/context mismatches or
+stale transition/header commitments. Malformed codecs and small context inputs
+exceeding the post-parse node/depth ceilings also deny. A canonical false
+signature deliberately passes integrity-only SQL and still fails the genuine
+signed verifier: the binder supplies no cryptographic authority. The active
+legacy v3 loader still rejects v4. These eight controls are authored and
+unexecuted, not evidence of current roots/time, public activation, SQL proof
+replay or committed execution.
+All 266 previous IDs remain; fourteen suites, sixteen children and deadlines
+are unchanged. The native source closure includes the genuine revocation
+fixture/verifier imports as well as the new SQL renderer.
+
+Four earlier custody methods cover the existing thirty-five-column assertion
 and twenty-one-column authorization-projection tables under the same actual
 v9 DDL and source-extracted immutable attachments. They pin primary/unique
 identity conflicts, every column's UPDATE denial and DELETE denial, then force

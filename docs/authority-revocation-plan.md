@@ -165,6 +165,15 @@ The existing tables/grants are unchanged, and no parent/projection/evidence
 foreign-key chain is claimed. This storage prerequisite does not admit v4 to
 the legacy SQL executor or permit service replay to reconstruct and re-sign it.
 
+Source `.42` adds a [private SQL retained-byte binder](authority-revocation-retention.md#private-sql-integrity-binder)
+for the original payload/envelope/context and their versioned commitments.
+It requires a caller-locked parent, strictly reads the immutable sidecar and
+exposes ordinary JSON/data only. It neither verifies Ed25519 signatures or
+complete semantic proofs nor reads current heads. Independently admitted
+keys/context, current-root binding and the writer reservation remain required
+before a real v4 execution consumer can be activated. The existing v3 loader,
+reservation and service replay/re-signing paths are unchanged.
+
 Source `.37` implements private original-byte storage and historical replay.
 Public verifier-response admission and service persistence still require
 coordinated v4 admission and consumer changes. They need

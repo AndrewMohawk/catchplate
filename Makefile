@@ -781,35 +781,69 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_authority_counted_maintenance_postgres.py \
 	scripts/test_traversal_response_evidence.py \
 	scripts/test_webauthn_recovery.py
-# Exact repository-source closure newly exercised by the counted SQL fixtures.
+# Exact repository-source closure exercised by counted and retained SQL fixtures.
 # The complete frozen archive remains the source authority; these presence/
 # nonsymlink checks neither replace its digest nor prepare an excluded test.
 # Include package imports, imported independent oracles, and db.py, which the
 # existing native helper reads as source without importing its runtime facade.
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
+	scripts/authority_revocation_observation_fixture.py \
+	scripts/authority_revocation_semantics_fixture.py \
+	scripts/authority_revocation_trust_fixture.py \
+	scripts/test_authority_audit_capacity_work.py \
 	scripts/test_authority_audit_initialization.py \
 	scripts/test_authority_audit_inventory.py \
+	scripts/test_authority_audit_trace.py \
+	scripts/test_authority_complete_query.py \
+	scripts/test_authority_complete_query_batch.py \
+	scripts/test_authority_complete_read_write.py \
+	scripts/test_authority_counted_installation.py \
+	scripts/test_authority_counted_root_transition.py \
 	scripts/test_authority_counted_hash_postgres.py \
 	scripts/test_authority_counted_projection_postgres.py \
 	scripts/test_authority_counted_store_postgres.py \
 	scripts/test_authority_counted_maintenance_postgres.py \
+	scripts/test_authority_global_audit_capacity.py \
+	scripts/test_authority_index_frontier.py \
+	scripts/test_authority_index_heads.py \
 	scripts/test_authority_index_join.py \
 	scripts/test_authority_indexed_mutation.py \
 	scripts/test_authority_index_range.py \
+	scripts/test_authority_index_trace.py \
 	scripts/test_authority_primary_tree_postgres.py \
+	scripts/test_authority_query_reads.py \
+	scripts/test_authority_query_reads_measured.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_radix_proof.py \
+	scripts/test_authority_revocation_persistence.py \
+	scripts/test_authority_revocation_plan.py \
+	scripts/test_authority_revocation_proof_bundle.py \
+	scripts/test_authority_revocation_query_program.py \
+	scripts/test_authority_revocation_query_work.py \
+	scripts/test_authority_revocation_read_write.py \
+	scripts/test_authority_revocation_retention.py \
+	scripts/test_authority_revocation_semantics.py \
+	scripts/test_authority_revocation_wire.py \
 	scripts/test_authority_root_transition_postgres.py \
+	scripts/test_authority_typed_request_work.py \
+	scripts/test_webauthn_assertion_work.py \
+	scripts/test_webauthn_revocation_work.py \
+	scripts/test_webauthn_revoke_transition.py \
 	scripts/test_webauthn_trust_projection_postgres.py \
 	serverware/__init__.py \
 	serverware/audit_outbox_contract.py \
 	serverware/authority_audit_capacity.py \
 	serverware/authority_audit_initialization.py \
 	serverware/authority_audit_inventory.py \
+	serverware/authority_audit_trace.py \
 	serverware/authority_complete_query.py \
+	serverware/authority_complete_query_batch.py \
+	serverware/authority_complete_read_write.py \
 	serverware/authority_contract.py \
+	serverware/authority_counted_root_transition.py \
 	serverware/authority_index_contract.py \
 	serverware/authority_index_frontier.py \
+	serverware/authority_index_heads.py \
 	serverware/authority_index_join.py \
 	serverware/authority_index_mutation.py \
 	serverware/authority_index_mutation_reader.py \
@@ -817,14 +851,28 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_index_projection.py \
 	serverware/authority_index_range.py \
 	serverware/authority_index_reader.py \
+	serverware/authority_index_trace.py \
 	serverware/authority_primary_contract.py \
 	serverware/authority_query_read_work.py \
 	serverware/authority_query_reads.py \
 	serverware/authority_radix_mutation.py \
 	serverware/authority_radix_proof.py \
+	serverware/authority_request_commitment.py \
+	serverware/authority_revocation_bundle_contract.py \
+	serverware/authority_revocation_persistence.py \
+	serverware/authority_revocation_plan.py \
+	serverware/authority_revocation_plan_contract.py \
+	serverware/authority_revocation_plan_production.py \
+	serverware/authority_revocation_proof_bundle.py \
+	serverware/authority_revocation_read_write.py \
+	serverware/authority_revocation_retention.py \
+	serverware/authority_revocation_semantics.py \
+	serverware/authority_revocation_wire.py \
+	serverware/authority_revocation_write_trace.py \
 	serverware/authority_root_transition.py \
 	serverware/authority_store/__init__.py \
 	serverware/authority_store/audit_capacity_sql.py \
+	serverware/authority_store/authorization_records.py \
 	serverware/authority_store/completed_v9_schema_source.py \
 	serverware/authority_store/counted_hash_sql.py \
 	serverware/authority_store/counted_installation.py \
@@ -834,8 +882,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/counted_maintenance_sql.py \
 	serverware/authority_store/metadata_schema_source.py \
 	serverware/authority_store/mutation_sql.py \
+	serverware/authority_store/planner_connection.py \
 	serverware/authority_store/postgres_trigger_manifest.py \
 	serverware/authority_store/primary_tree_sql.py \
+	serverware/authority_store/revocation_retained_sql.py \
+	serverware/authority_store/revocation_retention.py \
 	serverware/authority_store/root_transition_sql.py \
 	serverware/authority_store/schema.py \
 	serverware/authority_store/v9_schema_source.py \
@@ -843,6 +894,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/webauthn_trust_sql.py \
 	serverware/authority_store/wire_json_sql.py \
 	serverware/authority_transition_core.py \
+	serverware/authority_transition_policy.py \
+	serverware/authority_transition_webauthn.py \
+	serverware/authority_webauthn_assertion.py \
 	serverware/authority_webauthn_trust.py \
 	serverware/db.py \
 	serverware/native_postgres_inventory.py \
@@ -2527,6 +2581,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_store/planner_connection.py \
 				serverware/authority_store/authorization_records.py \
 				serverware/authority_store/revocation_retention.py \
+				serverware/authority_store/revocation_retained_sql.py \
 				serverware/authority_store/executor_v9.py \
 				serverware/authority_revocation_write_trace.py \
 				serverware/authority_webauthn_trust.py \

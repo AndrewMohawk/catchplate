@@ -9,6 +9,8 @@ root-table reads to independent expectations before the original database clock.
 Source `.40` connects this primitive to a configured read-transaction owner and
 separate original-byte persistence. Source `.41` adds the assertion/projection
 custody required by the executor to that same private write transaction.
+Source `.42` adds a private SQL retained-byte integrity binder, without
+connecting it to this producer or activating any execution route.
 These implementations are **unbuilt and
 unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
 deployed release.
@@ -72,6 +74,14 @@ still uses current configured maximum age and skew; historical reads remain
 clock-free. See the [retention contract](authority-revocation-retention.md)
 for these boundaries and the absence of custody-chain foreign
 keys. This is not mixed-root execution admission.
+
+The [private SQL binder](authority-revocation-retention.md#private-sql-integrity-binder)
+checks retained transport/record integrity using a caller-locked parent and
+its immutable sidecar. Its returned JSON and commitments are not verified
+authority: independent key/request/context admission, actual Ed25519 and
+complete-proof verification, current locked primary/counted roots and the
+writer reservation remain separate consumer requirements. Existing public
+v3 execution, reservation and service replay gates are unchanged.
 
 ## Actual pipeline
 

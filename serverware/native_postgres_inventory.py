@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 266
+TOTAL_TESTS = 274
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +78,14 @@ SUITES: tuple[NativePostgresSuite, ...] = (
     NativePostgresSuite(
         script="scripts/test_authority_root_transition_postgres.py",
         test_ids=(
+            "AuthorityRevocationRetainedBindingPostgresTests.test_canonical_raw_aliases_and_duplicate_decoded_keys_are_rejected",
+            "AuthorityRevocationRetainedBindingPostgresTests.test_closed_v4_documents_and_integer_token_types_do_not_use_jsonb_aliases",
+            "AuthorityRevocationRetainedBindingPostgresTests.test_genuine_original_bytes_bind_mixed_transition_and_snapshot_v4",
+            "AuthorityRevocationRetainedBindingPostgresTests.test_integrity_binding_never_authenticates_signature_or_opens_legacy_v3",
+            "AuthorityRevocationRetainedBindingPostgresTests.test_key_digests_and_record_header_are_original_integrity_bindings",
+            "AuthorityRevocationRetainedBindingPostgresTests.test_locked_parent_and_original_context_bind_identity_deadline_and_cutoff",
+            "AuthorityRevocationRetainedBindingPostgresTests.test_mixed_transition_and_nine_snapshot_frames_keep_their_v4_domains",
+            "AuthorityRevocationRetainedBindingPostgresTests.test_raw_hashes_and_separate_payload_envelope_context_anchors_are_required",
             "AuthorityRevocationRetentionPostgresTests.test_assertion_custody_primary_challenge_and_identity_are_unique",
             "AuthorityRevocationRetentionPostgresTests.test_authorization_custody_primary_transaction_and_identity_are_unique",
             "AuthorityRevocationRetentionPostgresTests.test_authorization_custody_update_delete_preserve_all_original_columns",
@@ -397,7 +405,7 @@ _SUITE_SHAPES = (
     ("scripts/test_webauthn_trust_projection_postgres.py", 12, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
     ("scripts/test_authority_mutation_postgres.py", 14, False, 300),
-    ("scripts/test_authority_root_transition_postgres.py", 31, False, 300),
+    ("scripts/test_authority_root_transition_postgres.py", 39, False, 300),
     ("scripts/test_authority_primary_tree_postgres.py", 9, False, 300),
     ("scripts/test_authority_audit_initialization_postgres.py", 31, False, 300),
     ("scripts/test_authority_audit_initialization_store_postgres.py", 36, True, 900),
@@ -420,7 +428,7 @@ def validate_inventory() -> None:
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
             or type(SUITES) is not tuple or len(SUITES) != 14
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 266):
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 274):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

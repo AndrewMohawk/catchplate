@@ -31,6 +31,11 @@ custody rows to the same private v4 write transaction. Genuine raw-record replay
 still precedes storage. This closes a persistence prerequisite, not the v4 SQL
 executor, service or registry gates.
 
+Source `.42` adds a private SQL retained-byte integrity binder. It is not
+installed into the active executor or exposed through reservation/service
+routes. Its observations do not replace independent signature, proof or
+current-state admission.
+
 The existing `exact_plan_*` fields continue to contain canonical **payload**
 bytes. Legacy v3 service replay reconstructs its envelope; private v4 replay
 returns the original envelope and context from the new immutable sidecar.
@@ -226,16 +231,48 @@ preserving the first error and leaving corrupted work untouched. An opener
 that never returns a handle, or an unfinished context entry, still depends on
 the actual driver's cleanup behavior.
 
+## Private SQL integrity binder
+
+[`authority_store.revocation_retained_sql`](../serverware/authority_store/revocation_retained_sql.py)
+provides `revocation_retained_declarations_sql()` and
+`load_revocation_retained_sql(namespace)`. The latter requires an actual
+caller-locked `planner` record and reads its immutable sidecar with a strict
+plain SELECT. It binds the original payload, signed-envelope and historical
+context transports to their stored byte commitments and versioned record.
+It does not overwrite the original bytes or change `exact_plan_*` semantics.
+
+The fragment exposes `rv_payload`, `rv_plan`, `rv_context`, `rv_transition`,
+`rv_primary`, `rv_record_digest` and `rv_snapshot_digest` as ordinary JSON/data.
+Canonical rendering and matching commitments are integrity checks, not
+Ed25519 verification, genuine complete-proof replay or an authority token.
+Stored key fingerprints, context clocks and before-root vectors cannot enroll
+keys or provide independent currentness. A future consumer must independently
+admit those authorities, verify the actual signatures and complete semantic
+proofs, bind current locked primary/counted roots, and own the separate
+writer reservation, deadline and one-use checks.
+
+The SQL component does not read live heads or sample a new evaluation clock.
+It checks transport byte bounds before PostgreSQL parsing, then uses the
+existing bounded wire walk and whole-byte canonical equality. Those post-parse
+walks do not replace the strict Python decoder's pre-parse depth checks or
+arbitrary-JSON integer ceiling. Its SQL parsing/rendering is outside the Python
+H/B/N meter and does not claim whole-process or pre-parse allocation bounds.
+Even a canonical replacement signature with consistently refreshed hashes can
+pass this integrity component; only genuine independent signature verification
+can reject its cryptographic invalidity. Source and native controls are
+authored but unexecuted. The existing v3 loader, execution reservation and
+service replay paths remain unchanged and continue to reject v4 records.
+
 ## Migration at the actual consumers
 
-| Consumer | Source `.41` status / remaining work |
+| Consumer | Source `.42` status / remaining work |
 | --- | --- |
 | Configured retention coordinator | Separate `RevocationPlannerPersistence` implemented; configuration pins keys/identities and calls genuine raw-byte storage. |
 | Configured read-to-persist owner | Private `RevocationPlanningCoordinator` closes read scopes before separate persistence, preserving original bytes, expectations and work. |
 | Transaction reserve/complete | Private v4 reservation, assertion/projection and sidecar custody, exact comparisons and locked CAS implemented. |
 | Store replay | Private original-byte replay requires existing exact assertion/projection custody; no repair or re-signing. |
 | Service persist/replay | Admit the explicit successor protocol; preserve original bytes and require independent context. |
-| Root-transition SQL | Legacy early protocol denial implemented; mixed-root v4 commit validation remains required. |
+| Root-transition SQL | Private retained-byte integrity binder added; legacy early protocol denial unchanged. Independently admitted mixed-root v4 commit validation remains required. |
 | Execution and terminal receipts | Bind the retained record and mixed transition; retain separate current-state, deadline and one-use checks. |
 | External witness | Authenticate the terminal writer/record/mixed-transition commitments, without exposing proof rows. |
 

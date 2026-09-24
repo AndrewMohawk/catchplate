@@ -3,8 +3,9 @@
 
 The caller must prepare a disposable private Unix-socket PostgreSQL cluster.
 This file never starts an engine, imports db/registry, or creates authority.
-Fixture records deliberately stand in for already admitted planner/capability
-rows and opaque root heads. These are NOT valid full planner or witness inputs.
+The legacy class records deliberately stand in for already admitted planner/
+capability rows and opaque root heads. They are NOT valid full planner or
+witness inputs.
 The exact production SQL guards, and the production canonical/digest functions,
 run against a real engine; data/root/publication rollback is observed directly.
 Pure radix calculation and signature admission have separate test boundaries.
@@ -13,6 +14,11 @@ The separate retention class installs the actual v9 custody schema and guards
 inside a rollback-owned namespace. Its small opaque byte strings are structural
 storage inputs, not signed plans. Deferred constraints are forced explicitly;
 these cases do not claim top-level commit, role/ACL or replay verification.
+
+The separate v4 integrity-binding class starts with genuinely signed/proved
+fixture bytes and actual Python raw replay under synthetic independent pins.
+Its SQL checks bind stored bytes and commitments only, not signatures, current
+roots/time, execution or public activation. Its schemas are rollback-owned.
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ import argparse
 import ast
 import base64
 import copy
+from contextlib import contextmanager
 import hashlib
 import json
 import re
@@ -40,6 +47,8 @@ sys.path.insert(0, str(ROOT))
 from serverware.native_postgres_results import run_native_fixture
 
 from serverware import authority_contract
+from serverware import authority_query_read_work as query_work
+from serverware import authority_revocation_retention as retained_record
 from serverware.authority_store.primary_tree_sql import canonical_json_function_sql
 from serverware.authority_store.root_transition_sql import (
     TRANSITION_PROFILE,
@@ -52,11 +61,18 @@ from serverware.authority_store.root_transition_sql import (
     root_transition_declarations_sql,
 )
 from serverware.authority_store.wire_json_sql import wire_json_function_sql
+from serverware.authority_store.revocation_retained_sql import (
+    load_revocation_retained_sql,
+    revocation_retained_declarations_sql,
+)
 from serverware.authority_store.v9_schema_source import (
     authority_v9_schema_source,
     planner_retention_guard_sql,
 )
 from test_webauthn_trust_projection_postgres import local_connection_parameters
+import test_authority_revocation_plan as revocation_oracle
+import test_authority_revocation_retention as retained_oracle
+import test_authority_revocation_persistence as persistence_oracle
 
 
 CONNECTION_PARAMETERS: dict[str, str | int] | None = None
@@ -1266,6 +1282,374 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.assertEqual(self.custody_snapshot(), baseline)
         # The outer transaction is still open and rollback-owned. This proves
         # neither top-level commit nor the production verifier/store call path.
+
+
+class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
+    """Actual retained-byte SQL binding, not signature or execution authority.
+
+    The positive starts with real independently signed/proved v4 fixture bytes,
+    also replayed by the genuine Python verifier. SQL only binds their original
+    transport, stored identities and commitments. It cannot authenticate a
+    replacement signing key, prove current roots, or authorize an operation.
+    """
+
+    PARENT = "policy_authority_planner_transactions"
+    CHILD = "policy_authority_revocation_retained_plans"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = revocation_oracle.PlanFixture(approval=False, include_audit=False)
+        cls.envelope_bytes = canonical(cls.fixture.envelope)
+        cls.context = retained_oracle.record_context(cls.fixture)
+        cls.context_bytes = canonical(cls.context)
+        cls.header = retained_oracle.record_header(cls.fixture, cls.envelope_bytes, cls.context_bytes)
+        expectations = cls.fixture.arguments()
+        expectations.pop("envelope")
+        # Real signatures, mixed proofs and kernel replay. This does not turn
+        # the independently supplied synthetic pins into production enrollment.
+        actual = retained_record._verify_record_on_work(envelope_bytes=cls.envelope_bytes,
+            evaluation_context_bytes=cls.context_bytes,
+            work=query_work._ValidationWork(query_work.QueryReadValidationLimits()), **expectations)
+        if (actual.payload_bytes != canonical(cls.fixture.payload) or actual.header != cls.header
+                or actual.record_digest != digest("serverware.policyAuthorityRevocationRetainedPlan/v1",
+                                                   canonical(cls.header))):
+            raise AssertionError("genuine fixture replay differs from independent retained commitments")
+
+    def setUp(self):
+        self.connection = AuthorityRootTransitionPostgresTests.connection()
+        self.addCleanup(self.connection.close)
+        self.assertEqual(self.connection.execute("SELECT inet_server_addr()").fetchone(), (None,))
+        self.schema = "serverware_revocation_binding_" + uuid.uuid4().hex
+        self.namespace = '"' + self.schema + '"'
+        self.connection.execute("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        self.addCleanup(self.rollback_owned_schema)
+        self.connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
+        self.connection.execute(sql.SQL("SET LOCAL search_path TO {}, pg_catalog").format(sql.Identifier(self.schema)))
+        self.connection.execute(authority_v9_schema_source())
+        self.connection.execute(planner_retention_guard_sql(self.namespace))
+        for statement in production_digest_functions(self.namespace):
+            self.connection.execute(statement)
+        self.connection.execute(wire_json_function_sql(self.namespace))
+        self.connection.execute(f"""
+            CREATE FUNCTION {self.namespace}.retained_component(planner_id text)
+            RETURNS TABLE(payload jsonb, measured_plan jsonb, evaluation_context jsonb,
+                mixed_transition jsonb, primary_transition jsonb, record_digest text,
+                snapshot_digest text, payload_bytes bytea, envelope_bytes bytea, context_bytes bytea)
+            LANGUAGE plpgsql SET search_path = pg_catalog AS $retained_component$
+            DECLARE
+                planner {self.namespace}.policy_authority_planner_transactions%ROWTYPE;
+                {revocation_retained_declarations_sql()}
+            BEGIN
+                SELECT * INTO STRICT planner FROM {self.namespace}.policy_authority_planner_transactions
+                    WHERE planner_transaction_id = planner_id FOR UPDATE;
+                {load_revocation_retained_sql(self.namespace)}
+                RETURN QUERY SELECT rv_payload, rv_plan, rv_context, rv_transition, rv_primary,
+                    rv_record_digest, rv_snapshot_digest, rv_payload_bytes, rv_envelope_bytes, rv_context_bytes;
+            END;
+            $retained_component$;
+            CREATE FUNCTION {self.namespace}.legacy_component(planner_id text)
+            RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog AS $legacy_component$
+            DECLARE
+                planner {self.namespace}.policy_authority_planner_transactions%ROWTYPE;
+                capability record;
+                {root_transition_declarations_sql()}
+            BEGIN
+                SELECT * INTO STRICT planner FROM {self.namespace}.policy_authority_planner_transactions
+                    WHERE planner_transaction_id = planner_id FOR UPDATE;
+                {load_root_transition_sql(self.namespace)}
+            END;
+            $legacy_component$;
+        """)
+
+    def rollback_owned_schema(self):
+        self.connection.rollback()
+        self.assertEqual(self.connection.execute("SELECT pg_catalog.to_regnamespace(%s)",
+            (self.schema,)).fetchone(), (None,))
+
+    def records(self):
+        parent, child = persistence_oracle.expected_rows(self.fixture, self.fixture.now_epoch_ns)
+        parent.update(exact_response_base64url=None, exact_response_bytes_digest=None,
+            exact_response_byte_count=None, terminal_receipt_json=None, terminal_receipt_digest=None,
+            terminal_at_epoch_ns=None)
+        self.assertEqual((len(parent), len(child)), (36, 12))
+        return parent, child
+
+    def reanchor(self, parent, child, *, envelope=None, context=None, payload=None):
+        # Independently refresh only storage byte/header anchors. Deliberately
+        # do not repair a changed signature, mixed proof, Snapshot or claim.
+        for row, prefix, raw in ((child, "exact_envelope", envelope),
+                                  (child, "evaluation_context", context),
+                                  (parent, "exact_plan", payload)):
+            if raw is not None:
+                row[prefix + "_base64url"] = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+                row[prefix + "_bytes_digest"] = "sha256:" + hashlib.sha256(raw).hexdigest()
+                row[prefix + "_byte_count"] = len(raw)
+        header = {**self.header, "plannerKeyDigest": child["planner_key_digest"],
+            "verifierKeyDigest": child["verifier_key_digest"],
+            "envelopeDigest": child["exact_envelope_bytes_digest"],
+            "envelopeByteCount": child["exact_envelope_byte_count"],
+            "contextDigest": child["evaluation_context_bytes_digest"],
+            "contextByteCount": child["evaluation_context_byte_count"]}
+        parent["retained_record_digest"] = child["retained_record_digest"] = digest(
+            "serverware.policyAuthorityRevocationRetainedPlan/v1", canonical(header))
+
+    @contextmanager
+    def inserted(self, parent, child):
+        # DDL rejection is not silently counted as binder coverage: insertion
+        # happens before each assertRaises scope. Rollback keeps cases isolated.
+        self.connection.execute("SAVEPOINT retained_binding_case")
+        try:
+            for table, row in ((self.PARENT, parent), (self.CHILD, child)):
+                if row is not None:
+                    self.connection.execute(sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+                        sql.Identifier(self.schema, table),
+                        sql.SQL(", ").join(sql.Identifier(name) for name in row),
+                        sql.SQL(", ").join(sql.Placeholder() for _ in row)), tuple(row.values()))
+            yield
+        finally:
+            self.connection.execute("ROLLBACK TO SAVEPOINT retained_binding_case")
+            self.connection.execute("RELEASE SAVEPOINT retained_binding_case")
+
+    def bind(self, parent, *, legacy=False):
+        function = "legacy_component" if legacy else "retained_component"
+        return self.connection.execute(sql.SQL("SELECT * FROM {}(%s)").format(
+            sql.Identifier(self.schema, function)), (parent["planner_transaction_id"],)).fetchone()
+
+    def denied(self, parent, child, *, legacy=False, sqlstate="P0001", message=None):
+        with self.inserted(parent, child):
+            with self.assertRaises(psycopg.Error) as caught:
+                self.bind(parent, legacy=legacy)
+            self.assertEqual(caught.exception.sqlstate, sqlstate)
+            if message is not None:
+                self.assertRegex(str(caught.exception), message)
+
+    def payload_case(self, payload):
+        parent, child = self.records()
+        envelope = {**self.fixture.envelope, "payload": payload}
+        self.reanchor(parent, child, envelope=canonical(envelope), payload=canonical(payload))
+        return parent, child
+
+    def test_genuine_original_bytes_bind_mixed_transition_and_snapshot_v4(self):
+        parent, child = self.records()
+        with self.inserted(parent, child):
+            self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            result = self.bind(parent)
+            measured = self.fixture.payload["measuredPlan"]
+            snapshot = digest("serverware.policyAuthoritySnapshot/v4", *(measured[name].encode("ascii")
+                for name in ("operation", "operationId", "requestDigest", "queryManifestDigest",
+                    "authorityRootSetBeforeDigest", "authorizationProjectionDigest",
+                    "selectedBusinessRowsDigest", "mutationPlanDigest", "rootTransitionDigest")))
+            self.assertEqual(result, (self.fixture.payload, measured, self.context,
+                self.fixture.payload["rootTransition"], self.fixture.payload["rootTransition"]["primaryTransition"],
+                digest("serverware.policyAuthorityRevocationRetainedPlan/v1", canonical(self.header)), snapshot,
+                canonical(self.fixture.payload), self.envelope_bytes, self.context_bytes))
+            self.assertEqual(snapshot, measured["authoritySnapshotDigest"])
+            # The pure binder reads actual custody rows and never mutates them.
+            self.assertEqual(self.connection.execute(sql.SQL("SELECT pg_catalog.to_jsonb(p) FROM {} p").format(
+                sql.Identifier(self.schema, self.PARENT))).fetchone(), (parent,))
+            self.assertEqual(self.connection.execute(sql.SQL("SELECT pg_catalog.to_jsonb(p) FROM {} p").format(
+                sql.Identifier(self.schema, self.CHILD))).fetchone(), (child,))
+
+    def test_raw_hashes_and_separate_payload_envelope_context_anchors_are_required(self):
+        for target, field in (("parent", "exact_plan_bytes_digest"),
+                ("child", "exact_envelope_bytes_digest"), ("child", "evaluation_context_bytes_digest")):
+            parent, child = self.records()
+            (parent if target == "parent" else child)[field] = token("wrong stored bytes")
+            with self.subTest(target=target, field=field):
+                self.denied(parent, child, message="bytes changed")
+        # The parent DDL keeps payload bytes opaque and permits these inputs;
+        # the stricter sidecar CHECKs would reject them before this binder.
+        # Exercise the common transport body through the actual parent row.
+        for variant in ("alphabet", "padding", "byte_count", "unused_bits"):
+            parent, child = self.records()
+            if variant == "alphabet":
+                parent["exact_plan_base64url"] = "%" + parent["exact_plan_base64url"][1:]
+            elif variant == "padding":
+                parent["exact_plan_base64url"] += "="
+            elif variant == "byte_count":
+                parent["exact_plan_byte_count"] += 1
+            else:
+                raw = canonical(self.fixture.payload)
+                if len(raw) % 3 == 0:
+                    raw += b" "  # Reach a padding-bit case before JSON admission.
+                self.reanchor(parent, child, payload=raw)
+                alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+                encoded = parent["exact_plan_base64url"]
+                last = alphabet.index(encoded[-1])
+                self.assertEqual(last % (16 if len(raw) % 3 == 1 else 4), 0)
+                parent["exact_plan_base64url"] = encoded[:-1] + alphabet[last + 1]
+            with self.subTest(transport=variant):
+                self.denied(parent, child, message=("payload bytes changed" if variant == "unused_bits"
+                    else "payload transport is invalid"))
+        parent, child = self.records()
+        self.reanchor(parent, child, payload=b"{}")
+        self.denied(parent, child)
+        parent, child = self.records()
+        self.denied(parent, None, sqlstate="P0002", message="query returned no rows")
+        # Independently changed original envelope payload cannot be replaced
+        # by the parent's still-valid byte digest or vice versa.
+        changed = copy.deepcopy(self.fixture.envelope)
+        changed["payload"]["expectedResult"] = {"unrelated": True}
+        parent, child = self.records()
+        self.reanchor(parent, child, envelope=canonical(changed))
+        self.denied(parent, child)
+
+    def test_canonical_raw_aliases_and_duplicate_decoded_keys_are_rejected(self):
+        for document in ("envelope", "context", "payload"):
+            raw = {"envelope": self.envelope_bytes, "context": self.context_bytes,
+                   "payload": canonical(self.fixture.payload)}[document]
+            # All variants get fresh byte/hash/header anchors. Only the
+            # original lexical spelling differs from admitted canonical wire.
+            key = b'"schema":'
+            self.assertIn(key, raw)
+            aliases = (b" " + raw, raw + b"\n", raw.replace(key, b'"\\u0073chema":', 1),
+                b'{"schema":"duplicate",' + raw[1:])
+            for alias in aliases:
+                parent, child = self.records()
+                self.reanchor(parent, child, **{document: alias})
+                with self.subTest(document=document, prefix=alias[:24]):
+                    self.denied(parent, child)
+        # A nested duplicate must be caught before JSONB erases it, even when
+        # it has the same decoded value and is outside the top-level key set.
+        key = b'"rootRevision":'
+        raw = self.envelope_bytes
+        self.assertIn(key, raw)
+        alias = raw.replace(key, b'"rootRevision":0,"rootRevision":', 1)
+        parent, child = self.records()
+        self.reanchor(parent, child, envelope=alias)
+        self.denied(parent, child)
+        for boundary in ("node", "depth"):
+            context = copy.deepcopy(self.context)
+            excessive = [None] * 4096 if boundary == "node" else None
+            if boundary == "depth":
+                for _ in range(9):
+                    excessive = [excessive]
+            context["expectedApproverPolicyDigest"] = excessive
+            raw = canonical(context)
+            self.assertLessEqual(len(raw), 512 * 1024)
+            parent, child = self.records()
+            self.reanchor(parent, child, context=raw)
+            with self.subTest(context_boundary=boundary):
+                self.denied(parent, child, message="authority wire JSON " + boundary + " bound exceeded")
+
+    def test_closed_v4_documents_and_integer_token_types_do_not_use_jsonb_aliases(self):
+        for path, action in (((), "extra"), (("measuredPlan",), "extra"),
+                (("rootTransition",), "extra"), (("rootTransition", "primaryTransition"), "extra")):
+            payload = copy.deepcopy(self.fixture.payload)
+            target = payload
+            for field in path:
+                target = target[field]
+            target["foreign"] = None
+            with self.subTest(path=path, action=action):
+                self.denied(*self.payload_case(payload))
+        for document, raw, key, value in (
+                ("envelope", self.envelope_bytes, "fence", self.fixture.fence),
+                ("context", self.context_bytes, "expectedFence", self.fixture.fence)):
+            original = ('"' + key + '":' + str(value)).encode("ascii")
+            self.assertIn(original, raw)
+            for token_value in (str(value) + ".0", str(value) + "e0", "true", "null"):
+                alias = raw.replace(original, ('"' + key + '":' + token_value).encode("ascii"), 1)
+                parent, child = self.records()
+                self.reanchor(parent, child, **{document: alias})
+                message = None
+                if document == "envelope":
+                    # Keep the parent's exact payload coherent with the
+                    # envelope so boolean/null reach the real counter guard,
+                    # not merely the envelope-versus-parent equality check.
+                    changed_payload = canonical(self.fixture.payload).replace(original,
+                        ('"' + key + '":' + token_value).encode("ascii"), 1)
+                    self.reanchor(parent, child, payload=changed_payload)
+                    if token_value in ("true", "null"):
+                        message = "counter type is invalid"
+                with self.subTest(document=document, token=token_value):
+                    self.denied(parent, child, message=message)
+        parent, child = self.records()
+        changed = {**self.fixture.envelope, "schema": "serverware.signedPolicyAuthorityMeasuredPlan/v3"}
+        self.reanchor(parent, child, envelope=canonical(changed))
+        self.denied(parent, child)
+
+    def test_locked_parent_and_original_context_bind_identity_deadline_and_cutoff(self):
+        for field, value in (("operation_id", token("foreign operation")),
+                ("request_digest", token("foreign request")), ("capability_id", token("foreign capability")),
+                ("fence", self.fixture.fence + 1), ("deadline_epoch_ns", self.fixture.deadline_epoch_ns + 1),
+                ("planner_measurement_digest", token("foreign planner"))):
+            parent, child = self.records()
+            parent[field] = value
+            with self.subTest(parent=field):
+                self.denied(parent, child)
+        for field, value in (("expectedCapabilityId", token("foreign capability")),
+                ("expectedPlannerTransactionId", token("foreign transaction")),
+                ("expectedFence", self.fixture.fence + 1),
+                ("deadlineEpochNs", self.fixture.deadline_epoch_ns + 1),
+                ("databaseCutoffUs", self.fixture.semantic.cutoff_us + 1)):
+            context = {**self.context, field: value}
+            parent, child = self.records()
+            self.reanchor(parent, child, context=canonical(context))
+            with self.subTest(context=field):
+                self.denied(parent, child)
+
+    def test_key_digests_and_record_header_are_original_integrity_bindings(self):
+        for field in ("planner_key_digest", "verifier_key_digest", "retained_record_digest"):
+            parent, child = self.records()
+            child[field] = token("different retained " + field)
+            if field == "retained_record_digest":
+                parent[field] = child[field]
+            with self.subTest(field=field):
+                self.denied(parent, child)
+        # A different valid header domain is not interchangeable, even with
+        # coherent parent/sidecar relational digest values.
+        parent, child = self.records()
+        parent["retained_record_digest"] = child["retained_record_digest"] = digest(
+            "serverware.policyAuthorityRevocationRetainedPlan/v0", canonical(self.header))
+        self.denied(parent, child)
+
+    def test_mixed_transition_and_nine_snapshot_frames_keep_their_v4_domains(self):
+        payload = copy.deepcopy(self.fixture.payload)
+        payload["rootTransition"]["proofBundleDigest"] = token("wrong proof bundle")
+        self.denied(*self.payload_case(payload))
+        payload = copy.deepcopy(self.fixture.payload)
+        payload["rootTransition"]["primaryTransition"]["businessAfterRoots"][0]["rootRevision"] += 1
+        self.denied(*self.payload_case(payload))
+        fields = ("operation", "operationId", "requestDigest", "queryManifestDigest",
+            "authorityRootSetBeforeDigest", "authorizationProjectionDigest",
+            "selectedBusinessRowsDigest", "mutationPlanDigest", "rootTransitionDigest")
+        for domain, count in (("serverware.policyAuthoritySnapshot/v3", 9),
+                               ("serverware.policyAuthoritySnapshot/v4", 8)):
+            payload = copy.deepcopy(self.fixture.payload)
+            measured = payload["measuredPlan"]
+            measured["authoritySnapshotDigest"] = digest(domain,
+                *(measured[name].encode("ascii") for name in fields[:count]))
+            parent, child = self.payload_case(payload)
+            parent["authority_snapshot_digest"] = measured["authoritySnapshotDigest"]
+            with self.subTest(domain=domain, count=count):
+                self.denied(parent, child)
+        # The legacy variadic helper's ninth-frame exception is still v3-only.
+        with self.assertRaises(psycopg.Error) as caught:
+            with self.connection.transaction():
+                self.connection.execute(sql.SQL("SELECT {}(%s, VARIADIC %s::text[])").format(
+                    sql.Identifier(self.schema, "serverware_policy_authority_domain_digest")),
+                    ("serverware.policyAuthoritySnapshot/v4", ["x"] * 9))
+        self.assertEqual(caught.exception.sqlstate, "P0001")
+        self.assertRegex(str(caught.exception), "digest framing is outside its fixed bound")
+
+    def test_integrity_binding_never_authenticates_signature_or_opens_legacy_v3(self):
+        parent, child = self.records()
+        self.denied(parent, child, legacy=True, message="requires legacy v3 protocol")
+        envelope = {**self.fixture.envelope,
+            "signatureBase64Url": base64.urlsafe_b64encode(bytes(64)).rstrip(b"=").decode("ascii")}
+        raw = canonical(envelope)
+        self.reanchor(parent, child, envelope=raw)
+        with self.inserted(parent, child):
+            result = self.bind(parent)
+            self.assertEqual(result[8], raw)
+        expectations = self.fixture.arguments()
+        expectations.pop("envelope")
+        with self.assertRaises(retained_record.RevocationRetentionError):
+            retained_record._verify_record_on_work(envelope_bytes=raw,
+                evaluation_context_bytes=self.context_bytes,
+                work=query_work._ValidationWork(query_work.QueryReadValidationLimits()), **expectations)
+        # No SQL proof/signature success token is passed into that verifier;
+        # false cryptographic authority remains false after integrity binding.
 
 
 if __name__ == "__main__":

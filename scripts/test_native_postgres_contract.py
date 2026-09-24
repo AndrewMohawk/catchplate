@@ -30,7 +30,7 @@ from serverware import native_postgres_results as reporting
 
 
 EXPECTED_SUITES = (
-    ("scripts/test_webauthn_trust_projection_postgres.py", 8, False, 300),
+    ("scripts/test_webauthn_trust_projection_postgres.py", 12, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
     ("scripts/test_authority_mutation_postgres.py", 14, False, 300),
     ("scripts/test_authority_root_transition_postgres.py", 21, False, 300),
@@ -119,8 +119,8 @@ class NativePostgresInventoryTests(unittest.TestCase):
         self.assertEqual(tuple((suite.script, len(suite.test_ids), suite.disposable_cluster,
                                 suite.timeout_seconds) for suite in inventory.SUITES), EXPECTED_SUITES)
         self.assertIs(type(inventory.TOTAL_TESTS), int)
-        self.assertEqual(inventory.TOTAL_TESTS, 252)
-        self.assertEqual(sum(shape[1] for shape in EXPECTED_SUITES), 252)
+        self.assertEqual(inventory.TOTAL_TESTS, 256)
+        self.assertEqual(sum(shape[1] for shape in EXPECTED_SUITES), 256)
         all_ids = tuple(test_id for suite in inventory.SUITES for test_id in suite.test_ids)
         self.assertEqual(len(all_ids), len(set(all_ids)))
 
@@ -164,7 +164,7 @@ class NativePostgresInventoryTests(unittest.TestCase):
             with self.subTest(suites=suites), mock.patch.object(inventory, "SUITES", suites):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()
-        for total in (True, 251, 252.0, "252"):
+        for total in (True, 252, 255, 256.0, "256"):
             with self.subTest(total=total), mock.patch.object(inventory, "TOTAL_TESTS", total):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()

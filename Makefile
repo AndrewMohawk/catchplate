@@ -839,6 +839,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/webauthn_trust_sql.py \
 	serverware/authority_store/wire_json_sql.py \
 	serverware/authority_transition_core.py \
+	serverware/authority_webauthn_trust.py \
 	serverware/db.py \
 	serverware/native_postgres_inventory.py \
 	serverware/native_postgres_results.py

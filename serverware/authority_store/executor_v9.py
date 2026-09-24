@@ -24,6 +24,7 @@ from serverware.authority_store.mutation_sql import (
 from serverware.authority_store.audit_capacity_sql import AUDIT_CAPACITY_FUNCTION_NAME
 from serverware.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection,
+    webauthn_credential_policy_sql,
 )
 from serverware.authority_store.root_transition_sql import (
     assert_root_transition_after_sql,
@@ -1787,69 +1788,7 @@ def install_authority_v9_executor(
                                     'serverware.policyAuthorityCredentialPolicy/v1',
                                     {namespace}.
                                         serverware_policy_authority_wire_json(
-                                            pg_catalog.jsonb_build_object(
-                                                'schema',
-                                                    'serverware.policyAuthorityCredentialPolicy/v1',
-                                                'credentialRecordId',
-                                                    assertion_evidence.
-                                                        credential_record_id,
-                                                'credentialId',
-                                                    assertion_evidence.
-                                                        credential_id,
-                                                'userId',
-                                                    credential_mutation.value
-                                                        ->'expectedRow'
-                                                        ->>'user_id',
-                                                'authenticatorClass',
-                                                    credential_mutation.value
-                                                        ->'expectedRow'
-                                                        ->>'authenticator_class',
-                                                'attestationTrusted',
-                                                    (
-                                                        credential_mutation.
-                                                            value
-                                                            ->'expectedRow'
-                                                            ->>'attestation_trusted'
-                                                    )::bigint = 1,
-                                                'attestationLeafDigest',
-                                                    credential_mutation.value
-                                                        ->'expectedRow'
-                                                        ->'attestation_leaf_sha256',
-                                                'attestationRootDigest',
-                                                    credential_mutation.value
-                                                        ->'expectedRow'
-                                                        ->'attestation_root_sha256',
-                                                'trustBundleDigest',
-                                                    trust_publication.
-                                                        bundle_digest,
-                                                'trustBundleSequence',
-                                                    trust_publication.sequence,
-                                                'trustRollbackEpoch',
-                                                    trust_publication.
-                                                        rollback_epoch,
-                                                'trustHighWaterDigest',
-                                                    computed_trust_high_water_digest,
-                                                'revocationSetDigest',
-                                                    trust_publication.
-                                                        revocation_set_digest,
-                                                'trustWitnessReceiptDigest',
-                                                    trust_publication.
-                                                        witness_receipt_digest,
-                                                'publicKeyDigest',
-                                                    'sha256:' ||
-                                                    pg_catalog.encode(
-                                                        pg_catalog.sha256(
-                                                            pg_catalog.convert_to(
-                                                                credential_mutation.
-                                                                    value
-                                                                    ->'expectedRow'
-                                                                    ->>'public_key_cose',
-                                                                'UTF8'
-                                                            )
-                                                        ),
-                                                        'hex'
-                                                    )
-                                            )
+                                            {webauthn_credential_policy_sql()}
                                         )
                                 ) = assertion_evidence.
                                         credential_policy_digest

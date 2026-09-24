@@ -10,6 +10,7 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 from types import MappingProxyType
 import unittest
@@ -20,7 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_webauthn_trust as trust
+from serverware import authority_contract
 from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadWorkError, _ValidationWork
+from serverware.authority_store import mutation_sql
+from serverware.authority_store import webauthn_trust_sql as trust_sql
 
 
 DOMAIN = "serverware.webauthnTrustHighWater/v1"
@@ -70,6 +74,41 @@ def policy_document(row):
         "revocationSetDigest": "sha256:" + "3" * 64,
         "trustWitnessReceiptDigest": "sha256:" + "4" * 64,
         "publicKeyDigest": "sha256:" + hashlib.sha256(row["public_key_cose"].encode("utf-8")).hexdigest()}
+
+
+def source_tree(relative, maximum_bytes=2 * 1024 * 1024):
+    path = ROOT / relative
+    if path.stat().st_size > maximum_bytes:
+        raise AssertionError("source fixture input exceeds its explicit bound")
+    source = path.read_text(encoding="utf-8")
+    return source, ast.parse(source)
+
+
+def source_function(tree, name):
+    matches = [node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name]
+    if len(matches) != 1:
+        raise AssertionError("source function inventory is not exact")
+    return matches[0]
+
+
+def source_assignment(tree, name):
+    matches = [node.value for node in ast.walk(tree) if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)]
+    if len(matches) != 1:
+        raise AssertionError("source assignment inventory is not exact")
+    return matches[0]
+
+
+def strings(tree):
+    return [node.value for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and type(node.value) is str]
+
+
+def sql_tokens(value):
+    # The independently pinned expression contains no whitespace inside SQL
+    # string literals. This comparison ignores layout, not SQL value spelling.
+    return re.sub(r"\s+", "", value)
 
 
 class Text(str):
@@ -240,6 +279,172 @@ class WebAuthnTrustTests(unittest.TestCase):
         imports = {node.module for node in helper.body if isinstance(node, ast.ImportFrom)}
         self.assertTrue({"serverware.authority_service", "serverware.authority_planner",
                          "serverware.authority_transition_registry"}.isdisjoint(imports))
+
+    def test_nullable_and_text_aaguid_remain_exact_policy_values_and_commitments(self):
+        observed = []
+        for value in (None, "", "fixture-aaguid", "雪-aaguid"):
+            row = {**credential(), "aaguid": value}
+            expected = policy_document(row)
+            actual = trust.credential_policy_document(credential=row, high_water=document(),
+                trust_high_water_digest=commitment(document()))
+            with self.subTest(aaguid=value):
+                self.assertEqual(actual, expected)
+                self.assertIs(type(actual["aaguid"]), type(value))
+                result = trust.credential_policy_digest(actual)
+                self.assertEqual(result, commitment(expected, "serverware.policyAuthorityCredentialPolicy/v1"))
+                observed.append(result)
+                row["aaguid"] = "caller changed"
+                self.assertEqual(actual["aaguid"], value)
+        self.assertEqual(len(set(observed)), 4)
+
+    def test_missing_and_nonstring_aaguid_are_not_nullable_validated_row_authority(self):
+        high_digest = commitment(document())
+        missing = {key: value for key, value in credential().items() if key != "aaguid"}
+        for row, expected_hashes in ((missing, 0), *(({**credential(), "aaguid": value}, 1)
+                for value in (False, 17, [], {}, b"aaguid", Text("aaguid")))):
+            # The constructor hashes the genuine public-key text before its
+            # final policy type guard; a missing required row field fails sooner.
+            with self.subTest(aaguid=row.get("aaguid", "missing")), \
+                    patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes, \
+                    self.assertRaises(trust.WebAuthnTrustError):
+                trust.credential_policy_document(credential=row, high_water=document(),
+                    trust_high_water_digest=high_digest)
+            self.assertEqual(hashes.call_count, expected_hashes)
+        for value in (False, 17, [], {}, b"aaguid", Text("aaguid")):
+            changed = {**policy_document(credential()), "aaguid": value}
+            with self.subTest(document_aaguid=value), \
+                    patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes, \
+                    self.assertRaises(trust.WebAuthnTrustError):
+                trust.credential_policy_digest(changed)
+            self.assertEqual(hashes.call_count, 0)
+
+    def test_sql_expression_has_exact_sixteen_literal_fields_and_json_aaguid_projection(self):
+        expected = (
+            ("schema", "'serverware.policyAuthorityCredentialPolicy/v1'"),
+            ("credentialRecordId", "assertion_evidence.credential_record_id"),
+            ("credentialId", "assertion_evidence.credential_id"),
+            ("userId", "credential_mutation.value->'expectedRow'->>'user_id'"),
+            ("authenticatorClass", "credential_mutation.value->'expectedRow'->>'authenticator_class'"),
+            ("aaguid", "credential_mutation.value->'expectedRow'->'aaguid'"),
+            ("attestationTrusted", "(credential_mutation.value->'expectedRow'->>'attestation_trusted')::bigint = 1"),
+            ("attestationLeafDigest", "credential_mutation.value->'expectedRow'->'attestation_leaf_sha256'"),
+            ("attestationRootDigest", "credential_mutation.value->'expectedRow'->'attestation_root_sha256'"),
+            ("trustBundleDigest", "trust_publication.bundle_digest"),
+            ("trustBundleSequence", "trust_publication.sequence"),
+            ("trustRollbackEpoch", "trust_publication.rollback_epoch"),
+            ("trustHighWaterDigest", "computed_trust_high_water_digest"),
+            ("revocationSetDigest", "trust_publication.revocation_set_digest"),
+            ("trustWitnessReceiptDigest", "trust_publication.witness_receipt_digest"),
+            ("publicKeyDigest", "'sha256:' || pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "credential_mutation.value->'expectedRow'->>'public_key_cose', 'UTF8')), 'hex')"),
+        )
+        self.assertEqual(len(expected), 16)
+        self.assertEqual({name for name, _ in expected}, set(policy_document(credential())))
+        with patch.object(hashlib, "sha256", side_effect=AssertionError("SQL rendering is hash-free")):
+            actual = trust_sql.webauthn_credential_policy_sql()
+        self.assertEqual(sql_tokens(actual), sql_tokens("pg_catalog.jsonb_build_object("
+            + ",".join(f"'{name}', {value}" for name, value in expected) + ")"))
+        for arguments in (("caller SQL",), ({"aaguid": "caller projection"},)):
+            with self.assertRaises(TypeError):
+                trust_sql.webauthn_credential_policy_sql(*arguments)
+        _, tree = source_tree("serverware/authority_store/webauthn_trust_sql.py")
+        self.assertEqual([alias.name for node in tree.body if isinstance(node, ast.Import)
+            for alias in node.names], ["re", "textwrap"])
+        self.assertEqual([node.module for node in tree.body if isinstance(node, ast.ImportFrom)], ["__future__"])
+
+    def test_active_executor_interpolates_the_real_shared_policy_inside_existing_digest_and_cas(self):
+        source, tree = source_tree("serverware/authority_store/executor_v9.py")
+        aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
+            and node.module == "serverware.authority_store.webauthn_trust_sql" for alias in node.names]
+        self.assertEqual([(alias.name, alias.asname) for alias in aliases],
+            [("locked_webauthn_trust_projection", None), ("webauthn_credential_policy_sql", None)])
+        installer = source_function(tree, "install_authority_v9_executor")
+        calls = [node for node in ast.walk(installer) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == "webauthn_credential_policy_sql"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((calls[0].args, calls[0].keywords), ([], []))
+        owners = [node for node in ast.walk(installer) if isinstance(node, ast.JoinedStr)
+            and any(isinstance(item, ast.FormattedValue) and item.value is calls[0] for item in node.values)]
+        self.assertEqual(len(owners), 1)
+        sql = "".join(item.value if isinstance(item, ast.Constant) else "{"
+            + ast.unparse(item.value) + "}" for item in owners[0].values)
+        active = sql.split("AS $serverware_execute_v9$", 1)[1].split("$serverware_execute_v9$;", 1)[0]
+        self.assertIn(sql_tokens("serverware_policy_authority_domain_digest("
+            "'serverware.policyAuthorityCredentialPolicy/v1', {namespace}."
+            "serverware_policy_authority_wire_json({webauthn_credential_policy_sql()})"
+            ") = assertion_evidence.credential_policy_digest"), sql_tokens(active))
+        self.assertIn("authority v9 WebAuthn CAS mutations are incomplete", active)
+        self.assertIn("{apply_mutation_sql(namespace)}", active)
+        mutation = mutation_sql.apply_mutation_sql('"serverware_metadata"')
+        self.assertIn("WHERE %s FOR UPDATE", mutation)
+        self.assertIn("current_row IS DISTINCT FROM mutation->'expectedRow'", mutation)
+        self.assertEqual(source.count("{webauthn_credential_policy_sql()}"), 1)
+
+    def test_legacy_apply_and_begin_are_overridden_by_unconditional_v9_denial(self):
+        _, tree = source_tree("serverware/authority_store/executor_v9.py")
+        literals = "\n".join(strings(source_function(tree, "install_authority_v9_executor")))
+        for tag, message in (("serverware_legacy_apply_v9", "legacy authority apply is disabled by schema v9"),
+                             ("serverware_legacy_begin_v9", "legacy controlled writer begin is disabled by schema v9"),
+                             ("serverware_legacy_finish_v9", "legacy controlled writer finish is disabled by schema v9")):
+            bodies = re.findall(rf"AS \${tag}\$(.*?)\${tag}\$;", literals, re.DOTALL)
+            self.assertEqual(len(bodies), 1)
+            self.assertEqual(" ".join(bodies[0].split()), f"BEGIN RAISE EXCEPTION '{message}'; END;")
+        source, db_tree = source_tree("serverware/db.py", 16 * 1024 * 1024)
+        calls = [node for node in ast.walk(db_tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "_authority_executor_v9" and node.func.attr == "install_authority_v9_executor"]
+        self.assertEqual(len(calls), 1)
+        prefix = "\n".join(source.splitlines()[:calls[0].lineno - 1])
+        for tag in ("serverware_owner_apply", "serverware_begin_controlled_writer", "serverware_finish_controlled_writer"):
+            self.assertIn(f"${tag}$", prefix)
+
+    def test_dormant_challenge_issuer_is_outside_exact_executor_grants(self):
+        legacy = "serverware_policy_authority_issue_webauthn_challenge"
+        self.assertNotIn(legacy, {name for name, _, _ in authority_contract.EXECUTOR_FUNCTION_SIGNATURES})
+        _, tree = source_tree("serverware/db.py", 16 * 1024 * 1024)
+        inventory = source_assignment(tree, "_POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES")
+        self.assertIn("authority_contract.EXECUTOR_FUNCTION_SIGNATURES", ast.unparse(inventory))
+        self.assertNotIn(legacy, strings(source_assignment(tree, "_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS")))
+        seal = source_function(tree, "_seal_postgres_schema_acl")
+        statements = [node.args[0] for node in ast.walk(seal) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "execute" and node.args]
+        revokes = [node for node in statements if any("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA" in value
+            for value in strings(node))]
+        self.assertTrue(any("FROM PUBLIC" in value for node in revokes for value in strings(node)))
+        for name in ("role_name", "executor_role_name", "verifier_role_name", "planner_writer_role_name"):
+            self.assertTrue(any(name in {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
+                for node in revokes), name)
+        grants = [node for node in statements if any("GRANT EXECUTE ON FUNCTION" in value for value in strings(node))]
+        self.assertEqual(len(grants), 3)
+        self.assertFalse(any(legacy in value for node in grants for value in strings(node)))
+        executor_loops = [node for node in ast.walk(seal) if isinstance(node, ast.For)
+            and ast.unparse(node.iter) == "sorted(authority_executor_function_signatures)"]
+        self.assertEqual(len(executor_loops), 1)
+        executor_grants = [node for node in ast.walk(executor_loops[0]) if node in grants]
+        self.assertEqual(len(executor_grants), 1)
+        self.assertIn("executor_role_name", ast.unparse(executor_grants[0]))
+        self.assertIn("authority_contract.EXECUTOR_ARGUMENT_TYPES", ast.unparse(executor_loops[0]))
+
+    def test_current_service_challenge_producer_and_receipt_require_same_seven_fields(self):
+        _, tree = source_tree("serverware/authority_service.py")
+        producer = source_function(tree, "_prepare_webauthn_challenge_writer")
+        payload = source_assignment(producer, "challenge_payload")
+        self.assertIsInstance(payload, ast.Dict)
+        expected = {"schema", "operationId", "rpId", "origin", "issuedAtEpochNs", "expiresAtEpochNs", "credentialId"}
+        names = [node.value for node in payload.keys]
+        self.assertEqual((len(names), set(names)), (7, expected))
+        self.assertEqual(ast.unparse(payload.values[names.index("credentialId")]), "credential_id")
+        reader = source_function(tree, "_read_webauthn_authority")
+        closures = [node for node in ast.walk(reader) if isinstance(node, ast.Compare)
+            and ast.unparse(node.left) == "set(payload)" and len(node.ops) == 1
+            and isinstance(node.ops[0], ast.NotEq)]
+        self.assertEqual(len(closures), 1)
+        self.assertEqual({node.value for node in closures[0].comparators[0].elts}, expected)
+        self.assertIn("payload.get('credentialId') != credential_binding['credential_id']", ast.unparse(reader))
+        producer_calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "_prepare_webauthn_challenge_writer"]
+        self.assertEqual(len(producer_calls), 1)
+        self.assertFalse(any("serverware_policy_authority_issue_webauthn_challenge" in value for value in strings(tree)))
 
 
 if __name__ == "__main__":

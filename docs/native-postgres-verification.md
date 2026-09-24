@@ -25,16 +25,16 @@ supply independent approval, installed controller identity or cleanup proof.
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
 defines `serverware.nativePostgresInventory/v1`, fourteen ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 252`. Each record contains an
+`NativePostgresSuite` records and `TOTAL_TESTS = 256`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 252 native SQL tests.
+methods contained in these fixtures; it is not a count of 256 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
-| 00 | `test_webauthn_trust_projection_postgres.py` | 8 | 300 s | No |
+| 00 | `test_webauthn_trust_projection_postgres.py` | 12 | 300 s | No |
 | 01 | `test_postgres_trigger_manifest.py` | 5 | 300 s | No |
 | 02 | `test_authority_mutation_postgres.py` | 14 | 300 s | No |
 | 03 | `test_authority_root_transition_postgres.py` | 21 | 300 s | No |
@@ -48,6 +48,17 @@ methods contained in these fixtures; it is not a count of 252 native SQL tests.
 | 11 | `test_authority_counted_projection_postgres.py` | 16 | 300 s | No |
 | 12 | `test_authority_counted_store_postgres.py` | 10 | 300 s | No |
 | 13 | `test_authority_counted_maintenance_postgres.py` | 32 | 300 s | No |
+
+Four added credential-policy methods use the fixed expression interpolated into
+the active v9 executor, the actual wire serializer and domain-digest function,
+and an independent sixteen-field policy oracle. They compare SQL and Python
+documents/digests, distinguish nullable and textual AAGUID values, and check that
+an AAGUID-only change invalidates the old claim in the component equality
+predicate. Missing and nonstring values explicitly demonstrate the expression's
+boundary: it is not full-row admission or a substitute for the executor's locked
+row comparison. These methods do not execute the full executor or prove CAS,
+independent roots, live credentials or deployment. All 252 previous method IDs,
+fourteen suites, sixteen children and deadlines remain; none has been run.
 
 The six appended counted-reader methods execute the unchanged production-qualified
 SQL against an independently seeded `serverware_metadata` schema. They reject

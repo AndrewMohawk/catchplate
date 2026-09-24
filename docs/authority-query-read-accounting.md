@@ -176,7 +176,8 @@ All prior method IDs are preserved. The `.30` bookkeeping slice retained 27
 staging methods, 16 planner/capacity source-linkage methods, 19 table/source-contract
 methods and 32 startup methods. Later private-acquisition additions are recorded
 in the linked acquisition document; these counts are authored inventories, not
-test results. The native inventory remains 252 methods across fourteen suites.
+test results. The separate [native inventory](native-postgres-verification.md)
+now contains 256 methods across fourteen suites, including later policy-parity controls.
 
 These tests have not run. No runtime, database, startup or production claim is
 established by their source or registration. Native-suite counts, verification

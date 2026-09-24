@@ -78,7 +78,7 @@ class NativePostgresBatchTests(unittest.TestCase):
     def test_exact_ten_synthetic_reports_reconcile_as_tests_only_not_controller_proof(self):
         result = reconcile()
         self.assertEqual((result.tests_status, result.expected_tests, result.stopped_tests),
-                         ("PASS", 252, 252))
+                         ("PASS", 256, 256))
         self.assertEqual(tuple(row.script for row in result.fixtures), tuple(s.script for s in SUITES))
         self.assertEqual(result.fixtures[0].source_sha256, SOURCE[0])
         self.assertEqual(result.fixtures[0].report_sha256,
@@ -117,7 +117,7 @@ class NativePostgresBatchTests(unittest.TestCase):
             value["suiteStatus"] = "FAIL"
             with self.subTest(status=status):
                 result = reconcile(changed_first(report=canonical(value), exit_code=1))
-                self.assertEqual((result.tests_status, result.stopped_tests), ("FAIL", 252))
+                self.assertEqual((result.tests_status, result.stopped_tests), ("FAIL", 256))
 
     def test_not_run_and_interrupted_methods_cannot_be_hidden_by_complete_count(self):
         for status, started, stopped, counter in (
@@ -135,7 +135,7 @@ class NativePostgresBatchTests(unittest.TestCase):
             with self.subTest(status=status, stopped=stopped):
                 result = reconcile(changed_first(report=canonical(value), exit_code=2))
                 self.assertEqual(result.tests_status, "INCOMPLETE")
-                self.assertEqual(result.stopped_tests, 252 - int(not stopped))
+                self.assertEqual(result.stopped_tests, 256 - int(not stopped))
 
     def test_auxiliary_error_fails_and_protocol_error_makes_even_full_run_incomplete(self):
         for key, status, code in (("auxiliaryErrors", "FAIL", 1),

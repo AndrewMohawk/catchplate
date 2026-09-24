@@ -125,8 +125,9 @@ and frontier suites preserve their old methods and add shared-work controls.
 Startup-dependent cases retain the real registry import and both planner gates.
 
 Existing-suite totals are now 28 batch, 30 range, 33 frontier, 20 planner/capacity
-source-linkage, 20 ACL/source-contract and 38 startup methods. These are authored
-inventories only; the native inventory stays at 252 methods across fourteen suites.
+source-linkage, 21 ACL/source-contract and 38 startup methods. These are authored
+inventories only; the separate [native inventory](native-postgres-verification.md)
+now contains 256 methods across fourteen suites, including later policy-parity controls.
 
 None has been executed. Deterministic SQL responders are not PostgreSQL
 transaction evidence; source review and fixture counts establish neither service

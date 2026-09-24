@@ -238,6 +238,19 @@ definition remain fail-closed and require a separately reviewed repair contract;
 the code change does not authorize silently replacing their functions. It also
 does not supply any missing kernel or remove the startup blocker.
 
+The active executor's credential-policy expression also now includes `aaguid`,
+matching the exact sixteen-field shared Python policy. It is a fixed zero-argument
+renderer in the same registry-free SQL module, used inside the unchanged
+wire/domain digest comparison. JSON null and string values retain their types;
+missing or malformed row values are not admitted merely because this expression
+can render them. The actual executor still locks and compares the complete
+`expectedRow` before any mutation. Four added native component cases compare
+the production expression, wire serializer and domain digest against independent
+and Python policies, including an AAGUID-only stale-claim negative control.
+They do not execute the full executor or prove CAS. The original eight fixture
+methods remain, and all twelve are authored and unexecuted. The existing-database
+repair requirement above applies to this function-definition change as well.
+
 ## Authenticated storage prerequisites
 
 ### Persisted PostgreSQL trigger modes

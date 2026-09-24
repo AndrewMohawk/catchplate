@@ -73,8 +73,9 @@ The four WebAuthn startup gaps remain open.
 
 The 14 isolated installation controls, five added ACL source controls and eight
 added native trigger/installer controls are authored only. All 24 previous
-counted-maintenance native IDs remain, giving 32 in that suite and 252 across
-the unchanged fourteen-suite native inventory.
+counted-maintenance native IDs remain, giving 32 in that suite. The separate
+[native inventory](native-postgres-verification.md) now contains 256 methods
+across the unchanged fourteen suites, including later credential-policy controls.
 
 Authored unit/native controls must be executed against one frozen source through
 the prescribed prepared lane. Source review and fixture counts are not evidence

@@ -104,19 +104,23 @@ Database Snapshot/persistence, one-use consumption, executor and terminal
 witness semantics must move together before activation. Registry admission and
 the other three missing WebAuthn kernels remain outstanding.
 
-Source review identifies an active v9 SQL/Python mismatch: the credential-policy
-reconstruction in `serverware_policy_authority_execute_v9` in
-[`executor_v9.py`](../serverware/authority_store/executor_v9.py) omits `aaguid`
-from the sixteen-field service/shared-helper policy. That active consumer still
-needs coordinated correction. The similar historical policy bodies in
+The active v9 SQL credential-policy reconstruction now uses the fixed
+[`webauthn_credential_policy_sql`](../serverware/authority_store/webauthn_trust_sql.py)
+expression, including `aaguid` in the sixteen-field service/shared-helper policy.
+[`executor_v9.py`](../serverware/authority_store/executor_v9.py) retains its
+existing wire/domain digest and locked full-row CAS checks. The expression
+preserves JSON null/string values; it is not row admission. Existing databases
+with the older function definition still require a reviewed repair rather than
+an automatic upgrade. SQL/Python component parity controls are authored, not run.
+
+The similar historical policy bodies in
 [`db.py`](../serverware/db.py) are replaced by unconditional v9 denial stubs.
 Its standalone SQL challenge issuer stores `credentialPolicyDigest` instead of
 `credentialId`, but remains an ungranted legacy path, not the current service
 producer. The current [`authority_service.py`](../serverware/authority_service.py)
 challenge preparation already emits the exact `credentialId` payload required
-by its receipt admission. This checkpoint neither repairs the active SQL policy
-consumer nor activates legacy helpers; no live ceremony or commit success is
-claimed.
+by its receipt admission. The SQL policy correction does not activate v4 or
+legacy helpers; no live ceremony, full executor or commit success is claimed.
 
 The authored shape, signed-plan and semantic-handoff fixtures use synthetic
 external identities and real fixture signatures/proofs. They are not passing

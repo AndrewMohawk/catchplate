@@ -7,12 +7,16 @@ schema, and drops that exact schema. It never starts Docker, provisions trust,
 imports the blocked registry, or substitutes a successful authority admission.
 The table declarations come from the pure production schema source; the executed
 projection comes from the same helper interpolated into the production executor.
+The credential-policy expression uses the real production wire/domain functions;
+its claim-equality predicate is component coverage, not the enclosing CAS guard.
 Root authentication, predicate completeness, the full executor, and migrations
 are deliberately outside this engineering proof boundary.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import stat
@@ -32,15 +36,20 @@ sys.path.insert(0, str(ROOT))
 
 from serverware.native_postgres_results import run_native_fixture
 
+from serverware import authority_webauthn_trust as trust
 from serverware.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection,
+    webauthn_credential_policy_sql,
 )
 from serverware.authority_store.metadata_schema_source import metadata_base_schema_source
+from serverware.authority_store.wire_json_sql import wire_json_function_sql
 
 
 CONNECTION_PARAMETERS: dict[str, str | int] | None = None
 PUBLICATIONS = "webauthn_trust_publications"
 HIGH_WATER = "webauthn_trust_publication_high_water"
+POLICY_DOMAIN = "serverware.policyAuthorityCredentialPolicy/v1"
+HIGH_WATER_DOMAIN = "serverware.webauthnTrustHighWater/v1"
 
 
 def local_connection_parameters(dsn: str) -> dict[str, str | int]:
@@ -109,6 +118,48 @@ def digest(character: str) -> str:
     return "sha256:" + character * 64
 
 
+def policy_wire(value: object) -> str:
+    return json.dumps(value, ensure_ascii=True, allow_nan=False,
+                      sort_keys=True, separators=(",", ":"))
+
+
+def policy_commitment(domain: str, value: object) -> str:
+    """Independent expected framing, never a substitute SQL implementation."""
+    body = policy_wire(value).encode("ascii")
+    return "sha256:" + hashlib.sha256(domain.encode("ascii") + b"\0"
+        + len(body).to_bytes(8, "big") + body).hexdigest()
+
+
+def policy_high_water() -> dict:
+    return {"schema": HIGH_WATER_DOMAIN, "rollbackEpoch": 2, "sequence": 7,
+        "publicationDigest": digest("a"), "metadataBlobDigest": digest("b"),
+        "revocationSetDigest": digest("c"), "witnessReceiptDigest": digest("d"),
+        "witnessSequence": 11}
+
+
+def policy_credential() -> dict:
+    return {"id": "credential-record", "credential_id": "credential-public-id",
+        "user_id": "fixture-actor", "authenticator_class": "security-key",
+        "aaguid": "fixture-aaguid", "attestation_trusted": 1,
+        "attestation_leaf_sha256": None, "attestation_root_sha256": digest("e"),
+        "attestation_trust_bundle_digest": digest("a"),
+        "attestation_trust_bundle_sequence": 7, "public_key_cose": "synthetic-key-雪🙂"}
+
+
+def independent_policy(row: dict) -> dict:
+    return {"schema": POLICY_DOMAIN, "credentialRecordId": row["id"],
+        "credentialId": row["credential_id"], "userId": row["user_id"],
+        "authenticatorClass": row["authenticator_class"], "aaguid": row["aaguid"],
+        "attestationTrusted": bool(row["attestation_trusted"]),
+        "attestationLeafDigest": row["attestation_leaf_sha256"],
+        "attestationRootDigest": row["attestation_root_sha256"],
+        "trustBundleDigest": digest("a"), "trustBundleSequence": 7,
+        "trustRollbackEpoch": 2,
+        "trustHighWaterDigest": policy_commitment(HIGH_WATER_DOMAIN, policy_high_water()),
+        "revocationSetDigest": digest("c"), "trustWitnessReceiptDigest": digest("d"),
+        "publicKeyDigest": "sha256:" + hashlib.sha256(row["public_key_cose"].encode("utf-8")).hexdigest()}
+
+
 class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
     @classmethod
     def connection(cls, *, autocommit: bool = True) -> psycopg.Connection:
@@ -123,8 +174,8 @@ class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
         cls.schema = "serverware_trust_projection_" + uuid.uuid4().hex
         cls.namespace = '"' + cls.schema + '"'
         with cls.connection() as connection:
-            if connection.execute("SELECT inet_server_addr()").fetchone() != (None,):
-                raise RuntimeError("PostgreSQL fixture must use a Unix socket")
+            if connection.execute("SELECT inet_server_addr(), getdatabaseencoding()").fetchone() != (None, "UTF8"):
+                raise RuntimeError("PostgreSQL fixture must use a UTF8 database over a Unix socket")
             connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(cls.schema)))
         cls.addClassCleanup(cls.drop_schema)
         with cls.connection() as connection:
@@ -133,6 +184,13 @@ class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
             )
             for declaration in production_table_declarations():
                 connection.execute(declaration)
+            # This existing bounded extractor reads the actual installer SQL.
+            # Delay its import: that fixture imports our connection admission.
+            # No replacement SQL digest or blocked database facade is loaded.
+            from test_authority_root_transition_postgres import production_digest_functions
+            for declaration in production_digest_functions(cls.namespace):
+                connection.execute(declaration)
+            connection.execute(wire_json_function_sql(cls.namespace))
             connection.execute(
                 f"""
                 CREATE FUNCTION {cls.namespace}.project_trust()
@@ -147,6 +205,39 @@ class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
                     RETURN pg_catalog.to_jsonb(trust_publication);
                 END;
                 $projection_fixture$;
+                """
+            )
+            connection.execute(
+                f"""
+                CREATE FUNCTION {cls.namespace}.project_credential_policy(
+                    input_row pg_catalog.jsonb, expected_claim text, high_water_digest text
+                ) RETURNS TABLE(policy pg_catalog.jsonb, policy_wire text,
+                                policy_digest text, claim_matches boolean)
+                LANGUAGE plpgsql SET search_path = pg_catalog
+                AS $credential_policy_fixture$
+                DECLARE
+                    trust_high_water record;
+                    trust_publication record;
+                    credential_mutation record;
+                    assertion_evidence record;
+                    computed_trust_high_water_digest text := high_water_digest;
+                BEGIN
+                    {locked_webauthn_trust_projection(cls.namespace)}
+                    SELECT pg_catalog.jsonb_build_object('expectedRow', input_row) AS value
+                    INTO STRICT credential_mutation;
+                    SELECT input_row->>'id' AS credential_record_id,
+                           input_row->>'credential_id' AS credential_id
+                    INTO STRICT assertion_evidence;
+                    policy := {webauthn_credential_policy_sql()};
+                    policy_wire := {cls.namespace}.serverware_policy_authority_wire_json(policy);
+                    policy_digest := {cls.namespace}.serverware_policy_authority_domain_digest(
+                        '{POLICY_DOMAIN}', policy_wire);
+                    -- This is the active guard's equality predicate only.
+                    -- It is not the full executor, its row CAS, or a write.
+                    claim_matches := policy_digest = expected_claim;
+                    RETURN NEXT;
+                END;
+                $credential_policy_fixture$;
                 """
             )
 
@@ -199,6 +290,29 @@ class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
                 ),
                 (value,),
             )
+
+    def credential_policy(self, row: dict, *, claim: str | None) -> tuple:
+        # The high-water digest is an independently constructed fixture input,
+        # not an assertion that this component has admitted a current root.
+        with self.connection() as connection:
+            return connection.execute(
+                f"SELECT * FROM {self.namespace}.project_credential_policy(%s::jsonb, %s, %s)",
+                (policy_wire(row), claim, policy_commitment(HIGH_WATER_DOMAIN, policy_high_water())),
+            ).fetchone()
+
+    def assert_policy_parity(self, row: dict) -> tuple:
+        expected = independent_policy(row)
+        expected_digest = policy_commitment(POLICY_DOMAIN, expected)
+        high_water = policy_high_water()
+        self.assertEqual(trust.high_water_digest(high_water),
+                         policy_commitment(HIGH_WATER_DOMAIN, high_water))
+        actual_python = trust.credential_policy_document(credential=row,
+            high_water=high_water, trust_high_water_digest=expected["trustHighWaterDigest"])
+        self.assertEqual(actual_python, expected)
+        self.assertEqual(trust.credential_policy_digest(actual_python), expected_digest)
+        actual_sql = self.credential_policy(row, claim=expected_digest)
+        self.assertEqual(actual_sql, (expected, policy_wire(expected), expected_digest, True))
+        return actual_sql
 
     def test_exact_projection_uses_real_publication_and_high_water_columns(self) -> None:
         self.assertEqual(self.projection(), {
@@ -301,6 +415,71 @@ class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
         with patch.dict(os.environ, {"PGSERVICE": "redirect"}, clear=True):
             with self.assertRaisesRegex(ValueError, "forbids ambient PG configuration"):
                 local_connection_parameters("host=/fixture dbname=postgres user=serverware")
+
+    def test_credential_policy_sql_matches_independent_sixteen_field_python_wire_and_digest(self) -> None:
+        row = policy_credential()
+        expected = independent_policy(row)
+        self.assertEqual(len(expected), 16)
+        self.assertEqual(set(expected), {
+            "schema", "credentialRecordId", "credentialId", "userId", "authenticatorClass",
+            "aaguid", "attestationTrusted", "attestationLeafDigest", "attestationRootDigest",
+            "trustBundleDigest", "trustBundleSequence", "trustRollbackEpoch",
+            "trustHighWaterDigest", "revocationSetDigest", "trustWitnessReceiptDigest", "publicKeyDigest",
+        })
+        actual = self.assert_policy_parity(row)
+        self.assertTrue(actual[1].isascii())
+        self.assertEqual(actual[0]["publicKeyDigest"], "sha256:" +
+            hashlib.sha256("synthetic-key-雪🙂".encode("utf-8")).hexdigest())
+
+    def test_aaguid_only_change_rejects_old_claim_in_component_predicate(self) -> None:
+        row = policy_credential()
+        before = self.assert_policy_parity(row)
+        changed = {**row, "aaguid": "different-aaguid-雪"}
+        after = self.assert_policy_parity(changed)
+        self.assertEqual({key for key in before[0] if before[0][key] != after[0][key]}, {"aaguid"})
+        self.assertNotEqual(before[1], after[1])
+        self.assertNotEqual(before[2], after[2])
+        wrong = self.credential_policy(changed, claim=before[2])
+        self.assertEqual(wrong[:3], after[:3])
+        self.assertIs(wrong[3], False)
+        self.assertIs(self.credential_policy(changed, claim=digest("f"))[3], False)
+        self.assertIsNone(self.credential_policy(changed, claim=None)[3])
+        old_fifteen_fields = {key: value for key, value in before[0].items() if key != "aaguid"}
+        self.assertIs(self.credential_policy(row,
+            claim=policy_commitment(POLICY_DOMAIN, old_fifteen_fields))[3], False)
+        # FALSE/UNKNOWN cannot satisfy this component's SQL equality. No
+        # enclosing executor rejection, DML rollback or full-row CAS was run.
+
+    def test_nullable_and_text_aaguid_values_preserve_exact_json_policy(self) -> None:
+        commitments = []
+        for value in (None, "", "null", "aaguid-雪🙂", 'quote"slash\\'):
+            with self.subTest(aaguid=value):
+                actual = self.assert_policy_parity({**policy_credential(), "aaguid": value})
+                self.assertEqual(actual[0]["aaguid"], value)
+                commitments.append(actual[2])
+        self.assertEqual(len(set(commitments)), len(commitments))
+
+    def test_missing_and_nonstring_aaguid_expose_expression_not_row_admission(self) -> None:
+        row = policy_credential()
+        null_row = {**row, "aaguid": None}
+        null_policy = self.assert_policy_parity(null_row)
+        missing = {key: value for key, value in row.items() if key != "aaguid"}
+        self.assertEqual(self.credential_policy(missing, claim=null_policy[2]), null_policy)
+        for malformed in (missing, *({**row, "aaguid": value} for value in (True, 7, [], {}))):
+            with self.subTest(aaguid=malformed.get("aaguid", "missing")), \
+                    self.assertRaises(trust.WebAuthnTrustError):
+                trust.credential_policy_document(credential=malformed,
+                    high_water=policy_high_water(), trust_high_water_digest=independent_policy(row)["trustHighWaterDigest"])
+        for value in (True, 7, [], {}):
+            malformed = {**row, "aaguid": value}
+            expected = independent_policy(malformed)
+            claim = policy_commitment(POLICY_DOMAIN, expected)
+            self.assertEqual(self.credential_policy(malformed, claim=claim),
+                             (expected, policy_wire(expected), claim, True))
+        # JSON projection intentionally preserves these inputs. The fragment
+        # cannot prove presence/type or replacement equality with stored TEXT;
+        # those are the enclosing executor's separate row boundary, which this
+        # component does not execute.
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 252
+TOTAL_TESTS = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,13 +26,17 @@ SUITES: tuple[NativePostgresSuite, ...] = (
     NativePostgresSuite(
         script="scripts/test_webauthn_trust_projection_postgres.py",
         test_ids=(
+            "WebAuthnTrustProjectionPostgresTests.test_aaguid_only_change_rejects_old_claim_in_component_predicate",
             "WebAuthnTrustProjectionPostgresTests.test_both_rows_remain_write_locked_until_transaction_ends",
             "WebAuthnTrustProjectionPostgresTests.test_connection_admission_rejects_tcp_and_configuration_overrides",
+            "WebAuthnTrustProjectionPostgresTests.test_credential_policy_sql_matches_independent_sixteen_field_python_wire_and_digest",
             "WebAuthnTrustProjectionPostgresTests.test_exact_projection_uses_real_publication_and_high_water_columns",
             "WebAuthnTrustProjectionPostgresTests.test_join_mismatches_and_unpublished_status_are_denied",
             "WebAuthnTrustProjectionPostgresTests.test_matching_values_on_different_publications_cannot_be_combined",
+            "WebAuthnTrustProjectionPostgresTests.test_missing_and_nonstring_aaguid_expose_expression_not_row_admission",
             "WebAuthnTrustProjectionPostgresTests.test_missing_either_row_is_denied",
             "WebAuthnTrustProjectionPostgresTests.test_namespace_matches_existing_quoted_identifier_contract",
+            "WebAuthnTrustProjectionPostgresTests.test_nullable_and_text_aaguid_values_preserve_exact_json_policy",
             "WebAuthnTrustProjectionPostgresTests.test_witness_and_revocation_values_are_from_the_same_locked_high_water",
         ),
         disposable_cluster=False,
@@ -380,7 +384,7 @@ SUITES: tuple[NativePostgresSuite, ...] = (
 # encode an extra fixture CLI acknowledgement; False never permits a real or
 # shared database. All fourteen suites require a prepared disposable local cluster.
 _SUITE_SHAPES = (
-    ("scripts/test_webauthn_trust_projection_postgres.py", 8, False, 300),
+    ("scripts/test_webauthn_trust_projection_postgres.py", 12, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
     ("scripts/test_authority_mutation_postgres.py", 14, False, 300),
     ("scripts/test_authority_root_transition_postgres.py", 21, False, 300),
@@ -406,7 +410,7 @@ def validate_inventory() -> None:
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
             or type(SUITES) is not tuple or len(SUITES) != 14
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 252):
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 256):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

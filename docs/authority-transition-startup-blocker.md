@@ -5,17 +5,24 @@ The frozen `f16da11` source-root run of `scripts/test_control_plane_startup.py`
 failed while importing `authority_transition_registry`, before service startup.
 The diagnostic-only change described here does not make that runtime healthy.
 
-`authority_contract.OPERATION_REGISTRY` declares four typed pure transitions
+At source `.81`, `authority_contract.OPERATION_REGISTRY` declares six transitions
 that have no kernels in the policy, quota, or release registries:
 
 - `webauthn.trust.stage`
 - `webauthn.trust.complete`
 - `webauthn.registration.finalize`
 - `webauthn.credential.revoke`
+- `webauthn.registration.evidence.admit`
+- `webauthn.trust.installation.admit`
 
-Their argument and evidence field sets are already reserved in
-`serverware/authority_transition_policy.py`, but no complete implementations are
-registered. An unregistered explicit self-revocation candidate now exists in
+The original four have reserved legacy argument/evidence sets in
+`serverware/authority_transition_policy.py`; successor adapters and the two
+admission operations have their own closed sets described in
+[successor transitions](webauthn-successor-transitions.md). No complete configured
+implementations are registered. The two new admission operations also need
+genuine callable database handlers before the controlled-writer dispatcher can
+install their boundaries; no placeholder handlers have been added.
+An unregistered explicit self-revocation candidate now exists in
 `serverware/authority_transition_webauthn.py`; its deliberately limited source
 boundary and outstanding activation requirements are documented in
 [webauthn-revocation-candidate.md](webauthn-revocation-candidate.md). It is not a
@@ -26,6 +33,10 @@ All prior closure conditions remain enforced. No operation was removed from
 the contract, marked disabled, given a placeholder kernel, or delegated back to
 legacy mutation code. Changing the database backend cannot repair this
 unconditional import-time failure.
+
+The four-kernel diagnostic from `f16da11` is historical runtime evidence. The
+current six-kernel gap follows from source inspection, not a new executed
+startup check. The revision notes below retain their historical gap counts.
 
 The coordinated implementation direction is documented in
 [WebAuthn authority integration](webauthn-authority-integration.md), including
@@ -67,6 +78,13 @@ composers. They recompute semantic claims and verify original signatures before
 proposing an exact evidence-row insertion or unused-identical no-op. They do
 not grant INSERT privileges, authenticate the selected absence or implement
 durable operation/executor admission; the four startup gaps remain.
+Source `.81` adds the two actual admission manifests and private exact-PK
+query/kernel adapters. Genuine re-verification precedes INSERT rendering or an
+identical unused-row no-op; existing consumers and table defaults remain
+UPDATE-only. These are not registered kernels, configured input owners,
+authenticated read/root acquisition, callable database handlers or executor
+activation. The current registry gap is therefore six, not four. Framework
+audit remains required, while no metadata outbox/capacity path is added.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from
@@ -273,14 +291,16 @@ transaction composition requires an explicit contract design and review.
 
 | Operation | Existing row / mutation / work bounds | Missing typed inputs and preserved behavior |
 | --- | --- | --- |
-| `webauthn.trust.stage` | 4 / 1 / 64 | Exact bundle, predecessor, sequence, rollback epoch, signer, actor, withdrawal IDs, and audit event. Preserve digest-reuse checks, single pending publication, monotonicity, and publication/withdrawal atomicity. |
+| `webauthn.trust.stage` | 193 / 137 / 2050 | Aggregate business bounds 192 / 136 / 2048 plus exact global accounting. Bind the original candidate bundle, predecessor, signer, actor and complete withdrawal effects. Preserve digest-reuse checks, single pending publication, monotonicity, and publication/withdrawal atomicity. |
+| `webauthn.trust.installation.admit` | 3 / 1 / 128 | Exact evidence/publication/high-water queries, independently admitted stage and physical readback, original installation envelope and pinned installer. INSERT the verified 17-field row or admit an identical unused no-op. |
 | `webauthn.trust.complete` | 5 / 5 / 130 | Original business bounds 4 / 4 / 128 plus exact global accounting. `publication_id` plus `verification_evidence_digest`. Bind a durably verified signed publication receipt to the stored bundle and signer; consume it atomically with publication, witness/high-water advancement, and the audit record. |
-| `webauthn.registration.finalize` | 113 / 41 / 1026 | Original business bounds 112 / 40 / 1024 plus exact global accounting. In addition to legacy registration arguments: `challenge_id`, `attestation_evidence_digest`, `oidc_session_id`, `sibling_challenge_ids`. Bind fresh registration attestation and trust generation, exact unexpired unused challenge, user and label; preserve credential-ID non-reuse, pending OIDC session authorization, zero historical credentials for first enrollment, sibling invalidation, and audit. |
+| `webauthn.registration.evidence.admit` | 5 / 1 / 128 | Exact evidence/challenge/published/high-water/optional-session queries, original ceremony and envelope, independently admitted enrollment/trust context and signer pins. INSERT the verified 17-field row or admit an identical unused no-op. |
+| `webauthn.registration.finalize` | 113 / 41 / 1026 | Original business bounds 112 / 40 / 1024 plus exact global accounting. The successor carries semantic intent, credential/challenge material, original envelope identity, OIDC and sibling inputs. Bind fresh registration attestation and trust generation, exact unexpired unused challenge, user and label; preserve credential-ID non-reuse, pending OIDC session authorization, zero historical credentials for first enrollment, sibling invalidation, and audit. |
 | `webauthn.credential.revoke` | 193 / 137 / 2050 | Original business bounds 192 / 136 / 2048 plus exact global accounting. In addition to legacy revocation arguments: `approval_grant_ids`, `control_plane_approval_ids`, `oidc_session_ids`, `registration_challenge_ids`. Preserve the bound verified assertion and atomic credential/session/grant/approval revocation, explicit-source global live-registration invalidation, and per-approval audit events. |
 
 Exact implementation references:
 
-- `serverware/authority_contract.py`: four operation declarations; proof
+- `serverware/authority_contract.py`: six operation declarations; proof
   primitives, evidence types, relation permissions, and bounds are authoritative.
 - `serverware/authority_transition_policy.py`:
   `_WEBAUTHN_TRUST_STAGE_FIELDS`, `_WEBAUTHN_TRUST_COMPLETE_FIELDS`,
@@ -307,19 +327,20 @@ The trust-publication API currently performs dependent credential withdrawals,
 global live-registration challenge invalidation, and publication staging inside
 one `db.connect()` transaction in `app.py:webauthn_trust_publish`. Its staging
 handler requires `_connection`; the controlled-writer wrapper rejects that
-argument. The stage contract permits only a publication-row mutation, not all
-those dependent withdrawals. A reviewed admission/transaction design must
-preserve the aggregate atomicity; it cannot be replaced with independent
-commits to get past startup.
+argument. The successor stage manifest and private adapter now include the
+aggregate withdrawals, but are not wired to that public handler or its
+transaction. Configured admission and execution must preserve the aggregate
+atomicity; independent commits cannot be used to get past startup.
 
 The legacy completion handler takes only a publication ID.
 `webauthn_trust.reconcile_trust_publications` verifies and installs the bundle
-locally, then passes that ID. It does not create the typed
-`webauthn-trust-publication-verification/v1` receipt. Likewise, the reserved
-registration contract requires a `webauthn-registration-attestation/v1`
-receipt; no operation-specific producer or admission adapter for that type is
-present in the reviewed source. Local verification results and caller-supplied
-JSON must not be promoted into signed external evidence.
+locally, then passes that ID. It does not create or admit the successor
+`webauthn-trust-installation/v2` receipt. Private purpose-specific producers and
+admission adapters now exist for installation and registration v2 evidence,
+but are not wired into the configured public workflow. Legacy v1 receipt
+contracts are not interchangeable with these original-envelope v2 receipts.
+Local verification results and caller-supplied JSON must not be promoted into
+signed external evidence.
 
 The [explicit trust verification and local installation path](webauthn-trust-installation.md)
 now uses one captured key/schema/time context, validates roots before checkpoint
@@ -332,10 +353,11 @@ validates evidence type, binding, canonical statement and signature digests,
 verifier identity/measurement/attestation, current source revision, validity
 window, and one-time consumption state. Those structural/commitment checks
 assume prior authenticated admission; they do not themselves verify an Ed25519
-signature against independent purpose-specific identity pins. The trust
-installation admission producer remains missing. New producers and kernels must agree
-on the complete authenticated binding and use those checks. The unused field
-sets alone do not establish a producer protocol.
+signature against independent purpose-specific identity pins. The successor
+composers perform real signature verification themselves and do not reuse
+those v1 status/digest checks as v2 evidence authority. Configured production,
+authenticated custody acquisition and durable admission remain missing; the
+unused legacy field sets alone do not establish that producer protocol.
 
 For finalization and revocation, legacy SQL derives complete sets inside a
 transaction. New bounded queries need ordered exact-page/completeness proofs,
@@ -495,7 +517,7 @@ either test:
    availability or execution.
 2. `python3 scripts/test_control_plane_startup.py` remains the source-root
    integration gate. With only this diagnostic change it is expected to fail,
-   now naming the four missing kernels. That failure must remain visible.
+   now naming the six missing kernels. That failure must remain visible.
 3. Before treating eventual kernel implementations as complete, add operation
    fixtures for success, idempotent replay, conflicting replay, stale trust and
    predecessor, expired/consumed/wrong-binding evidence, duplicate credential

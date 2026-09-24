@@ -31,8 +31,9 @@ OPERATION = "webauthn.credential.revoke"
 EXCLUDED = {"authn", "authn_evidence", "webauthn_authorization", "challenge_id"}
 REGISTRY_IMPORT_DIAGNOSTIC = (
     "authority transition registry is not closed: missing transition kernels=["
-    "webauthn.credential.revoke, webauthn.registration.finalize, "
-    "webauthn.trust.complete, webauthn.trust.stage]"
+    "webauthn.credential.revoke, webauthn.registration.evidence.admit, "
+    "webauthn.registration.finalize, webauthn.trust.complete, "
+    "webauthn.trust.installation.admit, webauthn.trust.stage]"
 )
 
 

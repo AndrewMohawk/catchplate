@@ -1,7 +1,8 @@
 # Unactivated bounded self-revocation candidate
 
 Status: partial source implementation, not registered or activated, not an
-enabled service API. All four missing-kernel closure failures remain intentional.
+enabled service API. Missing-kernel closure failures remain enforced; the
+[current startup inventory](authority-transition-startup-blocker.md) lists six.
 This work does not repair control-plane startup, the legacy revoke endpoint,
 trust publication, or production authority acceptance.
 

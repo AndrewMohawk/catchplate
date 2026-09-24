@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.80`, implementation only. These helpers do not register the
+Status: source `.81`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -54,6 +54,42 @@ unused verified fields to produce a no-op; consumed, revoked or conflicting
 rows fail, and every duplicate still goes through genuine verification. These
 helpers do not prove the selection or persist it. They are prerequisites for
 the fixed admission operations, not registered operations or write authority.
+
+## Evidence admission operation contracts
+
+Two explicit source operations now render those verified effects through
+purpose-specific INSERT-only templates. They leave the table-wide default and
+consumer permissions UPDATE-only, with no planner/writer ACL expansion.
+
+| Operation | Exact primary-key reads | Maximum rows / mutations / work |
+| --- | --- | --- |
+| `webauthn.registration.evidence.admit` | Evidence, registration challenge, global high-water, published predecessor, optional OIDC session | 5 / 1 / 128 |
+| `webauthn.trust.installation.admit` | Evidence, publication, global high-water | 3 / 1 / 128 |
+
+The registration request has exactly `evidence_digest`,
+`registration_challenge_id`, `published_publication_id`, nullable
+`oidc_session_id` and `businessIntent`. The distinct challenge argument remains
+in request/intent commitments; the legacy authorization-only `challenge_id`
+normalization is unchanged. The installation request has exactly
+`evidence_digest`, `publication_id` and `businessIntent`.
+
+The private query/kernel adapters own the selected rows and arguments, rederive
+business intent, join the actual envelope identity and current row identities,
+and call the genuine purpose-specific admission composer. Fresh verification
+uses the held database UTC instant, separately from the original ceremony or
+installation observation. They propose one real INSERT, or no mutation for an
+identical unused verified row; the result reports only the evidence identity
+and `proposed-insert` or `already-retained`, never a committed receipt.
+
+Neither operation changes challenges, credentials, sessions, trust publication
+or audit-outbox/capacity rows. The executor's framework audit remains required.
+Exact selected primary proofs and independent current roots, configured input
+owners, signed-plan replay and atomic execution are still missing integration.
+The adapters do not register configured kernels or supply the two required
+callable database handlers. All six missing-kernel closure failures remain;
+operator-role admission stays denied. This source does not repair startup.
+
+## Retained evidence and consumption
 
 The v2 custody projection uses the existing
 `policy_authority_external_evidence_receipts` table's exact **17 fields**. Its
@@ -261,14 +297,12 @@ Registry and public operation admission, authorized atomic execution, terminal
 witnessing and recovery remain pending. The generic evidence signer and ordinary
 row/acquisition results cannot fill those gaps or repair service startup.
 
-The evidence-storage integration must use explicit purpose-specific admission
-operations, with a narrow INSERT-only template for the existing 17-column
-receipt row. The existing table-wide default remains UPDATE-only. Admission
-must derive the purpose's semantic claims, genuinely verify the original
-envelope, prove exact-key absence and commit through authenticated root
-maintenance. If a no-op duplicate path is declared, only an identical unused
-verified row may qualify; consumed, revoked or conflicting rows must fail.
-This is remaining implementation, not an enabled operation or new ACL.
+The evidence-storage integration must connect the declared admission operations
+and real query/kernel adapters to authenticated exact-key absence or existing
+row proofs, then commit through authenticated root maintenance. The identical
+unused verified-row no-op requires an explicit empty-mutation policy when its
+configured kernel is eventually registered. No placeholder handler, keyless
+kernel, new ACL or disabled closure check supplies this remaining integration.
 
 The current v9 SQL execution loader accepts its existing v3 plan protocol.
 Successor acquisition outputs cannot enter it by being relabelled as v3.

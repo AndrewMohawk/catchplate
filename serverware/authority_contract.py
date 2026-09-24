@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.80"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.81"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -2315,6 +2315,21 @@ _OPERATIONS = {
         maximum_mutations=136,
         maximum_work_units=2048,
     ),
+    "webauthn.trust.installation.admit": _spec(
+        "admit_webauthn_trust_installation_evidence",
+        reads=(
+            "webauthn_trust_publications",
+            "webauthn_trust_publication_high_water",
+            "policy_authority_external_evidence_receipts",
+        ),
+        writes=("policy_authority_external_evidence_receipts",),
+        mutation_kinds={"policy_authority_external_evidence_receipts": ("INSERT",)},
+        proof_primitives=("primary-key-row", "aggregate-high-water", "external-evidence-receipt"),
+        external_evidence_types=("webauthn-trust-installation/v2",),
+        maximum_query_rows=3,
+        maximum_mutations=1,
+        maximum_work_units=128,
+    ),
     "webauthn.trust.complete": _spec(
         "complete_webauthn_trust_publication",
         reads=(
@@ -2351,6 +2366,23 @@ _OPERATIONS = {
         writes=("webauthn_credentials", "metadata_audit_outbox",
                 "policy_authority_bounded_aggregate_states"),
         proof_primitives=("primary-key-row", "aggregate-high-water"),
+    ),
+    "webauthn.registration.evidence.admit": _spec(
+        "admit_webauthn_registration_evidence",
+        reads=(
+            "webauthn_challenges",
+            "webauthn_trust_publications",
+            "webauthn_trust_publication_high_water",
+            "oidc_browser_sessions",
+            "policy_authority_external_evidence_receipts",
+        ),
+        writes=("policy_authority_external_evidence_receipts",),
+        mutation_kinds={"policy_authority_external_evidence_receipts": ("INSERT",)},
+        proof_primitives=("primary-key-row", "aggregate-high-water", "external-evidence-receipt"),
+        external_evidence_types=("webauthn-registration-attestation/v2",),
+        maximum_query_rows=5,
+        maximum_mutations=1,
+        maximum_work_units=128,
     ),
     "webauthn.registration.finalize": _spec(
         "finalize_webauthn_registration",

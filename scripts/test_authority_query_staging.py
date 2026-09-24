@@ -26,6 +26,7 @@ from serverware import authority_contract
 from serverware import authority_primary_contract as primary
 from serverware import authority_query_reads as reads
 from serverware import authority_query_staging as staging
+from serverware import authority_query_read_work as accounting
 from serverware import authority_radix_mutation as mutation
 from serverware import authority_radix_proof as radix
 from serverware import authority_root_transition as transition
@@ -34,6 +35,8 @@ import test_authority_global_audit_capacity as capacity_oracle
 import test_authority_radix_batch as batch_oracle
 import test_authority_radix_proof as wire_oracle
 import test_authority_root_transition as root_oracle
+import test_authority_query_reads as query_oracle
+import test_authority_query_reads_measured as query_work_oracle
 
 
 OPERATION = "webauthn.credential.revoke"
@@ -92,6 +95,51 @@ def primary_document(inputs, selected, proofs):
         "authorizationRoots": inputs["authorization_before_roots"],
         "selected": list(selected), "proofs": list(proofs), "mutations": [],
     }
+
+
+def expected_stage_query_work(query, records, selected):
+    """Independent QueryRead-only schedule, excluding proof/stamp work.
+
+    Staging snapshots once, then reference enumeration snapshots again. Each
+    prior record has two real reconstruction passes plus budget/association
+    scans: six header frames and four address frames. Selected address and
+    referenced-key work are repeated even when primary proofs are cached.
+    """
+    result = query_work_oracle.ExpectedWork()
+    values = tuple(predicate.value for predicate in query.predicates)
+    if query.absent_key is not None:
+        values += tuple(query.absent_key.values())
+    references = tuple(value for value in values if type(value) is core.SelectedRowFieldReference)
+    document = query_oracle.query_document(query)
+    for _ in range(2):
+        for value in values:
+            if type(value) is core.SelectedRowFieldReference:
+                result.copy(value.key)
+                result.encoding(value.key, copies=1)
+            else:
+                result.copy(value)
+        for name in (() if query.absent_key is None else query.absent_key):
+            result.copy(name)
+        for value in references:
+            result.encoding(value.key)  # genuine contract projection's dict copy
+        result.encoding(document)
+        result.bytes += len(query_oracle.canonical(document))
+    for record in records:
+        addresses = sum(query_work_oracle.address_bytes(address) for address in record.addresses)
+        header = query_work_oracle.record_bytes(record) - addresses
+        result.bytes += 6 * header + 4 * addresses
+    for row in selected:
+        keys = (row["key"], {"id": row["row"]["id"]}) if row["present"] else (row["key"],)
+        for key in keys:
+            result.copy(key)
+            result.encoding(key)
+        result.hashes += 1
+        result.bytes += (8 + len(row["table"]) + 8 + len(query_oracle.canonical(row["key"]))
+                         + 8 + len(row["keyDigest"]) + 9)
+    for value in references:
+        result.copy(value.key)
+        result.encoding(value.key)
+    return result
 
 
 class StageTrace(batch_oracle.RecordingTrace):
@@ -639,6 +687,189 @@ class AuthorityQueryStagingTests(unittest.TestCase):
             staging.StagedQueryProofs(operation=OPERATION,
                 business_before_roots=self.inputs["business_before_roots"],
                 authorization_before_roots=self.inputs["authorization_before_roots"], limits=object())
+
+    def test_shared_query_meter_accumulates_real_snapshot_reference_and_cached_rescans(self):
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        work.charge(hashes=7, input_bytes=11, json_nodes=13)
+        collector = self.collector(query_work=work)
+        collector._require_query_work(work)
+        records, selected = (self.first_record,), (self.first,)
+        queries = tuple(reference_query(name, reference(self.first)) for name in ("shared-a", "shared-b"))
+        expected = [expected_stage_query_work(query, records, selected) for query in queries]
+        actual_snapshot, actual_references = reads._snapshot_queries, reads._reference_source_rows
+        actual_membership = staging.evaluate_primary_radix_memberships
+        with mock.patch.object(reads, "_snapshot_queries", wraps=actual_snapshot) as snapshots, \
+                mock.patch.object(reads, "_reference_source_rows", wraps=actual_references) as references, \
+                mock.patch.object(staging, "evaluate_primary_radix_memberships", wraps=actual_membership) as memberships:
+            owned = self.authenticate(collector, queries[0])
+            first = work.metrics
+            proofs = collector.metrics
+            again = self.authenticate(collector, queries[1], selected=owned)
+        self.assertIs(again[0], owned[0])
+        self.assertEqual(memberships.call_count, 1)
+        self.assertEqual(self.proof_calls(), 5)
+        self.assertEqual(snapshots.call_count, 4)  # staging and genuine reference enumeration per call
+        for call in snapshots.call_args_list:
+            passed = call.kwargs.get("work", call.args[2] if len(call.args) > 2 else None)
+            self.assertIs(passed, work)
+        self.assertEqual(references.call_count, 2)
+        self.assertTrue(all(call.kwargs["work"] is work for call in references.call_args_list))
+        self.assertEqual((first.hash_work, first.input_bytes, first.json_nodes),
+            (7 + expected[0].hashes, 11 + expected[0].bytes, 13 + expected[0].nodes))
+        self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes),
+            (7 + sum(item.hashes for item in expected), 11 + sum(item.bytes for item in expected),
+             13 + sum(item.nodes for item in expected)))
+        self.assertGreater(work.input_bytes, first.input_bytes)
+        self.assertEqual((collector.metrics.stages, collector.metrics.selected_rows,
+                          collector.metrics.hash_work, collector.metrics.input_bytes, collector.metrics.json_nodes),
+                         (proofs.stages, proofs.selected_rows, proofs.hash_work, proofs.input_bytes, proofs.json_nodes))
+        self.assertGreater(collector.metrics.stamp_bytes, proofs.stamp_bytes)
+        self.assertEqual(collector.unproved_rows(again), ())
+        self.assertEqual(collector.merge_proofs(selected_rows=again, remaining_proofs=()),
+                         (self.trees[CREDENTIALS].proof(self.first),))
+
+    def test_query_meter_exact_limits_and_exhaustion_deny_before_proof_sql(self):
+        query = reference_query("meter-quota", reference(self.first))
+        expected = expected_stage_query_work(query, (self.first_record,), (self.first,))
+        exact = dict(max_hashes=expected.hashes + 1, max_input_bytes=expected.bytes + 1,
+                     max_json_nodes=expected.nodes + 1)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits(**exact))
+        work.charge(hashes=1, input_bytes=1, json_nodes=1)
+        collector = self.collector(query_work=work)
+        self.authenticate(collector, query)
+        self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes),
+                         (exact["max_hashes"], exact["max_input_bytes"], exact["max_json_nodes"]))
+        for field in exact:
+            with self.subTest(field=field):
+                limits = {**exact, field: exact[field] - 1}
+                limited = accounting._ValidationWork(accounting.QueryReadValidationLimits(**limits))
+                limited.charge(hashes=1, input_bytes=1, json_nodes=1)
+                denied = self.collector(query_work=limited)
+                cursor = batch_oracle.StoredTreeCursor(*self.trees.values())
+                with self.assertRaises(staging.QueryStagingError):
+                    self.authenticate(denied, query, cursor=cursor)
+                self.assertEqual(cursor.calls, [])
+                self.assertEqual((denied.metrics.stages, denied.metrics.selected_rows, denied.metrics.hash_work),
+                                 (0, 0, 66))
+                spent = limited.metrics
+                with self.assertRaisesRegex(staging.QueryStagingError, "not ready"):
+                    denied._require_query_work(limited)
+                with self.assertRaisesRegex(staging.QueryStagingError, "not ready"):
+                    self.authenticate(denied, query, cursor=cursor)
+                self.assertEqual(limited.metrics, spent)
+                self.assertEqual(cursor.calls, [])
+
+    def test_query_meter_identity_is_pinned_and_exact_type_admission_is_sticky(self):
+        class DerivedWork(accounting._ValidationWork):
+            pass
+        for invalid in ({}, object(), DerivedWork(accounting.QueryReadValidationLimits())):
+            with self.subTest(constructor=type(invalid)), self.assertRaisesRegex(staging.QueryStagingError, "exact shared meter"):
+                self.collector(query_work=invalid)
+        for mode in ("none", "different", "subclass", "object", "legacy"):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            collector = self.collector(query_work=None if mode == "legacy" else work)
+            incoming = {
+                "none": None, "different": accounting._ValidationWork(accounting.QueryReadValidationLimits()),
+                "subclass": DerivedWork(accounting.QueryReadValidationLimits()), "object": object(), "legacy": work,
+            }[mode]
+            with self.subTest(mode=mode), self.assertRaisesRegex(staging.QueryStagingError, "identity changed"):
+                collector._require_query_work(incoming)
+            with self.assertRaisesRegex(staging.QueryStagingError, "not ready"):
+                collector._require_query_work(work)
+            self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), (0, 0, 0))
+        self.assertEqual(self.proof_calls(), 0)
+
+    def test_cached_source_cannot_reset_an_exhausted_shared_query_allowance(self):
+        first = reference_query("cache-a", reference(self.first))
+        second = reference_query("cache-b", reference(self.first))
+        expected = expected_stage_query_work(first, (self.first_record,), (self.first,))
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits(
+            max_hashes=expected.hashes, max_input_bytes=expected.bytes, max_json_nodes=expected.nodes))
+        collector = self.collector(query_work=work)
+        owned = self.authenticate(collector, first)
+        spent, proof_usage = work.metrics, collector.metrics
+        with self.assertRaises(staging.QueryStagingError):
+            self.authenticate(collector, second, selected=owned)
+        self.assertEqual(work.metrics, spent)
+        self.assertEqual(self.proof_calls(), 5)
+        self.assertEqual(collector.metrics, proof_usage)
+        with self.assertRaisesRegex(staging.QueryStagingError, "not ready"):
+            collector.unproved_rows(owned)
+
+    def test_caught_nested_acquisition_poisons_outer_before_membership_without_refund(self):
+        for action in ("authenticate", "close", "meter-check"):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            collector = self.collector(query_work=work)
+            caught = []
+            def change(kind, rows, parameters):
+                if not caught:
+                    try:
+                        if action == "authenticate":
+                            self.authenticate(collector, reference_query("nested", reference(self.first)), cursor=cursor)
+                        elif action == "close":
+                            collector.unproved_rows((self.first,))
+                        else:
+                            collector._require_query_work(work)
+                    except staging.QueryStagingError as exc:
+                        caught.append(exc)
+                return rows
+            cursor = batch_oracle.StoredTreeCursor(*self.trees.values(), change=change)
+            with self.subTest(action=action), \
+                    mock.patch.object(staging, "evaluate_primary_radix_memberships",
+                        wraps=staging.evaluate_primary_radix_memberships) as actual_membership:
+                with self.assertRaisesRegex(staging.QueryStagingError, "nested failure"):
+                    self.authenticate(collector, cursor=cursor)
+            self.assertEqual(len(caught), 1)
+            self.assertEqual(actual_membership.call_count, 0)
+            self.assertEqual(len(cursor.calls), 5)  # genuine producer finishes; poisoned result cannot be consumed
+            self.assertEqual((collector.metrics.stages, collector.metrics.selected_rows, collector.metrics.hash_work),
+                             (1, 1, 202))
+            self.assertGreater(work.input_bytes, 0)
+            spent = work.metrics
+            with self.assertRaisesRegex(staging.QueryStagingError, "not ready"):
+                collector.unproved_rows((self.first,))
+            self.assertEqual(work.metrics, spent)
+            self.assertEqual(len(cursor.calls), 5)
+
+    def test_caught_nested_completion_cannot_overwrite_poison_with_a_success_phase(self):
+        for phase in ("unproved", "merge"):
+            collector = self.collector()
+            owned = self.authenticate(collector)
+            if phase == "merge":
+                self.assertEqual(collector.unproved_rows(owned), ())
+            caught = []
+            actual_encoder = staging.canonical_bytes
+            def encode(value):
+                if not caught:
+                    try:
+                        if phase == "unproved":
+                            collector.unproved_rows(owned)
+                        else:
+                            collector.merge_proofs(selected_rows=owned, remaining_proofs=())
+                    except staging.QueryStagingError as exc:
+                        caught.append(exc)
+                return actual_encoder(value)
+            with self.subTest(phase=phase), mock.patch.object(staging, "canonical_bytes", new=encode):
+                with self.assertRaisesRegex(staging.QueryStagingError, "nested failure"):
+                    if phase == "unproved":
+                        collector.unproved_rows(owned)
+                    else:
+                        collector.merge_proofs(selected_rows=owned, remaining_proofs=())
+            self.assertEqual(len(caught), 1)
+            with self.assertRaisesRegex(staging.QueryStagingError, "not ready"):
+                collector.merge_proofs(selected_rows=owned, remaining_proofs=())
+
+    def test_legacy_none_keeps_public_query_routes_and_existing_proof_counters(self):
+        collector = self.collector(query_work=None)
+        with mock.patch.object(reads, "snapshot_queries", wraps=reads.snapshot_queries) as snapshots, \
+                mock.patch.object(reads, "reference_source_rows", wraps=reads.reference_source_rows) as references:
+            owned = self.authenticate(collector)
+        self.assertEqual(snapshots.call_count, 1)
+        self.assertEqual(references.call_count, 1)
+        self.assertEqual((collector.metrics.stages, collector.metrics.selected_rows, collector.metrics.hash_work),
+                         (1, 1, 202))
+        self.assertEqual(self.proof_calls(), 5)
+        self.assertEqual(owned, (self.first,))
 
 
 if __name__ == "__main__":

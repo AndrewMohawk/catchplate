@@ -22,7 +22,9 @@ from serverware import authority_contract
 from serverware import authority_complete_query
 from serverware import authority_primary_contract
 from serverware import authority_query_reads
-from serverware.authority_query_read_work import _ValidationWork, QueryReadWorkError
+from serverware.authority_query_read_work import (
+    _ValidationWork, QueryReadValidationLimits, QueryReadWorkError,
+)
 # Preserve the existing planner names as direct re-exports of the actual
 # registry-free computation bodies. Public request admission remains below.
 from serverware.authority_request_commitment import (
@@ -572,6 +574,7 @@ class TypedTransitionPlanningProgram:
         manifest: tuple[dict[str, Any], ...],
         trace: PlannerTrace,
         query_sources: authority_query_staging.StagedQueryProofs,
+        query_work: _ValidationWork,
         verified_webauthn_evidence: Mapping[str, Any] | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
         if (
@@ -579,6 +582,7 @@ class TypedTransitionPlanningProgram:
             or self.kernel.handler != self.handler
             or self.kernel.program_id
                 != authority_contract.transition_program_id(self.operation)
+            or type(query_work) is not _ValidationWork
         ):
             raise AuthorityPlannerError(
                 "typed transition query identity changed"
@@ -640,10 +644,12 @@ class TypedTransitionPlanningProgram:
                 manifest=manifest,
                 trace=trace,
                 query_sources=query_sources,
+                query_work=query_work,
             )
         except (authority_transition_core.TransitionKernelError,
                 authority_complete_query.CompleteQueryError,
                 authority_query_reads.QueryReadError,
+                QueryReadWorkError,
                 authority_query_staging.QueryStagingError) as exc:
             raise AuthorityPlannerError(
                 "typed transition query program denied the request"
@@ -1489,12 +1495,14 @@ def _read_bounded_transition_rows(
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
     query_sources: authority_query_staging.StagedQueryProofs,
+    query_work: _ValidationWork,
 ) -> tuple[tuple[dict[str, Any], ...],
            tuple[authority_transition_core.Query, ...],
            tuple[authority_query_reads.QueryRead, ...]]:
     # Retain query identity and empty results separately from the deduplicated
     # row union. This records SQL observations, not predicate completeness.
-    queries = authority_query_reads.snapshot_queries(operation, queries)
+    query_sources._require_query_work(query_work)
+    queries = authority_query_reads._snapshot_queries(operation, queries, work=query_work)
     # Reject the whole inventory before even the first business/proof read.
     # A complete declaration must never fall through to ordinary SQL LIMIT+1.
     # The earlier database-clock read is not independent time authority.
@@ -1536,9 +1544,9 @@ def _read_bounded_transition_rows(
             (entry["table"], canonical_bytes(entry["key"])): entry
             for entry in staged_rows
         }
-        resolved_query = authority_query_reads.resolve_query(
+        resolved_query = authority_query_reads._resolve_query(
             operation, query, prior_reads=tuple(query_reads),
-            selected_rows=tuple(selected.values()),
+            selected_rows=tuple(selected.values()), work=query_work,
         )
         clauses: list[str] = []
         parameters: list[Any] = []
@@ -1635,12 +1643,13 @@ def _read_bounded_transition_rows(
             selected[identity] = entry
             ordered_selected.append(entry)
             trace.read(query.table, key)
-        query_read = authority_query_reads.capture_query_read(
+        query_read = authority_query_reads._capture_query_read(
             operation, query, resolved_query=resolved_query,
             ordered_selected_rows=tuple(ordered_selected), returned_row_count=len(rows),
+            work=query_work,
         )
-        authority_query_reads.validate_read_budget(
-            operation, query_reads=(*query_reads, query_read),
+        authority_query_reads._validate_read_budget(
+            operation, query_reads=(*query_reads, query_read), work=query_work,
         )
         query_reads.append(query_read)
     selected_rows = tuple(
@@ -1649,9 +1658,11 @@ def _read_bounded_transition_rows(
             key=lambda entry: (entry["table"], entry["keyDigest"]),
         )
     )
-    return selected_rows, queries, authority_query_reads.validate_query_reads(
+    _, checked_reads = authority_query_reads._validate_query_reads(
         operation, queries=queries, query_reads=tuple(query_reads), selected_rows=selected_rows,
+        work=query_work,
     )
+    return selected_rows, queries, checked_reads
 
 
 def _query_webauthn_challenge_rows(
@@ -1995,6 +2006,7 @@ def _read_planning_inputs(
     trace: PlannerTrace,
     program: PlanningProgram,
     query_sources: authority_query_staging.StagedQueryProofs | None = None,
+    query_work: _ValidationWork | None = None,
     verified_webauthn_evidence: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
     if operation in WEBAUTHN_CHALLENGE_OPERATIONS:
@@ -2013,6 +2025,7 @@ def _read_planning_inputs(
             manifest=manifest,
             trace=trace,
             query_sources=query_sources,
+            query_work=query_work,
             verified_webauthn_evidence=verified_webauthn_evidence,
         )
     return (
@@ -2792,6 +2805,19 @@ class MeasuredPlanner:
         from psycopg.rows import dict_row
 
         trace = PlannerTrace(operation=operation)
+        # One invocation-private ledger for the actual typed-query bookkeeping
+        # path. This does not meter SQL, primary proofs, kernels or whole-plan
+        # execution, and is never serialized or replaced between phases.
+        bookkeeping = authority_contract.PLANNER_QUERY_BOOKKEEPING_CONTRACT
+        query_work = (
+            _ValidationWork(QueryReadValidationLimits(
+                max_hashes=bookkeeping["maxHashes"],
+                max_input_bytes=bookkeeping["maxInputBytes"],
+                max_json_nodes=bookkeeping["maxJsonNodes"],
+            ))
+            if isinstance(self.programs[operation], TypedTransitionPlanningProgram)
+            else None
+        )
         with psycopg.connect(
             self.read_dsn,
             row_factory=dict_row,
@@ -2840,6 +2866,7 @@ class MeasuredPlanner:
                             authority_query_staging.StagedQueryProofs(
                                 operation=operation, business_before_roots=roots,
                                 authorization_before_roots=authorization_roots,
+                                query_work=query_work,
                             )
                             if isinstance(self.programs[operation], TypedTransitionPlanningProgram)
                             else None
@@ -2854,6 +2881,7 @@ class MeasuredPlanner:
                         trace=trace,
                         program=self.programs[operation],
                         query_sources=query_sources,
+                        query_work=query_work,
                         verified_webauthn_evidence=verified_webauthn_evidence,
                     )
                     try:
@@ -2884,13 +2912,15 @@ class MeasuredPlanner:
                         if isinstance(self.programs[operation], TypedTransitionPlanningProgram):
                             planning_state = replace(
                                 planning_state,
-                                query_reads=authority_query_reads.validate_query_reads(
+                                query_reads=authority_query_reads._validate_query_reads(
                                     operation, queries=planning_state.query_program,
                                     query_reads=planning_state.query_reads, selected_rows=selected,
-                                ),
+                                    work=query_work,
+                                )[1],
                             )
                     except (authority_root_transition.PrimaryRadixMutationError,
                             authority_query_reads.QueryReadError,
+                            QueryReadWorkError,
                             authority_query_staging.QueryStagingError) as exc:
                         raise AuthorityPlannerError(
                             "planner before-kernel input verification failed"

@@ -270,6 +270,165 @@ def expected_work(fixture):
     return result
 
 
+class IncrementalFixture(MixedFixture):
+    """Ordinary declarations matching the still-admitted planner read kind."""
+
+    def __init__(self, *, payload=None):
+        super().__init__(payload=payload)
+        self.selected = (self.first, self.second, self.absent)
+        self.queries = (self.source, self.dependent, self.empty, self.missing, self.overlap)
+        self.ordered = ((self.first,), (self.second,), (), (self.absent,), (self.second, self.first))
+        self.resolved = tuple(self.resolve(query) for query in self.queries)
+        self.records = tuple(self.record(query, resolved, ordered)
+            for query, resolved, ordered in zip(self.queries, self.resolved, self.ordered))
+
+
+class PipelineWork(ExpectedWork):
+    """Independent ordinary-query pass schedule, not production helper output."""
+
+    def __init__(self, fixture):
+        super().__init__()
+        self.fixture = fixture
+
+    @staticmethod
+    def values(query):
+        return (tuple(item.value for item in query.predicates)
+                + (() if query.absent_key is None else tuple(query.absent_key.values())))
+
+    def reference_copies(self, query):
+        for value in self.values(query):
+            if type(value) is core.SelectedRowFieldReference:
+                self.encoding(value.key)
+
+    def key(self, key):
+        self.copy(key)
+        self.encoding(key)
+
+    def selection(self, selected):
+        self.key(selected["key"])
+        if selected["present"]:
+            self.key({"id": selected["row"]["id"]})
+        self.hashes += 1
+        self.address(reads.QueryReadAddress(selected["table"], wire(selected["key"]),
+            selected["keyDigest"], selected["present"]))
+
+    def snapshot(self, query):
+        for value in self.values(query):
+            if type(value) is core.SelectedRowFieldReference:
+                self.copy(value.key)
+                self.encoding(value.key, copies=1)
+            else:
+                self.copy(value)
+        if query.absent_key is not None:
+            for name in query.absent_key:
+                self.copy(name)
+        self.reference_copies(query)
+        document = self.fixture.document(query)
+        self.encoding(document)
+        self.bytes += len(wire(document))
+
+    def copy_record(self, record):
+        addresses = sum(address_bytes(address) for address in record.addresses)
+        header = record_bytes(record) - addresses
+        self.bytes += 2 * header + addresses
+
+    def prefix_budget(self, records):
+        for record in records:
+            self.copy_record(record)
+            self.record(record)
+
+    def prior_context(self, records, selections):
+        # Budget copy+scan, a second copy, and association: 6H+4A per
+        # immutable record, plus the actual selected-address reconstructions.
+        self.prefix_budget(records)
+        for record in records:
+            self.copy_record(record)
+        for selected in selections:
+            self.selection(selected)
+        for record in records:
+            self.record(record)
+
+    def reference(self, query, records, selections):
+        self.snapshot(query)
+        self.prior_context(records, selections)
+        for value in self.values(query):
+            if type(value) is core.SelectedRowFieldReference:
+                self.key(value.key)
+
+    def resolution(self, query, resolved, records, selections):
+        self.snapshot(query)
+        self.prior_context(records, selections)
+        for before, after in zip(self.values(query), self.values(resolved)):
+            if type(before) is core.SelectedRowFieldReference:
+                self.key(before.key)
+            self.copy(after)
+
+    def capture(self, query, resolved, selected, record):
+        self.snapshot(query)
+        self.snapshot(resolved)
+        self.reference_copies(query)
+        resolved_document = self.fixture.document(resolved)
+        self.encoding(resolved_document)  # expected shape after substitution
+        self.encoding(resolved_document)  # actual resolved shape
+        self.reference_copies(query)
+        declared_document = self.fixture.document(query)
+        self.encoding(declared_document)
+        self.encoding(resolved_document)
+        self.bytes += len(wire(declared_document)) + len(wire(resolved_document))
+        for row in selected:
+            self.selection(row)
+        if record.returned_row_count == 0 and resolved.absent_key is not None:
+            self.key(resolved.absent_key)
+        self.bytes += record_bytes(record) - sum(address_bytes(address) for address in record.addresses)
+        self.prefix_budget((record,))
+
+
+def expected_pipeline_work(fixture):
+    result = PipelineWork(fixture)
+    for query in fixture.queries:
+        result.snapshot(query)
+    prior, selected = [], {}
+    for query, resolved, ordered, record in zip(
+            fixture.queries, fixture.resolved, fixture.ordered, fixture.records):
+        result.snapshot(query)  # staging's own source snapshot precedes its worker
+        result.reference(query, prior, tuple(selected.values()))
+        result.resolution(query, resolved, prior, tuple(selected.values()))
+        result.capture(query, resolved, ordered, record)
+        prior.append(record)
+        result.prefix_budget(prior)
+        for row in ordered:
+            selected.setdefault((row["table"], row["keyDigest"]), row)
+    # Both end-of-read and post-primary QueryRead checks are genuine repeated
+    # bookkeeping. This fixture performs no SQL or primary verification.
+    final = expected_work(fixture)
+    result.hashes += 2 * final.hashes
+    result.bytes += 2 * final.bytes
+    result.nodes += 2 * final.nodes
+    return result
+
+
+def incremental_pipeline(fixture, work):
+    queries = reads._snapshot_queries(OPERATION, fixture.queries, work)
+    prior, selected, sources = [], {}, []
+    for query, ordered, expected in zip(queries, fixture.ordered, fixture.records):
+        staged, = reads._snapshot_queries(OPERATION, (query,), work)
+        sources.append(reads._reference_source_rows(OPERATION, staged, prior_reads=tuple(prior),
+            selected_rows=tuple(selected.values()), work=work))
+        resolved = reads._resolve_query(OPERATION, query, prior_reads=tuple(prior),
+            selected_rows=tuple(selected.values()), work=work)
+        record = reads._capture_query_read(OPERATION, query, resolved_query=resolved,
+            ordered_selected_rows=ordered, returned_row_count=expected.returned_row_count, work=work)
+        prior.append(record)
+        reads._validate_read_budget(OPERATION, tuple(prior), work)
+        for row in ordered:
+            selected.setdefault((row["table"], row["keyDigest"]), row)
+    for _ in range(2):
+        queries, records = reads._validate_query_reads(OPERATION, queries=queries,
+            query_reads=tuple(prior), selected_rows=tuple(selected.values()), work=work)
+        prior = list(records)
+    return tuple(prior), tuple(sources)
+
+
 class AuthorityQueryReadMeasuredTests(unittest.TestCase):
     def measured(self, fixture, *, limits=None, **changes):
         inputs = fixture.inputs()
@@ -557,6 +716,155 @@ class AuthorityQueryReadMeasuredTests(unittest.TestCase):
                 self.assertRaises(reads.QueryReadError):
             self.measured(fixture, limits=reads.QueryReadValidationLimits(max_hashes=49))
         self.assertEqual(hashes.call_count, 49)
+
+    def test_incremental_pipeline_matches_independent_records_work_and_real_hashes(self):
+        fixture = IncrementalFixture()
+        expected = expected_pipeline_work(fixture)
+        meter = work_component._ValidationWork(reads.QueryReadValidationLimits())
+        actual_sha = hashlib.sha256
+        with patch.object(hashlib, "sha256", wraps=actual_sha) as hashes:
+            records, sources = incremental_pipeline(fixture, meter)
+        self.assertEqual(records, fixture.records)
+        self.assertEqual(sources, ((), (fixture.first,), (), (fixture.first,), ()))
+        self.assertEqual(expected.hashes, 37)
+        self.assertEqual(hashes.call_count, expected.hashes)
+        self.assertEqual((meter.hash_work, meter.input_bytes, meter.json_nodes),
+                         (expected.hashes, expected.bytes, expected.nodes))
+        self.assertEqual(incremental_pipeline(fixture, None), (records, sources))
+
+    def test_incremental_pipeline_exact_and_minus_one_use_independent_whole_totals(self):
+        fixture = IncrementalFixture()
+        expected = expected_pipeline_work(fixture)
+        limits = reads.QueryReadValidationLimits(expected.hashes, expected.bytes, expected.nodes)
+        meter = work_component._ValidationWork(limits)
+        self.assertEqual(incremental_pipeline(fixture, meter)[0], fixture.records)
+        for name in ("max_hashes", "max_input_bytes", "max_json_nodes"):
+            smaller = replace(limits, **{name: getattr(limits, name) - 1})
+            meter = work_component._ValidationWork(smaller)
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                incremental_pipeline(fixture, meter)
+            self.assertLessEqual(meter.hash_work, smaller.max_hashes)
+            self.assertLessEqual(meter.input_bytes, smaller.max_input_bytes)
+            self.assertLessEqual(meter.json_nodes, smaller.max_json_nodes)
+
+    def test_incremental_pipeline_preconsumed_work_and_two_repeats_never_reset(self):
+        fixture = IncrementalFixture()
+        expected = expected_pipeline_work(fixture)
+        initial = (7, 101, 13)
+        limits = reads.QueryReadValidationLimits(2 * expected.hashes + initial[0],
+            2 * expected.bytes + initial[1], 2 * expected.nodes + initial[2])
+        meter = work_component._ValidationWork(limits)
+        meter.charge(hashes=initial[0], input_bytes=initial[1], json_nodes=initial[2])
+        for ordinal in (1, 2):
+            self.assertEqual(incremental_pipeline(fixture, meter)[0], fixture.records)
+            self.assertEqual((meter.hash_work, meter.input_bytes, meter.json_nodes),
+                (ordinal * expected.hashes + initial[0], ordinal * expected.bytes + initial[1],
+                 ordinal * expected.nodes + initial[2]))
+        with self.assertRaises(ValueError):
+            incremental_pipeline(fixture, meter)
+
+    def test_incremental_workers_forward_one_real_meter_without_fresh_allowances(self):
+        fixture = IncrementalFixture()
+        meter = work_component._ValidationWork(reads.QueryReadValidationLimits())
+        observed = []
+
+        def observer(name, original):
+            def call(*args, **kwargs):
+                observed.append((name, kwargs.get("work", args[-1])))
+                return original(*args, **kwargs)
+            return call
+
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for name in ("_snapshot_queries", "_copy_read", "_selection_map", "_associations",
+                         "_resolve", "_capture", "_validate_read_budget", "_validate_query_reads"):
+                stack.enter_context(patch.object(reads, name, new=observer(name, getattr(reads, name))))
+            stack.enter_context(patch.object(work_component._ValidationWork, "__init__",
+                side_effect=AssertionError("incremental worker created another allowance")))
+            records, _ = incremental_pipeline(fixture, meter)
+        self.assertEqual(records, fixture.records)
+        self.assertEqual({name for name, _ in observed}, {"_snapshot_queries", "_copy_read",
+            "_selection_map", "_associations", "_resolve", "_capture", "_validate_read_budget",
+            "_validate_query_reads"})
+        self.assertTrue(all(work is meter for _, work in observed))
+
+    def test_public_incremental_facades_delegate_none_to_the_same_complete_bodies(self):
+        fixture = IncrementalFixture()
+        prior, selected = (fixture.records[0],), (fixture.first,)
+        original_reference = reads._reference_source_rows
+        original_resolve = reads._resolve_query
+        original_capture = reads._capture_query_read
+        with patch.object(reads, "_reference_source_rows", wraps=original_reference) as references, \
+                patch.object(reads, "_resolve_query", wraps=original_resolve) as resolutions, \
+                patch.object(reads, "_capture_query_read", wraps=original_capture) as captures:
+            sources = reads.reference_source_rows(OPERATION, fixture.dependent,
+                prior_reads=prior, selected_rows=selected)
+            resolved = reads.resolve_query(OPERATION, fixture.dependent,
+                prior_reads=prior, selected_rows=selected)
+            record = reads.capture_query_read(OPERATION, fixture.dependent, resolved_query=resolved,
+                ordered_selected_rows=(fixture.second,), returned_row_count=1)
+        self.assertEqual(sources, selected)
+        self.assertEqual(record, fixture.records[1])
+        for calls in (references, resolutions, captures):
+            self.assertEqual(calls.call_count, 1)
+            self.assertIsNone(calls.call_args.kwargs["work"])
+
+    def test_reference_worker_does_not_copy_unproved_values_but_resolution_really_does(self):
+        fixture = IncrementalFixture()
+        prior, selected = (fixture.records[0],), (fixture.first,)
+        fixture.first["row"]["payload"] = object()
+        meter = work_component._ValidationWork(reads.QueryReadValidationLimits())
+        sources = reads._reference_source_rows(OPERATION, fixture.dependent,
+            prior_reads=prior, selected_rows=selected, work=meter)
+        self.assertEqual(sources, selected)
+        self.assertIs(sources[0], fixture.first)
+        before = meter.metrics
+        with self.assertRaises(reads.QueryReadError):
+            reads._resolve_query(OPERATION, fixture.dependent,
+                prior_reads=prior, selected_rows=selected, work=meter)
+        self.assertGreater(meter.input_bytes, before.input_bytes)
+        self.assertGreater(meter.json_nodes, before.json_nodes)
+        with self.assertRaises(reads.QueryReadError):
+            reads._reference_source_rows(OPERATION, fixture.dependent,
+                prior_reads=(), selected_rows=selected, work=meter)
+
+    def test_incremental_exhaustion_precedes_real_reference_copy_and_capture_encoding(self):
+        fixture = IncrementalFixture()
+        prior, selected = (fixture.records[0],), (fixture.first,)
+        meter = work_component._ValidationWork(reads.QueryReadValidationLimits(max_hashes=1))
+        meter.charge(hashes=1)
+        actual_resolve = reads._resolve
+        with patch.object(reads, "_resolve", wraps=actual_resolve) as resolutions, \
+                self.assertRaises(ValueError):
+            reads._resolve_query(OPERATION, fixture.dependent,
+                prior_reads=prior, selected_rows=selected, work=meter)
+        self.assertEqual(resolutions.call_count, 0)
+        self.assertEqual(meter.hash_work, 1)
+        meter = work_component._ValidationWork(reads.QueryReadValidationLimits(max_input_bytes=1))
+        actual_dumps = json.dumps
+        with patch.object(json, "dumps", wraps=actual_dumps) as encodings, \
+                self.assertRaises(ValueError):
+            reads._capture_query_read(OPERATION, fixture.source, resolved_query=fixture.resolved[0],
+                ordered_selected_rows=(fixture.first,), returned_row_count=1, work=meter)
+        self.assertEqual(encodings.call_count, 0)
+
+    def test_repeated_incremental_passes_consume_the_unchanged_source_ceiling(self):
+        fixture = IncrementalFixture(payload="x" * (256 * 1024))
+        expected = expected_pipeline_work(fixture)
+        limits = reads.QueryReadValidationLimits()
+        admitted = min(limits.max_hashes // expected.hashes,
+                       limits.max_input_bytes // expected.bytes,
+                       limits.max_json_nodes // expected.nodes)
+        self.assertGreaterEqual(admitted, 1)
+        self.assertLessEqual(admitted, 16)
+        self.assertLess(sum(record_bytes(record) for record in fixture.records), 1024 * 1024)
+        meter = work_component._ValidationWork(limits)
+        for _ in range(admitted):
+            self.assertEqual(incremental_pipeline(fixture, meter)[0], fixture.records)
+        self.assertEqual((meter.hash_work, meter.input_bytes, meter.json_nodes),
+            (admitted * expected.hashes, admitted * expected.bytes, admitted * expected.nodes))
+        with self.assertRaises(ValueError):
+            incremental_pipeline(fixture, meter)
 
 
 if __name__ == "__main__":

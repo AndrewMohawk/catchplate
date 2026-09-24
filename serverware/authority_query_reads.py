@@ -513,8 +513,9 @@ def _associations(records: tuple[QueryRead, ...], selections,
     return seen
 
 
-def reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[QueryRead, ...],
-                          selected_rows: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+def _reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[QueryRead, ...],
+                           selected_rows: tuple[dict[str, Any], ...],
+                           work: _ValidationWork | None = None) -> tuple[dict[str, Any], ...]:
     """Select prior observed source rows for staging, without reading their values.
 
     This validates source query shape, address associations and field presence,
@@ -524,19 +525,19 @@ def reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[Quer
     or copied as query parameter values here.
     A caller must genuinely verify these rows before calling resolve_query.
     """
-    owned = snapshot_queries(operation, (query,))[0]
-    validate_read_budget(operation, query_reads=prior_reads)
-    records = tuple(_copy_read(record) for record in prior_reads)
+    owned = _snapshot_queries(operation, (query,), work)[0]
+    _validate_read_budget(operation, prior_reads, work)
+    records = tuple(_copy_read(record, work) for record in prior_reads)
     if any(record.query_id == owned.query_id for record in records):
         raise QueryReadError("query reference source inventory includes the current query")
-    selections = _selection_map(operation, selected_rows)
-    available = _associations(records, selections)
+    selections = _selection_map(operation, selected_rows, work)
+    available = _associations(records, selections, work)
     # The initial complete roles bind only request literals, fixed source enums
     # and an explicit supplied cutoff. They contain no deferred row references.
     if type(owned) is authority_complete_query.CompleteIndexQuery:
         return ()
     core = _core()
-    budget = _CopyBudget()
+    budget = _CopyBudget(work)
     sources = {}
 
     def include(value):
@@ -558,6 +559,13 @@ def reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[Quer
     return tuple(sources[identity] for identity in sorted(
         sources, key=lambda identity: (identity[0], sources[identity]["keyDigest"], identity[1]),
     ))
+
+
+def reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[QueryRead, ...],
+                          selected_rows: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    """Select prior observed reference sources, without authenticating them."""
+    return _reference_source_rows(operation, query, prior_reads=prior_reads,
+                                  selected_rows=selected_rows, work=None)
 
 
 def _resolve(query, prior_reads: tuple[QueryRead, ...], selections,
@@ -595,12 +603,19 @@ def _resolve(query, prior_reads: tuple[QueryRead, ...], selections,
         raise QueryReadError("query resolution is outside its source definition") from exc
 
 
+def _resolve_query(operation: str, query: Any, *, prior_reads: tuple[QueryRead, ...],
+                   selected_rows: tuple[dict[str, Any], ...],
+                   work: _ValidationWork | None = None):
+    owned = _snapshot_queries(operation, (query,), work)[0]
+    _validate_read_budget(operation, prior_reads, work)
+    records = tuple(_copy_read(record, work) for record in prior_reads)
+    return _resolve(owned, records, _selection_map(operation, selected_rows, work), work)
+
+
 def resolve_query(operation: str, query: Any, *, prior_reads: tuple[QueryRead, ...],
                   selected_rows: tuple[dict[str, Any], ...]):
-    owned = snapshot_queries(operation, (query,))[0]
-    validate_read_budget(operation, query_reads=prior_reads)
-    records = tuple(_copy_read(record) for record in prior_reads)
-    return _resolve(owned, records, _selection_map(operation, selected_rows))
+    return _resolve_query(operation, query, prior_reads=prior_reads,
+                          selected_rows=selected_rows, work=None)
 
 
 def _resolution_shape(query, resolved, work: _ValidationWork | None = None) -> None:
@@ -672,14 +687,22 @@ def _capture(query, resolved, ordered_selected_rows, returned_row_count,
     }, work)
 
 
+def _capture_query_read(operation: str, query: Any, *, resolved_query: Any,
+                        ordered_selected_rows: tuple[dict[str, Any], ...], returned_row_count: int,
+                        work: _ValidationWork | None = None) -> QueryRead:
+    """Capture actual ordered selection wrappers; final validation replays refs."""
+    owned = _snapshot_queries(operation, (query,), work)[0]
+    resolved = _snapshot_queries(operation, (resolved_query,), work)[0]
+    record = _capture(owned, resolved, ordered_selected_rows, returned_row_count, work)
+    _validate_read_budget(operation, (record,), work)
+    return record
+
+
 def capture_query_read(operation: str, query: Any, *, resolved_query: Any,
                        ordered_selected_rows: tuple[dict[str, Any], ...], returned_row_count: int) -> QueryRead:
     """Capture actual ordered selection wrappers; final validation replays refs."""
-    owned = snapshot_queries(operation, (query,))[0]
-    resolved = snapshot_queries(operation, (resolved_query,))[0]
-    record = _capture(owned, resolved, ordered_selected_rows, returned_row_count)
-    validate_read_budget(operation, query_reads=(record,))
-    return record
+    return _capture_query_read(operation, query, resolved_query=resolved_query,
+        ordered_selected_rows=ordered_selected_rows, returned_row_count=returned_row_count, work=None)
 
 
 def _validate_query_reads(operation: str, *, queries: tuple[Any, ...], query_reads: tuple[QueryRead, ...],

@@ -13,12 +13,14 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from types import MappingProxyType
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract
+from serverware import authority_query_read_work
 
 
 PHASE2 = (
@@ -390,7 +392,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.29")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.30")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -405,6 +407,43 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             if isinstance(node, ast.Constant) and type(node.value) is str]
         self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 17)
         self.assertFalse(any("serverware.policyCandidateAuthoritySource/2026-07-30.26" in value for value in literals))
+
+    def test_planner_query_bookkeeping_contract_binds_narrow_cumulative_limits(self):
+        contract = authority_contract.PLANNER_QUERY_BOOKKEEPING_CONTRACT
+        self.assertIs(type(contract), MappingProxyType)
+        self.assertEqual(dict(contract), {
+            "schema": "serverware.policyAuthorityPlannerQueryBookkeeping/v1",
+            "allocation": "once-per-typed-derive",
+            "maxHashes": 8_000_000, "maxInputBytes": 64 * 1024 * 1024,
+            "maxJsonNodes": 1_000_000, "maxJsonDepth": 128,
+            "includedPhases": (
+                "snapshot", "reference-sources", "resolve", "capture", "prefix-budget",
+                "end-of-read-validation", "post-primary-validation",
+            ),
+            "excludedWork": (
+                "sql-acquisition", "primary-proof-verification", "staging-cache-stamps",
+                "kernel", "range-and-mutation-proofs", "whole-plan",
+            ),
+        })
+        with self.assertRaises(TypeError):
+            contract["maxHashes"] = 1
+        limits = authority_query_read_work.QueryReadValidationLimits()
+        self.assertEqual((limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes,
+                          authority_query_read_work.MAX_JSON_DEPTH),
+                         (contract["maxHashes"], contract["maxInputBytes"],
+                          contract["maxJsonNodes"], contract["maxJsonDepth"]))
+        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        material = named_assignment(tree, "OPERATION_MANIFEST_DIGEST").value.args[1]
+        fields = {key.value: value for key, value in zip(material.keys, material.values)}
+        self.assert_shape(fields["plannerQueryBookkeeping"], "dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT)")
+        source_contract = named_function(self.schema_tree, "_policy_candidate_authority_source_contract_digest")
+        serialized = named_assignment(source_contract, "material", recursive=True).value.func.value.args[0]
+        source_fields = {key.value: value for key, value in zip(serialized.keys, serialized.values)
+                         if isinstance(key, ast.Constant) and type(key.value) is str}
+        self.assert_shape(source_fields["operationContractDigest"], "authority_contract.OPERATION_MANIFEST_DIGEST")
+        self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
+        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+        self.assertEqual(authority_contract.MAX_PLAN_WORK_UNITS, 16386)
 
     def test_counted_custody_is_exact_postgres_only_and_excluded_from_primary_business(self):
         self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_STORE_COLUMNS), COUNTED_COLUMNS)

@@ -152,13 +152,13 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
 
     def test_query_observations_are_retained_and_rechecked_against_owned_primary_rows(self):
         reader = definition(self.tree, "_read_bounded_transition_rows")
-        snapshotted = call(reader, "authority_query_reads.snapshot_queries")
+        snapshotted = call(reader, "authority_query_reads._snapshot_queries")
         staged = call(reader, "query_sources.authenticate_references")
-        resolved = call(reader, "authority_query_reads.resolve_query")
+        resolved = call(reader, "authority_query_reads._resolve_query")
         executed = call(reader, "cursor.execute")
-        captured = call(reader, "authority_query_reads.capture_query_read")
-        bounded = call(reader, "authority_query_reads.validate_read_budget")
-        validated = call(reader, "authority_query_reads.validate_query_reads")
+        captured = call(reader, "authority_query_reads._capture_query_read")
+        bounded = call(reader, "authority_query_reads._validate_read_budget")
+        validated = call(reader, "authority_query_reads._validate_query_reads")
         self.assertLess(snapshotted.lineno, staged.lineno)
         self.assertLess(staged.lineno, resolved.lineno)
         self.assertLess(resolved.lineno, executed.lineno)
@@ -185,11 +185,11 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(state)["query_reads"], "query_reads")
         producer = self.method("derive", "MeasuredPlanner")
         primary = call(producer, "authority_root_transition.verify_primary_plan_inputs")
-        association = call(producer, "authority_query_reads.validate_query_reads")
+        association = call(producer, "authority_query_reads._validate_query_reads")
         self.assertLess(primary.lineno, association.lineno)
         self.assertEqual(keywords(association), {
             "queries": "planning_state.query_program", "query_reads": "planning_state.query_reads",
-            "selected_rows": "selected",
+            "selected_rows": "selected", "work": "query_work",
         })
 
     def test_staged_proofs_are_transaction_local_and_only_unproved_rows_are_reread(self):
@@ -207,6 +207,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(created), {
             "operation": "operation", "business_before_roots": "roots",
             "authorization_before_roots": "authorization_roots",
+            "query_work": "query_work",
         })
         self.assertEqual(keywords(selected)["query_sources"], "query_sources")
         self.assertEqual([ast.unparse(item) for item in pending.args], ["selected"])
@@ -219,6 +220,58 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertIn("type(query_sources) is not authority_query_staging.StagedQueryProofs", ast.unparse(inputs))
         reader = call(self.method("read_inputs"), "_read_bounded_transition_rows")
         self.assertEqual(keywords(reader)["query_sources"], "query_sources")
+
+    def test_one_source_bounded_query_meter_is_threaded_through_every_real_bookkeeping_phase(self):
+        producer = self.method("derive", "MeasuredPlanner")
+        meter = call(producer, "_ValidationWork")
+        limits = call(producer, "QueryReadValidationLimits")
+        self.assertEqual([ast.unparse(value) for value in meter.args], [ast.unparse(limits)])
+        self.assertEqual(keywords(limits), {
+            "max_hashes": "bookkeeping['maxHashes']",
+            "max_input_bytes": "bookkeeping['maxInputBytes']",
+            "max_json_nodes": "bookkeeping['maxJsonNodes']",
+        })
+        allocation, = [node for node in ast.walk(producer) if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "query_work" for target in node.targets)]
+        self.assertIsInstance(allocation.value, ast.IfExp)
+        self.assertEqual(ast.unparse(allocation.value.test),
+            "isinstance(self.programs[operation], TypedTransitionPlanningProgram)")
+        self.assertEqual(ast.unparse(allocation.value.orelse), "None")
+        self.assertLess(meter.lineno, call(producer, "psycopg.connect").lineno)
+        self.assertIn("bookkeeping = authority_contract.PLANNER_QUERY_BOOKKEEPING_CONTRACT", ast.unparse(producer))
+        for name in ("authority_query_staging.StagedQueryProofs", "_read_planning_inputs"):
+            self.assertEqual(keywords(call(producer, name))["query_work"], "query_work")
+        forwarding = definition(self.tree, "_read_planning_inputs")
+        self.assertEqual(keywords(call(forwarding, "program.read_inputs"))["query_work"], "query_work")
+        self.assertEqual(keywords(call(self.method("read_inputs"), "_read_bounded_transition_rows"))["query_work"],
+            "query_work")
+        reader = definition(self.tree, "_read_bounded_transition_rows")
+        pinned = call(reader, "query_sources._require_query_work")
+        self.assertEqual([ast.unparse(value) for value in pinned.args], ["query_work"])
+        for name in ("_snapshot_queries", "_resolve_query", "_capture_query_read", "_validate_read_budget",
+                     "_validate_query_reads"):
+            actual = call(reader, "authority_query_reads." + name)
+            self.assertEqual(keywords(actual)["work"], "query_work")
+            self.assertLess(pinned.lineno, actual.lineno)
+        self.assertEqual(keywords(call(producer, "authority_query_reads._validate_query_reads"))["work"], "query_work")
+        for node in (reader, forwarding, self.method("read_inputs")):
+            self.assertFalse(calls(node, "_ValidationWork"))
+            self.assertFalse(calls(node, "authority_query_reads.validate_query_reads_measured"))
+        state = definition(self.tree, "PlanningState")
+        self.assertNotIn("query_work", [node.target.id for node in state.body if isinstance(node, ast.AnnAssign)])
+
+    def test_query_work_failures_abort_typed_planning_and_post_primary_validation_without_reset(self):
+        for node, message in ((self.method("read_inputs"), "typed transition query program denied the request"),
+                (self.method("derive", "MeasuredPlanner"), "planner before-kernel input verification failed")):
+            handlers = [item for item in ast.walk(node) if isinstance(item, ast.ExceptHandler)
+                and item.type is not None and "QueryReadWorkError" in ast.unparse(item.type)]
+            self.assertEqual(len(handlers), 1)
+            self.assertEqual(len(handlers[0].body), 1)
+            self.assertIsInstance(handlers[0].body[0], ast.Raise)
+            self.assertIn(message, ast.unparse(handlers[0].body[0]))
+            self.assertFalse(calls(handlers[0], "_ValidationWork"))
+        reader = definition(self.tree, "_read_bounded_transition_rows")
+        self.assertFalse(any(isinstance(node, ast.ExceptHandler) for node in ast.walk(reader)))
 
     def test_transition_work_uses_finalized_batch_and_explicit_shared_accounting(self):
         method = self.method("__call__")

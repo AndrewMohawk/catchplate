@@ -586,7 +586,8 @@ class CompleteQueryTests(unittest.TestCase):
         def calls(node, name):
             return [item for item in ast.walk(node) if isinstance(item, ast.Call)
                     and ast.unparse(item.func) == name]
-        snapshot, = calls(reader, "authority_query_reads.snapshot_queries")
+        snapshot, = calls(reader, "authority_query_reads._snapshot_queries")
+        self.assertEqual({item.arg: ast.unparse(item.value) for item in snapshot.keywords}, {"work": "query_work"})
         guards = [node for node in reader.body if isinstance(node, ast.If)
                   and ast.unparse(node.test) ==
                   "any(type(query) is authority_complete_query.CompleteIndexQuery for query in queries)"]
@@ -600,7 +601,7 @@ class CompleteQueryTests(unittest.TestCase):
         self.assertLess(snapshot.lineno, guard.lineno)
         loop, = [node for node in reader.body if isinstance(node, ast.For)]
         self.assertLess(guard.end_lineno, loop.lineno)
-        for name in ("query_sources.authenticate_references", "authority_query_reads.resolve_query", "cursor.execute"):
+        for name in ("query_sources.authenticate_references", "authority_query_reads._resolve_query", "cursor.execute"):
             actual, = calls(reader, name)
             self.assertLess(guard.end_lineno, actual.lineno)
         self.assertFalse(any(isinstance(node, ast.For) for node in reader.body[:reader.body.index(guard)]))

@@ -44,6 +44,10 @@ The collector binds the cursor and trace identity and enforces a one-way
 lifecycle. Once final proof selection begins, no additional query staging is
 allowed; final proof merging cannot be repeated. A failed operation leaves the
 collector unusable rather than admitting partially accumulated evidence.
+The guard also rejects reentrancy: a caught nested error permanently poisons the
+outer operation, including proof completion and merge. An already executing
+bounded producer may finish its current reads; no successful membership/cache
+publication or collector result follows from the poisoned invocation.
 
 ## Final verification is still required
 
@@ -81,7 +85,12 @@ kernel work units, final selected envelopes or the outer 64 MiB plan ceiling.
 
 Canonical cache-stamp creation and rechecking have their own cumulative 64 MiB
 byte and 1,000,000-node budgets. They are not hidden under the membership engine's
-input metric. Query-record/address bookkeeping has its own existing bounds.
+input metric. The actual planner additionally supplies one shared
+[QueryRead bookkeeping ledger](authority-query-read-accounting.md), used for
+source snapshots and reference enumeration even on cache hits. Its identity is
+bound before the reader begins; none of these staging phases can replace it.
+Legacy standalone collectors may omit that meter and retain their original
+named public query-helper route. The production typed planner may not omit it.
 None of these component metrics claims total planner CPU, process memory, SQL
 producer allocation or an external parser limit.
 
@@ -113,7 +122,7 @@ kernels remain separate requirements.
 
 ## Authored verification coverage
 
-The staging fixture adds 20 methods using the actual proof producer and
+The staging fixture retains 20 methods using the actual proof producer and
 membership engine against independent tree/store data. They cover source
 ownership, deferred resolution, cache reuse and mutation rejection, transaction
 lifecycle, cumulative source limits, the final singleton counter block, and
@@ -121,6 +130,10 @@ mandatory complete-input verification. Three query-record methods cover source
 enumeration, and one new planner source-order method covers transaction-local
 construction and proof reuse; the existing observation-order check is extended.
 Existing test method identities are preserved.
+Seven additional methods cover shared-meter identity and exact cumulative work,
+preconsumed and exhausted allowances, cache-hit bookkeeping, legacy compatibility,
+and caught reentrant failures during acquisition/completion. There are 27 authored
+methods in that fixture; none is passing evidence yet.
 
 All of this coverage is authored but unrun. The cursor fixtures are deterministic
 SQL responders, not PostgreSQL. They do not prove database execution, transaction

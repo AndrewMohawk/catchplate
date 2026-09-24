@@ -9,8 +9,9 @@ existing source snapshot, record reconstruction, address association, deferred
 value resolution and observation capture. It does not replace those checks
 with a metric calculation or accept a previously successful result.
 
-This is source implementation only: unbuilt, unexecuted and not wired into the
-planner or the complete read/write composer. The original public
+This is source implementation only: unbuilt and unexecuted. The actual typed
+planner now shares this ledger across its observation-bookkeeping phases; the
+mixed revocation composer also uses the genuine measured validator. The original public
 `validate_query_reads` keeps its existing admission rules and return type.
 The measured entry point deliberately has additional cumulative-work limits.
 
@@ -111,10 +112,45 @@ packaging, kernel/audit-capacity admission, SQL acquisition and the coordinated
 versioned planner/executor protocol remain separate work. Snapshot/v3 and its
 nine frames are unchanged; the complete-query planner gate remains closed.
 
+## Actual planner bookkeeping integration
+
+Source `.30` binds `PLANNER_QUERY_BOOKKEEPING_CONTRACT` into the operation and
+schema-source digests. It is an additional cumulative admission limit, not just
+telemetry or a reinterpretation of signed business `workUnits`. Schema version
+9, the closed v3 payloads, and their field inventories remain unchanged.
+
+`MeasuredPlanner.derive` creates one invocation-private `_ValidationWork` for a
+typed program, using the fixed hash/input/node limits above. That same object
+passes through source snapshotting, staged reference-source bookkeeping,
+resolution, capture and growing-prefix checks, then both whole-observation
+validations: at the end of acquisition and after actual primary verification
+replaces selected rows with its owned snapshots. Repeated scans and copies
+remain charged even when a previous phase examined identical records.
+
+The real reference, resolution and capture bodies are shared private workers;
+their existing public facades preserve the unmeasured behavior and return types.
+The planner does not call the standalone measured entry point between phases,
+because that entry point would start a new ledger. It does not store the mutable
+ledger in PlanningState, retained proofs, signatures or durable receipts.
+
+The staged collector binds the supplied meter identity and retains its own
+separate proof and cache-stamp budgets. Bookkeeping exhaustion aborts planning;
+it is never handled by resetting limits or retrying the next query. A poisoned
+or reentered collector cannot return success even when a nested rejection was
+caught by an observer. That does not interrupt a currently running bounded proof
+producer or establish a whole-process execution bound.
+
+This ledger excludes source query generation, full-row conflict comparisons,
+SQL/transport, primary proof construction and verification, cache stamps, kernel
+execution, range/mutation proofs, and final payload packaging. Integrating those
+phases under coordinated remaining-work limits is still required. Query records
+remain observations, not complete or current authority; complete-index queries
+still reject before business/proof SQL and the registry remains closed.
+
 ## Authored coverage
 
 [`test_authority_query_reads_measured.py`](../scripts/test_authority_query_reads_measured.py)
-contains 18 authored methods using independently encoded mixed observations:
+retains its original 18 authored methods using independently encoded mixed observations:
 present point reads, deferred
 values and absence keys, ordinary empty results, all five complete roles and
 ordered overlap. It observes the real resolution/capture/closure and SHA calls,
@@ -122,6 +158,20 @@ checks independently calculated byte/node/hash totals, tightened exact budgets
 and one-unit denials, and exercises cumulative
 repeated-reference work under the unchanged source ceiling. Legacy admission
 and the distinction between observations and proof authority remain explicit.
+
+Eight additional incremental-pipeline cases (26 methods total) exercise the actual shared workers and
+independently count repeated snapshot/reference/resolve/capture/prefix/final
+validation work. Staging cases cover shared meter identity, cache-hit charges,
+exhaustion before proof acquisition and monotonic failure. Source-linkage checks
+pin actual planner wiring without importing a substitute registry. Two genuine
+planner-worker cases are retained in the startup-dependent suite; they cannot
+run successfully until its real registry imports, and even then their empty SQL
+responder is not native PostgreSQL evidence.
+
+All prior method IDs are preserved. The related staging fixture has 27 methods,
+planner/capacity source linkage has 16, table/source-contract linkage has 19,
+and the startup suite has 32. These are authored inventories, not test results;
+the existing native inventory remains 252 methods across fourteen suites.
 
 These tests have not run. No runtime, database, startup or production claim is
 established by their source or registration. Native-suite counts, verification

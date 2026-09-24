@@ -52,6 +52,12 @@ unexecuted. Complete-query planner acquisition, independently admitted roots,
 shared operation budgets and versioned retained evidence are still required;
 this wiring neither enables counted queries nor registers a missing kernel.
 
+Source `.30` now threads one [query-bookkeeping ledger](authority-query-read-accounting.md)
+through actual typed planning and staged reference resolution, including both
+final observation validations. This bounds that repeated bookkeeping only;
+SQL/proof/kernel and whole-operation accounting remain separate. The complete
+query gate, v3 retained-evidence limitations and four startup gaps remain unchanged.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

@@ -16,6 +16,7 @@ from typing import Any
 from serverware import authority_audit_capacity as capacity
 from serverware import authority_contract, authority_query_reads, authority_radix_proof
 from serverware.authority_primary_contract import primary_table_contracts
+from serverware.authority_query_read_work import _ValidationWork
 from serverware.authority_radix_mutation import (
     PrimaryRadixLimits, PrimaryRoot, evaluate_primary_radix_memberships,
 )
@@ -63,11 +64,17 @@ class StagedQueryProofs:
     their encoding work has its own cumulative byte/node limits. These limits
     do not claim process-memory isolation or account for the separate query
     bookkeeping, physical proof producer, or final complete-plan verification.
+    An optional caller-owned QueryRead meter is reused for actual source
+    snapshots/reference scans; its counters are not added to these proof/stamp
+    metrics, and this collector never creates a replacement allowance.
     """
 
     def __init__(self, *, operation: str, business_before_roots: Any,
-                 authorization_before_roots: Any) -> None:
+                 authorization_before_roots: Any,
+                 query_work: _ValidationWork | None = None) -> None:
         self._phase = "active"
+        self._busy = self._poisoned = False
+        self._query_work = query_work
         self._usage = StagedProofMetrics()
         self._cursor = None
         self._trace = None
@@ -80,6 +87,8 @@ class StagedQueryProofs:
         self._completion_stamps: tuple[bytes, ...] = ()
         self._remaining: frozenset[tuple[str, str]] = frozenset()
         try:
+            if query_work is not None and type(query_work) is not _ValidationWork:
+                raise QueryStagingError("staging query work must be an exact shared meter")
             if type(operation) is not str or not 1 <= len(operation) <= 128:
                 raise QueryStagingError("staging operation is not an exact string")
             self._operation = operation
@@ -92,6 +101,7 @@ class StagedQueryProofs:
             self._authorization_roots = self._capture_roots(authorization_before_roots, "authorization")
         except Exception as exc:
             self._phase = "failed"
+            self._poisoned = True
             if isinstance(exc, QueryStagingError):
                 raise
             raise QueryStagingError("staging source root context is invalid") from exc
@@ -117,16 +127,35 @@ class StagedQueryProofs:
 
     @contextmanager
     def _guard(self, required: str):
-        if self._phase != required:
+        if self._poisoned or self._busy or self._phase != required:
             self._phase = "failed"
+            self._poisoned = True
             raise QueryStagingError("staging collector is not ready for this phase")
+        self._busy = True
         try:
             yield
+            # A trace/cursor observer may catch a nested call's error. A
+            # legitimate phase transition must never overwrite that failure.
+            self._require_running()
         except BaseException as exc:
             self._phase = "failed"
+            self._poisoned = True
             if isinstance(exc, QueryStagingError) or not isinstance(exc, Exception):
                 raise
             raise QueryStagingError("staging acquisition or validation failed") from exc
+        finally:
+            self._busy = False
+
+    def _require_running(self) -> None:
+        if self._poisoned:
+            self._phase = "failed"
+            raise QueryStagingError("staging collector is not ready after a nested failure")
+
+    def _require_query_work(self, work: _ValidationWork) -> None:
+        """Pin the actual planner's non-None meter before starting its reader."""
+        with self._guard("active"):
+            if type(work) is not _ValidationWork or work is not self._query_work:
+                raise QueryStagingError("staging query work identity changed")
 
     def _stamp(self, value: Any) -> bytes:
         """Count exact ASCII encoding before serialization, without row copies."""
@@ -241,15 +270,28 @@ class StagedQueryProofs:
                 self._cursor, self._trace = cursor, trace
             elif cursor is not self._cursor or trace is not self._trace:
                 raise QueryStagingError("staging cursor or trace identity changed")
-            owned_query, = authority_query_reads.snapshot_queries(self._operation, (query,))
+            if self._query_work is None:
+                owned_query, = authority_query_reads.snapshot_queries(self._operation, (query,))
+            else:
+                owned_query, = authority_query_reads._snapshot_queries(
+                    self._operation, (query,), work=self._query_work,
+                )
+            self._require_running()
             if (owned_query.query_id in self._query_ids
                     or len(self._query_ids) >= self._spec["maximumQueryRows"]):
                 raise QueryStagingError("staging query identity is repeated or exceeds its bound")
             self._query_ids.add(owned_query.query_id)
             union = self._overlay(selected_rows)
-            references = authority_query_reads.reference_source_rows(
-                self._operation, owned_query, prior_reads=query_reads, selected_rows=union,
-            )
+            if self._query_work is None:
+                references = authority_query_reads.reference_source_rows(
+                    self._operation, owned_query, prior_reads=query_reads, selected_rows=union,
+                )
+            else:
+                references = authority_query_reads._reference_source_rows(
+                    self._operation, owned_query, prior_reads=query_reads, selected_rows=union,
+                    work=self._query_work,
+                )
+            self._require_running()
             fresh = tuple(row for row in references if self._identity(row) not in self._rows)
             if not fresh:
                 return union
@@ -270,6 +312,7 @@ class StagedQueryProofs:
             if min(remaining_bytes, remaining_nodes) < 1 or remaining_vectors < count * depth or remaining_slots < count * depth * radix:
                 raise QueryStagingError("staging cumulative input or vector budget exceeded")
             original_stamps = tuple(self._stamp(row) for row in fresh)
+            self._require_running()
             # Reserve before any physical proof read or proof reconstruction.
             self._usage = replace(self._usage, stages=self._usage.stages + 1,
                                   selected_rows=self._usage.selected_rows + count,
@@ -279,6 +322,7 @@ class StagedQueryProofs:
                 roots=tuple(root.json_projection() for root in self._business_roots + self._authorization_roots),
                 trace=trace,
             )
+            self._require_running()
             verified = evaluate_primary_radix_memberships(
                 table_contracts=self._contracts, business_before_roots=self._business_roots,
                 authorization_before_roots=self._authorization_roots, selected_rows=fresh, before_proofs=proofs,
@@ -289,6 +333,7 @@ class StagedQueryProofs:
                     max_json_depth=MAX_JSON_DEPTH, max_json_nodes=remaining_nodes,
                 ),
             )
+            self._require_running()
             result = verified.result
             if (result.business_after_roots != self._business_roots
                     or result.authorization_after_roots != self._authorization_roots

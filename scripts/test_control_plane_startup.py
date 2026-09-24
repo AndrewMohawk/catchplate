@@ -898,6 +898,72 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         with self.assertRaises(self.planner.AuthorityPlannerError):
             self.commitment._typed_request_digest(malformed, work=None)
 
+    def query_reader_fixture(self, work):
+        from serverware import authority_contract, authority_query_staging, authority_transition_core
+        import test_authority_root_transition as roots
+
+        operation = "webauthn.counter.cas"
+        inputs, _ = roots.input_fixture(operation, {})
+        query = authority_transition_core.BoundedQuery(
+            query_id=f"serverware.policyAuthorityQuery/{operation}/empty-reader/webauthn_credentials/v1",
+            table="webauthn_credentials", predicates=(),
+            order_by=(authority_transition_core.QueryOrder("id"),), maximum_rows=1)
+        request = {}
+        for paths in authority_contract.operation_spec(operation)["selectors"].values():
+            for path in paths:
+                current = request
+                for part in path[:-1]:
+                    current = current.setdefault(part, {})
+                current[path[-1]] = "fixture-selector"
+        cursor = MagicMock()
+        cursor.execute.return_value.fetchall.return_value = []
+        collector = authority_query_staging.StagedQueryProofs(
+            operation=operation, business_before_roots=inputs["business_before_roots"],
+            authorization_before_roots=inputs["authorization_before_roots"], query_work=work)
+        return cursor, {
+            "operation": operation, "request": request, "queries": (query,),
+            "manifest": ({"table": "webauthn_credentials", "keyColumns": ["id"]},),
+            "trace": self.planner.PlannerTrace(operation=operation),
+            "query_sources": collector, "query_work": work,
+        }
+
+    def test_real_query_reader_empty_observation_preserves_legacy_bytes_with_one_meter(self) -> None:
+        # A real planner worker with a deterministic empty SQL responder, not
+        # native PostgreSQL or a complete signed-plan invocation. The genuine
+        # registry import in setUp must succeed; no bypass or skip is allowed.
+        from serverware import authority_query_reads as reads
+        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        cursor, arguments = self.query_reader_fixture(work)
+        selected, queries, observed = self.planner._read_bounded_transition_rows(cursor, **arguments)
+        self.assertEqual(selected, ())
+        self.assertEqual(queries, arguments["queries"])
+        query, = queries
+        resolved = reads.resolve_query(arguments["operation"], query, prior_reads=(), selected_rows=())
+        expected = reads.capture_query_read(arguments["operation"], query, resolved_query=resolved,
+            ordered_selected_rows=(), returned_row_count=0)
+        self.assertEqual(observed, (expected,))
+        cursor.execute.assert_called_once()
+        self.assertGreater(work.input_bytes, 0)
+        self.assertGreater(work.json_nodes, 0)
+        self.assertIs(arguments["query_sources"]._query_work, work)
+
+    def test_real_query_reader_exhausted_meter_denies_before_any_business_or_proof_sql(self) -> None:
+        from serverware.authority_query_reads import QueryReadError
+        from serverware.authority_query_read_work import (
+            _ValidationWork, QueryReadValidationLimits, QueryReadWorkError,
+        )
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        work.charge(json_nodes=work.limits.max_json_nodes)
+        cursor, arguments = self.query_reader_fixture(work)
+        with self.assertRaises(QueryReadError) as denied:
+            self.planner._read_bounded_transition_rows(cursor, **arguments)
+        self.assertIsInstance(denied.exception.__cause__, QueryReadWorkError)
+        cursor.execute.assert_not_called()
+        self.assertEqual(work.json_nodes, work.limits.max_json_nodes)
+
 
 if __name__ == "__main__":
     unittest.main()

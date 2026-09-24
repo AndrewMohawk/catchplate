@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.29"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.30"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -61,6 +61,25 @@ MAX_PLAN_QUERY_ROWS = MAX_QUERY_PROOFS + 1
 MAX_PLAN_MUTATIONS = MAX_MUTATIONS + 1
 MAX_PLAN_WORK_UNITS = MAX_WORK_UNITS + 2
 MAX_PLAN_SELECTED_BYTES = MAX_REQUEST_BYTES + 8192
+# One cumulative ledger for actual typed-query observation bookkeeping. This
+# admission is separate from signed business workUnits and the staging proof
+# and cache-stamp budgets; it is not a whole-planner resource contract.
+PLANNER_QUERY_BOOKKEEPING_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityPlannerQueryBookkeeping/v1",
+    "allocation": "once-per-typed-derive",
+    "maxHashes": 8_000_000,
+    "maxInputBytes": 64 * 1024 * 1024,
+    "maxJsonNodes": 1_000_000,
+    "maxJsonDepth": 128,
+    "includedPhases": (
+        "snapshot", "reference-sources", "resolve", "capture", "prefix-budget",
+        "end-of-read-validation", "post-primary-validation",
+    ),
+    "excludedWork": (
+        "sql-acquisition", "primary-proof-verification", "staging-cache-stamps",
+        "kernel", "range-and-mutation-proofs", "whole-plan",
+    ),
+})
 # Current measured verifier evidence reads, not planner/business query closure
 # or the retained pre-v9 root/outcome helper inventory.
 VERIFIER_READ_CONTRACT = "serverware.policyAuthorityVerifierRead/v1"
@@ -2238,6 +2257,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "maxPlanMutations": MAX_PLAN_MUTATIONS,
         "maxPlanWorkUnits": MAX_PLAN_WORK_UNITS,
         "maxPlanSelectedBytes": MAX_PLAN_SELECTED_BYTES,
+        "plannerQueryBookkeeping": dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT),
         "auditCapacityQueryWorkUnits": AUDIT_CAPACITY_QUERY_WORK_UNITS,
         "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
         "phase2StoreTables": list(PHASE2_STORE_TABLES),

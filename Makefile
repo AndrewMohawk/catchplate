@@ -659,6 +659,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_service_source.py \
 	scripts/test_authority_revocation_roots.py \
 	scripts/test_authority_revocation_roots_source.py \
+	scripts/test_authority_revocation_observed.py \
+	scripts/test_authority_revocation_observed_source.py \
 	scripts/test_authority_revocation_coordinator_source.py \
 	scripts/test_authority_webauthn_trust.py \
 	scripts/test_authority_radix_mutation.py \
@@ -880,6 +882,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_revocation_configuration.py \
 	serverware/authority_revocation_roots.py \
 	serverware/authority_revocation_root_reader.py \
+	serverware/authority_revocation_observed.py \
 	serverware/authority_revocation_invocation.py \
 	serverware/authority_revocation_issuance.py \
 	serverware/authority_revocation_persistence.py \
@@ -2609,6 +2612,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_configuration.py \
 				serverware/authority_revocation_roots.py \
 				serverware/authority_revocation_root_reader.py \
+				serverware/authority_revocation_observed.py \
 				serverware/authority_transport.py \
 				serverware/authority_revocation_invocation.py \
 				serverware/authority_revocation_issuance.py \

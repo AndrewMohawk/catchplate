@@ -860,11 +860,22 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertLess(call(append, "self._budget.append").lineno, call(append, "self._entries.append").lineno)
 
     def test_private_signed_producer_owns_context_then_packages_and_signs_actual_raw_acquisition(self):
-        method = self.method("_produce_revocation_plan")
-        self.assertEqual({item.arg for item in method.args.kwonlyargs}, {
+        facade = self.method("_produce_revocation_plan")
+        self.assertEqual({item.arg for item in facade.args.kwonlyargs}, {
             "request", "manifest", "evidence", "context", "verifier_public_key",
             "planner_private_key", "planner_public_key", "query_work", "trace"})
-        copied = call(method, "authority_query_reads._CopyBudget(query_work).copy")
+        delegated = call(facade, "self._produce_revocation_plan_on_work")
+        self.assertEqual([ast.unparse(item) for item in delegated.args], ["cursor"])
+        self.assertEqual(keywords(delegated), {name: name for name in (
+            "request", "manifest", "evidence", "context", "verifier_public_key",
+            "planner_private_key", "planner_public_key", "query_work", "trace")})
+        self.assertFalse(calls(facade, "authority_query_reads._CopyBudget"))
+        method = self.method("_produce_revocation_plan_on_work")
+        copies = sorted(calls(method, "authority_query_reads._CopyBudget(query_work).copy"),
+                        key=lambda item: item.lineno)
+        self.assertEqual(len(copies), 2)
+        copied = copies[0]
+        self.assertEqual(ast.unparse(copies[1].args[0]), "actual_context")
         checked = call(method, "authority_revocation_plan_production._validate_context")
         acquired = call(method, "self._acquire_revocation_transition")
         packaged = call(method, "authority_revocation_proof_bundle._derive_on_work")
@@ -874,8 +885,8 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         for left, right in zip((copied, checked, acquired, packaged, context_encoded, signed),
                                 (checked, acquired, packaged, context_encoded, signed, returned)):
             self.assertLess(left.lineno, right.lineno)
-        self.assertEqual([ast.unparse(item) for item in call(method, "authority_query_reads._CopyBudget").args],
-                         ["query_work"])
+        self.assertTrue(all([ast.unparse(item) for item in constructor.args] == ["query_work"]
+                           for constructor in calls(method, "authority_query_reads._CopyBudget")))
         self.assertEqual([ast.unparse(item) for item in checked.args], ["actual_context", "query_work"])
         self.assertEqual([ast.unparse(item) for item in acquired.args], ["cursor"])
         self.assertEqual(keywords(acquired)["query_work"], "query_work")
@@ -969,19 +980,24 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         checked = call(method, "retention.capture._SharedLedger")
         copied = call(method, "authority_query_reads._CopyBudget(work).copy")
         validated = call(method, "retention.production._validate_context")
+        delegated = call(method, "_produce_on_read_configuration")
         self.assertLess(snapshot.lineno, checked.lineno)
         self.assertLess(checked.lineno, copied.lineno)
         self.assertLess(copied.lineno, validated.lineno)
+        self.assertLess(validated.lineno, delegated.lineno)
+        self.assertEqual([ast.unparse(item) for item in delegated.args], ["read_configuration", "configured"])
+        self.assertEqual(keywords(delegated), {"owned": "owned", "actual_context": "actual_context", "work": "work"})
         self.assertEqual({key.value: ast.unparse(value)
                           for key, value in zip(copied.args[0].keys, copied.args[0].values)},
                          {"request": "request", "evidence": "evidence", "context": "context"})
-        trace = call(method, "planner.PlannerTrace")
-        identity = call(method, "planner._validate_database_identity")
-        business = call(method, "planner._load_manifest")
-        authorization = call(method, "planner._load_authorization_manifest")
-        produced = call(method, "program._produce_revocation_plan")
-        for before, after in zip((validated, trace, identity, business, authorization),
-                                 (trace, identity, business, authorization, produced)):
+        body = definition(tree, "_produce_on_read_configuration")
+        trace = call(body, "planner.PlannerTrace")
+        identity = call(body, "planner._validate_database_identity")
+        business = call(body, "planner._load_manifest")
+        authorization = call(body, "planner._load_authorization_manifest")
+        produced = call(body, "program._produce_revocation_plan")
+        for before, after in zip((trace, identity, business, authorization),
+                                 (identity, business, authorization, produced)):
             self.assertLess(before.lineno, after.lineno)
         self.assertEqual(keywords(trace), {"operation": "operation", "_complete_queries": "True"})
         self.assertEqual([ast.unparse(item) for item in identity.args], ["guarded", "database_identity"])
@@ -1003,21 +1019,26 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         branch, = [node for node in acquisition.body if isinstance(node, ast.If)
                    and ast.unparse(node.test) == "trace is None"]
         self.assertIn(constructor, list(ast.walk(branch)))
-        self.assertFalse(calls(method, "planner._read_root_set"))
+        self.assertFalse(calls(body, "planner._read_root_set"))
         for forbidden in ("_ValidationWork", "planner.MeasuredPlanner", "planner.validate_planner_request"):
             self.assertFalse(calls(method, forbidden))
+            self.assertFalse(calls(body, forbidden))
 
     def test_configured_owner_captures_original_bytes_before_cleanup_and_only_then_persists(self):
         _, tree = source("serverware/authority_revocation_coordinator.py")
         method = definition(tree, "produce_and_persist_with_cutoff", "RevocationPlanningCoordinator")
-        produced = call(method, "program._produce_revocation_plan")
+        body = definition(tree, "_produce_on_read_configuration")
+        produced = call(body, "program._produce_revocation_plan")
+        delegated = call(method, "_produce_on_read_configuration")
         persistence = call(method, "persistence_module._run_on_configuration")
-        scopes = [node for node in ast.walk(method) if isinstance(node, ast.With)]
+        self.assertLess(delegated.lineno, persistence.lineno)
+        self.assertFalse(any(isinstance(node, ast.With) for node in ast.walk(method)))
+        scopes = [node for node in ast.walk(body) if isinstance(node, ast.With)]
         self.assertEqual(len(scopes), 3)
         for scope in scopes:
             self.assertIn(produced, list(ast.walk(scope)))
             self.assertNotIn(persistence, list(ast.walk(scope)))
-        captures = {node.targets[0].id: node for node in ast.walk(method)
+        captures = {node.targets[0].id: node for node in ast.walk(body)
                     if isinstance(node, ast.Assign) and len(node.targets) == 1
                     and isinstance(node.targets[0], ast.Name)
                     and node.targets[0].id in {"envelope_bytes", "context_bytes", "database_now"}}
@@ -1026,7 +1047,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             "context_bytes": "produced.evaluation_context_bytes", "database_now": "produced.database_now"})
         for node in captures.values():
             self.assertLess(produced.lineno, node.lineno)
-            self.assertLess(node.lineno, persistence.lineno)
+            self.assertLess(node.lineno, body.body[-1].lineno)
             for scope in scopes:
                 self.assertIn(node, list(ast.walk(scope)))
         self.assertEqual([ast.unparse(item) for item in persistence.args], [
@@ -1036,10 +1057,13 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(call(method, "expectations.update")),
                          {"expected_request": "owned['request']", "database_now": "database_now"})
         self.assertIn("owned['context'][name]", ast.unparse(method))
-        self.assertIn("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE", ast.unparse(method))
+        self.assertEqual(ast.unparse(body.body[-1]),
+                         "return (envelope_bytes, context_bytes, database_now, expected_context)")
+        self.assertIn("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE", ast.unparse(body))
         for forbidden in ("persistence.persist", "json.loads", "retention._verify_record_on_work",
                           "time.time_ns", "time.monotonic_ns"):
             self.assertFalse(calls(method, forbidden))
+            self.assertFalse(calls(body, forbidden))
         self.assertIsInstance(method.body[-1], ast.Return)
         self.assertEqual(ast.unparse(method.body[-1].value), "(retained, database_now)")
         self.assertIsInstance(method.body[-2], ast.Assign)

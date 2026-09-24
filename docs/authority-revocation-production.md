@@ -15,6 +15,10 @@ Source `.43` adds a separately invoked private execution-envelope reservation
 after genuine stored replay, without activating business execution.
 Source `.44` adds private source-derived counted before/after SQL fragments;
 they remain separate from this producer and any installed executor.
+Source `.53` adds an [independently observed planning successor](authority-revocation-observed-planning.md):
+it compares the full verifier inventory before selecting the actual signed
+subset, then retains the same independent context through persistence. The
+exact-context API described below remains available.
 These implementations are **unbuilt and
 unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
 deployed release.

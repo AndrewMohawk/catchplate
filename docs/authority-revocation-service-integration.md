@@ -94,7 +94,7 @@ alternate opener can replace that private composition.
 
 The helpers and private process method are callable components, not a complete
 network handler. Enabling dispatch still requires coordinated original-byte
-ingress, integration of the [independent complete root reader](authority-revocation-root-observation.md)
+ingress, serving integration of the [independently observed planning path](authority-revocation-observed-planning.md)
 and authenticated planner-cutoff custody,
 durable original invocation retention, and the successor order: retain plan,
 reserve execution, produce capability, sign/send invocation, issue capability.

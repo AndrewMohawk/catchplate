@@ -288,6 +288,156 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
                               for target in node.targets))
         self.assertEqual(schema.value, "serverware.signedPolicyAuthorityMeasuredPlan/v3")
 
+    def test_observed_entry_owns_twelve_context_fields_and_inventory_before_read_callbacks(self):
+        _, tree = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        owner = definition(tree, "RevocationPlanningCoordinator")
+        method = definition(owner, "produce_observed_and_persist_with_cutoff")
+        self.assertEqual([argument.arg for argument in method.args.kwonlyargs],
+            ["request", "evidence", "context", "root_inventory", "planned_at_epoch_ns", "work"])
+        self.assertIsNone(method.args.kwarg)
+        self.assertTrue(all(value is None for value in method.args.kw_defaults))
+        assignments = {node.targets[0].id: node.value for node in tree.body
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
+        self.assert_shape(assignments["_CALL_CONTEXT"],
+            'retention.production._CONTEXT_FIELDS - {"expectedPlannerIdentity", "expectedVerifierIdentity"}')
+        self.assert_shape(assignments["_OBSERVED_CALL_CONTEXT"], '_CALL_CONTEXT - {"expectedBefore"}')
+        _, production = source("serverware/authority_revocation_plan_production.py", 64 * 1024)
+        fields = next(node.value for node in production.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "_CONTEXT_FIELDS" for target in node.targets))
+        self.assertEqual({item.value for item in fields.args[0].elts}
+            - {"expectedPlannerIdentity", "expectedVerifierIdentity", "expectedBefore"},
+            {"expectedCapabilityId", "expectedPlannerTransactionId", "expectedFence",
+             "reservedAtEpochNs", "deadlineEpochNs", "deadlineMonotonicNs", "nowEpochNs",
+             "nowMonotonicNs", "maximumAssertionAgeNs", "maximumPlanAgeNs", "maximumClockSkewNs",
+             "expectedApproverPolicyDigest"})
+        for expression in ("type(context) is not dict", "set(context) != _OBSERVED_CALL_CONTEXT",
+                "len(context) != len(_OBSERVED_CALL_CONTEXT)", "type(planned_at_epoch_ns) is not int"):
+            self.assertIn(expression, ast.unparse(method))
+        read_snapshot, = calls(method, "self._snapshot_configuration")
+        pins, = calls(method, "persistence._snapshot_configuration")
+        ledger, = calls(method, "retention.capture._SharedLedger")
+        copied = sorted(calls(method, "authority_query_reads._CopyBudget(work).copy"), key=lambda node: node.lineno)
+        inventory, = calls(method, "observed._capture_root_inventory")
+        validated, = calls(method, "observed._validate_partial_context")
+        read, = calls(method, "_produce_on_read_configuration")
+        self.assertEqual(len(copied), 3)
+        self.assert_shape(copied[0],
+            'authority_query_reads._CopyBudget(work).copy({"request": request, "evidence": evidence, "context": context})')
+        self.assert_shape(inventory, "observed._capture_root_inventory(root_inventory, work=work)")
+        self.assert_shape(validated, "observed._validate_partial_context(actual_context, work)")
+        ordered = [read_snapshot, pins, ledger, copied[0], inventory, validated, read]
+        self.assertEqual([item.lineno for item in ordered], sorted(item.lineno for item in ordered))
+        self.assert_shape(read, "_produce_on_read_configuration(read_configuration, configured, "
+            "owned=owned, actual_context=actual_context, work=work, root_inventory=inventory)")
+        context = next(node.value for node in ast.walk(method) if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "actual_context" for target in node.targets))
+        self.assert_shape(context, '{**owned["context"], "expectedPlannerIdentity": '
+            'dict(zip(persistence_module._IDENTITY_FIELDS, configured[4])), "expectedVerifierIdentity": '
+            'dict(zip(persistence_module._IDENTITY_FIELDS, configured[5]))}')
+        self.assertIn("identity[4:] != configured[4]", ast.unparse(method))
+
+    def test_shared_read_body_selects_real_producer_and_owns_projected_context_before_exit(self):
+        _, tree = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        helper = definition(tree, "_produce_on_read_configuration")
+        legacy, = calls(helper, "program._produce_revocation_plan")
+        observed, = calls(helper, "program._produce_observed_revocation_plan")
+        branch, = [node for node in ast.walk(helper) if isinstance(node, ast.If)
+            and ast.unparse(node.test) == "root_inventory is None"]
+        self.assertIn(legacy, list(ast.walk(branch.body[0])))
+        self.assertIn(observed, list(ast.walk(branch.orelse[0])))
+        for call in (legacy, observed):
+            self.assertEqual([ast.unparse(argument) for argument in call.args], ["guarded"])
+            keywords = {item.arg: ast.unparse(item.value) for item in call.keywords}
+            for name, value in {"request": "owned['request']", "evidence": "owned['evidence']",
+                    "context": "actual_context", "manifest": "manifest + authorization",
+                    "verifier_public_key": "configured[3]", "planner_private_key": "private_key",
+                    "planner_public_key": "configured[2]", "query_work": "work", "trace": "trace"}.items():
+                self.assertEqual(keywords[name], value)
+        self.assertEqual({item.arg: ast.unparse(item.value) for item in observed.keywords}["root_inventory"], "root_inventory")
+        copied, = calls(helper, "authority_query_reads._CopyBudget(work).copy")
+        self.assert_shape(copied, "authority_query_reads._CopyBudget(work).copy(produced.expected_context)")
+        validated, = calls(helper, "retention.production._validate_context")
+        self.assert_shape(validated, "retention.production._validate_context(expected_context, work)")
+        bound, = calls(helper, "retention.plan.semantics._canonical_equal")
+        self.assert_shape(bound, 'retention.plan.semantics._canonical_equal('
+            '{name: expected_context[name] for name in actual_context}, actual_context, '
+            'work=work, label="observed producer changed independent context pins")')
+        self.assertLess(observed.lineno, copied.lineno)
+        self.assertLess(copied.lineno, validated.lineno)
+        self.assertLess(validated.lineno, bound.lineno)
+        scopes = [node for node in ast.walk(helper) if isinstance(node, ast.With)]
+        self.assertEqual(len(scopes), 3)
+        captures = [node for node in ast.walk(helper) if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id in
+                {"envelope_bytes", "context_bytes", "database_now"} for target in node.targets)]
+        self.assertEqual(len(captures), 3)
+        for scope in scopes:
+            for item in (legacy, observed, copied, validated, bound, *captures):
+                self.assertIn(item, list(ast.walk(scope)))
+        self.assertFalse(calls(helper, "persistence_module._run_on_configuration"))
+        self.assert_shape(helper.body[-1].value, "(envelope_bytes, context_bytes, database_now, expected_context)")
+        for forbidden in ("_ValidationWork", "QueryReadValidationLimits", "json.loads", "time.time_ns", "time.monotonic_ns"):
+            self.assertFalse(calls(helper, forbidden))
+
+    def test_observed_writer_uses_detached_projected_expectations_and_returns_independent_history(self):
+        _, tree = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        method = definition(tree, "produce_observed_and_persist_with_cutoff", "RevocationPlanningCoordinator")
+        read, = calls(method, "_produce_on_read_configuration")
+        copied = sorted(calls(method, "authority_query_reads._CopyBudget(work).copy"), key=lambda node: node.lineno)
+        self.assert_shape(copied[1], "authority_query_reads._CopyBudget(work).copy({"
+            "argument: expected_context[name] for name, argument in retention._CONTEXT_PAIRS if name in _CALL_CONTEXT})")
+        self.assert_shape(copied[2], 'authority_query_reads._CopyBudget(work).copy(owned["request"])')
+        persisted, = calls(method, "persistence_module._run_on_configuration")
+        self.assertLess(read.lineno, copied[1].lineno)
+        self.assertLess(copied[1].lineno, copied[2].lineno)
+        self.assertLess(copied[2].lineno, persisted.lineno)
+        self.assert_shape(persisted, 'persistence_module._run_on_configuration(configured, '
+            'store.persist_revocation_planner_record, {"envelope_bytes": envelope_bytes, '
+            '"evaluation_context_bytes": context_bytes, "planned_at_epoch_ns": planned_at_epoch_ns}, expectations, work)')
+        self.assertNotIn("owned['context'][name]", ast.unparse(method))
+        self.assertEqual(len(calls(method, "_PersistedObservedRevocationPlan")), 1)
+        self.assert_shape(method.body[-1].value, "_PersistedObservedRevocationPlan(retained, database_now, expected_context)")
+        carrier = definition(tree, "_PersistedObservedRevocationPlan")
+        self.assert_shape(carrier.decorator_list[0], "dataclass(frozen=True, slots=True)")
+        self.assertEqual([node.target.id for node in carrier.body if isinstance(node, ast.AnnAssign)],
+            ["retained", "database_now", "expected_context"])
+        legacy = definition(tree, "produce_and_persist_with_cutoff", "RevocationPlanningCoordinator")
+        self.assert_shape(legacy.body[-1].value, "(retained, database_now)")
+        exact_read, = calls(legacy, "_produce_on_read_configuration")
+        self.assertNotIn("root_inventory", {item.arg for item in exact_read.keywords})
+        # The real persistence runner still owns inputs and invokes the actual
+        # raw-record store. Neither the returned carrier nor its context is a
+        # successful-verification argument accepted by that API.
+        runner = definition(self.tree, "_run_on_configuration")
+        self.assertEqual(len(calls(runner, "_inputs_from_configuration")), 1)
+        self.assertEqual(len(calls(runner, "operation")), 1)
+        service, _ = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        self.assertNotIn("produce_observed_and_persist_with_cutoff", service)
+
+    def test_shared_read_driver_getters_and_bindings_are_guarded_without_extra_allowance(self):
+        _, tree = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        fetched = definition(tree, "_call", "_ReadResult")
+        executed = definition(tree, "execute", "_ReadCursor")
+        guarded_fetch, = calls(fetched, "persistence_module.store._callback")
+        guarded_execute, = calls(executed, "persistence_module.store._callback")
+        self.assert_shape(guarded_fetch, "persistence_module.store._callback(work, lambda: getattr(result, method)(*args))")
+        self.assert_shape(guarded_execute, "persistence_module.store._callback(work, lambda: cursor.execute(*arguments))")
+        for body, target in ((fetched, "result"), (executed, "cursor")):
+            self.assertIn("self._identity is not identity", ast.unparse(body))
+            self.assertIn("self._work is not work", ast.unparse(body))
+            self.assertIn("self._" + target + " is not " + target, ast.unparse(body))
+            self.assertFalse(calls(body, "_ValidationWork"))
+        helper = definition(tree, "_produce_on_read_configuration")
+        callbacks = calls(helper, "store._callback")
+        self.assertEqual({ast.unparse(item) for item in callbacks}, {
+            "store._callback(work, lambda: connection.transaction())",
+            "store._callback(work, lambda: connection.cursor())"})
+        connected, = calls(helper, "psycopg.connect")
+        self.assert_shape(connected, 'psycopg.connect(read_dsn, row_factory=dict_row, '
+            'connect_timeout=timeout, options="-c search_path=pg_catalog")')
+        self.assertEqual({ast.unparse(item) for item in calls(helper, "store._context")}, {
+            "store._context(connection, work)", "store._context(transaction, work)", "store._context(cursor, work)"})
+
 
 if __name__ == "__main__":
     unittest.main()

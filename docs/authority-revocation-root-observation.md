@@ -90,19 +90,15 @@ The result carries no planner cutoff, trusted-clock assertion or authority to
 use those values after the snapshot. The original planner cutoff must still
 come from the actual planner acquisition and be retained authentically.
 
-## Remaining integration
+## Planner handoff and remaining integration
 
-The complete independent inventory must next be joined to the genuine planner
-acquisition. Compare all seven business roots, two authorization roots and nine
-heads before packaging; do not silently refresh on drift. Only after genuine
-effects exist can the source read profiles plus actual mutation profiles select
-the exact signed subset. Select its values exclusively from the independent
-inventory, not from the plan's proposed `expectedBefore`.
-
-The same projected independent context must reach both plan production and the
-configured persistence call. Trimming only the producer's context leaves the
-coordinator with different historical expectations. Never recover external
-expectations from the signed plan or retained evaluation-context bytes.
+Source `.53` adds the private [observed planning and persistence handoff](authority-revocation-observed-planning.md).
+It compares the complete independent inventory against genuine acquisition
+before packaging, then uses actual read/write profiles to select values from
+the independent inventory. The same independently projected context reaches
+plan production, configured persistence and the coordinator's result.
+Expectations are not recovered from signed or stored output. This subsequent
+source change is also unbuilt and unexecuted; it does not enable serving.
 
 Authenticated cutoff custody, original invocation retention, execution
 reservation/order, witness binding, current-root one-use execution and atomic

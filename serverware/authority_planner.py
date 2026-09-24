@@ -55,6 +55,7 @@ from serverware import authority_revocation_semantics
 from serverware import authority_revocation_proof_bundle
 from serverware import authority_revocation_plan
 from serverware import authority_revocation_plan_production
+from serverware import authority_revocation_observed
 from serverware import authority_revocation_retention
 from serverware import authority_transition_core
 from serverware import authority_transition_registry
@@ -472,6 +473,17 @@ class _ProducedRevocationPlan:
     database_now: datetime
     metrics: QueryReadValidationMetrics
     evaluation_context_bytes: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ProducedObservedRevocationPlan:
+    """Original output plus detached independent expectations, never authority."""
+
+    signed: authority_revocation_plan_production._ProducedPlan
+    database_now: datetime
+    metrics: QueryReadValidationMetrics
+    evaluation_context_bytes: bytes
+    expected_context: dict[str, Any]
 
 
 class PlanningProgram(Protocol):
@@ -1018,6 +1030,40 @@ class TypedTransitionPlanningProgram:
         planner_public_key: Ed25519PublicKey, query_work: _ValidationWork,
         trace: PlannerTrace | None = None,
     ) -> _ProducedRevocationPlan:
+        """Preserved exact-context API and accounting through the genuine body."""
+        return self._produce_revocation_plan_on_work(cursor, request=request, manifest=manifest,
+            evidence=evidence, context=context, verifier_public_key=verifier_public_key,
+            planner_private_key=planner_private_key, planner_public_key=planner_public_key,
+            query_work=query_work, trace=trace)
+
+    def _produce_observed_revocation_plan(
+        self, cursor: Any, *, request: dict[str, Any], manifest: tuple[dict[str, Any], ...],
+        evidence: dict[str, Any], context: dict[str, Any], root_inventory,
+        verifier_public_key: Ed25519PublicKey, planner_private_key: Ed25519PrivateKey,
+        planner_public_key: Ed25519PublicKey, query_work: _ValidationWork,
+        trace: PlannerTrace | None = None,
+    ) -> _ProducedObservedRevocationPlan:
+        """Acquire all observed commitments before projecting actual-write roots.
+
+        The fourteen-field context omits expectedBefore. The independent full
+        inventory is ordinary reader data, not an acquisition/proof success
+        token. Its auxiliary source metadata is not asserted to be present in
+        the planner's compact root vectors. No public admission changes here.
+        """
+        if root_inventory is None:
+            raise AuthorityPlannerError("observed production requires the full independent inventory")
+        return self._produce_revocation_plan_on_work(cursor, request=request, manifest=manifest,
+            evidence=evidence, context=context, verifier_public_key=verifier_public_key,
+            planner_private_key=planner_private_key, planner_public_key=planner_public_key,
+            query_work=query_work, trace=trace, root_inventory=root_inventory)
+
+    def _produce_revocation_plan_on_work(
+        self, cursor: Any, *, request: dict[str, Any], manifest: tuple[dict[str, Any], ...],
+        evidence: dict[str, Any], context: dict[str, Any],
+        verifier_public_key: Ed25519PublicKey, planner_private_key: Ed25519PrivateKey,
+        planner_public_key: Ed25519PublicKey, query_work: _ValidationWork,
+        trace: PlannerTrace | None = None, root_inventory=None,
+    ) -> _ProducedRevocationPlan | _ProducedObservedRevocationPlan:
         """Privately acquire, package and sign the genuine revoke-only v4 plan.
 
         The cursor belongs to a caller-owned read-only MVCC transaction. Key
@@ -1042,11 +1088,16 @@ class TypedTransitionPlanningProgram:
                 or not isinstance(planner_public_key, Ed25519PublicKey)):
             raise AuthorityPlannerError("private revocation production context has unexpected types")
         try:
+            independent_inventory = (None if root_inventory is None else
+                authority_revocation_observed._capture_root_inventory(root_inventory, work=query_work))
             owned = authority_query_reads._CopyBudget(query_work).copy({
                 "request": request, "manifest": manifest, "evidence": evidence, "context": context,
             })
             actual_request, actual_context = owned["request"], owned["context"]
-            authority_revocation_plan_production._validate_context(actual_context, query_work)
+            if independent_inventory is None:
+                authority_revocation_plan_production._validate_context(actual_context, query_work)
+            else:
+                authority_revocation_observed._validate_partial_context(actual_context, query_work)
             # Bind the externally reserved transaction before any SQL. The
             # genuine acquisition below independently recomputes the request
             # and operation commitments before its clock or driver callbacks.
@@ -1059,7 +1110,8 @@ class TypedTransitionPlanningProgram:
             authority_revocation_semantics._canonical_equal(transaction_id,
                 actual_context["expectedPlannerTransactionId"], work=query_work,
                 label="private producer transaction differs from independent reservation")
-            expected_before = actual_context["expectedBefore"]
+            expected_before = (actual_context["expectedBefore"] if independent_inventory is None else
+                authority_revocation_observed._inventory_before(independent_inventory))
             acquired = self._acquire_revocation_transition(cursor,
                 request=actual_request, manifest=owned["manifest"], evidence=owned["evidence"],
                 business_before_roots=expected_before["businessBeforeRoots"],
@@ -1077,6 +1129,22 @@ class TypedTransitionPlanningProgram:
                 raise AuthorityPlannerError("private producer lost its original complete evidence")
             queries = tuple(query for query in state.query_program
                             if type(query) is authority_complete_query.CompleteIndexQuery)
+            if independent_inventory is not None:
+                # Compare ALL nine commitments before deriving any subset.
+                # The selector names come only from this genuine acquisition's
+                # queries, effects and actual write-proof inventories.
+                actual_context = authority_revocation_observed._project_expected_context(
+                    actual_context, independent_inventory, acquired_before={
+                        "businessBeforeRoots": list(raw.business_before_roots),
+                        "authorizationBeforeRoots": list(raw.authorization_before_roots),
+                        "indexBeforeHeads": [{"indexId": item.index_id,
+                            "indexRevision": item.index_revision, "rootDigest": item.index_root.digest,
+                            "leafCount": item.index_root.count} for item in raw.heads]},
+                    query_roles=tuple(query.role for query in queries),
+                    mutated_tables=tuple(mutation["table"] for mutation in acquired.mutations),
+                    write_index_ids=tuple(head.index_id for head in acquired.write_evidence.result.before_heads),
+                    work=query_work)
+                expected_before = actual_context["expectedBefore"]
             # The collector captures all nine potential heads. Packaging needs
             # only the exact six-role read/ACTUAL write union, not unused heads.
             index_ids = {query.index_id for query in queries} | {
@@ -1115,6 +1183,10 @@ class TypedTransitionPlanningProgram:
                 raise AuthorityPlannerError("private producer context lost its original acquisition cutoff")
             evaluation_context_bytes = authority_revocation_retention._encode_context_on_work(
                 actual_context, database_now=state.database_now, work=query_work)
+            # The signer payload may retain identity subgraphs from its input.
+            # The returned expectations must not alias those mutable graphs.
+            independent_context = (None if independent_inventory is None else
+                authority_query_reads._CopyBudget(query_work).copy(actual_context))
             signed = authority_revocation_plan_production._build_and_sign(
                 request=acquired.request, selected_rows=acquired.selected_rows,
                 mutations=acquired.mutations, before_proofs=raw.before_proofs,
@@ -1124,6 +1196,9 @@ class TypedTransitionPlanningProgram:
                 context=actual_context, planner_private_key=planner_private_key,
                 planner_public_key=planner_public_key, work=query_work,
             )
+            if independent_context is not None:
+                return _ProducedObservedRevocationPlan(signed, state.database_now, query_work.metrics,
+                    evaluation_context_bytes, independent_context)
             return _ProducedRevocationPlan(signed, state.database_now, query_work.metrics,
                 evaluation_context_bytes)
         except (AttributeError, KeyError, TypeError, ValueError, OverflowError,

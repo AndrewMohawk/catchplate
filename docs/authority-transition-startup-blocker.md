@@ -52,6 +52,11 @@ family and mutation adapter, plus private pinned-assertion/read/effect/capacity/
 write-proof acquisition. It preserves whole-aggregate limits and fails query
 overflow before business/range SQL. This is not candidate-policy signature admission, a configured
 service owner, signed-plan/executor activation or a startup repair.
+Source `.78` adds genuine original signed-candidate admission to that stage
+acquisition and derives classifier roots from the real verifier. Installation
+evidence production and completion now share the original-byte semantic checks.
+Neither addition admits durable evidence, supplies the configured operation or
+physical-installation owner, registers a kernel or repairs startup.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from

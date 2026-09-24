@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.77`, implementation only. These helpers do not register the
+Status: source `.78`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -29,6 +29,15 @@ the supplied ceremony, row and trust snapshots before callbacks and accepts no
 successful-attestation DTO. Those snapshots, enrollment permission and signer
 configuration still require independent admission; producing these arguments
 does not grant registration or persist evidence.
+
+`authority_webauthn_installation_production.py` derives installation claims
+through the same original-byte semantic checks used by completion, then signs
+the genuine envelope and produces the final completion arguments. It accepts
+no claims or successful-verification DTO. The caller still owns the protected
+physical install/readback, independently admitted committed stage and current
+rows, target, observation time and signing configuration. Supplied file bytes
+are not proof of installation, fsync or runtime activation. Producing evidence
+does not persist it or authorize publication.
 
 The v2 custody projection uses the existing
 `policy_authority_external_evidence_receipts` table's exact **17 fields**. Its
@@ -180,16 +189,31 @@ database cutoff is checked against both admitted time and assertion expiry;
 clock callbacks preserve the meter on success and failure. This clock guard
 also covers the existing private registration/revocation reads.
 
+Candidate admission now takes the original signed bundle, independently
+configured key/schema/time and signing-key digest, not caller-supplied
+classifier roots. `authority_webauthn_trust_candidate.py` invokes the real trust
+core verifier and joins its decoded canonical envelope, digest, sequence,
+rollback epoch and signing key to the owned staged arguments. Only roots from
+that verification reach the aggregate classifier. This happens before SQL;
+the bundle validity interval is checked again at the database cutoff. It does
+not establish request permission, current database roots or committed state.
+
+The trust core's private shared-work path accounts for actual source-visible
+copies, encodings and hashes on the acquisition's existing allowance. Bounded
+native JSON/schema/X.509/Ed25519 operations guard meter continuity but remain
+outside that accounting, as with the attestation core. Public default behavior
+and existing input/resource ceilings are unchanged.
+
 ## Admission and execution still required
 
 No durable evidence producer INSERT/root-admission path or independently
 configured registration acquisition owner is established by these helpers.
 Caller-supplied current roots, signer pins, request authority and transaction
 ownership remain explicit prerequisites, not values authenticated by copying.
-Trust staging still needs its independently configured request/candidate-policy
-owner and signed-plan/execution integration; its supplied candidate roots are
-not authenticated by copying or classifying them. Completion needs its
-independently admitted committed-stage/installation owner.
+Trust staging still needs its independently configured request/candidate-key
+owner and signed-plan/execution integration. Completion needs its independently
+admitted committed-stage/physical-installation owner and actual readback wired
+to the evidence producer.
 Registry and public operation admission, authorized atomic execution, terminal
 witnessing and recovery remain pending. The generic evidence signer and ordinary
 row/acquisition results cannot fill those gaps or repair service startup.

@@ -63,6 +63,7 @@ from serverware import authority_transition_webauthn
 from serverware import authority_transition_webauthn_registration
 from serverware import authority_transition_webauthn_trust_stage
 from serverware import authority_webauthn_assertion
+from serverware import authority_webauthn_trust_candidate
 from serverware.config import (
     WEBAUTHN_CHALLENGE_GLOBAL_LIVE_MAX,
     WEBAUTHN_CHALLENGE_GLOBAL_RATE_MAX,
@@ -2277,7 +2278,8 @@ def _acquire_trust_stage_transition_on_work(
     expected_counted_heads: tuple[dict[str, Any], ...],
     assertion_evidence: dict[str, Any], verifier_identity: dict[str, Any],
     verifier_public_key: Ed25519PublicKey, capability_id: str,
-    candidate_roots: tuple, development_enabled: bool,
+    candidate_bundle_bytes: bytes, candidate_verification_context: Any,
+    expected_candidate_signing_key_id: str, development_enabled: bool,
     require_approval: bool, require_approver_webauthn: bool,
     now_epoch_ns: int, deadline_epoch_ns: int, maximum_age_ns: int,
     maximum_clock_skew_ns: int, query_work: _ValidationWork,
@@ -2285,11 +2287,11 @@ def _acquire_trust_stage_transition_on_work(
 ) -> _TrustStageAcquisition:
     """Join genuine assertion, aggregate reads, merged effects and write proofs.
 
-    Independent request/capability admission, candidate bundle signature and
-    complete root-policy admission, configuration, current root vectors/time
-    and read-only MVCC ownership remain caller prerequisites. A supplied root
-    policy is not authenticated by copying it. The actual pinned assertion
-    receipt is verified here before any SQL; no successful proof DTO is input.
+    Independent request/capability admission, candidate signing-key and schema
+    configuration, current root vectors/time and read-only MVCC ownership
+    remain caller prerequisites. The original candidate bundle and actual
+    pinned assertion receipt are genuinely verified here before any SQL;
+    candidate root policy is derived, never supplied as a successful proof DTO.
     This private acquisition neither signs/persists a plan nor executes a stage,
     activates a registry, installs trust files or establishes a terminal witness.
     """
@@ -2308,28 +2310,20 @@ def _acquire_trust_stage_transition_on_work(
                 or type(assertion_evidence) is not dict or type(verifier_identity) is not dict
                 or type(expected_counted_heads) is not tuple
                 or not 1 <= len(expected_counted_heads) <= authority_index_heads.MAX_HEADS
-                or type(candidate_roots) is not tuple or len(candidate_roots) > stage.classifier.MAX_ROOTS
+                or type(candidate_bundle_bytes) is not bytes
+                or type(candidate_verification_context) is not
+                    authority_webauthn_trust_candidate.bundle_core.TrustVerificationContext
                 or any(type(value) is not bool for value in (
                     development_enabled, require_approval, require_approver_webauthn))):
             raise AuthorityPlannerError("trust stage acquisition inputs are not exact source values")
         copier = authority_query_reads._CopyBudget(query_work)
-        roots = []
-        for root in candidate_roots:
-            if type(root) is not stage.classifier.RootTrustPolicy:
-                raise AuthorityPlannerError("trust stage candidate root has an unexpected type")
-            roots.append(copier.copy({"id": root.id, "certificate_sha256": root.certificate_sha256,
-                "authenticator_class": root.authenticator_class, "aaguids": root.aaguids,
-                "bundle_digest": root.bundle_digest, "bundle_sequence": root.bundle_sequence}))
         owned = copier.copy({"request": request, "manifest": manifest,
             "businessBeforeRoots": business_before_roots, "authorizationBeforeRoots": authorization_before_roots,
             "expectedCountedHeads": expected_counted_heads, "assertion": assertion_evidence,
             "verifierIdentity": verifier_identity, "capabilityId": capability_id,
             "nowEpochNs": now_epoch_ns, "deadlineEpochNs": deadline_epoch_ns,
-            "maximumAgeNs": maximum_age_ns, "maximumClockSkewNs": maximum_clock_skew_ns})
-        # Real classifier constructors encode these strings while validating
-        # their existing aggregate bound; prepare that same traversal first.
-        query_work.prepare_copy(roots)
-        held_roots = tuple(stage.classifier.RootTrustPolicy(**root) for root in roots)
+            "maximumAgeNs": maximum_age_ns, "maximumClockSkewNs": maximum_clock_skew_ns,
+            "candidateSigningKeyId": expected_candidate_signing_key_id})
         actual_request = owned["request"]
         if (actual_request.get("operation") != operation
                 or actual_request.get("handler") != "stage_webauthn_trust_publication"
@@ -2344,6 +2338,17 @@ def _acquire_trust_stage_transition_on_work(
                               authority_contract.VERIFIER_MAX_CLOCK_SKEW_NS)
         if owned["nowEpochNs"] >= owned["deadlineEpochNs"]:
             raise AuthorityPlannerError("trust stage acquisition deadline has expired")
+        if registration._now(candidate_verification_context.verified_at) != owned["nowEpochNs"]:
+            raise AuthorityPlannerError("candidate verification time differs from independently admitted time")
+        candidate_arguments, held_roots = authority_webauthn_trust_candidate._admit_on_work(
+            arguments=actual_request["arguments"], bundle_bytes=candidate_bundle_bytes,
+            verification_context=candidate_verification_context,
+            expected_signing_key_id=owned["candidateSigningKeyId"], work=query_work)
+        # The genuine candidate worker joins every original argument field;
+        # its detached result cannot substitute a different typed request.
+        authority_revocation_semantics._canonical_equal(candidate_arguments, actual_request["arguments"],
+            work=query_work, label="candidate admission changed the held request arguments")
+        actual_request["arguments"] = candidate_arguments
         request_digest = _typed_request_digest(actual_request, work=query_work)
         if _request_different(request_digest, actual_request.get("requestDigest"), work=query_work):
             raise AuthorityPlannerError("trust stage acquisition request digest changed")
@@ -2374,6 +2379,8 @@ def _acquire_trust_stage_transition_on_work(
                     or not verified["verifiedAtEpochNs"] <= database_now_ns < verified["expiresAtEpochNs"]
                     or database_now_ns >= owned["deadlineEpochNs"]):
                 raise AuthorityPlannerError("trust stage cutoff differs from live admitted assertion/time")
+            authority_webauthn_trust_candidate._require_valid_at_on_work(
+                arguments=actual_request["arguments"], verified_at=database_now, work=query_work)
             queries = stage._query_recipe_on_work(arguments=actual_request["arguments"],
                 database_now=database_now, request_digest=request_digest,
                 verified_webauthn_evidence=verified, work=query_work)

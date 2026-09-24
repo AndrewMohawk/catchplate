@@ -173,44 +173,28 @@ def _business_count(context, work):
     return count
 
 
-def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_bytes,
-        installed_state_bytes, installation_target_digest, expected_committed_stage,
-        installer_public_key, expected_installer_identity, expected_installer_spki_digest,
-        maximum_age_ns, maximum_clock_skew_ns, work):
-    """Plan concrete business effects, not proof/admission or a complete commit.
+def _installation_claims_on_work(*, installed_bundle_bytes, installed_state_bytes,
+        publication_row, high_water_row, expected_committed_stage,
+        installation_target_digest, observed_at, work):
+    """Recompute installation claims from owned originals and admitted rows.
 
-    All selected rows and independent stage/identity graphs are actually owned
-    before the first key callback. The exact installed originals are immutable.
-    Stage expectations must come from independently authenticated *committed*
-    aggregate-stage/root authority, never the ordinary stage planner's output.
-    PublicationRowDigest is the fixed immutable stage projection, excluding
-    retry bookkeeping; it is not mislabeled as the primary-tree row digest.
+    Every caller runs the real semantic checks below. The returned claims and
+    owned row ingredients are ordinary data; no API accepts this output as a
+    successful-proof token. Admission of the committed stage, current rows,
+    physical installation/readback, target and observation time belongs to the
+    owning caller. Byte equality cannot establish fsync, runtime activation or
+    filesystem ownership. No future completion receipt occurs in these claims.
     """
     ledger = evidence.capture._SharedLedger(work)
-    _business_count(context, work)
-    request_digest, database_now = context.request_digest, context.database_now
-    _object(context.arguments, _ARGUMENT_FIELDS, "completion arguments")
-    _text(context.arguments["publication_id"], "publication ID")
-    core.require_digest(request_digest, "completion request digest")
-    core.require_digest(context.arguments["verification_evidence_digest"], "installation evidence digest")
     core.require_digest(installation_target_digest, "independently configured installation target")
-    now_ns = _now(database_now)
-    if (type(context.selected_rows) is not tuple
-            or len(context.selected_rows) > authority.operation_spec(OPERATION)["maximumQueryRows"]):
-        raise WebAuthnTrustCompletionError("completion selected rows exceed the source bound")
-    for raw, maximum in ((installation_envelope_bytes, evidence.MAX_EVIDENCE_BYTES),
-                        (installed_bundle_bytes, bundle_core.MAX_INSTALLATION_BYTES),
+    now_ns = _now(observed_at)
+    for raw, maximum in ((installed_bundle_bytes, bundle_core.MAX_INSTALLATION_BYTES),
                         (installed_state_bytes, bundle_core.MAX_STATE_BYTES)):
         if type(raw) is not bytes or not 2 <= len(raw) <= maximum:
             raise WebAuthnTrustCompletionError("completion requires bounded immutable installation originals")
-    work.prepare_copy(context.selected_rows)
-    selected_input = list(context.selected_rows)
-    owned = evidence.capture._JSONCapture(ledger).visit({"arguments": context.arguments,
-        "selected": selected_input, "stage": expected_committed_stage,
-        "identity": expected_installer_identity})
-    arguments, selected, stage = owned["arguments"], tuple(owned["selected"]), owned["stage"]
-    owned_context = core.KernelContext(operation=OPERATION, arguments=arguments, selected_rows=selected,
-        database_now=database_now, request_digest=request_digest)
+    owned = evidence.capture._JSONCapture(ledger).visit({"publication": publication_row,
+        "highWater": high_water_row, "stage": expected_committed_stage})
+    publication, high, stage = owned["publication"], owned["highWater"], owned["stage"]
     _object(stage, _STAGE_FIELDS, "independently admitted committed stage")
     for field in _STAGE_FIELDS - {"witnessSequence"}:
         core.require_digest(stage[field], "committed stage " + field)
@@ -218,23 +202,10 @@ def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_
     _same(stage["operationId"], evidence.plan._frame("serverware.policyAuthorityOperation/v2",
         (evidence.plan._ascii("webauthn.trust.stage", work),
          evidence.plan._ascii(stage["requestDigest"], work)), work), work, "committed stage operation changed")
-    semantic = {name: arguments[name] for name in _ARGUMENT_FIELDS - {"businessIntent"}}
-    _same(arguments["businessIntent"], authority._synthesize_business_intent(OPERATION, semantic, work=work),
-        work, "completion business intent changed")
-    publication_selected = owned_context._exact(trust.PUBLICATION_TABLE,
-        {"id": arguments["publication_id"]}, work=work)
-    high_selected = owned_context._exact(trust.HIGH_WATER_TABLE,
-        {"authority_scope": trust.AUTHORITY_SCOPE}, work=work)
-    audit_selected = owned_context._exact("metadata_audit_outbox",
-        {"id": _audit_id(request_digest, work)}, work=work)
-    if (publication_selected.get("present") is not True or high_selected.get("present") is not True
-            or audit_selected.get("present") is not False):
-        raise WebAuthnTrustCompletionError("completion needs an existing predecessor and an unused audit identity")
-    publication, high = publication_selected["row"], high_selected["row"]
     _object(publication, _PUBLICATION_FIELDS, "staged publication")
     _object(high, _HIGH_WATER_FIELDS, "trust high-water")
-    if (publication["id"] != arguments["publication_id"] or publication["scope"] != "global"
-            or publication["status"] != "pending" or publication["published_at"] is not None
+    _text(publication["id"], "publication ID")
+    if (publication["scope"] != "global" or publication["status"] != "pending" or publication["published_at"] is not None
             or high["authority_scope"] != trust.AUTHORITY_SCOPE):
         raise WebAuthnTrustCompletionError("completion publication is not the pending global stage")
     for field in ("bundle_digest", "payload_digest", "signing_key_id", "previous_bundle_digest"):
@@ -251,7 +222,7 @@ def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_
     _text(publication["actor_id"], "publication actor")
     if publication["last_error"] is not None:
         _text(publication["last_error"], "publication last error", 2048)
-    if (_utc(publication["created_at"], "stage creation") > database_now
+    if (_utc(publication["created_at"], "stage creation") > observed_at
             or high["updated_at_epoch_ns"] > now_ns
             or publication["previous_bundle_digest"] != high["publication_digest"]
             or (publication["rollback_epoch"], publication["sequence"])
@@ -263,6 +234,7 @@ def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_
         metadata_blob_digest=high["metadata_blob_digest"], revocation_set_digest=high["revocation_set_digest"],
         witness_receipt_digest=high["witness_receipt_digest"], witness_sequence=high["witness_sequence"])
     previous_high_digest = trust.high_water_digest(high_document, work=work)
+    work.prepare_copy(publication)
     publication_digest = _frame(PUBLICATION_DOMAIN,
         {field: publication[field] for field in _PUBLICATION_MATERIAL}, work)
     _same((stage["previousHighWaterDigest"], stage["publicationRowDigest"]),
@@ -286,13 +258,14 @@ def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_
     _same((state["version"], state["bundle_digest"], state["sequence"], state["rollback_epoch"]),
         (1, publication["bundle_digest"], publication["sequence"], publication["rollback_epoch"]),
         work, "installed rollback state differs from committed stage")
-    if _utc(state["updated_at"], "installed rollback timestamp") > database_now:
+    if _utc(state["updated_at"], "installed rollback timestamp") > observed_at:
         raise WebAuthnTrustCompletionError("installed rollback state is from the future")
     withdrawn = _stored(publication["withdrawn_credential_ids_json"], work)
     if type(withdrawn) is not list or len(withdrawn) > MAX_STAGED_WITHDRAWAL_IDS:
         raise WebAuthnTrustCompletionError("staged withdrawal set is not bounded")
     for item in withdrawn:
         _text(item, "withdrawn credential ID")
+    work.prepare_copy(withdrawn)
     work.prepare_copy(withdrawn)
     _same(withdrawn, sorted(set(withdrawn)), work, "staged withdrawal set is not sorted and unique")
     event = _stored(publication["audit_event_json"], work)
@@ -312,6 +285,59 @@ def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_
         "committedStageReceiptDigest": stage["receiptDigest"], "committedStageBeforeRootsDigest": stage["beforeRootsDigest"],
         "committedStageAfterRootsDigest": stage["afterRootsDigest"], "committedStageFenceDigest": stage["fenceDigest"],
         "witnessReceiptDigest": stage["witnessReceiptDigest"], "witnessSequence": stage["witnessSequence"]}
+    return claims, publication, high, stage, withdrawn, event
+
+
+def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_bytes,
+        installed_state_bytes, installation_target_digest, expected_committed_stage,
+        installer_public_key, expected_installer_identity, expected_installer_spki_digest,
+        maximum_age_ns, maximum_clock_skew_ns, work):
+    """Recompute the shared checks, consume exact evidence and plan four effects.
+
+    Selected rows and identity are owned before key callbacks. The shared
+    installation worker independently owns and checks the actual originals,
+    stage and row material on every invocation; no cached success is accepted.
+    PublicationRowDigest remains the immutable stage projection, excluding
+    retry bookkeeping, not a substitute for the primary-tree row digest.
+    """
+    ledger = evidence.capture._SharedLedger(work)
+    _business_count(context, work)
+    request_digest, database_now = context.request_digest, context.database_now
+    _object(context.arguments, _ARGUMENT_FIELDS, "completion arguments")
+    _text(context.arguments["publication_id"], "publication ID")
+    core.require_digest(request_digest, "completion request digest")
+    core.require_digest(context.arguments["verification_evidence_digest"], "installation evidence digest")
+    now_ns = _now(database_now)
+    if (type(installation_envelope_bytes) is not bytes
+            or not 2 <= len(installation_envelope_bytes) <= evidence.MAX_EVIDENCE_BYTES):
+        raise WebAuthnTrustCompletionError("completion requires the bounded original evidence envelope")
+    work.prepare_copy(context.selected_rows)
+    selected_input = list(context.selected_rows)
+    owned = evidence.capture._JSONCapture(ledger).visit({"arguments": context.arguments,
+        "selected": selected_input, "identity": expected_installer_identity})
+    work.prepare_copy(owned["selected"])
+    arguments, selected = owned["arguments"], tuple(owned["selected"])
+    owned_context = core.KernelContext(operation=OPERATION, arguments=arguments, selected_rows=selected,
+        database_now=database_now, request_digest=request_digest)
+    work.prepare_copy(arguments)
+    semantic = {name: arguments[name] for name in _ARGUMENT_FIELDS - {"businessIntent"}}
+    _same(arguments["businessIntent"], authority._synthesize_business_intent(OPERATION, semantic, work=work),
+        work, "completion business intent changed")
+    publication_selected = owned_context._exact(trust.PUBLICATION_TABLE,
+        {"id": arguments["publication_id"]}, work=work)
+    high_selected = owned_context._exact(trust.HIGH_WATER_TABLE,
+        {"authority_scope": trust.AUTHORITY_SCOPE}, work=work)
+    audit_selected = owned_context._exact("metadata_audit_outbox",
+        {"id": _audit_id(request_digest, work)}, work=work)
+    if (publication_selected.get("present") is not True or high_selected.get("present") is not True
+            or audit_selected.get("present") is not False):
+        raise WebAuthnTrustCompletionError("completion needs an existing predecessor and an unused audit identity")
+    claims, publication, high, stage, withdrawn, event = _installation_claims_on_work(
+        installed_bundle_bytes=installed_bundle_bytes, installed_state_bytes=installed_state_bytes,
+        publication_row=publication_selected["row"], high_water_row=high_selected["row"],
+        expected_committed_stage=expected_committed_stage, installation_target_digest=installation_target_digest,
+        observed_at=database_now, work=work)
+    _same(publication["id"], arguments["publication_id"], work, "completion publication identity changed")
     evidence_digest = evidence._evidence_digest_on_work(installation_envelope_bytes, work)
     _same(evidence_digest, arguments["verification_evidence_digest"], work, "completion original evidence identity changed")
     consumed_evidence = evidence._consume_on_work(owned_context,

@@ -999,7 +999,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_assertion.py \
 	serverware/authority_webauthn_evidence.py \
 	serverware/authority_webauthn_registration_production.py \
+	serverware/authority_webauthn_trust_candidate.py \
+	serverware/authority_webauthn_installation_production.py \
 	serverware/authority_webauthn_trust.py \
+	serverware/webauthn_attestation_core.py \
+	serverware/webauthn_credential_trust.py \
+	serverware/webauthn_trust_core.py \
+	schemas/webauthn-trust-bundle.v1.schema.json \
 	serverware/db.py \
 	serverware/native_postgres_inventory.py \
 	serverware/native_postgres_results.py
@@ -2733,6 +2739,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_registration_production.py \
+				serverware/authority_webauthn_trust_candidate.py \
+				serverware/authority_webauthn_installation_production.py \
+				serverware/webauthn_attestation_core.py \
+				serverware/webauthn_credential_trust.py \
+				serverware/webauthn_trust_core.py \
+				schemas/webauthn-trust-bundle.v1.schema.json \
 				serverware/authority_transition_webauthn.py \
 				serverware/authority_transition_webauthn_registration.py \
 				serverware/authority_transition_webauthn_completion.py \

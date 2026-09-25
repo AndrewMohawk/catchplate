@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.104`, implementation only. All six WebAuthn successor operations
+Status: source `.105`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -15,9 +15,54 @@ An optional signed policy now maps these three operations to their real read,
 signed-production and configured raw-four verification owners through private
 service factories. The three transitions now have an authenticated private
 planning exchange backed by genuine independent verifier root observations.
-Public invocation, durable custody and successor execution remain unfinished;
-independent authority and release gates remain. Root observations do not hold
-roots current for later execution.
+Configured PostgreSQL raw-four custody is now also implemented. Public
+invocation, authenticated custody exchange, recovery and successor execution
+remain unfinished; independent authority and release gates remain. Root
+observations do not hold roots current for later execution.
+
+## Durable transition originals
+
+Source `.105` adds a dedicated `webauthn-transition-v1` retention protocol and
+`policy_authority_webauthn_transition_retained_plans` table. Its content identity
+commits an 18-field header: source/operation/request/configuration, actual
+planner and operation-key digests, verified plan digest, and exact original
+envelope/proof/inputs/context byte commitments and lengths. Genuine raw-four
+signature, proof and semantic replay precedes that identity calculation, using
+independently owned historical expectations and keys. Stored context cannot
+enroll history, keys or current-root authority.
+
+The immutable 23-column row retains all four original byte strings. Source DDL
+closes the operation/protocol/source, canonical base64 encoding, hashes and
+lengths, including a 64 MiB combined original-byte ceiling. The new table has
+only planner-writer SELECT/INSERT and the existing metadata read-only role
+treatment; no existing table privileges or business mutation families widen.
+UPDATE/DELETE guards and TRUNCATE denial preserve append-only custody. SQLite
+insertion is disabled. Existing-store replacement and migration paths reject
+pre-existing custody instead of silently adopting, dropping or synthesizing it.
+
+`persist_webauthn_transition_plan_record` performs actual replay and immutable
+INSERT/readback in a real nested savepoint inside the caller's SERIALIZABLE
+writer transaction. A duplicate content identity must match every immutable
+field and preserves the first retention timestamp. Writes check the original
+signed expiry and invocation deadline throughout; reads repeat genuine replay
+against independent history without sampling a new plan clock. Missing or
+conflicting rows raise, never prove that an uncertain earlier commit was absent.
+
+`TransitionPlanPersistence` uses the actual PostgreSQL/TLS/role/ACL connection
+owner and releases results only after normal outer transaction and connection
+exit. Its mapper joins held writer/planner aliases and explicit transition
+policy before key callbacks. Private measured service factories and persist/read
+methods own history before launch, descriptor and key callbacks and recheck
+generation after the closed transaction. A late failure, including a generation
+change after commit, supplies no rollback or retry authority.
+
+This is source-level custody integration, not a tested persistence claim or a
+signed durability receipt. No logical-operation reservation, capability, public
+business execution, authenticated custody socket exchange or automatic
+forwarding follows planning. Historical authority resolution, durable caller
+orchestration, recovery and current-root/reservation/capability/atomic execution
+remain unfinished. Infrastructure and the consolidated frozen-build verification
+phase are still required. Earlier sections below describe their own checkpoints.
 
 ## Authenticated private transition planning
 

@@ -1,6 +1,6 @@
 # Completing the WebAuthn authority transitions
 
-Status: source `.104`, implementation only, not an enabled public protocol or
+Status: source `.105`, implementation only, not an enabled public protocol or
 migration. All six WebAuthn successor operations now have genuine configured
 programs in the separate `typed-successor-planning` registry. Legacy `KERNELS` and
 `PLANNING_PROGRAMS`, legacy service routing, SQL execution and witness admission
@@ -16,6 +16,32 @@ They share the existing guarded transaction scope and work allowance.
 None of these registrations supplies public invocation, successor
 reservation/capability/atomic execution, physical readback or production
 readiness. All source is unbuilt and unexecuted.
+
+Source `.105` adds configured PostgreSQL custody for the four original transition
+plan records. A dedicated protocol, 18-field content header and immutable
+23-column table bind exact envelope/proof/inputs/context bytes and independently
+held keys after genuine raw-four replay. The source table enforces canonical
+base64, digests, operation/source/protocol and length constraints, with a shared
+64 MiB raw-body ceiling. SQLite inserts deny; existing custody requires a
+separately reviewed migration. The planner-writer receives SELECT/INSERT only
+on this new table, with existing metadata read-only treatment and immutable
+guards. Existing-table privileges and business execution gates are unchanged.
+
+The actual store replays within a real nested savepoint, performs an immutable
+INSERT and exact readback, and preserves the first timestamp for identical
+content. Writes retain original plan/invocation deadlines; historical reads
+replay without refreshing them. The configured owner uses the actual outer
+PostgreSQL SERIALIZABLE/TLS/role/ACL lifecycle and waits for normal transaction
+and connection exit before returning. Private service methods own independent
+history before measured callbacks and recheck active generation afterward.
+Failure after a possible commit does not establish rollback or permit retry.
+
+This adds no authenticated custody exchange, signed durability receipt, logical
+attempt reservation, capability or public execution. Independent historical
+resolution, durable caller orchestration, recovery, current-root admission and
+atomic execution remain unfinished. Neither current configuration nor stored
+context supplies historical authority. Infrastructure and consolidated
+frozen-build verification remain required; the current source is unexecuted.
 
 Source `.104` connects these three transitions through authenticated private
 planning. The verifier preparation owns the request, raw inputs, original

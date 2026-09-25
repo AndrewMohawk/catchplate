@@ -37,6 +37,7 @@ _V9_NEW_TABLES = frozenset(
         "policy_authority_operation_mutation_templates",
         "policy_authority_webauthn_assertion_evidence",
         "policy_authority_webauthn_evidence_retained_plans",
+        "policy_authority_webauthn_transition_retained_plans",
         "policy_authority_authorization_projections",
         "policy_authority_execution_envelopes",
         "policy_authority_planner_transactions",

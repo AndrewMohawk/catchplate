@@ -984,6 +984,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/revocation_retained_sql.py \
 	serverware/authority_store/revocation_retention.py \
 	serverware/authority_store/webauthn_evidence_retention.py \
+	serverware/authority_store/webauthn_transition_retention.py \
 	serverware/authority_store/webauthn_evidence_entrypoints.py \
 	serverware/authority_store/root_transition_sql.py \
 	serverware/authority_store/schema.py \
@@ -1023,6 +1024,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_transition_transport.py \
 	serverware/authority_webauthn_transition_live.py \
 	serverware/authority_webauthn_transition_actions.py \
+	serverware/authority_webauthn_transition_retention.py \
+	serverware/authority_webauthn_transition_persistence.py \
+	serverware/authority_webauthn_transition_writer_configuration.py \
 	serverware/authority_transition_policy.py \
 	serverware/authority_transition_webauthn.py \
 	serverware/authority_transition_webauthn_registration.py \
@@ -2807,6 +2811,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_store/revocation_capability_sql.py \
 				serverware/authority_store/revocation_retention.py \
 				serverware/authority_store/webauthn_evidence_retention.py \
+				serverware/authority_store/webauthn_transition_retention.py \
 				serverware/authority_store/webauthn_evidence_entrypoints.py \
 				serverware/authority_store/revocation_counted_sql.py \
 				serverware/authority_store/revocation_execution.py \
@@ -2850,6 +2855,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_transition_transport.py \
 				serverware/authority_webauthn_transition_live.py \
 				serverware/authority_webauthn_transition_actions.py \
+				serverware/authority_webauthn_transition_retention.py \
+				serverware/authority_webauthn_transition_persistence.py \
+				serverware/authority_webauthn_transition_writer_configuration.py \
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_evidence_acquisition.py \

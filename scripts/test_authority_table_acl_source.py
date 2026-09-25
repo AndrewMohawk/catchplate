@@ -394,13 +394,14 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "policy_authority_authenticated_table_roots": {"SELECT"},
             "policy_authority_webauthn_assertion_evidence": {"SELECT", "INSERT"},
             "policy_authority_webauthn_evidence_retained_plans": {"SELECT", "INSERT"},
+            "policy_authority_webauthn_transition_retained_plans": {"SELECT", "INSERT"},
             "policy_authority_writer_capabilities": {"SELECT", "UPDATE"},
         })
         self.assertTrue(set(PHASE2).isdisjoint(actual))
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.104")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.105")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -416,7 +417,8 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         # Preserve this historical method ID: .37 added the eighteenth check;
         # .45 adds retained capability's nineteenth; .65/.67 add request/ACK custody.
         # .89 adds the separate content-addressed WebAuthn evidence raw3 custody table.
-        self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 22)
+        # .105 adds separate raw4 successor transition custody without business authority.
+        self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 23)
         self.assertFalse(any("serverware.policyCandidateAuthoritySource/2026-07-30.26" in value for value in literals))
 
     def test_planner_query_bookkeeping_contract_binds_narrow_cumulative_limits(self):

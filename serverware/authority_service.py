@@ -4000,6 +4000,28 @@ class AuthorityProcess:
 
         return transitions._root_reader_on_work(self, operation=operation, work=work)
 
+    def _webauthn_transition_plan_persistence(self, *, operation, work):
+        """Construct one inert writer-only owner with held public policy pins."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._persistence_on_work(self, operation=operation, work=work)
+
+    def _persist_webauthn_transition_plan(self, *, operation, envelope_bytes, proof_bytes,
+            inputs_bytes, context_bytes, expectations, work):
+        """Own independent history before measured admission and real raw4 custody."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._persist_plan_on_work(self, operation=operation,
+            envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
+            context_bytes=context_bytes, expectations=expectations, work=work)
+
+    def _read_webauthn_transition_plan(self, *, operation, retained_record_digest, expectations, work):
+        """Genuinely replay retained originals without adopting stored history."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._read_plan_on_work(self, operation=operation,
+            retained_record_digest=retained_record_digest, expectations=expectations, work=work)
+
     def _read_webauthn_transition_root_observations(self, *, operation, request, work):
         """Read primary and counted-root metadata without reserving its state."""
         from serverware import authority_webauthn_transition_service as transitions

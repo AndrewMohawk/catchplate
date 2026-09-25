@@ -77,6 +77,10 @@ from serverware.authority_store.webauthn_evidence_retention import (
     persist_webauthn_evidence_plan_record,
     read_webauthn_evidence_plan_record,
 )
+from serverware.authority_store.webauthn_transition_retention import (
+    persist_webauthn_transition_plan_record,
+    read_webauthn_transition_plan_record,
+)
 from serverware.authority_store.webauthn_evidence_entrypoints import (
     admit_webauthn_registration_evidence,
     admit_webauthn_trust_installation_evidence,
@@ -1519,6 +1523,7 @@ _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES = (
     "policy_authority_writer_receipts",
     "policy_authority_webauthn_assertion_evidence",
     "policy_authority_webauthn_evidence_retained_plans",
+    "policy_authority_webauthn_transition_retained_plans",
     "policy_authority_authorization_projections",
     "policy_authority_revocation_retained_plans",
     "policy_authority_revocation_writer_requests",
@@ -6514,6 +6519,10 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "retained WebAuthn evidence storage requires a separately reviewed migration"
                 )
+            if _metadata_table_exists(conn, authority_contract.WEBAUTHN_TRANSITION_RETAINED_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "retained WebAuthn transition storage requires a separately reviewed migration"
+                )
             for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
                 if _metadata_table_exists(conn, table):
                     conn.execute(
@@ -6880,6 +6889,10 @@ def _prepare_policy_candidate_authority_schema(
     if _metadata_table_exists(conn, authority_contract.WEBAUTHN_EVIDENCE_RETAINED_TABLE):
         raise PolicyCandidateAuthorityError(
             "retained WebAuthn evidence storage requires a separately reviewed migration"
+        )
+    if _metadata_table_exists(conn, authority_contract.WEBAUTHN_TRANSITION_RETAINED_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "retained WebAuthn transition storage requires a separately reviewed migration"
         )
     for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
         if _metadata_table_exists(conn, table):

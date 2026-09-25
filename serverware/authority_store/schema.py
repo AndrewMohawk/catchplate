@@ -193,6 +193,7 @@ def _policy_candidate_authority_source_contract_digest() -> str:
                 counted_installation.counted_installation_contract(),
             "revocationRetention": dict(authority_contract.REVOCATION_RETENTION_CONTRACT),
             "webauthnEvidenceRetention": dict(authority_contract.WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
+            "webauthnTransitionRetention": dict(authority_contract.WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
             "revocationWriterRequestCustody": dict(authority_contract.REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT),
             "revocationWriterAckCustody": dict(authority_contract.REVOCATION_WRITER_ACK_CUSTODY_CONTRACT),
             "revocationCapabilityCustody": dict(authority_contract.REVOCATION_CAPABILITY_CUSTODY_CONTRACT),
@@ -1275,6 +1276,7 @@ def _policy_candidate_authority_required_guard_names(
                               "serverware_writer_request_sqlite_insert_guard",
                               "serverware_writer_ack_sqlite_insert_guard",
                               "serverware_webauthn_evidence_retained_sqlite_insert_guard",
+                              "serverware_webauthn_transition_retained_sqlite_insert_guard",
                               "serverware_capability_retention_insert_guard",
                               "serverware_capability_sidecar_sqlite_insert_guard"})
     for table in (

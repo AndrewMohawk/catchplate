@@ -27,6 +27,7 @@ PLANNER_WRITER_TABLE_PRIVILEGES = MappingProxyType({
     "policy_authority_authenticated_table_roots": frozenset({"SELECT"}),
     "policy_authority_webauthn_assertion_evidence": frozenset({"SELECT", "INSERT"}),
     "policy_authority_webauthn_evidence_retained_plans": frozenset({"SELECT", "INSERT"}),
+    "policy_authority_webauthn_transition_retained_plans": frozenset({"SELECT", "INSERT"}),
     "policy_authority_writer_capabilities": frozenset({"SELECT", "UPDATE"}),
 })
 AUDIT_CAPACITY_FUNCTION_NAME = "serverware_policy_authority_assert_audit_capacity"

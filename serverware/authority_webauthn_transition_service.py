@@ -1,9 +1,9 @@
-"""Private measured-service boundaries for configured successor planning.
+"""Private measured-service boundaries for successor planning and custody.
 
 The actual service configuration loader, protected descriptors and active
 launch guard supply admission. A caller-created configuration or returned
 owner does not. Fixed factory callers select only a planner reader, signed
-producer, verifier or verifier-root reader for one of three source operations;
+producer, verifier, verifier-root reader or custody owner for three source operations;
 no request chooses keys,
 policy, descriptor names, callbacks or a replacement work allowance.
 
@@ -11,8 +11,11 @@ The factories do not open SQL or enable public operations. The explicit root
 read performs only its separately admitted read-only acquisition. Dedicated
 live exchange methods authenticate and replay original planning bytes, with no
 custody, reservation, business execution or automatic retry. Historical
-handoff expectations are owned before all launch/key callbacks and must be
-independently admitted upstream, never adopted from received context bytes.
+handoff and custody expectations are owned before all launch/key callbacks and
+must be independently admitted upstream, never adopted from received context
+bytes. Explicit custody calls are separate from planning and return only after
+the actual writer transaction and connection exit; an uncertain error cannot
+prove rollback or authorize another attempt.
 """
 from __future__ import annotations
 
@@ -24,6 +27,9 @@ from serverware import authority_webauthn_transition_plan_verifier as verifying
 from serverware import authority_webauthn_transition_root_configuration as root_mapping
 from serverware import authority_webauthn_transition_root_reader as root_reader
 from serverware import authority_webauthn_transition_roots_contract as root_contract
+from serverware import authority_webauthn_transition_retention as retention
+from serverware import authority_webauthn_transition_persistence as persistence
+from serverware import authority_webauthn_transition_writer_configuration as writer_mapping
 
 
 def _operation(value):
@@ -40,12 +46,13 @@ def _measured_context_on_work(process, *, role, signing, read_descriptor, work):
 
     planner_dsn = "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"
     verifier_dsn = "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
+    writer_dsn = "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"
     if (type(role) is not str or type(signing) is not bool
             or type(read_descriptor) not in (str, type(None))
             or (role, signing, read_descriptor) not in (
                 ("planner", False, planner_dsn), ("planner", True, planner_dsn),
                 ("verifier", False, None), ("verifier", False, verifier_dsn),
-                ("verifier", True, verifier_dsn))):
+                ("verifier", True, verifier_dsn), ("planner-writer", False, writer_dsn))):
         raise service.AuthorityServiceError("transition service context is not source fixed")
     if (type(process) is not service.AuthorityProcess or process.role_name != role
             or process.process_mode != "policy-authority-" + role):
@@ -76,10 +83,12 @@ def _measured_context_on_work(process, *, role, signing, read_descriptor, work):
 def _context_on_work(process, *, operation, kind, work):
     """Own one actual measured configuration before real admission callbacks."""
     operation = _operation(operation)
-    if type(kind) is not str or kind not in ("reader", "producer", "verifier", "roots"):
+    if type(kind) is not str or kind not in ("reader", "producer", "verifier", "roots", "persistence"):
         raise ValueError("transition service factory is not source fixed")
-    role = "verifier" if kind in ("verifier", "roots") else "planner"
+    role = ("planner-writer" if kind == "persistence" else
+        "verifier" if kind in ("verifier", "roots") else "planner")
     descriptor = (None if kind == "verifier" else
+        "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN" if kind == "persistence" else
         "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN" if kind == "roots"
         else "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN")
     mapper = {
@@ -87,12 +96,15 @@ def _context_on_work(process, *, operation, kind, work):
         "producer": mapping._producer_from_configuration_on_work,
         "verifier": mapping._verifier_from_configuration_on_work,
         "roots": root_mapping._reader_from_configuration_on_work,
+        "persistence": writer_mapping._persistence_from_configuration_on_work,
     }[kind]
     owned, digest, generation, dsn, private = _measured_context_on_work(process,
         role=role, signing=kind == "producer", read_descriptor=descriptor, work=work)
     arguments = {"operation": operation, "payload": owned, "configuration_digest": digest,
         "generation": generation, "work": work}
-    if kind != "verifier":
+    if kind == "persistence":
+        arguments["writer_dsn"] = dsn
+    elif kind != "verifier":
         arguments["read_dsn"] = dsn
     if kind == "producer":
         arguments["planner_private_key"] = private
@@ -120,6 +132,10 @@ def _root_reader_on_work(process, *, operation, work):
     return _configured_on_work(process, operation=operation, kind="roots", work=work)
 
 
+def _persistence_on_work(process, *, operation, work):
+    return _configured_on_work(process, operation=operation, kind="persistence", work=work)
+
+
 def _generation_on_work(value, work):
     ledger = configuration.capability.capture._SharedLedger(work)
     configuration.capability.shape._bounded_object(value, 20, "transition root launch context")
@@ -133,7 +149,57 @@ def _require_generation_on_work(role, generation, work):
     configuration.production._callback(work, lambda: service.authority_launch_guard.require_active(role))
     final = configuration.production._callback(work, lambda: dict(service.authority_launch_guard.generation()))
     configuration.capability.plan._same(generation, _generation_on_work(final, work), work,
-        "transition planning generation changed")
+        "transition service generation changed")
+
+
+def _history_on_work(operation, expectations, work):
+    """Own independently admitted history without parsing a retained context."""
+    ledger = plan.evidence.capture._SharedLedger(work)
+    owned = plan.evidence.capture._JSONCapture(
+        ledger, maximum_bytes=plan.contract.MAX_BYTES).visit(expectations)
+    expected_operation = plan.contract._validate_expectations(owned)
+    plan.evidence.plan._same(expected_operation, operation, work,
+        "transition history differs from its independently selected operation")
+    return owned
+
+
+def _custody_owner_on_work(process, operation, work):
+    mapper, arguments = _context_on_work(process, operation=operation, kind="persistence", work=work)
+    generation = _generation_on_work(arguments["generation"], work)
+    arguments["generation"] = generation
+    return mapper(**arguments), generation
+
+
+def _persist_plan_on_work(process, *, operation, envelope_bytes, proof_bytes,
+        inputs_bytes, context_bytes, expectations, work):
+    """Retain raw4 under independent history, not the preceding live response.
+
+    A failure after the actual outer commit, including final generation
+    rejection, does not establish that custody was rolled back. No retry or
+    business execution follows this private call.
+    """
+    operation = _operation(operation)
+    originals = retention._raw4(envelope_bytes, proof_bytes, inputs_bytes, context_bytes)
+    owned = _history_on_work(operation, expectations, work)
+    owner, generation = _custody_owner_on_work(process, operation, work)
+    result = persistence.TransitionPlanPersistence.persist(owner,
+        envelope_bytes=originals[0], proof_bytes=originals[1], inputs_bytes=originals[2],
+        context_bytes=originals[3], expectations=owned, work=work)
+    _require_generation_on_work("planner-writer", generation, work)
+    return result
+
+
+def _read_plan_on_work(process, *, operation, retained_record_digest, expectations, work):
+    """Read and replay historical originals without renewing plan lifetime."""
+    operation = _operation(operation)
+    plan.contract.shape._digest(retained_record_digest)
+    digest = retained_record_digest
+    owned = _history_on_work(operation, expectations, work)
+    owner, generation = _custody_owner_on_work(process, operation, work)
+    result = persistence.TransitionPlanPersistence.read(owner,
+        retained_record_digest=digest, expectations=owned, work=work)
+    _require_generation_on_work("planner-writer", generation, work)
+    return result
 
 
 def _produce_request_on_work(process, *, operation, request, inputs_bytes,
@@ -248,12 +314,7 @@ def _verify_handoff_on_work(process, *, operation, envelope_bytes, proof_bytes,
     originals = envelope_bytes, proof_bytes, inputs_bytes, context_bytes
     plan.proof.wire._raw(originals[0], 2, plan.contract.MAX_BYTES)
     plan._originals(originals[1], originals[2], originals[3])
-    ledger = plan.evidence.capture._SharedLedger(work)
-    owned = plan.evidence.capture._JSONCapture(
-        ledger, maximum_bytes=plan.contract.MAX_BYTES).visit(expectations)
-    expected_operation = plan.contract._validate_expectations(owned)
-    plan.evidence.plan._same(expected_operation, operation, work,
-        "transition handoff differs from its independently selected operation")
+    owned = _history_on_work(operation, expectations, work)
     # Only now may active-launch and real key constructors run. Configuration
     # pins can constrain supplied history but never establish its provenance.
     verifier = _verifier_on_work(process, operation=operation, work=work)

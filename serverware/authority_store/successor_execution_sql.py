@@ -5,6 +5,9 @@ an explicit trusted boundary: its fixed Python owner must run genuine original
 grant/pending/plan admission, never accept a candidate as authority, and retain
 the exact derived packet. Only that issuer may store packets; only the distinct
 executor may consume protected custody by pending decision and packet digest.
+The third, separately pinned recovery role can read exact historical originals
+by both independently held identifiers in a read-only transaction. Its SQL
+does not renew controls, verify signatures or turn expired packets into grants.
 
 The actual protected Python owner compares the complete source-generated schema
 manifest (including function and all trigger bodies/modes) on the SAME admitted
@@ -46,8 +49,10 @@ from serverware.authority_store.revocation_retained_sql import _closed, _literal
 
 ISSUE_FUNCTION = "serverware_policy_authority_issue_successor_execution"
 EXECUTE_FUNCTION = "serverware_policy_authority_execute_successor"
+READ_FUNCTION = "serverware_policy_authority_read_successor_execution"
 ISSUER_IDENTITY_DOMAIN = "serverware.policyAuthoritySuccessorIssuerSession/v1"
 EXECUTOR_IDENTITY_DOMAIN = "serverware.policyAuthoritySuccessorExecutorSession/v1"
+RECOVERY_IDENTITY_DOMAIN = "serverware.policyAuthoritySuccessorRecoverySession/v1"
 _COLUMNS = ("pending_decision_digest", "packet_digest", "packet_json", "enrollment_digest",
     "generation_digest", "capability_digest", "operation_id", "fence", "issued_at_epoch_ns",
     "expires_at_epoch_ns", "issuer_identity_digest")
@@ -402,13 +407,13 @@ def _pins(value):
     return value
 
 
-def _admission(namespace, role, owner_role, pins, domain):
+def _admission(namespace, role, owner_role, pins, domain, *, recovery=False):
     return f"""
         IF session_user IS DISTINCT FROM {_literal(role)} OR current_user IS DISTINCT FROM {_literal(owner_role)}
             OR pg_catalog.current_setting('server_version_num')::integer / 10000 <> 16
             OR pg_catalog.current_setting('transaction_isolation') IS DISTINCT FROM 'serializable'
-            OR pg_catalog.current_setting('transaction_read_only') IS DISTINCT FROM 'off'
-            OR pg_catalog.current_setting('transaction_deferrable') IS DISTINCT FROM 'off'
+            OR pg_catalog.current_setting('transaction_read_only') IS DISTINCT FROM {_literal('on' if recovery else 'off')}
+            OR pg_catalog.current_setting('transaction_deferrable') IS DISTINCT FROM {_literal('on' if recovery else 'off')}
         THEN RAISE EXCEPTION 'successor protected role or transaction is not exact'; END IF;
         SELECT setting::bigint INTO STRICT sxe_statement_ms FROM pg_catalog.pg_settings WHERE name = 'statement_timeout';
         SELECT setting::bigint INTO STRICT sxe_lock_ms FROM pg_catalog.pg_settings WHERE name = 'lock_timeout';
@@ -435,17 +440,19 @@ def _admission(namespace, role, owner_role, pins, domain):
 
 
 def successor_execution_functions_sql(namespace: str, *, issuer_role: str, executor_role: str,
-        owner_role: str, issuer_pins: tuple, executor_pins: tuple) -> str:
-    """Render fixed issue2/consume2 functions; caller owns install/ACL/catalog."""
+        recovery_role: str, owner_role: str, issuer_pins: tuple, executor_pins: tuple,
+        recovery_pins: tuple) -> str:
+    """Render fixed issue2/consume2/read2; caller owns install/ACL/catalog."""
     _schema_name(namespace)
-    for role in (issuer_role, executor_role, owner_role):
+    for role in (issuer_role, executor_role, recovery_role, owner_role):
         if type(role) is not str or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", role) is None:
             raise ValueError("successor SQL role is not a source-bounded identifier")
-    if len({issuer_role, executor_role, owner_role}) != 3:
-        raise ValueError("successor issuer, executor and owner must be distinct")
-    issuer_pins, executor_pins = _pins(issuer_pins), _pins(executor_pins)
-    if issuer_pins == executor_pins or issuer_pins[3:] == executor_pins[3:]:
-        raise ValueError("successor issuer and executor TLS principals must be distinct")
+    if (len({issuer_role, executor_role, recovery_role, owner_role}) != 4
+            or recovery_role != authority.SUCCESSOR_RECOVERY_ROLE):
+        raise ValueError("successor issuer, executor, fixed recovery and owner must be distinct")
+    issuer_pins, executor_pins, recovery_pins = _pins(issuer_pins), _pins(executor_pins), _pins(recovery_pins)
+    if len({issuer_pins[3:], executor_pins[3:], recovery_pins[3:]}) != 3:
+        raise ValueError("successor issuer, executor and recovery TLS principals must be distinct")
     if tuple(authority.SUCCESSOR_EXECUTION_CUSTODY_COLUMNS) != _COLUMNS:
         raise ValueError("successor SQL custody columns differ from the exact source contract")
     table = authority.SUCCESSOR_EXECUTION_CUSTODY_TABLE
@@ -515,6 +522,48 @@ def successor_execution_functions_sql(namespace: str, *, issuer_role: str, execu
         {_live()}
         RETURN crx_marker_json;
     """
+    read = f"""
+        IF supplied_pending_decision_digest IS NULL OR supplied_packet_digest IS NULL
+            OR supplied_pending_decision_digest COLLATE "C" !~ '^sha256:[0-9a-f]{{64}}$'
+            OR supplied_packet_digest COLLATE "C" !~ '^sha256:[0-9a-f]{{64}}$'
+        THEN RAISE EXCEPTION 'successor recovery selectors are not canonical identities'; END IF;
+        SELECT stored.* INTO STRICT sxe_row FROM {namespace}.{table} AS stored
+            WHERE stored.pending_decision_digest = supplied_pending_decision_digest
+              AND stored.packet_digest = supplied_packet_digest;
+        sxe_packet_text := sxe_row.packet_json; sxe_packet_digest := supplied_packet_digest;
+        IF sxe_packet_text IS NULL OR pg_catalog.octet_length(sxe_packet_text) NOT BETWEEN 2 AND {packet.MAX_BYTES}
+            OR sxe_packet_text COLLATE "C" !~ '^[ -~]+$'
+            OR {_digest(namespace, packet.IDENTITY_DOMAIN, 'sxe_packet_text')} IS DISTINCT FROM supplied_packet_digest
+        THEN RAISE EXCEPTION 'successor recovery packet differs from its independent original identity'; END IF;
+        sxe_packet := sxe_packet_text::jsonb;
+        IF NOT {_closed('sxe_packet', packet.PACKET_FIELDS)}
+            OR sxe_packet->>'schema' IS DISTINCT FROM {_literal(packet.SCHEMA)}
+        THEN RAISE EXCEPTION 'successor recovery packet is not the closed source shape'; END IF;
+        {_wire(namespace, 'sxe_packet', 'sxe_canonical', packet.MAX_BYTES)}
+        IF sxe_canonical IS DISTINCT FROM sxe_packet_text
+        THEN RAISE EXCEPTION 'successor recovery packet bytes are not canonical'; END IF;
+        crx_marker := sxe_packet->'marker';
+        IF NOT {_closed('crx_marker', authority.CURRENT_ROOT_COMMIT_MARKER_COLUMNS)}
+        THEN RAISE EXCEPTION 'successor recovery marker is not closed'; END IF;
+        {_digests(tuple("crx_marker->'" + name + "'" for name in
+            ('pending_decision_digest', 'enrollment_digest', 'generation_digest', 'capability_digest', 'operation_id'))
+            + ("sxe_packet->'operationId'",))}
+        {_integer("crx_marker->'fence'", minimum=1)}
+        {_integer("sxe_packet->'issuedAtEpochNs'", minimum=1, maximum=2**63 - 2)}
+        {_integer("sxe_packet->'expiresAtEpochNs'", minimum=2)}
+        crx_operation_id := sxe_packet->>'operationId';
+        sxe_issued := (sxe_packet->>'issuedAtEpochNs')::bigint;
+        sxe_expires := (sxe_packet->>'expiresAtEpochNs')::bigint;
+        sxe_issuer_identity := {issuer_identity};
+        IF sxe_expires <= sxe_issued OR crx_marker->>'operation_id' IS DISTINCT FROM crx_operation_id
+        THEN RAISE EXCEPTION 'successor recovery original interval or operation changed'; END IF;
+        {exact_row}
+        -- Deliberately no _packet/live-control verifier, row lock, mutation or
+        -- comparison of historical expiry to now. Only this read's inherited
+        -- statement deadline remains live; downstream authenticates originals.
+        {_live()}
+        RETURN sxe_packet_text;
+    """
     return "\n".join(textwrap.dedent(f"""
         CREATE OR REPLACE FUNCTION {namespace}.{name}({arguments})
         RETURNS {returns} LANGUAGE plpgsql SECURITY DEFINER VOLATILE
@@ -523,7 +572,7 @@ def successor_execution_functions_sql(namespace: str, *, issuer_role: str, execu
         DECLARE
             {common}
         BEGIN
-            {_admission(namespace, role, owner_role, pins, domain)}
+            {_admission(namespace, role, owner_role, pins, domain, recovery=role == recovery_role)}
             {body}
         END;
         $serverware_successor_custody$;
@@ -532,4 +581,6 @@ def successor_execution_functions_sql(namespace: str, *, issuer_role: str, execu
             "TABLE(pending_decision_digest text, packet_digest text, issued_at_epoch_ns bigint, expires_at_epoch_ns bigint)",
             issuer_role, issuer_pins, ISSUER_IDENTITY_DOMAIN, issue),
         (EXECUTE_FUNCTION, "supplied_pending_decision_digest text, supplied_packet_digest text", "text",
-            executor_role, executor_pins, EXECUTOR_IDENTITY_DOMAIN, execute)))
+            executor_role, executor_pins, EXECUTOR_IDENTITY_DOMAIN, execute),
+        (READ_FUNCTION, "supplied_pending_decision_digest text, supplied_packet_digest text", "text",
+            recovery_role, recovery_pins, RECOVERY_IDENTITY_DOMAIN, read)))

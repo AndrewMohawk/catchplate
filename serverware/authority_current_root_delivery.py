@@ -29,6 +29,7 @@ a Python clock check; late failures never undo completed durability barriers.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
@@ -108,6 +109,7 @@ class CurrentRootCompletionDelivery:
         self._sequence = self._completed_count = self._last_state_sequence = 0
         self._pending = None
         self._history, self._pending_heads = {}, set()
+        self._pending_requests = {}
         try:
             original = authorization._original(enrollment_bytes,
                 authorization.MAX_ENROLLMENT_BYTES, "completion delivery enrollment")
@@ -189,6 +191,7 @@ class CurrentRootCompletionDelivery:
         # Only a genuine same-call decode/prepare which passed _check_record
         # reaches this continuation; no public API accepts such a carrier.
         self._history[record.request_digest] = record
+        self._pending_requests[record.pending_head_digest] = record.request_digest
         if record.kind == "request":
             self._pending = record
             self._pending_heads.add(record.pending_head_digest)
@@ -417,6 +420,40 @@ class CurrentRootCompletionDelivery:
             live(payload)
             return CurrentRootDeliveryReconciliation("pendingUnaccepted" if unchanged else "stateChanged",
                 identity, observed_sequence, observed_head, None)
+
+    @contextmanager
+    def _recovery_scope(self):
+        """Serialize fixed recovery through retention/delivery, not proof input."""
+        self._require_process()
+        with self._lock:
+            self._require_ready()
+            yield
+            self._require_ready()
+
+    def _original_for_pending_on_work(self, *, expected_pending_sequence,
+            expected_pending_head_digest, work):
+        """Locate exact retained bytes, never enroll a pending checkpoint.
+
+        Recovery uses this before producing a completion: existing originals
+        cannot be replaced or renewed. A returned pair is only a locator/raw
+        original, not a fresh state statement or caller-supplied proof token.
+        An unresolved other original or exhausted journal denies new work.
+        """
+        evidence.capture._SharedLedger(work)
+        sequence, head = records._pending_scope(expected_pending_sequence, expected_pending_head_digest)
+        self._require_process()
+        with self._lock:
+            self._require_ready()
+            identity = self._pending_requests.get(head)
+            if identity is not None:
+                retained = self._history[identity]
+                if retained.pending_sequence != sequence:
+                    raise CurrentRootDeliveryError("retained completion has another pending sequence")
+                return identity, retained.request_bytes
+            if (self._pending is not None or sequence <= self._last_state_sequence
+                    or self._sequence + 2 > self._maximum_records):
+                raise CurrentRootDeliveryError("completion recovery cannot replace pending or consumed local scope")
+            return None
 
     def inspect(self):
         self._require_process()

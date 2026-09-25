@@ -8,6 +8,17 @@ including the source installer, ACL/catalog checks and actual transaction
 owners. These changes remain unbuilt, unexecuted and unprovisioned; no public
 successor route is activated and existing legacy gates remain closed.
 
+Source `.140` adds a separate restricted recovery role and
+[`SuccessorExecutionRecoveryReader`](../serverware/authority_successor_execution_owner.py).
+Its sole protected read function retrieves exact canonical packet originals by
+independently held pending-decision and packet digests, with no direct table
+or sequence access. The real PostgreSQL read-only owner preserves the caller's
+live retrieval window, TLS/ACL admission and before/after source-catalog checks.
+Expired historical controls remain readable without renewal; returned bytes
+still require genuine historical authentication and an independently admitted
+current pending checkpoint. This does not provision the role or enable SQL retries,
+execution or a public recovery route.
+
 ## Authorization order
 
 ```mermaid
@@ -19,7 +30,7 @@ flowchart TD
     E --> F[Dedicated issuer retains original custody packet]
     F --> G[Separate durable one-attempt journal]
     G --> H[Identifier-only executor: atomic writes and marker]
-    H -. postcommit orchestration still required .-> I[Read-only completion and durable delivery]
+    H -. private postcommit recovery .-> I[Read-only completion and durable delivery]
 ```
 
 The grant precedes the pending decision. Its original signed-byte identity
@@ -116,6 +127,8 @@ with no direct relation/sequence privileges or generic function execution:
   `serverware_policy_authority_issue_successor_execution(text, text)`.
 - `serverware_policy_authority_successor_executor` calls
   `serverware_policy_authority_execute_successor(text, text)`.
+- `serverware_policy_authority_successor_recovery` calls
+  `serverware_policy_authority_read_successor_execution(text, text)`.
 
 [`authority_store.successor_execution_sql`](../serverware/authority_store/successor_execution_sql.py)
 stores the admitted packet in immutable
@@ -134,8 +147,8 @@ after-vector, and inserts the exact 18-column immutable framework marker in the
 same transaction. The later postcommit receipt commits that marker, never the
 reverse. Neither a matching marker nor its absence proves rollback resistance.
 
-Each owner uses actual PostgreSQL 16 TLS/role admission and keeps its catalog
-checks and protected call on its same physical
+Each issuer/executor owner uses actual PostgreSQL 16 TLS/role admission and
+keeps its catalog checks and protected call on the same physical
 `SERIALIZABLE READ WRITE NOT DEFERRABLE` transaction. Its exact eight-value
 configuration contains the fixed role, existing connection/query pins and an
 eighth independently admitted **source-generated complete structural-manifest
@@ -148,10 +161,11 @@ completion evidence. A late error may follow commitment; deadlines and bounded
 database waits are not a hard native-call watchdog.
 
 The source installer now includes the exact custody schema, functions, guards
-and grants; it has not been run here. The two roles and identities must be
-independently provisioned. Offline metadata bootstrap requires both prefixes
-`SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_ISSUER_` and
-`SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_EXECUTOR_`, each with all six suffixes:
+and grants; it has not been run here. All three roles and identities must be
+independently provisioned. Offline metadata bootstrap requires the prefixes
+`SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_ISSUER_`,
+`SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_EXECUTOR_` and
+`SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_RECOVERY_`, each with all six suffixes:
 `MEASUREMENT_SHA256`, `ATTESTATION_RECEIPT_SHA256`,
 `CREDENTIAL_ISSUANCE_SHA256`, `TLS_CLIENT_DN`, `TLS_CLIENT_SERIAL` and
 `TLS_ISSUER_DN`. Missing values do not fall back to legacy identity pins.
@@ -194,18 +208,54 @@ Only after normal database closure does the enrolled completion key sign the
 fresh complete control. Its inner observation record is not independently
 signed. This can follow grant expiry but cannot execute, reset or release a
 transition without the matched committed marker. The executor's unsigned return
-does not replace that readback or grant premature completion authority. Normal
-outer-postcommit orchestration into completion and durable delivery, including
-uncertain outcomes, is still not activated by these private owners.
+does not replace that readback or grant premature completion authority. The
+private recovery composition below connects this production to durable delivery;
+it does not activate a serving process or public business finalization.
+
+## Restricted recovery and exact completion reuse
+
+`SuccessorExecutionRecoveryReader.read(...)` retrieves packet originals through
+the recovery role's single protected function, with zero direct relation or
+sequence privileges. Its actual PostgreSQL transaction is
+`SERIALIZABLE READ ONLY DEFERRABLE`, with independently pinned TLS and full
+before/after catalog checks. Both custody selectors must be independently held.
+Canonical bytes, the framed packet digest and immutable row columns are joined;
+historical control expiry is not tested as fresh execution permission. The
+returned bytes still require original-signature and proof authentication.
+
+[`recover_and_deliver`](../serverware/authority_successor_completion_recovery.py)
+uses the actual custody reader, committed-state reader, durable delivery owner
+and fixed state client. It captures their configurations and independent
+history/key/scope inputs before callbacks, then holds the delivery lock across
+lookup, reading, completion production, retention and exchange. One unchanged
+work ledger and live retrieval window, clipped by the inherited monotonic
+deadline, cover the entire sequence; database or transport steps cannot renew it.
+
+If a completion is already retained for the exact pending checkpoint, the
+composition authenticates that original and joins it to the independently
+pinned custody packet, then reuses the identical bytes without another plan
+replay or replacement signature. Otherwise it genuinely replays the historical
+originals, matches the actual committed marker/full after-vector, and signs a
+completion only after normal database closure. The complete control is durably
+enqueued before transport; the authenticated original state acknowledgement is
+durably retained before a delivered result returns. An already acknowledged
+delivery returns that same receipt without another network exchange.
+
+Failures may leave a durable request or acknowledgement. Explicit recovery can
+redeliver only the retained original, never reexecute SQL, clear an attempt or
+replace an expired never-accepted completion. An unchanged expired original can
+succeed only when the state owner had already accepted it and returns its original
+receipt. Fresh signed state reconciliation is separate: a retained receipt is
+not a fresh state lease or independently current checkpoint.
 
 ## Remaining production boundary
 
 Independent caller authorization and key/history provenance, cold configuration,
 source-generated catalog/checkpoint admission and measured service ownership
-remain prerequisites. Authenticated custody read/recovery, normal outer-postcommit
-completion/delivery orchestration and public business finalization are still
-missing. An expired or unanswered request cannot clear a pending fence, reset
-an attempt or authorize SQL retry. No currentness authority is inferred from
+remain prerequisites. The restricted custody reader and private postcommit
+recovery/delivery composition are source implementations, not deployed service
+admission or public business finalization. An expired or unanswered request
+cannot clear a pending fence, reset an attempt or authorize SQL retry. No currentness authority is inferred from
 source installation, matching digests or local observation. Independent
 production infrastructure/provisioning and the consolidated frozen
 build/verification phase remain outstanding.

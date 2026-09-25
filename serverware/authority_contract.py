@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.139"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.140"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -501,11 +501,14 @@ CURRENT_ROOT_COMMIT_MARKER_COLUMNS = (
 )
 SUCCESSOR_ISSUER_ROLE = "serverware_policy_authority_successor_issuer"
 SUCCESSOR_EXECUTOR_ROLE = "serverware_policy_authority_successor_executor"
+SUCCESSOR_RECOVERY_ROLE = "serverware_policy_authority_successor_recovery"
 SUCCESSOR_ISSUE_FUNCTION = "serverware_policy_authority_issue_successor_execution"
 SUCCESSOR_EXECUTE_FUNCTION = "serverware_policy_authority_execute_successor"
+SUCCESSOR_READ_FUNCTION = "serverware_policy_authority_read_successor_execution"
 SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES = MappingProxyType({
     SUCCESSOR_ISSUE_FUNCTION: ("text", "text"),
     SUCCESSOR_EXECUTE_FUNCTION: ("text", "text"),
+    SUCCESSOR_READ_FUNCTION: ("text", "text"),
 })
 SUCCESSOR_EXECUTION_CUSTODY_TABLE = "policy_authority_successor_execution_custody"
 SUCCESSOR_EXECUTION_CUSTODY_COLUMNS = (
@@ -521,11 +524,17 @@ SUCCESSOR_EXECUTION_CUSTODY_CONTRACT = MappingProxyType({
     "uniqueKeys": (("packet_digest",), ("enrollment_digest", "capability_digest"),
         ("enrollment_digest", "operation_id"), ("enrollment_digest", "fence")),
     "issuerRole": SUCCESSOR_ISSUER_ROLE, "executorRole": SUCCESSOR_EXECUTOR_ROLE,
+    "recoveryRole": SUCCESSOR_RECOVERY_ROLE,
     "issuerFunction": SUCCESSOR_ISSUE_FUNCTION, "executorFunction": SUCCESSOR_EXECUTE_FUNCTION,
+    "recoveryFunction": SUCCESSOR_READ_FUNCTION,
     "functionArgumentTypes": ("text", "text"),
     "packetSchema": "serverware.policyAuthoritySuccessorExecutionPacket/v1",
     "maximumPacketBytes": 64 * 1024 * 1024,
     "directRuntimePrivileges": (), "directIssuerPrivileges": (), "directExecutorPrivileges": (),
+    "directRecoveryPrivileges": (),
+    "recoveryTransaction": "serializable-read-only-deferrable",
+    "recoveryOriginals": "bounded-canonical-packet-originals-not-fresh-execution-authority",
+    "recoveryHistoricalExpiry": "permitted-without-renewal-under-independent-live-retrieval-window",
     "postgresOnly": True, "sqliteAdmission": False, "publicExecutionEnabled": False,
     "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
     "frameworkCustodyExcludedFromBusinessRoots": True,
@@ -533,6 +542,7 @@ SUCCESSOR_EXECUTION_CUSTODY_CONTRACT = MappingProxyType({
     "catalogAdmission": "same-transaction-actual-full-manifest-against-independent-source-generated-pin",
     "issuerIdentityDomain": "serverware.policyAuthoritySuccessorIssuerSession/v1",
     "executorIdentityDomain": "serverware.policyAuthoritySuccessorExecutorSession/v1",
+    "recoveryIdentityDomain": "serverware.policyAuthoritySuccessorRecoverySession/v1",
     "existingStoreMigration": "separately-reviewed-no-adoption-synthesis-or-cascade",
     "legacyOperationGates": "unchanged",
 })

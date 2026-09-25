@@ -1,6 +1,6 @@
 """Exact purpose-specific successor role privileges, without database IO.
 
-Both roles have zero relation/sequence privileges and exactly one protected
+All three roles have zero relation/sequence privileges and exactly one protected
 function. The genuine generic verifier query supplies the complete effective
 schema/database/membership/column/PUBLIC checks. Closed source replacements
 change only the required function contract, never accept a caller inventory.
@@ -71,10 +71,12 @@ SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST = (
 
 
 def successor_execution_privilege_check(*, role, namespace):
-    if type(role) is not str or role not in (authority.SUCCESSOR_ISSUER_ROLE, authority.SUCCESSOR_EXECUTOR_ROLE):
+    if type(role) is not str or role not in (authority.SUCCESSOR_ISSUER_ROLE,
+            authority.SUCCESSOR_EXECUTOR_ROLE, authority.SUCCESSOR_RECOVERY_ROLE):
         raise ValueError("successor execution role is not source fixed")
     # Use the actual generic scalar admission, but never its read inventory.
     generic.verifier_read_privilege_check(role=role, namespace=namespace)
     function = (authority.SUCCESSOR_ISSUE_FUNCTION if role == authority.SUCCESSOR_ISSUER_ROLE
-        else authority.SUCCESSOR_EXECUTE_FUNCTION)
+        else authority.SUCCESSOR_EXECUTE_FUNCTION if role == authority.SUCCESSOR_EXECUTOR_ROLE
+        else authority.SUCCESSOR_READ_FUNCTION)
     return SUCCESSOR_EXECUTION_PRIVILEGE_SQL, (role, namespace, [], function)

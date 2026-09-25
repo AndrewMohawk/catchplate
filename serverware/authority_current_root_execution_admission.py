@@ -23,6 +23,9 @@ here, and returned data grants no retry or authority.
 A separate historical completion entrypoint shares original replay but never
 returns selected rows or mutations. Its fresh local observation window cannot
 renew the expired reserve; actual marker/root observation remains mandatory.
+A retained-custody variant additionally returns the actual same-call effects
+digest, not the effects, so stored packets can be compared without replaying
+the plan twice or accepting an executable successful-result carrier.
 """
 from __future__ import annotations
 
@@ -173,7 +176,7 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        live_window, work, transport_deadline_ns, historical_controls):
+        live_window, work, transport_deadline_ns, historical_controls, custody_effects=False):
     """Fixed replay shared by separate live-execution/historical-completion paths.
 
     ``original_interval`` in the candidate is the effective ORIGINAL RESERVE
@@ -184,6 +187,8 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
     """
     if type(historical_controls) is not bool:
         raise CurrentRootExecutionAdmissionError("pending admission purpose is not source-selected")
+    if type(custody_effects) is not bool or custody_effects and not historical_controls:
+        raise CurrentRootExecutionAdmissionError("custody effects identity is historical-completion only")
     evidence.capture._SharedLedger(work)
     held_operation = operation
     held = _originals(held_operation, originals, enrollment_bytes,
@@ -251,9 +256,20 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
     marker = _marker(material, request, request_digest, receipt, receipt_digest, expected_snapshot, work)
     now = _live(window, inherited, work)
     if historical_controls:
-        return _PendingCompletion(held_operation, marker, replayed.after_vector_bytes,
+        completion = _PendingCompletion(held_operation, marker, replayed.after_vector_bytes,
             reserve, receipt_original, snapshot_original,
             (request["issuedAtEpochNs"], request["expiresAtEpochNs"]))
+        if custody_effects:
+            # Only this invocation's genuine replay reaches the shared digest
+            # helper. No selected rows/mutations escape the historical API.
+            from serverware import authority_successor_execution_recovery_packet as recovery
+            effects_digest = recovery._effects_digest_on_work(selected_rows=replayed.selected_rows,
+                mutations=replayed.mutations, result=replayed.result,
+                work_units=replayed.work_units, work=work)
+            if _live(window, inherited, work) < now:
+                raise CurrentRootExecutionAdmissionError("custody completion clock reversed during effects binding")
+            return completion, effects_digest
+        return completion
     authorization._fresh(request, material, now)
     return _ExecutionCandidate(held_operation, replayed.request, replayed.selected_rows,
         replayed.mutations, replayed.result, replayed.before_vector_bytes, replayed.after_vector_bytes,
@@ -301,3 +317,26 @@ def _admit_for_completion_on_work(*, operation, originals, expectations, planner
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
         historical_controls=True)
+
+
+def _admit_for_custody_completion_on_work(*, operation, originals, expectations, planner_public_key,
+        operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
+        reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
+        expected_pending_sequence, expected_pending_head_digest, expected_fence,
+        live_window, work, transport_deadline_ns=None):
+    """Return historical pending scope plus its genuinely replayed effects ID.
+
+    The independent scope/keys/history and genuine originals are mandatory.
+    Exactly one plan replay occurs; only (_PendingCompletion, effects_digest)
+    is returned, never executable selected rows, mutations or a result object.
+    """
+    return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+        reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
+        snapshot_bytes=snapshot_bytes, expected_database_id=expected_database_id,
+        expected_generation_digest=expected_generation_digest,
+        expected_pending_sequence=expected_pending_sequence,
+        expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+        live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
+        historical_controls=True, custody_effects=True)

@@ -3580,6 +3580,7 @@ def _seal_postgres_schema_acl(
     successor_functions = ({
         authority_contract.SUCCESSOR_ISSUER_ROLE: authority_contract.SUCCESSOR_ISSUE_FUNCTION,
         authority_contract.SUCCESSOR_EXECUTOR_ROLE: authority_contract.SUCCESSOR_EXECUTE_FUNCTION,
+        authority_contract.SUCCESSOR_RECOVERY_ROLE: authority_contract.SUCCESSOR_READ_FUNCTION,
     } if completion_enabled else {})
     if set(successor_functions) & {
         runtime_role, authority_executor_role, authority_verifier_role,
@@ -3777,6 +3778,7 @@ def _seal_postgres_schema_acl(
             "AND role_record.rolname <> %s "
             "AND role_record.rolname <> %s "
             "AND role_record.rolname <> %s "
+            "AND role_record.rolname <> %s "
             "AND role_record.rolname <> %s",
             (
                 schema,
@@ -3790,6 +3792,7 @@ def _seal_postgres_schema_acl(
                 completion_role,
                 authority_contract.SUCCESSOR_ISSUER_ROLE if completion_enabled else runtime_role,
                 authority_contract.SUCCESSOR_EXECUTOR_ROLE if completion_enabled else runtime_role,
+                authority_contract.SUCCESSOR_RECOVERY_ROLE if completion_enabled else runtime_role,
             ),
         ).fetchall()
         for unexpected_role in unexpected_roles:
@@ -4353,6 +4356,9 @@ def _seal_postgres_schema_acl(
             " OR (grantee.rolname = %s AND function_record.proname = %s "
             "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
             "AND grant_entry.privilege_type = 'EXECUTE' AND NOT grant_entry.is_grantable)"
+            " OR (grantee.rolname = %s AND function_record.proname = %s "
+            "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
+            "AND grant_entry.privilege_type = 'EXECUTE' AND NOT grant_entry.is_grantable)"
             "), FALSE) LIMIT 1",
             (
                 schema,
@@ -4366,6 +4372,8 @@ def _seal_postgres_schema_acl(
                 authority_contract.SUCCESSOR_ISSUE_FUNCTION if completion_enabled else "",
                 authority_contract.SUCCESSOR_EXECUTOR_ROLE if completion_enabled else "",
                 authority_contract.SUCCESSOR_EXECUTE_FUNCTION if completion_enabled else "",
+                authority_contract.SUCCESSOR_RECOVERY_ROLE if completion_enabled else "",
+                authority_contract.SUCCESSOR_READ_FUNCTION if completion_enabled else "",
             ),
         ).fetchone()
         wrong_owner = cur.execute(
@@ -7245,7 +7253,7 @@ def _record_policy_candidate_authority_migration(
 
 def _successor_installation_pins(kind: str) -> tuple[str, ...]:
     """Mandatory separately provisioned bootstrap pins; never legacy defaults."""
-    if kind not in ("ISSUER", "EXECUTOR"):
+    if kind not in ("ISSUER", "EXECUTOR", "RECOVERY"):
         raise PolicyCandidateAuthorityError("successor bootstrap role is not source fixed")
     prefix = "SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_" + kind + "_"
     suffixes = ("MEASUREMENT_SHA256", "ATTESTATION_RECEIPT_SHA256", "CREDENTIAL_ISSUANCE_SHA256",
@@ -7277,6 +7285,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
             )
         successor_issuer_pins = _successor_installation_pins("ISSUER")
         successor_executor_pins = _successor_installation_pins("EXECUTOR")
+        successor_recovery_pins = _successor_installation_pins("RECOVERY")
         for label, digest in (
             (
                 "policy-authority audit store identity",
@@ -19180,8 +19189,10 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
         conn.execute(_successor_execution_sql.successor_execution_functions_sql(
             guard_namespace, issuer_role=authority_contract.SUCCESSOR_ISSUER_ROLE,
             executor_role=authority_contract.SUCCESSOR_EXECUTOR_ROLE,
+            recovery_role=authority_contract.SUCCESSOR_RECOVERY_ROLE,
             owner_role=_METADATA_STORE_AUTHORITY_OWNER_ROLE,
-            issuer_pins=successor_issuer_pins, executor_pins=successor_executor_pins))
+            issuer_pins=successor_issuer_pins, executor_pins=successor_executor_pins,
+            recovery_pins=successor_recovery_pins))
         return
 
     _execute_metadata_schema_statements(
@@ -20700,6 +20711,10 @@ def _validate_policy_authority_owner_apply_function(
         "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
         "AND grant_entry.grantee = pg_catalog.to_regrole(%s)::pg_catalog.oid "
         "AND grant_entry.privilege_type = 'EXECUTE' AND NOT grant_entry.is_grantable)"
+        " OR (function_record.proname = %s "
+        "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
+        "AND grant_entry.grantee = pg_catalog.to_regrole(%s)::pg_catalog.oid "
+        "AND grant_entry.privilege_type = 'EXECUTE' AND NOT grant_entry.is_grantable)"
         "), FALSE) "
         "LIMIT 1",
         (
@@ -20727,6 +20742,8 @@ def _validate_policy_authority_owner_apply_function(
             authority_contract.SUCCESSOR_ISSUER_ROLE,
             authority_contract.SUCCESSOR_EXECUTE_FUNCTION,
             authority_contract.SUCCESSOR_EXECUTOR_ROLE,
+            authority_contract.SUCCESSOR_READ_FUNCTION,
+            authority_contract.SUCCESSOR_RECOVERY_ROLE,
         ),
     ).fetchone()
     login_owner_membership = cur.execute(

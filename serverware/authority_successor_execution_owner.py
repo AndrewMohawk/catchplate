@@ -14,6 +14,11 @@ the database. A failed/uncertain attempt is never automatically retried, even
 after restart: recovery requires that journal's independently current exact
 checkpoint. Its durability is not a hostile-host antirollback guarantee.
 
+The separate recovery reader has only one protected read function and no
+direct table access. Historical packet/control expiry is not a read denial or
+fresh execution grant: it returns exact originals under a new independently
+admitted live retrieval window for downstream genuine historical replay.
+
 Returned observations follow normal actual connection closure, but are not
 signed completion evidence. The independent read-only completion producer must
 still match the committed marker/full vector and original controls. Driver,
@@ -64,12 +69,15 @@ class SuccessorExecutionObservation:
 
 
 _SET_TRANSACTION = "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE"
+_READ_TRANSACTION = "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE"
 _SEARCH_PATH = "SET LOCAL search_path TO serverware_metadata, pg_catalog, pg_temp"
 _WAIT_TIMEOUTS = ("lock_timeout", "idle_in_transaction_session_timeout", "statement_timeout")
 _ISSUE_SQL = ("SELECT * FROM serverware_metadata."
     "serverware_policy_authority_issue_successor_execution(%s, %s)")
 _EXECUTE_SQL = ("SELECT serverware_metadata.serverware_policy_authority_execute_successor(%s, %s) "
     "AS marker_json")
+_READ_SQL = ("SELECT serverware_metadata.serverware_policy_authority_read_successor_execution(%s, %s) "
+    "AS packet_json")
 _ISSUE_FIELDS = frozenset({"pending_decision_digest", "packet_digest",
     "issued_at_epoch_ns", "expires_at_epoch_ns"})
 
@@ -91,11 +99,12 @@ def _window(live_window, inherited):
     return window, window[4] if inherited is None else min(window[4], inherited)
 
 
-def _identity(row, config):
+def _identity(row, config, *, recovery=False):
     authorization.shape._object(row, connection_owner._IDENTITY_FIELDS, "successor database identity")
     expected = {"role": config[2], "session_role": config[2], "client_dn": config[3],
         "client_serial": config[4], "issuer_dn": config[5], "transaction_isolation": "serializable",
-        "transaction_read_only": "off", "transaction_deferrable": "off"}
+        "transaction_read_only": "on" if recovery else "off",
+        "transaction_deferrable": "on" if recovery else "off"}
     if (type(row["server_version_num"]) is not int
             or not 160000 <= row["server_version_num"] < 170000
             or any(type(row[name]) is not str or row[name] != value for name, value in expected.items())
@@ -137,13 +146,16 @@ def _marker_on_work(value, pending_digest, work):
 def _run_on_configuration(config, *, purpose, parameters, expected, live_window, work,
         transport_deadline_ns=None):
     """Private fixed continuation; public owners cannot accept SQL or packets."""
-    role = authority.SUCCESSOR_ISSUER_ROLE if purpose == "issue" else authority.SUCCESSOR_EXECUTOR_ROLE
-    if purpose not in ("issue", "execute"):
+    if purpose not in ("issue", "execute", "read"):
         raise SuccessorExecutionOwnerError("successor database purpose is not source fixed")
+    role = (authority.SUCCESSOR_ISSUER_ROLE if purpose == "issue"
+        else authority.SUCCESSOR_EXECUTOR_ROLE if purpose == "execute"
+        else authority.SUCCESSOR_RECOVERY_ROLE)
+    recovery = purpose == "read"
     configured = _configuration(config, role)
     evidence.capture._SharedLedger(work)
     window, bound = _window(live_window, transport_deadline_ns)
-    expires = window[3] if purpose == "execute" else min(window[3], expected.expires_at_epoch_ns)
+    expires = min(window[3], expected.expires_at_epoch_ns) if purpose == "issue" else window[3]
     callback = evidence.production._callback
     last_epoch, last_monotonic = window[0], window[2]
 
@@ -185,7 +197,7 @@ def _run_on_configuration(config, *, purpose, parameters, expected, live_window,
                 if active_cursor is not cursor:
                     raise SuccessorExecutionOwnerError("successor cursor context replaced its actual handle")
                 remaining()
-                callback(work, lambda: cursor.execute(_SET_TRANSACTION))
+                callback(work, lambda: cursor.execute(_READ_TRANSACTION if recovery else _SET_TRANSACTION))
                 callback(work, connection_owner._require_connection, connection, physical, 2)
 
                 def active(call):
@@ -211,7 +223,7 @@ def _run_on_configuration(config, *, purpose, parameters, expected, live_window,
                         active(lambda name=name: cursor.execute("SET LOCAL " + name + " = " + str(milliseconds)))
 
                 waits()
-                _identity(one(connection_owner._IDENTITY_SQL), configured)
+                _identity(one(connection_owner._IDENTITY_SQL), configured, recovery=recovery)
                 if one(*successor_execution_privilege_check(role=role, namespace="serverware_metadata")) is not None:
                     raise SuccessorExecutionOwnerError("successor database role has unexpected effective privileges")
                 active(lambda: cursor.execute(_SEARCH_PATH))
@@ -240,11 +252,23 @@ def _run_on_configuration(config, *, purpose, parameters, expected, live_window,
                             raise SuccessorExecutionOwnerError("successor custody readback scalar type differs")
                         authorization.plan._same(row[field], value, work, "successor actual custody readback")
                     result = SuccessorCustodyObservation(**wanted)
-                else:
+                elif purpose == "execute":
                     row = one(_EXECUTE_SQL, parameters)
                     authorization.shape._object(row, frozenset({"marker_json"}), "successor execution response")
                     marker = _marker_on_work(row["marker_json"], parameters[0], work)
                     result = SuccessorExecutionObservation(parameters[0], parameters[1], marker)
+                else:
+                    row = one(_READ_SQL, parameters)
+                    authorization.shape._object(row, frozenset({"packet_json"}), "successor recovery response")
+                    original = row["packet_json"]
+                    if (type(original) is not str or not 2 <= len(original) <= packet.MAX_BYTES
+                            or not original.isascii()):
+                        raise SuccessorExecutionOwnerError("successor recovery original exceeds its byte bound")
+                    work.charge(input_bytes=len(original))
+                    result = original.encode("ascii")
+                    digest = vector.framing._frame(packet.IDENTITY_DOMAIN, (result,), work)
+                    authorization.plan._same(digest, parameters[1], work,
+                        "successor recovery original differs from the independent packet identity")
                 waits()
                 catalog()
                 remaining()
@@ -349,3 +373,51 @@ class SuccessorExecutionExecutor:
             live_window=window, work=work, transport_deadline_ns=bound)
         return _run_on_configuration(configured, purpose="execute", parameters=parameters,
             expected=None, live_window=window, work=work, transport_deadline_ns=bound)
+
+
+def _read_on_configuration(config, *, pending_decision_digest, packet_digest,
+        live_window, work, transport_deadline_ns=None):
+    """Fixed read continuation using configuration held before other callbacks."""
+    configured = _configuration(config, authority.SUCCESSOR_RECOVERY_ROLE)
+    evidence.capture._SharedLedger(work)
+    authorization.shape._digest(pending_decision_digest)
+    authorization.shape._digest(packet_digest)
+    parameters = pending_decision_digest, packet_digest
+    window, bound = _window(live_window, transport_deadline_ns)
+    for value in parameters:
+        work.prepare_utf8(value)
+    return _run_on_configuration(configured, purpose="read", parameters=parameters,
+        expected=None, live_window=window, work=work, transport_deadline_ns=bound)
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
+class SuccessorExecutionRecoveryReader:
+    """Process-bound historical originals reader, never execution authority.
+
+    The caller independently admits both selectors and the live retrieval
+    window. Returned packet originals still require genuine signature/proof
+    replay and a separately admitted current pending checkpoint.
+    """
+
+    _configuration: tuple
+    _pid: int
+
+    def __init__(self, *, dsn, connect_timeout_seconds, tls_client_dn, tls_client_serial,
+            tls_issuer_dn, query_manifest_digest, expected_structure_manifest_digest):
+        configured = _configuration((dsn, connect_timeout_seconds, authority.SUCCESSOR_RECOVERY_ROLE,
+            tls_client_dn, tls_client_serial, tls_issuer_dn, query_manifest_digest,
+            expected_structure_manifest_digest), authority.SUCCESSOR_RECOVERY_ROLE)
+        object.__setattr__(self, "_configuration", configured)
+        object.__setattr__(self, "_pid", os.getpid())
+
+    def _snapshot_configuration(self):
+        if type(self) is not SuccessorExecutionRecoveryReader or os.getpid() != self._pid:
+            raise SuccessorExecutionOwnerError("successor recovery requires its actual process-bound owner")
+        return _configuration(self._configuration, authority.SUCCESSOR_RECOVERY_ROLE)
+
+    def read(self, *, pending_decision_digest, packet_digest, live_window, work,
+            transport_deadline_ns=None):
+        configured = SuccessorExecutionRecoveryReader._snapshot_configuration(self)
+        return _read_on_configuration(configured, pending_decision_digest=pending_decision_digest,
+            packet_digest=packet_digest, live_window=live_window, work=work,
+            transport_deadline_ns=transport_deadline_ns)

@@ -1,9 +1,9 @@
 # Authority artifact identities
 
-Source revisions `.108` through `.110` separate file, policy and generation
-identities. The final-generation back-reference is removed; launch-manifest and
-attestation cycles remain. This is an implementation checkpoint, not a successful
-build, launch or production release.
+Source revisions `.108` through `.111` separate file, policy, generation and role
+identities. Direct final-generation and final-launch configuration pins are
+replaced by static commitments; attestation-linked cycles remain. This is an
+implementation checkpoint, not a successful build, launch or production release.
 
 ## Operation contract
 
@@ -38,12 +38,13 @@ to the complete source document, and derives the semantic digest. The artifact
 validator and stage-zero admission independently enforce the source and
 generation commitments. Neither identity substitutes for the other.
 
-The current closed contracts are `serverware.authorityArtifactBundle/v5`,
-`serverware.authorityGenerationStatement/v5`,
-`serverware.signedAuthorityArtifactPackage/v5`, and
-`serverware.unsignedAuthorityArtifactPackage/v5`. Revision `.108` introduced v3
+The current closed contracts are `serverware.authorityArtifactBundle/v6`,
+`serverware.authorityGenerationStatement/v6`,
+`serverware.signedAuthorityArtifactPackage/v6`, and
+`serverware.unsignedAuthorityArtifactPackage/v6`. Revision `.108` introduced v3
 for the operation contract; `.109` added configuration identities in v4; `.110`
-binds configuration v3 in v5 packages. Existing digest domains remain unchanged;
+binds configuration v3 in v5 packages; `.111` binds configuration v4 in v6 packages.
+Existing digest domains remain unchanged;
 each canonical body carries its schema version. Older packages are not admitted
 through a compatibility fallback.
 
@@ -66,11 +67,11 @@ Its files must belong to the raw inventory; package validation requires exact
 equality with the supported configuration references, not a caller-selected
 subset. Schema and role must match the source-defined pair.
 
-Launch context v3 carries these bindings from the independently verified
+Launch context v4 carries these bindings from the independently verified
 generation statement. Service and witness loaders separately verify the root
 signature, hash the original file bytes and compute the payload commitment,
 then require the exact role/schema/raw/payload tuple in that admitted context.
-The shared service mapper captures eight selected launch fields on its
+The shared service mapper captures nine selected launch fields on its
 existing work allowance; its semantic-membership scan now uses the owned
 binding graph. That consistency check does not independently admit a root,
 launch or configuration file.
@@ -84,7 +85,7 @@ authority. The real loaders perform signature and admission checks.
 
 ## Predeclared generation binding
 
-Service and witness configuration v3 bind `generationBindingDigest` rather than
+Service and witness configuration bind `generationBindingDigest` rather than
 embedding the final generation digest or statement. This is the domain-framed
 digest of a nine-field `serverware.authorityConfigurationGenerationBinding/v1`
 document: `schema`, `generationId`, `sequence`, `predecessorDigest`,
@@ -102,7 +103,7 @@ floor must also match.
 
 The launcher independently verifies the complete signed generation, artifact
 package and external high-water evidence, then derives `configurationBindingDigest`
-for its 22-field context v3. Runtime loaders compare the signed configuration's
+for its launch context. Runtime loaders compare the signed configuration's
 predeclared binding with this derived value, while preserving original-file and
 payload membership in the final generation. The binding is not a substitute for
 the final generation digest in requests, receipts, capabilities or journal state.
@@ -119,22 +120,61 @@ substituting today's source contract. This is only recomputation of already
 admitted history: current source pins, signed statements, journal lineage and
 generation admission remain separate requirements.
 
-## Remaining circular dependencies
+## Static role and runtime-closure commitments
 
-The direct configuration-to-final-generation edge is removed, but configuration
-v3 still cannot be constructed through a fully acyclic production sequence. These checks
-are deliberately still enforced:
+Configuration v4 removes `launchManifestDigests` and `runtimeClosureDigests`.
+The service instead signs `roleBindingDigests` and `roleRuntimeClosureDigests`,
+each containing exactly the five service roles. Witness configuration signs its
+own `roleBindingDigest`. None of these values depends on a final launch manifest.
+
+`role_binding_digest()` frames the full canonical 14-field artifact role entry
+under `serverware.authorityRoleBinding/v1`. This covers the raw role-file hash
+and path, role, UID/GID, process mode, entrypoint, listener, credential names,
+working directory, PATH, argv, environment allowlist and mutable-state policy.
+Factored role validation preserves all prior bounds and restrictions; bundle
+executable and raw-file closure checks remain separate and mandatory. A raw
+role-file checksum alone cannot substitute for this semantic commitment.
+
+`role_runtime_closure_digest()` frames an exact document under
+`serverware.policyAuthorityRoleRuntimeClosure/v1`: `schema`, `roleBindingDigest`
+and `packageVersions`. The version map is bounded to 4096 nonempty ASCII
+name/version pairs of at most 256 characters each. The generator derives measured
+role references before configuration reads, then checks all signed static pins
+against those actual references and configured package versions.
+
+Launch context v4 has 24 fields: it carries the full bounded, ordered
+`roleManifests` list and derived `roleBindingDigests`, alongside the unchanged
+raw `roleManifestDigests`. Witness validation recomputes the existing signed
+`roleSetDigest` from the full metadata, derives both role maps and joins them
+to the generation statement. Historical records require this same recomputation;
+a semantic map without its committed metadata is insufficient. Existing
+launch, transport and journal byte ceilings are not widened.
+
+Service startup joins all five role pins to the admitted generation and checks
+the static closure against the launch-admitted package map. The private mapper
+uses its original work allowance for an owned role-map scan and fixed five-pin
+comparison; it does not hash roles off-ledger or claim launch admission itself.
+
+Dynamic attestation remains distinct: it still checks `launchManifestDigest`
+against the actual active launch and computes `runtimeClosureDigest` using the
+existing `serverware.policyAuthorityRuntimeClosure/v2` framing of that final
+launch digest and admitted package versions. The static closure never replaces
+those runtime values. Root launch signature, complete artifact/package and
+credential admission, generation high-water, and active role checks remain.
+
+## Remaining attestation dependencies
+
+Direct generation and role-launch pins no longer force the static configuration
+to contain those final identities. The receipt back-reference remains enforced:
 
 ```text
-configuration --> final launch manifest --> artifact package --> configuration file
 configuration --> attestation receipt --> configuration payload digest
+                                     --> final launch/package/generation identities
 ```
 
-The witness still pins its final launch-manifest digest. Service configuration
-pins final role launch digests and runtime closures derived from those launch
-digests. The trusted-host attestation path also compares a configured receipt
-digest with a receipt that binds the configuration payload itself. The new
-generation binding does not erase these separate back-references.
+The trusted-host path compares a configured `attestationReceiptDigest` with a
+receipt that binds the configuration payload itself and final runtime identities.
+The role split does not make that receipt constructible or remove its verification.
 
 The next implementation must version and integrate an acyclic binding across
 static policy production, artifact verification, launch and runtime attestation.
@@ -145,7 +185,7 @@ Skipping membership checks, treating a caller-supplied digest as authority, or
 enrolling historical configuration from retained data is not a remedy. Durable
 caller recovery and historical resolution remain pending that admission work.
 
-Older launch-context and journal snapshots do not satisfy context v3. They need
+Older launch-context and journal snapshots do not satisfy context v4. They need
 an explicitly admitted migration before reuse; no automatic adoption is added.
 
 All implementation and integration must finish before the exact source freeze,

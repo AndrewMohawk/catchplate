@@ -269,9 +269,9 @@ class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
                 {name: generation[name] for name in _GENERATION_FIELDS})''')
         self.shape(assigned(shared, "_GENERATION_FIELDS"), '''("schema", "sequence", "digest",
             "predecessorDigest", "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings",
-            "configurationBindingDigest")''')
+            "configurationBindingDigest", "roleBindingDigests")''')
         bounded = call(prefix, "capability.shape._bounded_object")
-        self.shape(bounded, 'capability.shape._bounded_object(generation, 22, "issuer launch context")')
+        self.shape(bounded, 'capability.shape._bounded_object(generation, 24, "issuer launch context")')
         encoded = call(prefix, "_configuration_wire")
         self.shape(encoded, "_configuration_wire(owned, ledger)")
         committed = call(prefix, "capability.plan._frame")

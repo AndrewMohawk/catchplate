@@ -70,9 +70,9 @@ from serverware.authority_store.verifier_read_sql import (
 SOURCE_REVISION = (
     authority_contract.SOURCE_REVISION
 )
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v3"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v4"
 SIGNED_CONFIG_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v3"
+    "serverware.signedPolicyAuthorityServiceConfiguration/v4"
 )
 ATTESTATION_SCHEMA = (
     "serverware.policyAuthorityCredentialReleaseAttestation/v2"
@@ -1098,8 +1098,8 @@ class MeasuredConfiguration:
             "roles",
             "runtimeUid",
             "runtimeGid",
-            "launchManifestDigests",
-            "runtimeClosureDigests",
+            "roleBindingDigests",
+            "roleRuntimeClosureDigests",
             "packageVersions",
             "launchNonceDigest",
             "queryManifestDigest",
@@ -1234,7 +1234,7 @@ class MeasuredConfiguration:
         }
         if (
             generation.get("schema")
-                != "serverware.authorityGenerationLaunchContext/v3"
+                != "serverware.authorityGenerationLaunchContext/v4"
             or generation.get("sequence")
                 != self.payload.get("generationSequence")
             or generation.get("configurationBindingDigest")
@@ -1269,11 +1269,14 @@ class MeasuredConfiguration:
 
     def _verify_role_topology(self) -> None:
         roles = self.payload.get("roles")
-        launch_manifest_digests = self.payload.get(
-            "launchManifestDigests"
+        role_binding_digests = self.payload.get(
+            "roleBindingDigests"
         )
-        runtime_closure_digests = self.payload.get(
-            "runtimeClosureDigests"
+        role_runtime_closure_digests = self.payload.get(
+            "roleRuntimeClosureDigests"
+        )
+        admitted_role_bindings = authority_launch_guard.generation().get(
+            "roleBindingDigests"
         )
         credential_release_trust = self.payload.get(
             "credentialReleaseTrust"
@@ -1341,19 +1344,22 @@ class MeasuredConfiguration:
                 "authority role topology is not closed"
             )
         if (
-            not isinstance(launch_manifest_digests, dict)
-            or set(launch_manifest_digests) != set(PROCESS_MODES)
-            or not isinstance(runtime_closure_digests, dict)
-            or set(runtime_closure_digests) != set(PROCESS_MODES)
+            type(role_binding_digests) is not dict
+            or set(role_binding_digests) != set(PROCESS_MODES)
+            or type(role_runtime_closure_digests) is not dict
+            or set(role_runtime_closure_digests) != set(PROCESS_MODES)
+            or type(admitted_role_bindings) is not dict
+            or len(admitted_role_bindings) > 256
             or any(
                 _require_digest(
-                    launch_manifest_digests[role],
-                    f"{role} launch manifest digest",
-                ) != launch_manifest_digests[role]
+                    role_binding_digests[role],
+                    f"{role} semantic role binding digest",
+                ) != role_binding_digests[role]
                 or _require_digest(
-                    runtime_closure_digests[role],
-                    f"{role} runtime closure digest",
-                ) != runtime_closure_digests[role]
+                    role_runtime_closure_digests[role],
+                    f"{role} static runtime closure digest",
+                ) != role_runtime_closure_digests[role]
+                or admitted_role_bindings.get(role) != role_binding_digests[role]
                 for role in PROCESS_MODES
             )
         ):
@@ -1711,18 +1717,19 @@ class MeasuredConfiguration:
             )
 
     def _verify_runtime_closure(self) -> None:
+        from serverware.authority_artifact_spec import (
+            ArtifactContractError, role_runtime_closure_digest,
+        )
+
         packages = self.payload.get("packageVersions")
         measured_packages = dict(
             authority_launch_guard.package_versions()
         )
-        launch_manifest_digest = authority_launch_guard.require_active(
-            _launch_role
-        )
+        _require_digest(authority_launch_guard.require_active(_launch_role),
+            "authority active launch manifest digest")
         if (
             not isinstance(packages, dict)
             or packages != measured_packages
-            or self.payload["launchManifestDigests"].get(_launch_role)
-                != launch_manifest_digest
         ):
             raise AuthorityServiceError(
                 "authority runtime closure is not closed"
@@ -1738,13 +1745,14 @@ class MeasuredConfiguration:
                 raise AuthorityServiceError(
                     f"authority package closure changed: {distribution}"
                 )
-        closure_digest = _domain_digest(
-            "serverware.policyAuthorityRuntimeClosure/v2",
-            launch_manifest_digest.encode("ascii"),
-            _canonical(packages),
-        )
+        try:
+            closure_digest = role_runtime_closure_digest(
+                self.payload["roleBindingDigests"][_launch_role], measured_packages
+            )
+        except ArtifactContractError as exc:
+            raise AuthorityServiceError("authority static role runtime closure is invalid") from exc
         if closure_digest != self.payload[
-            "runtimeClosureDigests"
+            "roleRuntimeClosureDigests"
         ].get(_launch_role):
             raise AuthorityServiceError(
                 "authority runtime closure digest is invalid"
@@ -1766,6 +1774,16 @@ class MeasuredConfiguration:
         generation = dict(authority_launch_guard.generation())
         verified_package = (
             authority_launch_guard.verified_artifact_package()
+        )
+        launch_manifest_digest = _require_digest(
+            authority_launch_guard.require_active(role),
+            "authority attested launch manifest digest",
+        )
+        measured_packages = dict(authority_launch_guard.package_versions())
+        runtime_closure_digest = _domain_digest(
+            "serverware.policyAuthorityRuntimeClosure/v2",
+            launch_manifest_digest.encode("ascii"),
+            _canonical(measured_packages),
         )
         payload = (
             envelope.get("payload")
@@ -1811,10 +1829,11 @@ class MeasuredConfiguration:
             or payload.get("processMode") != PROCESS_MODES[role]
             or payload.get("configurationDigest") != self.digest
             or payload.get("sourceRevision") != SOURCE_REVISION
+            or measured_packages != self.payload["packageVersions"]
             or payload.get("launchManifestDigest")
-                != self.payload["launchManifestDigests"][role]
+                != launch_manifest_digest
             or payload.get("runtimeClosureDigest")
-                != self.payload["runtimeClosureDigests"][role]
+                != runtime_closure_digest
             or payload.get("operationManifestDigest")
                 != authority_contract.OPERATION_MANIFEST_DIGEST
             or payload.get("generationDigest")

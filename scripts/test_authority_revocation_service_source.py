@@ -197,11 +197,11 @@ class RevocationServiceSourceTests(unittest.TestCase):
             configuration_digest=configuration_digest, generation=generation, work=work)""")
         self.assertEqual(ast.literal_eval(assigned(module, "_GENERATION_FIELDS")),
             ("schema", "sequence", "digest", "predecessorDigest", "minimumRollbackSequence",
-             "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest"))
+             "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest", "roleBindingDigests"))
         self.assertEqual(ast.literal_eval(assigned(module, "MAX_CONFIGURATION_DIGESTS")), 4096)
         bounded = calls(prefix, "capability.shape._bounded_object")
         self.assertEqual(len(bounded), 1)
-        self.shape(bounded[0], 'capability.shape._bounded_object(generation, 22, "issuer launch context")')
+        self.shape(bounded[0], 'capability.shape._bounded_object(generation, 24, "issuer launch context")')
         self.shape(assigned(prefix, "owned"), "_ConfigurationCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)")
         self.shape(assigned(prefix, "launch"), """capability.capture._JSONCapture(ledger,
             maximum_bytes=authority.MAX_REQUEST_BYTES).visit({name: generation[name] for name in _GENERATION_FIELDS})""")
@@ -246,7 +246,7 @@ class RevocationServiceSourceTests(unittest.TestCase):
                 ("expected_generation_digest", 'launch["digest"]')):
             self.shape(options[name], value)
         generation = definition(module, "_generation_binding")
-        self.assertEqual(len(calls(generation, "work.prepare_scan")), 1)
+        self.assertEqual(len(calls(generation, "work.prepare_scan")), 2)
         self.assertFalse(calls(generation, "sorted"))
         self.assertFalse(calls(generation, "set"))
         self.assertIn("previous >= file_digest", ast.unparse(generation))

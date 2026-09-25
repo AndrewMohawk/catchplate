@@ -25,17 +25,19 @@ except ImportError:  # The contract fails closed when crypto is unavailable.
     Ed25519PublicKey = None
 
 
-ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v5"
-GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v5"
-SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v5"
-UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v5"
+ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v6"
+GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v6"
+SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v6"
+UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v6"
+ROLE_BINDING_DOMAIN = "serverware.authorityRoleBinding/v1"
+ROLE_RUNTIME_CLOSURE_SCHEMA = "serverware.policyAuthorityRoleRuntimeClosure/v1"
 CONFIGURATION_GENERATION_BINDING_SCHEMA = (
     "serverware.authorityConfigurationGenerationBinding/v1"
 )
 CONFIGURATION_PAYLOAD_SCHEMAS = MappingProxyType(
     {
-        "authority-service": "serverware.policyAuthorityServiceConfiguration/v3",
-        "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v3",
+        "authority-service": "serverware.policyAuthorityServiceConfiguration/v4",
+        "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v4",
     }
 )
 KEY_AUTHORIZATION_SCHEMA = "serverware.authorityKeyAuthorizations/v1"
@@ -1938,6 +1940,117 @@ def configuration_generation_binding_digest(generation: Mapping[str, Any]) -> st
     )
 
 
+def validate_role_reference(reference: object) -> None:
+    """Validate the complete static role entry, without admitting its bundle."""
+    role = _validate_digest_file_reference(
+        reference,
+        name="role manifest",
+        extra_keys={
+            "role", "runtimeUid", "runtimeGid", "processMode",
+            "entrypointPath", "listenerName", "credentialNames", "cwd",
+            "pathEntries", "argv", "environmentAllowlist", "mutableStateDescriptors",
+        },
+    )
+    _require_identifier(role["role"], name="role")
+    _require_int(role["runtimeUid"], name="role uid", minimum=1, maximum=2**32 - 2)
+    _require_int(role["runtimeGid"], name="role gid", minimum=1, maximum=2**32 - 2)
+    _require_identifier(role["processMode"], name="process mode")
+    _require_runtime_path(role["entrypointPath"], name="role entrypoint path")
+    _require_identifier(role["listenerName"], name="listener name")
+    _require_runtime_path(role["cwd"], name="role working directory")
+    path_entries = _require_list(
+        role["pathEntries"], name="role PATH entries", minimum=1, maximum=64,
+    )
+    for path_entry in path_entries:
+        _require_runtime_path(path_entry, name="role PATH entry")
+    if list(path_entries) != list(dict.fromkeys(path_entries)):
+        raise ArtifactContractError("role PATH entries are repeated")
+    argv = _require_list(role["argv"], name="role argv", minimum=1, maximum=256)
+    for argument in argv:
+        _require_ascii(argument, name="role argv value", maximum=4096)
+    environment_allowlist = _require_list(
+        role["environmentAllowlist"], name="role environment allowlist", maximum=256,
+    )
+    for environment_name in environment_allowlist:
+        _require_ascii(environment_name, name="role environment name", maximum=256)
+    if list(environment_allowlist) != sorted(set(environment_allowlist)):
+        raise ArtifactContractError("role environment allowlist is not sorted and unique")
+    mutable_state = _require_list(
+        role["mutableStateDescriptors"], name="role mutable-state descriptors", maximum=16,
+    )
+    for raw_state in mutable_state:
+        state = _require_mapping(
+            raw_state,
+            name="mutable-state descriptor policy",
+            keys={
+                "name", "runtimePath", "atomicRecordProtocol", "quotaBytes",
+                "singletonLeaseRequired", "networkAllowed",
+            },
+        )
+        _require_identifier(state["name"], name="mutable-state descriptor name")
+        _require_runtime_path(state["runtimePath"], name="mutable-state runtime path")
+        if state["atomicRecordProtocol"] not in ALLOWED_MUTABLE_STATE_PROTOCOLS:
+            raise ArtifactContractError("mutable-state atomic record protocol is not allowed")
+        _require_int(state["quotaBytes"], name="mutable-state quota", minimum=1, maximum=64 * 1024**3)
+        if state["singletonLeaseRequired"] is not True or state["networkAllowed"] is not False:
+            raise ArtifactContractError("mutable state requires singleton lease and no network")
+    _require_sorted_unique(
+        mutable_state, name="mutable-state descriptor policies", key=lambda entry: entry["name"],
+    )
+    if (role["role"] == "witness") != bool(mutable_state):
+        raise ArtifactContractError("only the witness role requires mutable state")
+    credential_names = _require_list(
+        role["credentialNames"], name="role credential names", maximum=256,
+    )
+    for credential_name in credential_names:
+        _require_identifier(credential_name, name="role credential name")
+    if list(credential_names) != sorted(set(credential_names)):
+        raise ArtifactContractError("role credential names are not sorted and unique")
+
+
+def role_binding_digest(reference: Mapping[str, Any]) -> str:
+    validate_role_reference(reference)
+    return domain_digest(ROLE_BINDING_DOMAIN, canonical_json_bytes(reference))
+
+
+def role_binding_digests(roles: object) -> dict[str, str]:
+    references = _require_list(
+        roles, name="role manifests", minimum=1, maximum=MAX_ROLE_MANIFESTS,
+    )
+    bindings = {}
+    previous_role = None
+    for reference in references:
+        validate_role_reference(reference)
+        role = reference["role"]
+        if previous_role is not None and role <= previous_role:
+            raise ArtifactContractError("role manifests are not sorted and unique")
+        bindings[role] = domain_digest(ROLE_BINDING_DOMAIN, canonical_json_bytes(reference))
+        previous_role = role
+    return bindings
+
+
+def role_runtime_closure_digest(role_digest: str, package_versions: object) -> str:
+    """Bind static role metadata and package versions, never a final launch."""
+    _require_digest(role_digest, name="role binding digest")
+    if type(package_versions) is not dict or not 1 <= len(package_versions) <= 4096:
+        raise ArtifactContractError("role package versions have an invalid item count")
+    packages = {}
+    for name, version in package_versions.items():
+        if type(name) is not str or type(version) is not str:
+            raise ArtifactContractError("role package names and versions must be exact strings")
+        _require_ascii(name, name="role package name", maximum=256)
+        _require_ascii(version, name="role package version", maximum=256)
+        packages[name] = version
+    return domain_digest(
+        ROLE_RUNTIME_CLOSURE_SCHEMA,
+        canonical_json_bytes({
+            "schema": ROLE_RUNTIME_CLOSURE_SCHEMA,
+            "roleBindingDigest": role_digest,
+            "packageVersions": packages,
+        }),
+    )
+
+
 def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
     value = _require_mapping(
         bundle,
@@ -2350,145 +2463,7 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
         maximum=MAX_ROLE_MANIFESTS,
     )
     for entry in roles:
-        role = _validate_digest_file_reference(
-            entry,
-            name="role manifest",
-            extra_keys={
-                "role",
-                "runtimeUid",
-                "runtimeGid",
-                "processMode",
-                "entrypointPath",
-                "listenerName",
-                "credentialNames",
-                "cwd",
-                "pathEntries",
-                "argv",
-                "environmentAllowlist",
-                "mutableStateDescriptors",
-            },
-        )
-        _require_identifier(role["role"], name="role")
-        _require_int(
-            role["runtimeUid"],
-            name="role uid",
-            minimum=1,
-            maximum=2**32 - 2,
-        )
-        _require_int(
-            role["runtimeGid"],
-            name="role gid",
-            minimum=1,
-            maximum=2**32 - 2,
-        )
-        _require_identifier(role["processMode"], name="process mode")
-        _require_runtime_path(
-            role["entrypointPath"], name="role entrypoint path"
-        )
-        _require_identifier(role["listenerName"], name="listener name")
-        _require_runtime_path(role["cwd"], name="role working directory")
-        path_entries = _require_list(
-            role["pathEntries"],
-            name="role PATH entries",
-            minimum=1,
-            maximum=64,
-        )
-        for path_entry in path_entries:
-            _require_runtime_path(path_entry, name="role PATH entry")
-        if list(path_entries) != list(dict.fromkeys(path_entries)):
-            raise ArtifactContractError("role PATH entries are repeated")
-        argv = _require_list(
-            role["argv"],
-            name="role argv",
-            minimum=1,
-            maximum=256,
-        )
-        for argument in argv:
-            _require_ascii(argument, name="role argv value", maximum=4096)
-        environment_allowlist = _require_list(
-            role["environmentAllowlist"],
-            name="role environment allowlist",
-            maximum=256,
-        )
-        for environment_name in environment_allowlist:
-            _require_ascii(
-                environment_name,
-                name="role environment name",
-                maximum=256,
-            )
-        if list(environment_allowlist) != sorted(
-            set(environment_allowlist)
-        ):
-            raise ArtifactContractError(
-                "role environment allowlist is not sorted and unique"
-            )
-        mutable_state = _require_list(
-            role["mutableStateDescriptors"],
-            name="role mutable-state descriptors",
-            maximum=16,
-        )
-        for raw_state in mutable_state:
-            state = _require_mapping(
-                raw_state,
-                name="mutable-state descriptor policy",
-                keys={
-                    "name",
-                    "runtimePath",
-                    "atomicRecordProtocol",
-                    "quotaBytes",
-                    "singletonLeaseRequired",
-                    "networkAllowed",
-                },
-            )
-            _require_identifier(
-                state["name"],
-                name="mutable-state descriptor name",
-            )
-            _require_runtime_path(
-                state["runtimePath"],
-                name="mutable-state runtime path",
-            )
-            if state["atomicRecordProtocol"] not in (
-                ALLOWED_MUTABLE_STATE_PROTOCOLS
-            ):
-                raise ArtifactContractError(
-                    "mutable-state atomic record protocol is not allowed"
-                )
-            _require_int(
-                state["quotaBytes"],
-                name="mutable-state quota",
-                minimum=1,
-                maximum=64 * 1024**3,
-            )
-            if (
-                state["singletonLeaseRequired"] is not True
-                or state["networkAllowed"] is not False
-            ):
-                raise ArtifactContractError(
-                    "mutable state requires singleton lease and no network"
-                )
-        _require_sorted_unique(
-            mutable_state,
-            name="mutable-state descriptor policies",
-            key=lambda entry: entry["name"],
-        )
-        if (role["role"] == "witness") != bool(mutable_state):
-            raise ArtifactContractError(
-                "only the witness role requires mutable state"
-            )
-        credential_names = _require_list(
-            role["credentialNames"],
-            name="role credential names",
-            maximum=256,
-        )
-        for credential_name in credential_names:
-            _require_identifier(
-                credential_name, name="role credential name"
-            )
-        if list(credential_names) != sorted(set(credential_names)):
-            raise ArtifactContractError(
-                "role credential names are not sorted and unique"
-            )
+        validate_role_reference(entry)
     _require_sorted_unique(
         roles, name="role manifests", key=lambda entry: entry["role"]
     )
@@ -3843,6 +3818,23 @@ CONFIGURATION_GENERATION_BINDING_JSON_SCHEMA = _closed_object_schema(
         "trustMode": {"enum": sorted(TRUST_MODES)},
     }
 )
+ROLE_RUNTIME_CLOSURE_JSON_SCHEMA = _closed_object_schema(
+    {
+        "schema": {"const": ROLE_RUNTIME_CLOSURE_SCHEMA},
+        "roleBindingDigest": SHA256_JSON_SCHEMA,
+        "packageVersions": {
+            "type": "object", "minProperties": 1, "maxProperties": 4096,
+            "propertyNames": {
+                "type": "string", "minLength": 1, "maxLength": 256,
+                "pattern": "^[\\u0000-\\u007f]+$",
+            },
+            "additionalProperties": {
+                "type": "string", "minLength": 1, "maxLength": 256,
+                "pattern": "^[\\u0000-\\u007f]+$",
+            },
+        },
+    }
+)
 ROOT_IDENTITY_JSON_SCHEMA = _closed_object_schema(
     {
         "runtimePath": TEXT_JSON_SCHEMA,
@@ -4603,6 +4595,8 @@ __all__ = [
     "GENERATION_STATEMENT_SCHEMA",
     "SIGNED_PACKAGE_SCHEMA",
     "UNSIGNED_PACKAGE_SCHEMA",
+    "ROLE_BINDING_DOMAIN",
+    "ROLE_RUNTIME_CLOSURE_SCHEMA",
     "CONFIGURATION_GENERATION_BINDING_SCHEMA",
     "CONFIGURATION_PAYLOAD_SCHEMAS",
     "KEY_AUTHORIZATION_SCHEMA",
@@ -4621,6 +4615,8 @@ __all__ = [
     "CONFIGURATION_GENERATION_BINDING_JSON_SCHEMA",
     "CONFIGURATION_REFERENCE_JSON_SCHEMA",
     "CONFIGURATION_PAYLOAD_BINDING_JSON_SCHEMA",
+    "ROLE_MANIFEST_REFERENCE_JSON_SCHEMA",
+    "ROLE_RUNTIME_CLOSURE_JSON_SCHEMA",
     "ARTIFACT_BUNDLE_JSON_SCHEMA",
     "GENERATION_STATEMENT_JSON_SCHEMA",
     "SIGNED_ARTIFACT_PACKAGE_JSON_SCHEMA",
@@ -4636,6 +4632,9 @@ __all__ = [
     "ed25519_public_key_from_seed",
     "generation_statement_digest",
     "package_signature_message",
+    "role_binding_digest",
+    "role_binding_digests",
+    "role_runtime_closure_digest",
     "signed_artifact_package_digest",
     "snapshot_receipt_digest",
     "strict_base64url_decode",
@@ -4643,6 +4642,7 @@ __all__ = [
     "validate_artifact_bundle",
     "validate_generation_statement",
     "validate_configuration_payload_bindings",
+    "validate_role_reference",
     "validate_closure_receipt",
     "validate_snapshot_receipt",
     "validate_signed_artifact_package",

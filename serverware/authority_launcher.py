@@ -13,6 +13,7 @@ import socket
 import stat
 import sys
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from types import ModuleType
@@ -24,7 +25,7 @@ LAUNCH_MANIFEST_SCHEMA = (
 )
 LAUNCH_PAYLOAD_SCHEMA = "serverware.policyAuthorityLaunchManifest/v4"
 GENERATION_CONTEXT_SCHEMA = (
-    "serverware.authorityGenerationLaunchContext/v3"
+    "serverware.authorityGenerationLaunchContext/v4"
 )
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 MAX_STAGE_ZERO_HANDOFF_BYTES = 1024 * 1024
@@ -1406,10 +1407,15 @@ def _validate_canonical_launch_evidence(
         raise LaunchError(
             "launch-certificate issuer authorization changed"
         )
+    role_manifests = deepcopy(bundle["roleManifests"])
     role_manifest_digests = {
         entry["role"]: entry["sha256"]
-        for entry in bundle["roleManifests"]
+        for entry in role_manifests
     }
+    role_binding_digests = _require_contract_callable(
+        artifact_contract,
+        "role_binding_digests",
+    )(role_manifests)
     generation_context = {
         "schema": GENERATION_CONTEXT_SCHEMA,
         "statement": generation,
@@ -1426,6 +1432,8 @@ def _validate_canonical_launch_evidence(
         "operationManifestDigest":
             verified_package.operation_manifest_digest,
         "roleManifestDigests": role_manifest_digests,
+        "roleManifests": role_manifests,
+        "roleBindingDigests": role_binding_digests,
         "configurationDigests":
             list(generation["configurationDigests"]),
         "configurationPayloadBindings": [

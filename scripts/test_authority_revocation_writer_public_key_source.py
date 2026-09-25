@@ -104,9 +104,9 @@ class RevocationWriterPublicKeySourceTests(unittest.TestCase):
         self.assertTrue(any(isinstance(node, ast.Compare)
             and ast.unparse(node) == "payload['sourceRevision'] != source_revision"
             for node in ast.walk(self.document)))
-        self.shape(assigned(self.service, "CONFIG_SCHEMA"), '"serverware.policyAuthorityServiceConfiguration/v3"')
+        self.shape(assigned(self.service, "CONFIG_SCHEMA"), '"serverware.policyAuthorityServiceConfiguration/v4"')
         self.shape(assigned(self.generator, "SERVICE_CONFIGURATION_PAYLOAD_SCHEMA"),
-            '"serverware.policyAuthorityServiceConfiguration/v3"')
+            '"serverware.policyAuthorityServiceConfiguration/v4"')
 
     def test_other_role_and_actual_launch_key_separation_remain_required(self):
         separated, = [node for node in self.topology.body if isinstance(node, ast.If)

@@ -36,12 +36,13 @@ import test_authority_revocation_issuance as issuance_oracle
 import test_authority_revocation_plan as oracle
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v3"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v3"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v4"
+GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
 VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 ISSUER_SESSION = "serverware.policyAuthorityCapabilityIssuerSession/v1"
 GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest", "minimumRollbackSequence",
-    "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest")
+    "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest", "roleBindingDigests")
+ROLE_NAMES = ("verifier", "planner", "planner-writer", "issuer", "executor")
 
 
 def raw_key(key):
@@ -57,6 +58,11 @@ def configuration_binding(digest):
     file_bytes = oracle.wire({"fixtureConfigurationDigest": digest})
     return {"fileDigest": oracle.sha(file_bytes), "payloadDigest": digest,
         "payloadSchema": CONFIG_SCHEMA, "role": "authority-service"}
+
+
+def fixture_role_pins(domain):
+    """Synthetic component pins, not admitted static roles or runtime closures."""
+    return {role: oracle.sha(domain + role.encode("ascii")) for role in sorted(ROLE_NAMES)}
 
 
 class ConfigurationFixture:
@@ -83,6 +89,8 @@ class ConfigurationFixture:
             "databaseConnectTimeoutSeconds": 2.5}
         self.payload = {"schema": CONFIG_SCHEMA, "sourceRevision": authority_contract.SOURCE_REVISION,
             "roles": roles, "generationSequence": 3,
+            "roleBindingDigests": fixture_role_pins(b"fixture static role:"),
+            "roleRuntimeClosureDigests": fixture_role_pins(b"fixture static closure:"),
             "generationBindingDigest": oracle.sha(b"configured generation intent"),
             "generationPredecessorDigest": oracle.sha(b"configured generation predecessor"),
             "generationMinimumRollbackSequence": 2,
@@ -95,7 +103,8 @@ class ConfigurationFixture:
         self.generation = {"schema": GENERATION_SCHEMA, "sequence": 3, "digest": cap.generation_digest,
             "predecessorDigest": self.payload["generationPredecessorDigest"], "minimumRollbackSequence": 2,
             "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST, "configurationPayloadBindings": [],
-            "configurationBindingDigest": self.payload["generationBindingDigest"]}
+            "configurationBindingDigest": self.payload["generationBindingDigest"],
+            "roleBindingDigests": {**self.payload["roleBindingDigests"], "witness": oracle.sha(b"fixture witness role")}}
         self.commit_payload()
         self.rebuild_originals()
 
@@ -158,10 +167,12 @@ def independent_configuration_work(fixture):
     launch = {name: generation[name] for name in GENERATION_FIELDS}
     joined = (generation["sequence"], generation["configurationBindingDigest"], generation["predecessorDigest"],
         generation["minimumRollbackSequence"], generation["operationManifestDigest"])
+    role_pins = tuple(payload["roleBindingDigests"][role] for role in ROLE_NAMES)
     phases = {"capture": add(graph(payload, 1, 1), graph(launch, 1, 1)),
         "commitment": add(graph(payload), oracle.frame_cost(CONFIG_SCHEMA, (oracle.wire(payload),)),
             same(fixture.digest, fixture.digest)),
-        "generation": add(same(joined, joined), graph(generation["configurationPayloadBindings"]))}
+        "generation": add(same(joined, joined), graph(generation["configurationPayloadBindings"]),
+            graph(generation["roleBindingDigests"]), same(role_pins, role_pins))}
     keys = []
     for role in (payload["roles"]["planner"], payload["roles"]["verifier"]):
         keys.extend((same(role["responseSigningSpkiDigest"], role["signingSpkiDigest"]),

@@ -38,9 +38,9 @@ from serverware import authority_witness_capacity as capacity
 from serverware.authority_witness_journal import JournalConflict, WitnessJournalIO
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityReplayWitnessConfiguration/v3"
+CONFIG_SCHEMA = "serverware.policyAuthorityReplayWitnessConfiguration/v4"
 SIGNED_CONFIG_SCHEMA = (
-    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v3"
+    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v4"
 )
 REQUEST_SCHEMA = "serverware.policyAuthorityReplayWitnessRequest/v2"
 WITNESS_RECEIPT_SCHEMA = (
@@ -50,7 +50,7 @@ WITNESS_STATE_RECORD_SCHEMA = (
     "serverware.policyAuthorityReplayWitnessStateRecord/v1"
 )
 GENERATION_CONTEXT_SCHEMA = (
-    "serverware.authorityGenerationLaunchContext/v3"
+    "serverware.authorityGenerationLaunchContext/v4"
 )
 LAUNCH_KEY_ID_DOMAIN = (
     "serverware.authorityLaunchPublicKey/v1"
@@ -324,6 +324,8 @@ def _validate_generation_value(
         "artifactBundleDigest",
         "operationManifestDigest",
         "roleManifestDigests",
+        "roleManifests",
+        "roleBindingDigests",
         "configurationDigests",
         "configurationPayloadBindings",
         "configurationBindingDigest",
@@ -351,6 +353,17 @@ def _validate_generation_value(
                 statement
             )
         )
+        role_manifests = generation["roleManifests"]
+        derived_role_bindings = authority_artifact_spec.role_binding_digests(
+            role_manifests
+        )
+        role_set_digest = authority_artifact_spec.domain_digest(
+            "serverware.authorityRoleSet/v1",
+            authority_artifact_spec.canonical_json_bytes(role_manifests),
+        )
+        derived_role_digests = {
+            role["role"]: role["sha256"] for role in role_manifests
+        }
     except authority_artifact_spec.ArtifactContractError as exc:
         raise WitnessError(
             "witness generation statement is invalid"
@@ -360,6 +373,7 @@ def _validate_generation_value(
     high_water = generation.get("externalHighWater")
     issuer = generation.get("launchIdentityIssuer")
     role_digests = generation.get("roleManifestDigests")
+    role_bindings = generation.get("roleBindingDigests")
     configuration_digests = generation.get("configurationDigests")
     try:
         valid_from = _parse_canonical_timestamp(
@@ -410,8 +424,13 @@ def _validate_generation_value(
             != statement["trustMode"]["mode"]
         or not isinstance(role_digests, dict)
         or sorted(role_digests) != list(role_digests)
+        or role_digests != derived_role_digests
         or sorted(role_digests.values())
             != statement["roleManifestDigests"]
+        or role_set_digest != statement["roleSetDigest"]
+        or not isinstance(role_bindings, dict)
+        or sorted(role_bindings) != list(role_bindings)
+        or role_bindings != derived_role_bindings
         or not isinstance(configuration_digests, list)
         or configuration_digests
             != sorted(set(configuration_digests))
@@ -593,6 +612,7 @@ def _public_key_digest(key: Ed25519PublicKey) -> str:
 
 
 def _load_configuration() -> tuple[dict[str, Any], str, dict[str, Any]]:
+    authority_launch_guard.require_active("witness")
     root_key = _load_public_key(
         _read_descriptor(
             "SERVERWARE_POLICY_AUTHORITY_WITNESS_ROOT_PUBLIC_KEY",
@@ -631,7 +651,7 @@ def _load_configuration() -> tuple[dict[str, Any], str, dict[str, Any]]:
     required = {
         "schema",
         "sourceRevision",
-        "launchManifestDigest",
+        "roleBindingDigest",
         "generationBindingDigest",
         "operationManifestDigest",
         "authorityConfigurationDigests",
@@ -670,8 +690,9 @@ def _load_configuration() -> tuple[dict[str, Any], str, dict[str, Any]]:
         or payload.get("schema") != CONFIG_SCHEMA
         or payload.get("sourceRevision")
         != authority_contract.SOURCE_REVISION
-        or payload.get("launchManifestDigest")
-        != authority_launch_guard.require_active("witness")
+        or not _is_digest(payload.get("roleBindingDigest"))
+        or payload.get("roleBindingDigest")
+            != launch_generation["roleBindingDigests"].get("witness")
         or not _is_digest(payload.get("generationBindingDigest"))
         or payload.get("generationBindingDigest")
             != launch_generation["configurationBindingDigest"]
@@ -865,10 +886,13 @@ class WitnessStateStore:
         self.generation = _validate_generation_value(
             generation, require_current_validity=True,
         )
-        if configuration.get("generationBindingDigest") != (
-            self.generation["configurationBindingDigest"]
+        if (
+            configuration.get("generationBindingDigest")
+            != self.generation["configurationBindingDigest"]
+            or configuration.get("roleBindingDigest")
+            != self.generation["roleBindingDigests"].get("witness")
         ):
-            raise WitnessError("witness configuration generation binding changed")
+            raise WitnessError("witness configuration launch bindings changed")
         self.verifier_key = Ed25519PublicKey.from_public_bytes(
             _b64url_decode(
                 configuration[

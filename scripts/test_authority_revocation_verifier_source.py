@@ -358,8 +358,8 @@ class RevocationVerifierSourceTests(unittest.TestCase):
         closure = definition(configuration, "_verify_runtime_closure")
         self.shape(call(closure, "authority_launch_guard.require_active"),
             "authority_launch_guard.require_active(_launch_role)")
-        self.assertIn("self.payload['launchManifestDigests'].get(_launch_role)", ast.unparse(closure))
-        self.assertIn("self.payload['runtimeClosureDigests'].get(_launch_role)", ast.unparse(closure))
+        self.assertIn("self.payload['roleBindingDigests'][_launch_role]", ast.unparse(closure))
+        self.assertIn("self.payload['roleRuntimeClosureDigests'].get(_launch_role)", ast.unparse(closure))
 
     def test_existing_dispatch_credentials_and_signer_roles_are_not_expanded(self):
         handle = definition(self.process, "handle")

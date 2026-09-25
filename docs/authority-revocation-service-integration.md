@@ -58,15 +58,19 @@ existing measured payload/digest and the actual launch-generation context to
 `_issuer_from_configuration_on_work`. Arbitrary dataclass or dictionary
 construction is not equivalent to this admission chain.
 
-The inert mapper owns the full payload and the eight launch bindings used by
+The inert mapper owns the full payload and the nine launch bindings used by
 measured configuration admission before key callbacks. It recomputes the
 canonical configuration commitment, requires semantic service membership in
-launch-context v3's sorted, file-unique `configurationPayloadBindings`, and
+launch-context v4's sorted, file-unique `configurationPayloadBindings`, and
 joins the predeclared generation binding, sequence, predecessor, rollback floor
 and operation manifest. The final generation digest comes separately from the
 admitted launch and remains the identity used for actual protocol operations. The
 actual loader separately checks the original file hash and its complete
 role/schema/raw/payload binding; the mapper is not file or root admission.
+The mapper additionally scans the owned admitted role map and compares the
+five configured semantic role pins on the same work allowance. Static role
+runtime closures are checked by the actual loader against admitted package
+versions; dynamic attestation continues to bind the real final launch.
 This successor requires a positive generation;
 the general service's generation-zero behavior is not changed.
 

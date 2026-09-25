@@ -33,6 +33,8 @@ from serverware.authority_artifact_spec import (
     configuration_payload_bindings,
     domain_digest,
     package_signature_message,
+    role_binding_digests,
+    role_runtime_closure_digest,
     snapshot_receipt_digest,
     strict_base64url_decode,
     strict_base64url_encode,
@@ -56,16 +58,16 @@ CLOSURE_SIGNATURE_DOMAIN = (
 )
 ROLE_SET_DIGEST_DOMAIN = "serverware.authorityRoleSet/v1"
 SERVICE_CONFIGURATION_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v3"
+    "serverware.signedPolicyAuthorityServiceConfiguration/v4"
 )
 SERVICE_CONFIGURATION_PAYLOAD_SCHEMA = (
-    "serverware.policyAuthorityServiceConfiguration/v3"
+    "serverware.policyAuthorityServiceConfiguration/v4"
 )
 WITNESS_CONFIGURATION_SCHEMA = (
-    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v3"
+    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v4"
 )
 WITNESS_CONFIGURATION_PAYLOAD_SCHEMA = (
-    "serverware.policyAuthorityReplayWitnessConfiguration/v3"
+    "serverware.policyAuthorityReplayWitnessConfiguration/v4"
 )
 SERVICE_CONFIGURATION_ROLES = frozenset(
     {"verifier", "planner", "planner-writer", "issuer", "executor"}
@@ -82,8 +84,8 @@ SERVICE_CONFIGURATION_FIELDS = frozenset(
         "roles",
         "runtimeUid",
         "runtimeGid",
-        "launchManifestDigests",
-        "runtimeClosureDigests",
+        "roleBindingDigests",
+        "roleRuntimeClosureDigests",
         "packageVersions",
         "launchNonceDigest",
         "queryManifestDigest",
@@ -161,7 +163,7 @@ WITNESS_CONFIGURATION_FIELDS = frozenset(
     {
         "schema",
         "sourceRevision",
-        "launchManifestDigest",
+        "roleBindingDigest",
         "generationBindingDigest",
         "operationManifestDigest",
         "authorityConfigurationDigests",
@@ -666,6 +668,7 @@ def _validate_configuration_document(
     source_revision: str,
     expected_generation_binding: Mapping[str, Any],
     expected_generation_binding_digest: str,
+    expected_role_bindings: Mapping[str, str],
 ) -> tuple[str | None, str | None]:
     role = reference["role"]
     if role not in {AUTHORITY_SERVICE_CONFIGURATION_ROLE, "witness"}:
@@ -722,6 +725,8 @@ def _validate_configuration_document(
         if (
             payload["operationManifestDigest"]
             != authority_contract.OPERATION_MANIFEST_DIGEST
+            or _digest(payload["roleBindingDigest"], name="witness role binding")
+                != expected_role_bindings.get("witness")
             or payload["socketPath"]
             != "/run/serverware/authority-witness/authority.sock"
             or payload["socketActivationName"]
@@ -754,7 +759,7 @@ def _validate_configuration_document(
             )
         ):
             raise GeneratorError(
-                "witness-v3 configuration topology is not exact"
+                "witness-v4 configuration topology is not exact"
             )
     else:
         if (
@@ -767,6 +772,24 @@ def _validate_configuration_document(
                 != expected_generation_binding["minimumRollbackSequence"]
         ):
             raise GeneratorError("authority service generation metadata changed")
+        role_bindings = _closed(
+            payload["roleBindingDigests"],
+            name="authority service role bindings",
+            keys=set(SERVICE_CONFIGURATION_ROLES),
+        )
+        role_closures = _closed(
+            payload["roleRuntimeClosureDigests"],
+            name="authority service static role closures",
+            keys=set(SERVICE_CONFIGURATION_ROLES),
+        )
+        for configured_role in sorted(SERVICE_CONFIGURATION_ROLES):
+            binding = _digest(role_bindings[configured_role], name="service role binding")
+            if (
+                binding != expected_role_bindings.get(configured_role)
+                or _digest(role_closures[configured_role], name="service static role closure")
+                != role_runtime_closure_digest(binding, payload["packageVersions"])
+            ):
+                raise GeneratorError("authority service static role binding changed")
         roles = payload["roles"]
         if (
             not isinstance(roles, Mapping)
@@ -1069,52 +1092,6 @@ def _build_bundle(
         _sorted_unique(
             schemas, name="schemas", key=lambda entry: entry["schemaId"]
         )
-        configurations = []
-        for entry in _bounded_list(
-            spec["configurations"],
-            name="configurations",
-            minimum=1,
-            maximum=4096,
-        ):
-            configuration = _digest_reference(
-                entry,
-                name="configuration",
-                keys={"name", "role"},
-                files=file_by_path,
-            )
-            payload_schema, payload_digest = _validate_configuration_document(
-                root_fd,
-                configuration,
-                file_by_path[configuration["path"]],
-                source_revision=spec["sourceRevision"],
-                expected_generation_binding=expected_generation_binding,
-                expected_generation_binding_digest=expected_generation_binding_digest,
-            )
-            configuration["payloadSchema"] = payload_schema
-            configuration["payloadDigest"] = payload_digest
-            configurations.append(configuration)
-        _sorted_unique(
-            configurations,
-            name="configurations",
-            key=lambda entry: (
-                entry["role"],
-                entry["name"],
-                entry["path"],
-            ),
-        )
-        configuration_counts = {
-            role: sum(
-                entry["role"] == role for entry in configurations
-            )
-            for role in (
-                AUTHORITY_SERVICE_CONFIGURATION_ROLE,
-                "witness",
-            )
-        }
-        if any(count != 1 for count in configuration_counts.values()):
-            raise GeneratorError(
-                "authority service and witness configurations are not unique"
-            )
         roles = [
             _digest_reference(
                 entry,
@@ -1146,6 +1123,54 @@ def _build_bundle(
             roles, name="role manifests", key=lambda entry: entry["role"]
         )
         _validate_required_role_manifests(roles)
+        expected_role_bindings = role_binding_digests(roles)
+        configurations = []
+        for entry in _bounded_list(
+            spec["configurations"],
+            name="configurations",
+            minimum=1,
+            maximum=4096,
+        ):
+            configuration = _digest_reference(
+                entry,
+                name="configuration",
+                keys={"name", "role"},
+                files=file_by_path,
+            )
+            payload_schema, payload_digest = _validate_configuration_document(
+                root_fd,
+                configuration,
+                file_by_path[configuration["path"]],
+                source_revision=spec["sourceRevision"],
+                expected_generation_binding=expected_generation_binding,
+                expected_generation_binding_digest=expected_generation_binding_digest,
+                expected_role_bindings=expected_role_bindings,
+            )
+            configuration["payloadSchema"] = payload_schema
+            configuration["payloadDigest"] = payload_digest
+            configurations.append(configuration)
+        _sorted_unique(
+            configurations,
+            name="configurations",
+            key=lambda entry: (
+                entry["role"],
+                entry["name"],
+                entry["path"],
+            ),
+        )
+        configuration_counts = {
+            role: sum(
+                entry["role"] == role for entry in configurations
+            )
+            for role in (
+                AUTHORITY_SERVICE_CONFIGURATION_ROLE,
+                "witness",
+            )
+        }
+        if any(count != 1 for count in configuration_counts.values()):
+            raise GeneratorError(
+                "authority service and witness configurations are not unique"
+            )
         operation_manifest = _digest_reference(
             spec["operationManifest"],
             name="operation manifest",

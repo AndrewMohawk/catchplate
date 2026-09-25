@@ -189,12 +189,18 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         shared = definition(config_tree, "_capture_configuration_on_work")
         self.shape(call(shared, "_generation_binding"), "_generation_binding(owned, launch, configuration_digest, work)")
         binding = definition(config_tree, "_generation_binding")
-        self.shape(call(binding, "capability.plan._same"), '''capability.plan._same(
+        comparisons = calls(binding, "capability.plan._same")
+        self.assertEqual(len(comparisons), 2)
+        self.shape(comparisons[0], '''capability.plan._same(
             (generation["sequence"], generation["configurationBindingDigest"], generation["predecessorDigest"],
              generation["minimumRollbackSequence"], generation["operationManifestDigest"]),
             (payload["generationSequence"], payload["generationBindingDigest"], payload["generationPredecessorDigest"],
              payload["generationMinimumRollbackSequence"], authority.OPERATION_MANIFEST_DIGEST), work,
             "issuer configuration differs from the active launch generation")''')
+        self.shape(comparisons[1], '''capability.plan._same(
+            tuple(role_pins[role] for role in _ROLE_NAMES),
+            tuple(launch_pins[role] for role in _ROLE_NAMES), work,
+            "issuer role bindings differ from the active launch generation")''')
         for function in (continuation, self.adapter):
             for forbidden in ("SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN", "self.role_config",
                     "self.signing_key", "_produce_revocation_observed_plan"):

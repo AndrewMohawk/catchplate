@@ -24,16 +24,18 @@ from serverware import authority_revocation_invocation as invocation
 from serverware import authority_revocation_issuance as configured
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v3"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v3"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v4"
+GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
 MAX_CONFIGURATION_DIGESTS = 4096
 _GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest",
     "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings",
-    "configurationBindingDigest")
+    "configurationBindingDigest", "roleBindingDigests")
+_ROLE_NAMES = ("verifier", "planner", "planner-writer", "issuer", "executor")
+_ROLE_FIELDS = frozenset(_ROLE_NAMES)
 _CONFIGURATION_BINDING_FIELDS = frozenset({"fileDigest", "payloadDigest", "payloadSchema", "role"})
 _CONFIGURATION_PAYLOAD_SCHEMAS = {
     "authority-service": CONFIG_SCHEMA,
-    "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v3",
+    "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v4",
 }
 _VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 _ISSUER_SESSION = "serverware.policyAuthorityCapabilityIssuerSession/v1"
@@ -152,10 +154,29 @@ def _generation_binding(payload, generation, configuration_digest, work):
         previous = file_digest
     if not present:
         raise RevocationConfigurationError("issuer configuration is not in the active launch generation")
+    role_pins = payload["roleBindingDigests"]
+    closure_pins = payload["roleRuntimeClosureDigests"]
+    launch_pins = generation["roleBindingDigests"]
+    shape._object(role_pins, _ROLE_FIELDS, "configured role bindings")
+    shape._object(closure_pins, _ROLE_FIELDS, "configured role runtime closures")
+    shape._bounded_object(launch_pins, 256, "launch role bindings")
+    work.prepare_scan(launch_pins)
+    for digest in launch_pins.values():
+        shape._digest(digest)
+    for role in _ROLE_NAMES:
+        shape._digest(role_pins[role])
+        shape._digest(closure_pins[role])
+        if role not in launch_pins:
+            raise RevocationConfigurationError("launch role binding is missing a configured authority role")
+    # These are semantic pins derived by the independently admitted package
+    # path, not final launch-manifest digests or hashes recomputed off-ledger.
+    capability.plan._same(tuple(role_pins[role] for role in _ROLE_NAMES),
+        tuple(launch_pins[role] for role in _ROLE_NAMES), work,
+        "issuer role bindings differ from the active launch generation")
 
 
 def _capture_configuration_on_work(*, payload, configuration_digest, generation, work):
-    """Own the actual configuration and eight launch bindings on existing work.
+    """Own the actual configuration and nine launch bindings on existing work.
 
     This shared consistency check is not root-key or launch admission. Its
     caller must supply the separately admitted configuration commitment and
@@ -166,8 +187,8 @@ def _capture_configuration_on_work(*, payload, configuration_digest, generation,
     if type(payload) is not dict or type(generation) is not dict:
         raise RevocationConfigurationError("issuer configuration requires exact local JSON objects")
     # Validate exact keys before fixed lookups can encounter a foreign
-    # string subclass. The real launch-context/v3 has twenty-two fields.
-    capability.shape._bounded_object(generation, 22, "issuer launch context")
+    # string subclass. The real launch-context/v4 has twenty-four fields.
+    capability.shape._bounded_object(generation, 24, "issuer launch context")
     owned = _ConfigurationCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
     launch = capability.capture._JSONCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(
         {name: generation[name] for name in _GENERATION_FIELDS})
@@ -183,7 +204,7 @@ def _capture_configuration_on_work(*, payload, configuration_digest, generation,
 def _issuer_from_configuration_on_work(*, payload, configuration_digest, generation, work):
     """Map an owned configuration on the existing remaining work allowance.
 
-    Only the eight bindings used from the actual twenty-two-field launch context
+    Only the nine bindings used from the actual twenty-four-field launch context
     are captured; its signed statement and provisioning bodies are not new
     proof inputs. The service's measured load and active guard supply admission.
     The single issuer age policy is the minimum of its measured internal age

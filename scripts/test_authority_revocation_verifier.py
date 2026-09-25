@@ -36,11 +36,11 @@ import test_authority_revocation_plan as oracle
 import test_authority_revocation_retention as record_oracle
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v3"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v3"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v4"
+GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
 VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest",
-    "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest")
+    "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest", "roleBindingDigests")
 IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")
 CONFIGURED_FIELDS = ("expectedPlannerIdentity", "expectedVerifierIdentity", "maximumAssertionAgeNs",
     "maximumPlanAgeNs", "maximumClockSkewNs")
@@ -69,6 +69,8 @@ class VerifierFixture:
         roles["planner"]["plannerSessionIdentityDigest"] = plan.identity["sessionIdentityDigest"]
         self.payload = {"schema": CONFIG_SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
             "roles": roles, "queryManifestDigest": oracle.source_manifest_digest(),
+            "roleBindingDigests": configuration_oracle.fixture_role_pins(b"fixture static role:"),
+            "roleRuntimeClosureDigests": configuration_oracle.fixture_role_pins(b"fixture static closure:"),
             "generationSequence": 3, "generationBindingDigest": oracle.sha(b"verifier generation intent"),
             "generationPredecessorDigest": oracle.sha(b"verifier predecessor"),
             "generationMinimumRollbackSequence": 2,
@@ -78,7 +80,8 @@ class VerifierFixture:
             "digest": oracle.sha(b"verifier generation"),
             "predecessorDigest": self.payload["generationPredecessorDigest"],
             "minimumRollbackSequence": 2, "operationManifestDigest": authority.OPERATION_MANIFEST_DIGEST,
-            "configurationPayloadBindings": [], "configurationBindingDigest": self.payload["generationBindingDigest"]}
+            "configurationPayloadBindings": [], "configurationBindingDigest": self.payload["generationBindingDigest"],
+            "roleBindingDigests": {**self.payload["roleBindingDigests"], "witness": oracle.sha(b"fixture witness role")}}
         self.commit_payload()
         self.rebuild_originals()
 
@@ -141,10 +144,12 @@ def independent_factory_work(fixture):
     launch = {name: generation[name] for name in GENERATION_FIELDS}
     joined = (generation["sequence"], generation["configurationBindingDigest"], generation["predecessorDigest"],
         generation["minimumRollbackSequence"], generation["operationManifestDigest"])
+    role_pins = tuple(payload["roleBindingDigests"][role] for role in configuration_oracle.ROLE_NAMES)
     phases = {"capture": add(graph(payload, 1, 1), graph(launch, 1, 1)),
         "commitment": add(graph(payload), oracle.frame_cost(CONFIG_SCHEMA, (oracle.wire(payload),)),
             same(fixture.digest, fixture.digest)),
-        "generation": add(same(joined, joined), graph(generation["configurationPayloadBindings"]))}
+        "generation": add(same(joined, joined), graph(generation["configurationPayloadBindings"]),
+            graph(generation["roleBindingDigests"]), same(role_pins, role_pins))}
     keys = [same(payload["queryManifestDigest"], oracle.source_manifest_digest())]
     for role in (payload["roles"]["planner"], payload["roles"]["verifier"]):
         keys.extend((same(role["responseSigningSpkiDigest"], role["signingSpkiDigest"]),

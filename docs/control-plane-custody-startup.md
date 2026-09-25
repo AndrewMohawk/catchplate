@@ -1,6 +1,6 @@
 # Cold control-plane custody startup
 
-Source `.119`; implementation only, unbuilt and unexecuted. This documents the
+Source `.127`; implementation only, unbuilt and unexecuted. This documents the
 trusted-host-local provisioning and descriptor handoff, not a Nitro/TEE storage
 or deployment guarantee. It supplies one actual caller client/journal owner;
 it does not provision the independent authority services or admit a public
@@ -8,10 +8,15 @@ business workflow.
 
 ## Provisioned inputs
 
-The root `authority_fd_entrypoint` uses two fixed locations:
+The root `authority_fd_entrypoint` uses two fixed custody locations:
 
 - Startup configuration: `/run/serverware/authority-trust/control-plane-custody.json`.
 - Journal directory: `/var/lib/serverware/control-plane-custody`.
+
+The separate [enrollment bootstrap](control-plane-enrollment-startup.md) is now
+also mandatory for that root entrypoint, including explicitly disabled enrollment.
+Its sealed bootstrap and optional private-key descriptors must already belong
+to the same exact root-signed inherited inventory.
 
 The configuration is a root-owned, single-link regular file, not group/world
 writable. It must be exact canonical ASCII JSON: sorted keys, compact separators,
@@ -73,7 +78,7 @@ variable. The root-signed runtime trust
 inventory must **already exactly include both retained descriptors**, together
 with the existing runtime-root and runtime-trust descriptors and any other
 independently admitted inherited descriptors. Delivery does not extend that
-signed inventory automatically.
+  signed inventory automatically.
 
 The cold client performs actual runtime-root signature, current
 configuration/source, process/identity, attestation and exact inherited-FD
@@ -87,6 +92,7 @@ supported workaround.
 ```text
 root FD delivery -> drop to UID/GID 65532 -> cold runner
     -> sealed config + actual runtime admission + journal lease/recovery
+    -> enrollment startup reuses the admitted root and original FD inventory
     -> application/server imports and database startup gates
     -> ASGI requires the existing shared owner -> serve
     -> close shared owner on startup failure or server exit
@@ -95,7 +101,10 @@ root FD delivery -> drop to UID/GID 65532 -> cold runner
 `control_plane_runner.main` initializes `control_plane_custody_startup` before
 importing the application/database configuration or HTTP runtime. Admission
 completes once and retains the real `ControlPlaneCustodyClient`, including its
-admitted runtime client and actual journal. ASGI startup calls `require_started`;
+admitted runtime client, actual root public key, immutable original FD inventory
+and journal. Enrollment initialization reuses those retained pins without
+re-running runtime admission after the journal opens its private handle.
+ASGI startup calls both owners' `require_started`;
 a legacy PID environment marker cannot replace this owner. Error paths and normal
 server return close it, preserving the original failure if cleanup also fails.
 

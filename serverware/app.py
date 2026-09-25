@@ -2696,10 +2696,12 @@ class KeyReleaseVerify(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     from serverware import control_plane_custody_startup
+    from serverware import control_plane_enrollment_startup
 
     # The legacy PID startup marker cannot stand in for a live custody owner.
     # Direct ASGI startup must not admit descriptors after the event loop opens.
     control_plane_custody_startup.require_started()
+    control_plane_enrollment_startup.require_started()
     if RELEASE_CHANNEL.strip().lower() not in {
         "dev",
         "development",
@@ -2715,6 +2717,7 @@ def startup() -> None:
     # original admitted receipt interval. Recheck the same cold owner before
     # starting workers; never reload or renew trust during application startup.
     control_plane_custody_startup.require_started()
+    control_plane_enrollment_startup.require_started()
     runtime.start_runtime_workers()
     runtime.start_audit_anchor_worker()
     runtime.start_decision_gate_ca_publisher()

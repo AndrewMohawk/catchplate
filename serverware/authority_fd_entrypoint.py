@@ -16,6 +16,12 @@ CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES = 16384
 CONTROL_PLANE_CUSTODY_DIRECTORY = "/var/lib/serverware/control-plane-custody"
 CONTROL_PLANE_CUSTODY_FD_MIN = 32
 CONTROL_PLANE_CUSTODY_FD_MAX = 1023
+CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME = "SERVERWARE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD"
+CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v1"
+CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v1"
+CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
+CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES = 4096
+CONTROL_PLANE_ENROLLMENT_KEY_NAME = "serverware-control-plane-enrollment-signing-key"
 TRUSTED_HOST_LOCAL_WITNESS_STATE_PATH = (
     "/var/lib/serverware/authority-witness"
 )
@@ -85,6 +91,10 @@ ROLE_SOURCES = {
         (
             CONTROL_PLANE_CUSTODY_CONFIG_NAME,
             "/run/serverware/authority-trust/control-plane-custody.json",
+        ),
+        (
+            CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME,
+            "/run/serverware/authority-trust/control-plane-enrollment.json",
         ),
     ),
     "runtime": (
@@ -364,12 +374,20 @@ def _open_source(
     *,
     expected_owner_uid: int,
     maximum_bytes: int = MAX_SOURCE_BYTES,
+    required_mode: int | None = None,
+    directory_fd: int | None = None,
 ) -> int:
     if type(maximum_bytes) is not int or not 1 <= maximum_bytes <= MAX_SOURCE_BYTES:
         raise RuntimeError("authority descriptor source bound is invalid")
+    if required_mode is not None and (type(required_mode) is not int or required_mode != 0o400):
+        raise RuntimeError("authority private source mode is not exact")
+    if directory_fd is not None and (type(directory_fd) is not int or directory_fd < 0):
+        raise RuntimeError("authority source parent descriptor is invalid")
     descriptor = os.open(
         path,
-        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+        | (os.O_NONBLOCK if required_mode is not None else 0),
+        dir_fd=directory_fd,
     )
     try:
         metadata_before = os.fstat(descriptor)
@@ -379,6 +397,9 @@ def _open_source(
             or metadata_before.st_uid != expected_owner_uid
             or metadata_before.st_nlink != 1
             or not 0 <= metadata_before.st_size <= maximum_bytes
+            or required_mode is not None and (
+                stat.S_IMODE(metadata_before.st_mode) != required_mode
+                or metadata_before.st_size < 1)
         ):
             raise RuntimeError("authority descriptor source is not trusted")
         value = _read_exact_source(descriptor, metadata_before.st_size)
@@ -397,14 +418,140 @@ def _open_source(
             raise RuntimeError(
                 "authority descriptor source changed while sealing"
             )
+        if required_mode is not None and _material_identity(metadata_before) != _material_identity(metadata_after):
+            raise RuntimeError("authority private source identity changed while sealing")
         return _seal_bytes(
             descriptor,
             name="serverware-authority-material",
             value=value,
             mode=stat.S_IMODE(metadata_before.st_mode),
         )
-    except Exception:
+    except BaseException:
         os.close(descriptor)
+        raise
+
+
+def _material_identity(metadata):
+    return (metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid,
+        metadata.st_gid, metadata.st_nlink, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+def _control_plane_enrollment_key_slot(descriptor: int) -> int | None:
+    """Project a delivery slot only; the child must verify root authorization."""
+    if type(descriptor) is not int or not 3 <= descriptor <= 1023:
+        raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
+    metadata = os.fstat(descriptor)
+    seals = (fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK
+        | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE)
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_nlink != 0
+            or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or not 2 <= metadata.st_size <= CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES
+            or fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & seals != seals):
+        raise RuntimeError("control-plane enrollment bootstrap is not bounded root-owned sealed material")
+    original = _read_exact_source(descriptor, metadata.st_size)
+    if _material_identity(os.fstat(descriptor)) != _material_identity(metadata):
+        raise RuntimeError("control-plane enrollment bootstrap changed while reading")
+    try:
+        value = json.loads(original)
+        if (type(value) is not dict or set(value) != {"schema", "payload", "signatureBase64Url"}
+                or value["schema"] != CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA):
+            raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
+        payload = value["payload"]
+        if (type(payload) is not dict or set(payload) != {"schema", "sourceRevision",
+                "configurationDigest", "configurationPayload", "generation",
+                "runtimeRoleIdentities", "issuerPrivateKeyFd"}
+                or payload["schema"] != CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA):
+            raise RuntimeError("control-plane enrollment bootstrap payload is not closed")
+        signature = value["signatureBase64Url"]
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        if (type(signature) is not str or len(signature) != 86
+                or any(character not in alphabet for character in signature)):
+            raise RuntimeError("control-plane enrollment bootstrap signature encoding is invalid")
+        revision = payload["sourceRevision"]
+        allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-"
+        if (type(revision) is not str or not 1 <= len(revision) <= 256
+                or not revision[0].isascii() or not revision[0].isalnum()
+                or any(character not in allowed for character in revision)):
+            raise RuntimeError("control-plane enrollment source revision is not a bounded ASCII token")
+        digest = payload["configurationDigest"]
+        if (type(digest) is not str or len(digest) != 71 or not digest.startswith("sha256:")
+                or any(character not in "0123456789abcdef" for character in digest[7:])):
+            raise RuntimeError("control-plane enrollment configuration identity is not canonical")
+        if any(type(payload[name]) is not dict
+                for name in ("configurationPayload", "generation", "runtimeRoleIdentities")):
+            raise RuntimeError("control-plane enrollment bootstrap graphs are not objects")
+        target = payload["issuerPrivateKeyFd"]
+        if target is not None and (type(target) is not int or not 32 <= target <= 1023):
+            raise RuntimeError("control-plane enrollment key descriptor is outside its exact range")
+        canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
+            separators=(",", ":"), sort_keys=True).encode("ascii")
+        if canonical != original:
+            raise RuntimeError("control-plane enrollment bootstrap is not original canonical JSON")
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
+        raise RuntimeError("control-plane enrollment bootstrap is invalid") from exc
+    return target
+
+
+def _open_control_plane_enrollment_key(bootstrap_descriptor: int, *,
+        occupied_descriptors: set[int]) -> int | None:
+    """Deliver original key bytes at one declared free slot, never authorize it.
+
+    The full original signed runtime inventory must already include bootstrap
+    and key. Root signature, policy/null correspondence and actual key admission
+    belong to the child; no inventory or key environment is synthesized here.
+    """
+    target = _control_plane_enrollment_key_slot(bootstrap_descriptor)
+    if target is None:
+        return None
+    if target in occupied_descriptors:
+        raise RuntimeError("control-plane enrollment key descriptor is already assigned")
+    owned: list[int] = []
+    try:
+        # This non-overwriting reservation also detects undeclared open FDs.
+        reserved = fcntl.fcntl(bootstrap_descriptor, fcntl.F_DUPFD_CLOEXEC, target)
+        owned.append(reserved)
+        if reserved != target:
+            raise RuntimeError("control-plane enrollment key descriptor is occupied")
+        reservation_identity = _material_identity(os.fstat(reserved))
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        parent = os.open("/", flags)
+        owned.append(parent)
+        for component in (None, "run", "secrets"):
+            if component is not None:
+                parent = os.open(component, flags, dir_fd=parent)
+                owned.append(parent)
+            metadata = os.fstat(parent)
+            if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0
+                    or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                raise RuntimeError("control-plane enrollment key ancestor is not root-owned nonwritable material")
+        key = _open_source(CONTROL_PLANE_ENROLLMENT_KEY_NAME, expected_owner_uid=0,
+            maximum_bytes=CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES,
+            required_mode=0o400, directory_fd=parent)
+        owned.append(key)
+        if _material_identity(os.fstat(reserved)) != reservation_identity:
+            # Do not close a slot which no longer belongs to our reservation.
+            owned.remove(reserved)
+            raise RuntimeError("control-plane enrollment key reservation changed")
+        owned.remove(reserved)
+        os.close(reserved)
+        retained = fcntl.fcntl(key, fcntl.F_DUPFD_CLOEXEC, target)
+        owned.append(retained)
+        if retained != target:
+            raise RuntimeError("control-plane enrollment reserved key slot changed")
+        os.set_inheritable(retained, True)
+        for descriptor in tuple(reversed(owned)):
+            if descriptor != retained:
+                owned.remove(descriptor)
+                os.close(descriptor)
+        owned.clear()
+        return retained
+    except BaseException:
+        for descriptor in reversed(owned):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         raise
 
 
@@ -1041,7 +1188,8 @@ def _normal_main(role: str) -> int:
                 None,
             )
     for name in tuple(environment):
-        if name.startswith("SERVERWARE_CONTROL_PLANE_CUSTODY_"):
+        if name.startswith(("SERVERWARE_CONTROL_PLANE_CUSTODY_",
+                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_")):
             environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
@@ -1054,12 +1202,16 @@ def _normal_main(role: str) -> int:
     descriptor_assignments: list[tuple[str, int]] = []
     launch_manifest_descriptor: int | None = None
     custody_configuration_descriptor: int | None = None
+    enrollment_bootstrap_descriptor: int | None = None
+    control_plane_source_limits = {
+        CONTROL_PLANE_CUSTODY_CONFIG_NAME: CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES,
+        CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME: CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES,
+    }
     try:
         for environment_name, path in ROLE_SOURCES[role]:
             descriptor = (
                 _open_source(path, expected_owner_uid=0,
-                    maximum_bytes=(CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES
-                        if environment_name == CONTROL_PLANE_CUSTODY_CONFIG_NAME else MAX_SOURCE_BYTES))
+                    maximum_bytes=control_plane_source_limits.get(environment_name, MAX_SOURCE_BYTES))
                 if role == "control-plane"
                 else _open_systemd_credential(
                     os.path.basename(path)
@@ -1070,6 +1222,8 @@ def _normal_main(role: str) -> int:
                 environment[environment_name] = str(descriptor)
                 if environment_name == CONTROL_PLANE_CUSTODY_CONFIG_NAME:
                     custody_configuration_descriptor = descriptor
+                elif environment_name == CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME:
+                    enrollment_bootstrap_descriptor = descriptor
             else:
                 descriptor_assignments.append(
                     (environment_name, descriptor)
@@ -1098,6 +1252,12 @@ def _normal_main(role: str) -> int:
             environment[CONTROL_PLANE_CUSTODY_CONFIG_NAME] = str(custody_configuration)
             descriptors.remove(custody_configuration_descriptor)
             os.close(custody_configuration_descriptor)
+            if enrollment_bootstrap_descriptor is None:
+                raise RuntimeError("control-plane enrollment bootstrap is unavailable")
+            enrollment_key = _open_control_plane_enrollment_key(
+                enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
+            if enrollment_key is not None:
+                descriptors.append(enrollment_key)
             environment["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
             _drop_identity(role)
             os.execve(

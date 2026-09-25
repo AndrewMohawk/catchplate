@@ -75,6 +75,8 @@ class _Binding:
     caller_gid: int
     attestation_interval: tuple[int, int]
     runtime_client: service.AuthorityRuntimeClient
+    runtime_root_public_key: service.Ed25519PublicKey
+    inherited_descriptors: tuple[int, ...]
 
 
 def _process(binding):
@@ -164,6 +166,16 @@ class ControlPlaneCustodyClient:
         configuration_digest = runtime.configuration_digest
         maximum_deadline_ns = runtime.maximum_deadline_ns
         caller_uid, caller_gid = runtime.control_plane_uid, runtime.control_plane_gid
+        runtime_root_public_key = runtime.runtime_root_public_key
+        inherited_descriptors = runtime.inherited_descriptors
+        if (not isinstance(runtime_root_public_key, service.Ed25519PublicKey)
+                or type(inherited_descriptors) is not tuple
+                or not inherited_descriptors
+                or any(type(value) is not int or value < 3
+                    for value in inherited_descriptors)
+                or tuple(sorted(set(inherited_descriptors))) != inherited_descriptors
+                or directory[0] not in inherited_descriptors):
+            raise CustodyClientError("admitted runtime root or inherited inventory is unavailable")
         attestation = runtime.attestation_evidence
         if type(attestation) is not dict or type(attestation.get("payload")) is not dict:
             raise CustodyClientError("admitted runtime attestation payload is unavailable")
@@ -188,7 +200,7 @@ class ControlPlaneCustodyClient:
             client = object.__new__(ControlPlaneCustodyClient)
             client._binding = _Binding(owned_journal, pid, relay_path, relay_uid,
                 relay_gid, configuration_digest, maximum_deadline_ns, caller_uid, caller_gid,
-                attestation_interval, runtime)
+                attestation_interval, runtime, runtime_root_public_key, inherited_descriptors)
             client._closed = False
             _receipt_now(_snapshot(client))
             return client

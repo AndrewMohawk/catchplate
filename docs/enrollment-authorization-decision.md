@@ -1,6 +1,6 @@
 # Decision: dedicated control-plane enrollment authorization
 
-Accepted by the user on 2026-09-25. Source checkpoint `.126`; implementation
+Accepted by the user on 2026-09-25. Source checkpoint `.127`; implementation
 only, unbuilt and unexecuted. Reasonable architecture choices within the agreed
 scope will be made and recorded for later review. This does not authorize new
 external access, production provisioning or bypassing release gates.
@@ -26,8 +26,8 @@ The signed configuration independently pins its identity/key and the evidence
 recipient. Possession of an arbitrary private key cannot enroll an issuer.
 The policy validator checks separation from the keys present in the authority
 configuration. The control plane's separate HTTP-response key is outside that
-inventory; cold issuer provisioning must additionally compare its actual SPKI
-and reject reuse. That provisioning check is not implemented by this mapper.
+inventory; the new cold issuer owner compares its actual SPKI and rejects reuse
+or later key/path drift. The policy mapper alone does not perform that check.
 
 ## Implemented source flow
 
@@ -45,7 +45,9 @@ signed verifier/planner source exchange      -> real attestation/evidence signin
 issuer and recipient from the admitted configuration and signs through the
 fixed grant producer. Its caller must already have performed the actual
 control-plane authentication; a raw identity dictionary is not a proof of that.
-Cold key delivery and public-route orchestration remain unfinished.
+Protected cold key delivery and the fixed private issuer owner are implemented
+in [enrollment startup](control-plane-enrollment-startup.md). Public-route
+orchestration and actual independent signer transport remain unfinished.
 
 The closed `webauthnEnrollmentAuthorization` configuration extension is optional
 but mandatory for this signing path. Absent/null grants no enrollment authority.
@@ -98,9 +100,10 @@ admission; this module does not claim to supply that infrastructure.
 
 ## Remaining integration
 
-- Provision the dedicated issuer key through protected cold-start delivery and
-  enroll its public policy; compare the actual control-plane response key and
-  reject reuse, with no generic response-key fallback.
+- Independently provision the dedicated issuer key, signed bootstrap and public
+  policy for the implemented cold-start delivery. Enroll the optional key mount
+  in the immutable deployment/readiness closure. No key or service is provisioned
+  by this source change, and there is no generic response-key fallback.
 - Connect the existing authenticated operator/OIDC finish handlers to the issuer,
   authenticated signer transport, custody and successor orchestration. Current
   public handlers still perform legacy finalization.

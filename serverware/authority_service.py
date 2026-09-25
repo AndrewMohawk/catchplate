@@ -2608,6 +2608,8 @@ class AuthorityRuntimeClient:
         verifier_gid: int,
         control_plane_uid: int,
         control_plane_gid: int,
+        runtime_root_public_key: Ed25519PublicKey | None = None,
+        inherited_descriptors: tuple[int, ...] = (),
     ) -> None:
         self.socket_path = socket_path
         self.timeout_seconds = timeout_seconds
@@ -2627,6 +2629,10 @@ class AuthorityRuntimeClient:
         self.verifier_gid = verifier_gid
         self.control_plane_uid = control_plane_uid
         self.control_plane_gid = control_plane_gid
+        # These are retained only by the genuine environment admission path.
+        # They do not make a directly constructed client an admitted owner.
+        self.runtime_root_public_key = runtime_root_public_key
+        self.inherited_descriptors = inherited_descriptors
 
     @classmethod
     def from_environment(
@@ -2905,6 +2911,8 @@ class AuthorityRuntimeClient:
             verifier_gid=int(payload["verifierServiceGid"]),
             control_plane_uid=int(payload["controlPlaneUid"]),
             control_plane_gid=int(payload["controlPlaneGid"]),
+            runtime_root_public_key=root_key,
+            inherited_descriptors=tuple(sorted(allowed_descriptors)),
         )
 
     def request(

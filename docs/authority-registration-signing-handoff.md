@@ -1,9 +1,15 @@
 # Registration source-to-signer handoff
 
-Source-only `.126` implementation; unbuilt and unexecuted. The independent
+Source-only `.127` implementation; unbuilt and unexecuted. The independent
 registration signer consumes the four original source-exchange byte strings
 and a dedicated signed enrollment grant. It durably consumes one grant attempt
 before evidence signing. Public enrollment orchestration is still unfinished.
+
+The [cold issuer owner](control-plane-enrollment-startup.md) now binds protected
+key delivery to the actual runtime root and original descriptor inventory,
+including real HTTP-response key separation. Its private issuance API is ready
+for authenticated application orchestration; no public route or independent
+signer transport is connected by that startup work.
 
 ```text
 implemented source branch:

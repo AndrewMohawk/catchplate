@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.126`, implementation only. All six WebAuthn successor operations
+Status: source `.127`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -107,8 +107,11 @@ Source `.126` implements the selected
 closed purpose policy, signed original browser/user/session grant, genuine
 configured verification and a durable one-attempt marker before evidence
 signing. The source loader now admits the registered planning inventory without
-widening legacy execution. Public orchestration, protected issuer provisioning
-and independent replay-state continuity/capacity management remain unfinished.
+widening legacy execution. Source `.127` adds protected issuer delivery and
+[cold startup](control-plane-enrollment-startup.md), using the admitted runtime
+root, exact inherited descriptors and actual HTTP-response key separation.
+Public orchestration, deployed provisioning and independent replay-state
+continuity/capacity management remain unfinished.
 
 Deployed caller provisioning, public preparation/invocation and business
 successor execution remain unfinished, as do independent evidence production,

@@ -1,6 +1,6 @@
 # Private WebAuthn custody preparation
 
-Source `.124`; implementation only, unbuilt and unexecuted. The actual verifier
+Source `.125`; implementation only, unbuilt and unexecuted. The actual verifier
 now composes live planning, historical-observation admission, retain-intent
 signing and planner-relay preparation. It returns exact originals for the caller
 journal. It does not expose a public endpoint or contact the custody writer.
@@ -65,6 +65,14 @@ that binds its own root observations to authenticated planner acquisition and
 genuine returned-proof replay. Its raw-four result is request control/context,
 response control and source observations. This is upstream source data, not the
 raw-six custody tuple, an original evidence signature or enrollment permission.
+
+The [dedicated signing continuation](authority-registration-signing-handoff.md)
+now consumes and authenticates that raw-four exchange itself before deriving
+source selectors/roots and calling the real evidence producer. It does not
+accept a successful-proof carrier or replace the original evaluation time.
+The enrollment trust contract remains undecided; public integration and signer
+provisioning remain unfinished. Source-control expiry and evidence-envelope
+lifetime stay separate, without renewal or implicit clipping.
 
 ## Live origin of historical expectations
 

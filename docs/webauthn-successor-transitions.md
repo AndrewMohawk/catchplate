@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.124`, implementation only. All six WebAuthn successor operations
+Status: source `.125`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -93,6 +93,15 @@ bytes after genuine replay. The receiving verifier authenticates before decoding
 and repeats source membership, query and cutoff checks. The fixed private peer
 route preserves request expiry and returns all four original byte strings, not
 an evidence signature, enrolled root, business grant or custody receipt.
+
+Source `.125` connects those original bytes to the
+[dedicated registration evidence signer](authority-registration-signing-handoff.md).
+The fixed continuation authenticates both controls before source decode, replays
+memberships/query/cutoff checks and derives the signer inputs from that exchange.
+The original evaluation time and separate source/evidence lifetimes remain
+unchanged. The missing actor/session enrollment trust contract still requires a
+choice between dedicated control-plane authorization and independent signer
+validation; neither generic response keys nor source-role keys are reused.
 
 Deployed caller provisioning, public preparation/invocation and business
 successor execution remain unfinished, as do independent evidence production,

@@ -78,6 +78,11 @@ The separate [original-evidence signing composition](authority-original-evidence
 still requires its own signer and independently admitted enrollment, prior
 publication and original ceremony inputs.
 
+The later [source-to-signer handoff](authority-registration-signing-handoff.md)
+now authenticates these original controls and replays the source proofs inside
+the dedicated signing continuation. It does not supply the still-unselected
+actor/session enrollment authority or connect public registration routes.
+
 No credential mutation, custody write, root reservation, new clock authority,
 signer provisioning or public business route is added. A root observation can
 become stale; signed source bytes do not prevent concurrent changes or authorize

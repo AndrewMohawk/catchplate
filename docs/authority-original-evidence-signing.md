@@ -13,6 +13,11 @@ existing verifier/planner peer boundary. It preserves the original request,
 response and source proofs for independent authentication/replay, not as a
 transferable successful result or an evidence-signing grant.
 
+The later [source-to-signer handoff](authority-registration-signing-handoff.md)
+consumes that original exchange directly in the dedicated signing continuation;
+source controls are authenticated before returned rows are decoded. Enrollment
+authority and independent signer provisioning remain unfinished.
+
 ## Registration: source proofs before an envelope exists
 
 `authority_webauthn_registration_signing._produce_from_source_proofs_on_configuration`

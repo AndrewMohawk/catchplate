@@ -2,7 +2,10 @@
 
 Source `.136` implements a fixed read-only completion continuation. It has not
 been built, tested, imported or run and is not a provisioned completion service
-or production approval. It does not install or enable successor SQL execution.
+or production approval. Source `.139` separately adds [protected successor
+custody and execution](authority-successor-execution.md), with actual owners,
+catalog checks, durable attempts and fixed-function source installation; this
+does not establish deployed execution or public activation.
 
 The path is:
 
@@ -108,11 +111,13 @@ driver/native-call watchdog. A late failure does not renew the window. Missing
 markers, changed roots, timeouts and transport errors do not prove noncommit,
 clear pending state or authorize retry/re-execution.
 
-The protected SQL issuer/capability-custody bridge, source-exact function and
-trigger installation, actual writer/outer-commit owner and public finalization
-remain unimplemented. Cold completion-key/configuration custody, trusted
+The `.139` source bridge now supplies protected packet custody, fixed SQL
+installation and actual outer-commit owners over maintained writes/markers,
+with independent catalog pins and pre-database attempt custody. Public
+finalization and deployment remain unfinished. Cold completion-key/configuration custody, trusted
 measurement, independent current checkpoint/root provenance, provisioned roles
-and infrastructure, and end-to-end uncertainty orchestration are still required.
+and infrastructure, authenticated custody recovery and end-to-end uncertainty
+orchestration are still required.
 The consolidated frozen build/verification phase remains outstanding. See
-[successor execution](authority-successor-execution.md) for the unchanged
-execution gate.
+[successor execution](authority-successor-execution.md) for the source bridge
+and remaining activation boundaries.

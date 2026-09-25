@@ -1,12 +1,18 @@
 # Current-root decisions and trust boundaries
 
 These are the `.133` current-root decisions with `.134` computation/storage,
-`.136` read-only completion and `.138` signed lookup/reconciliation, separate
+`.136` read-only completion, `.138` signed lookup/reconciliation and `.139`
+protected successor custody/execution, separate
 from the existing replay-witness protocol. This is source-only work, not an
 executed or provisioned authority, production approval or successor-execution
 permission. See the
 [integration boundary](authority-current-root-witness-integration.md) for the
 remaining database and executor work.
+
+The [.139 execution integration](authority-successor-execution.md) adds actual
+issuer/executor owners, source-installed fixed SQL functions, full catalog
+checks and a durable pre-database attempt journal. This is source integration,
+not deployed execution, public activation or completed verification.
 
 ## Independent enrollment, distinct authorities
 
@@ -140,10 +146,11 @@ provisioning, deployment, native/TEE guarantee or independent latest-head servic
 is supplied by this source slice. The existing replay-witness purposes and
 legacy operation gates are not widened.
 
-Successor SQL execution still needs protected integration of actual fenced
-decision/capability admission, same-transaction marker insertion and maintained
-complete roots. The marker schema is immutable framework storage with executor
-SELECT only and no insert function. The `.136` completion reader has a separate
+Source `.139` connects genuine original grant/pending/plan admission to immutable
+protected custody and identifier-only SQL execution with maintained complete
+roots and same-transaction marker insertion. Dedicated roles have no direct
+table DML; legacy executor rights and operation gates are unchanged. The `.136`
+completion reader has a separate
 fixed role with SELECT on only the marker, primary roots and counted heads; its
 actual postcommit producer does not supply cold configuration/key custody or
 independent latest-head authority. Separate durable delivery and signed lookup
@@ -151,6 +158,6 @@ now exist as source, but cold activation and expired-unaccepted recovery remain
 unimplemented.
 Every application writer must participate or be excluded. Registration evidence
 custody and signed planning remain distinct from inserting the business evidence
-row or finalizing a credential. This source-only work has not been built, tested,
-imported or run;
-no startup or SQL execution is claimed.
+row or finalizing a credential through deployed public orchestration. This
+source-only work has not been built, tested, imported or run; no running startup
+or observed SQL execution is claimed.

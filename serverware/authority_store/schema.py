@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_contract
 from serverware.authority_store import counted_installation
 from serverware.authority_store.completion_read_sql import COMPLETION_READ_PRIVILEGE_SQL_DIGEST
+from serverware.authority_store.successor_execution_privileges import SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store import metadata_schema_source
 from serverware.authority_store import postgres_trigger_manifest
 from serverware.authority_store import v9_schema_source
@@ -196,6 +197,12 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "webauthnEvidenceRetention": dict(authority_contract.WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
             "webauthnTransitionRetention": dict(authority_contract.WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
             "currentRootCommitMarker": dict(authority_contract.CURRENT_ROOT_COMMIT_MARKER_CONTRACT),
+            "successorExecutionCustody": dict(authority_contract.SUCCESSOR_EXECUTION_CUSTODY_CONTRACT),
+            "successorExecutionPrivilegeSqlDigest": SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST,
+            "successorExecutionFunctionSignatures": {
+                name: list(arguments)
+                for name, arguments in authority_contract.SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES.items()
+            },
             "revocationWriterRequestCustody": dict(authority_contract.REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT),
             "revocationWriterAckCustody": dict(authority_contract.REVOCATION_WRITER_ACK_CUSTODY_CONTRACT),
             "revocationCapabilityCustody": dict(authority_contract.REVOCATION_CAPABILITY_CUSTODY_CONTRACT),
@@ -1284,6 +1291,7 @@ def _policy_candidate_authority_required_guard_names(
                               "serverware_webauthn_evidence_retained_sqlite_insert_guard",
                               "serverware_webauthn_transition_retained_sqlite_insert_guard",
                               "serverware_current_root_marker_sqlite_insert_guard",
+                              "serverware_successor_custody_sqlite_insert_guard",
                               "serverware_capability_retention_insert_guard",
                               "serverware_capability_sidecar_sqlite_insert_guard"})
     for table in (
@@ -1371,6 +1379,7 @@ def _policy_candidate_authority_required_guard_names(
                 "serverware_metadata_storage_epoch_guard",
                 *_POLICY_AUTHORITY_EXECUTOR_FUNCTIONS,
                 *_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS,
+                *authority_contract.SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES,
             }
         )
         overlong = sorted(
@@ -1566,6 +1575,11 @@ def _validate_policy_candidate_authority_structure(
         raise PolicyCandidateAuthorityError(
             "current-root commit marker columns are not source exact"
         )
+    custody_columns = table_manifests[authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE]["columns"]
+    if (tuple(column["name"] for column in custody_columns)
+            != authority_contract.SUCCESSOR_EXECUTION_CUSTODY_COLUMNS
+            or any(column["nullable"] for column in custody_columns)):
+        raise PolicyCandidateAuthorityError("successor execution custody columns are not source exact")
     for table in (
         _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
         + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES

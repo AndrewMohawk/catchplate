@@ -6,10 +6,13 @@ delta compatibility, dedicated signed enrollment/controls and a durable local
 one-pending decision owner. Source `.134` adds genuine six-operation plan replay,
 computation reserve production, full SQL observation/configured read ownership
 and protected marker schema ([details](authority-current-root-computation.md)).
-These do not supply an
-independently admitted cold startup, latest-head service, listener or successor
-SQL execution. Existing replay-witness purposes remain unchanged. Source
-components and authored fixtures are unbuilt and unexecuted.
+Source `.139` adds [protected successor custody/execution](authority-successor-execution.md),
+including actual transaction owners, independent before/after catalog checks,
+durable pre-database attempts and fixed SQL source installation. These do not
+supply independently admitted cold startup, a provisioned latest-head service
+or listener, public activation or verified deployment. Existing replay-witness
+purposes remain unchanged. Source components and authored fixtures are unbuilt
+and unexecuted.
 
 The purpose is to make a future Snapshot/v4 bind independently admitted primary
 and counted roots, without treating a restored database, signed historical
@@ -144,8 +147,9 @@ compatibility nor a matching digest supplies currentness or execution authority.
 
 The following are integration requirements. The `.133`
 [reserve/complete implementation](authority-current-root-decisions.md) covers
-bounded controls and local state, but does not supply fresh-currentness requests
-or an assured SQL completion producer:
+bounded controls and local state. The separate `.136` completion and `.138`
+nonce-bound lookup source paths do not replace independent currentness or
+assured cold runtime ownership:
 
 | Purpose | Minimum binding |
 | --- | --- |
@@ -157,8 +161,9 @@ or an assured SQL completion producer:
 The `.134` reserve producer now genuinely replays original successor plans and
 binds a dedicated computationSnapshot/v1. That identity is not revocation
 Snapshot/v4 or proof of capability admission; Snapshot/v4 execution integration
-in the requirements above remains separate. Source computation exists, while
-its independently trusted measured/cold owner and postcommit producer do not.
+in the requirements above remains separate. Source computation and the `.136`
+read-only postcommit producer exist; their independently trusted measured/cold
+runtime ownership remains a separate requirement.
 
 All inventories, canonical envelopes, retained records, proof work and historical
 lookups need source-fixed limits and rejection of duplicate/unknown fields and
@@ -243,13 +248,15 @@ untracked inventory. Its exact 18 scalar fields bind enrollment/generation,
 pending decision/request, predecessor checkpoint/fence, operation/request,
 capability, snapshot, before/after vectors and result, with fixed uniqueness
 constraints. No writer-receipt field introduces the cycle above; it has no
-primary or counted maintenance trigger. The executor has SELECT only and no
-insert function exists. The future admitted executor operation must insert the
-marker after actual after-root checks, within the same SQL transaction.
+primary or counted maintenance trigger. Legacy executor SELECT rights are
+unchanged. The `.139` source installer includes a separate protected consume
+function, reached through immutable issuer custody, that inserts the marker
+after actual after-root checks within the same SQL transaction; its dedicated
+caller role has no direct table DML.
 
 The schema, canonical catalog/ACL and framework/source-inventory boundaries now
-exist; actual executor/function admission, writes and receipt validation remain
-unimplemented. A genuinely written marker would be protected transaction
+exist, and `.139` adds the actual fixed owner/custody/SQL source path. Independent
+deployment, cold admission and public activation remain unfinished. A genuinely written marker would be protected transaction
 evidence, not proof that the database has not been rolled back. Its absence
 confers no authority.
 The final signed root receipt belongs in a separately defined protected
@@ -284,13 +291,13 @@ rollback resistance. Do not repurpose its schema, signing purposes or enrollment
 Complete-vector computation, necessary delta checks, genuine plan replay and
 reserve production, same-transaction full observation with a configured read
 owner, protected marker schema, purpose-specific signature admission and a
-durable local one-pending owner are implemented as separate source components. Required integration
-remains: independently admitted cold enrollment and exact latest-head
-provisioning; a serving owner and transport;
-trusted measurement/key ownership for the real computation producer, an assured
-completion producer and generation/recovery lifecycle; protected SQL marker
-insertion and postcommit assurance; and coordinated Snapshot/v4,
-planner, executor, receipt, schema/ACL and source-manifest integration. Every
+durable local one-pending owner are implemented as separate source components.
+The `.136`–`.139` additions supply read-only completion, serving/lookup/delivery
+cores and protected custody/SQL ownership with source catalog/ACL integration.
+Required integration remains independently admitted cold enrollment and exact
+latest-head provisioning; real services and trusted measurement/key ownership;
+authenticated custody recovery, public orchestration and generation handover;
+external infrastructure and the frozen verification phase. Every
 application writer, including legacy/direct DML and authorization-source updates,
 must participate or be fenced. Installing counted maintenance triggers alone
 cannot achieve it.

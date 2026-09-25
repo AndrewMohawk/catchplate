@@ -1,11 +1,12 @@
-"""Uninstalled same-transaction successor mutation/marker SQL fragments.
+"""Same-transaction successor mutation/marker SQL fragments.
 
-There is deliberately no CREATE FUNCTION, installer, grant or database caller.
-The eventual protected issuer/executor bridge must authenticate ORIGINAL plan,
-execution grant and pending controls, bind their exact same-call derived values
-to protected custody, and admit its actual role/TLS/session/transaction. Neither
-these variables, a Python candidate carrier nor a digest is an authority token.
-Installing a JSON-accepting wrapper around this body would bypass that boundary.
+This module alone grants nothing. The source-installed successor_execution_sql
+bridge loads immutable custody populated by the actual original-byte issuer;
+its executor accepts only pending/packet identities. The fixed Python owner
+admits actual role/TLS/transaction and independently pinned complete catalog
+before and after that call, with a separate durable attempt before connecting.
+Neither these variables, a Python candidate carrier nor a digest is an authority
+token. A generic JSON-accepting execution wrapper would bypass that boundary.
 
 After that missing admission, the owning function assigns these fixed locals:
 crx_operation/request_digest/operation_id (text), crx_selected_rows/crx_mutations
@@ -16,9 +17,9 @@ crx_after_vector_json (canonical complete vectors), crx_marker (exact18 storage
 projection) and crx_deadline_epoch_ns (unchanged independently admitted expiry).
 The declarations below include these inputs; all other locals are scratch.
 
-The enclosing function must also admit exact installed schema/ACL/function and
-ALL business trigger definitions, retain bounded inherited statement/lock/idle
-timeouts, and implement the genuine successor capability lifecycle. This body
+The enclosing owner must also admit exact installed schema/ACL/function and
+ALL business trigger definitions and retain bounded inherited statement/lock/idle
+timeouts. Source integration is not deployed or runtime verified. This body
 does not set any writer-token/operation GUC or fake a legacy v3 reserved/planned
 row. The old controlled-writer trigger, if attached, requires its genuine token
 and transaction-bound reserved capability; current source attaches it to no
@@ -125,7 +126,7 @@ def _live_sql():
 
 
 def current_root_execution_declarations_sql() -> str:
-    """Fixed input/scratch locals for one future genuinely admitted owner call."""
+    """Fixed input/scratch locals for one genuinely admitted protected owner call."""
     return """
         crx_operation text; crx_request_digest text; crx_operation_id text;
         crx_selected_rows jsonb; crx_mutations jsonb; crx_work_units bigint;

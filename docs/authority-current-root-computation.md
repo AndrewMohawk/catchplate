@@ -7,6 +7,12 @@ schema. This is unbuilt, unexecuted source, not a running current-root authority
 capability admission or successor SQL execution. The
 [durable decision owner](authority-current-root-decisions.md) remains separate.
 
+Source `.139` adds the separate [protected successor execution
+integration](authority-successor-execution.md): genuine original admission,
+immutable custody, actual transaction owners, before/after catalog checks,
+durable attempt recording and source-installed fixed SQL functions. Deployment,
+public activation and frozen verification remain outstanding.
+
 ## Original plans to complete vectors
 
 [`authority_current_root_plan_replay._replay_on_work`](../serverware/authority_current_root_plan_replay.py)
@@ -64,8 +70,8 @@ Source `.135` adds a separate [original-grant preparation and execution
 admission](authority-successor-execution.md) path. It derives the capability
 digest from a genuinely verified pre-decision grant and joins that same grant
 again at final pending/plan admission. The scope-only producer described above
-retains its narrower contract. Protected SQL activation and postcommit ownership
-remain unfinished.
+retains its narrower contract. The `.139` protected SQL source path does not
+supply public activation or independently admitted cold postcommit ownership.
 
 ## Complete SQL observation, not enrollment
 
@@ -108,14 +114,17 @@ operation and capability identities are unique. It is immutable and excluded
 from primary/count business maintenance.
 
 There is deliberately no writer-receipt field: a later postcommit receipt must
-commit the marker, not the reverse. Runtime roles cannot insert; the executor
-has SELECT only, and no insert function is installed. SQLite insertion and
+commit the marker, not the reverse. Runtime roles cannot insert directly; the
+legacy executor retains SELECT only. The `.139` source installer includes a
+dedicated protected consume function that inserts the marker only with its
+actual maintained writes and after-root check. SQLite insertion and
 automatic existing-store adoption remain denied. The schema does not establish
 that any protected marker has been written.
 
 Still missing are independently admitted cold serving/key/measurement owners,
-latest-checkpoint provisioning, actual capability and pending-decision executor
-admission, same-transaction maintained writes/marker insertion, assured
-postcommit production, and uncertain-outcome recovery. No listener or legacy
-execution gate is enabled. Signing, custody, observation and a matching digest
-are not substitutes for those authorities.
+latest-checkpoint and real-service provisioning, authenticated custody recovery
+and public end-to-end orchestration, and external infrastructure/verification.
+The source execution and read-only completion paths do not establish those
+deployment premises or authorize expired/uncertain re-execution. No legacy
+execution gate is widened. Signing, custody, observation and a matching digest
+are not substitutes for independent authority.

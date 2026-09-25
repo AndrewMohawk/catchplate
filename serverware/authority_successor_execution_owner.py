@@ -1,0 +1,351 @@
+"""Protected original-byte issuance and identifier-only successor execution.
+
+These owners use real PostgreSQL connections, distinct fixed roles and exact
+TLS identities. The independently admitted eighth configuration value is the
+SOURCE-GENERATED complete structural-manifest digest, including functions,
+ACLs and all business triggers. Actual catalog observations are compared before
+the fixed call and again before normal outer commit; they never enroll their
+own expected digest. Runtime creates no scratch schema or provisioning.
+
+The issuer genuinely admits original grant/pending/plan bytes once and retains
+only its same-call packet. The executor accepts only two custody identifiers,
+and irrevocably records its attempt in a separate actual journal BEFORE opening
+the database. A failed/uncertain attempt is never automatically retried, even
+after restart: recovery requires that journal's independently current exact
+checkpoint. Its durability is not a hostile-host antirollback guarantee.
+
+Returned observations follow normal actual connection closure, but are not
+signed completion evidence. The independent read-only completion producer must
+still match the committed marker/full vector and original controls. Driver,
+catalog and PostgreSQL work are outside H/B/N; genuine packet/response work uses
+the caller's unchanged allowance. Deadline checks and bounded per-statement
+waits are not a hard syscall watchdog. Late errors may follow a committed write.
+No opener override, public packet/candidate input, retry or legacy gate exists.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
+import time
+
+from serverware import authority_contract as authority
+from serverware import authority_current_root_authorization as authorization
+from serverware import authority_current_root_vector as vector
+from serverware import authority_revocation_root_reader as connection_owner
+from serverware import authority_successor_execution_attempts as attempts
+from serverware import authority_successor_execution_packet as packet
+from serverware import authority_webauthn_evidence as evidence
+from serverware import authority_webauthn_evidence_plan_clock as clock
+from serverware.authority_store import current_root_commit_observation as markers
+from serverware.authority_store.successor_execution_privileges import successor_execution_privilege_check
+
+
+class SuccessorExecutionOwnerError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SuccessorCustodyObservation:
+    """Unsigned durable custody locators, not a new execution grant."""
+
+    pending_decision_digest: str
+    packet_digest: str
+    issued_at_epoch_ns: int
+    expires_at_epoch_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class SuccessorExecutionObservation:
+    """Normal outer-commit observation, not external signed completion."""
+
+    pending_decision_digest: str
+    packet_digest: str
+    marker_bytes: bytes
+
+
+_SET_TRANSACTION = "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE"
+_SEARCH_PATH = "SET LOCAL search_path TO serverware_metadata, pg_catalog, pg_temp"
+_WAIT_TIMEOUTS = ("lock_timeout", "idle_in_transaction_session_timeout", "statement_timeout")
+_ISSUE_SQL = ("SELECT * FROM serverware_metadata."
+    "serverware_policy_authority_issue_successor_execution(%s, %s)")
+_EXECUTE_SQL = ("SELECT serverware_metadata.serverware_policy_authority_execute_successor(%s, %s) "
+    "AS marker_json")
+_ISSUE_FIELDS = frozenset({"pending_decision_digest", "packet_digest",
+    "issued_at_epoch_ns", "expires_at_epoch_ns"})
+
+
+def _configuration(config, role):
+    if type(config) is not tuple or len(config) != 8:
+        raise SuccessorExecutionOwnerError("successor database configuration is not an exact eight-tuple")
+    connection_owner._validate_configuration(config[:7])
+    if config[2] != role or "\r" in config[0] or "\n" in config[0]:
+        raise SuccessorExecutionOwnerError("successor database role or DSN differs from its fixed purpose")
+    authorization.shape._digest(config[7])
+    return config
+
+
+def _window(live_window, inherited):
+    window = clock._validate(live_window)
+    if inherited is not None:
+        authorization.shape._integer(inherited, minimum=1)
+    return window, window[4] if inherited is None else min(window[4], inherited)
+
+
+def _identity(row, config):
+    authorization.shape._object(row, connection_owner._IDENTITY_FIELDS, "successor database identity")
+    expected = {"role": config[2], "session_role": config[2], "client_dn": config[3],
+        "client_serial": config[4], "issuer_dn": config[5], "transaction_isolation": "serializable",
+        "transaction_read_only": "off", "transaction_deferrable": "off"}
+    if (type(row["server_version_num"]) is not int
+            or not 160000 <= row["server_version_num"] < 170000
+            or any(type(row[name]) is not str or row[name] != value for name, value in expected.items())
+            or row["ssl"] is not True or row["rolcanlogin"] is not True
+            or any(row[name] is not False for name in connection_owner._FALSE_FIELDS)):
+        raise SuccessorExecutionOwnerError("successor actual role, TLS or transaction identity differs")
+
+
+def _marker_on_work(value, pending_digest, work):
+    if type(value) is not str or not 2 <= len(value) <= 4096 or not value.isascii():
+        raise SuccessorExecutionOwnerError("successor marker response exceeds its canonical byte bound")
+    work.charge(input_bytes=len(value))
+    original = value.encode("ascii")
+    owned = authorization.wire._decode_object(original, work=work,
+        maximum_bytes=4096, maximum_nodes=64, maximum_depth=2)
+    authorization.shape._object(owned, frozenset(markers.FIELDS), "successor committed marker")
+    for name in markers.FIELDS:
+        item = owned[name]
+        if name in markers._COUNTERS:
+            authorization.shape._integer(item)
+        elif (type(item) is not str or not 1 <= len(item) <= markers._SCALAR_BYTES[name]
+                or not item.isascii() or "\x00" in item):
+            raise SuccessorExecutionOwnerError("successor marker scalar is not source bounded")
+        elif name in markers._DIGEST_FIELDS:
+            authorization.shape._digest(item)
+    if (owned["source_revision"] != authority.SOURCE_REVISION
+            or owned["operation"] not in markers._OPERATIONS
+            or markers._TOKEN.fullmatch(owned["database_id"]) is None
+            or owned["pending_sequence"] != owned["predecessor_sequence"] + 1
+            or owned["fence"] < 1):
+        raise SuccessorExecutionOwnerError("successor marker source or sequence differs")
+    authorization.plan._same(owned["pending_decision_digest"], pending_digest, work,
+        "successor marker names another admitted pending decision")
+    authorization.capability._canonical(original, owned,
+        evidence.capture._SharedLedger(work), 4096, 64)
+    return original
+
+
+def _run_on_configuration(config, *, purpose, parameters, expected, live_window, work,
+        transport_deadline_ns=None):
+    """Private fixed continuation; public owners cannot accept SQL or packets."""
+    role = authority.SUCCESSOR_ISSUER_ROLE if purpose == "issue" else authority.SUCCESSOR_EXECUTOR_ROLE
+    if purpose not in ("issue", "execute"):
+        raise SuccessorExecutionOwnerError("successor database purpose is not source fixed")
+    configured = _configuration(config, role)
+    evidence.capture._SharedLedger(work)
+    window, bound = _window(live_window, transport_deadline_ns)
+    expires = window[3] if purpose == "execute" else min(window[3], expected.expires_at_epoch_ns)
+    callback = evidence.production._callback
+    last_epoch, last_monotonic = window[0], window[2]
+
+    def remaining():
+        nonlocal last_epoch, last_monotonic
+        epoch = clock._check_on_work(window, work=work)
+        monotonic = callback(work, time.monotonic_ns)
+        authorization.shape._integer(monotonic, minimum=1)
+        if epoch < last_epoch or monotonic < last_monotonic or monotonic >= bound or epoch >= expires:
+            raise SuccessorExecutionOwnerError("successor original transaction window expired or clock reversed")
+        last_epoch, last_monotonic = epoch, monotonic
+        return min(expires - epoch, bound - monotonic)
+
+    remaining()
+    bindings = vector._source_bindings_on_work(work=work)
+    authorization.plan._same(configured[6], bindings["queryManifestDigest"], work,
+        "successor owner query manifest differs from actual source")
+    import psycopg
+    from psycopg.rows import dict_row
+    from serverware import db
+
+    available = remaining()
+    connect_timeout = min(configured[1], available // 1_000_000_000)
+    if connect_timeout < 2:
+        raise SuccessorExecutionOwnerError("successor owner has less than the minimum connection budget")
+    options = "-c search_path=pg_catalog" + "".join(
+        " -c " + name + "=" + str(available // 1_000_000) for name in _WAIT_TIMEOUTS)
+    connection = connection_owner._connect(work, lambda: psycopg.connect(configured[0],
+        row_factory=dict_row, connect_timeout=connect_timeout, autocommit=False, options=options))
+    try:
+        remaining()
+        physical = callback(work, connection_owner._connection_identity, connection, 0)
+        with connection_owner._context(connection, work) as active_connection:
+            if active_connection is not connection:
+                raise SuccessorExecutionOwnerError("successor connection context replaced its actual handle")
+            callback(work, connection_owner._require_connection, connection, physical, 0)
+            cursor = callback(work, lambda: connection.cursor())
+            with connection_owner._context(cursor, work) as active_cursor:
+                if active_cursor is not cursor:
+                    raise SuccessorExecutionOwnerError("successor cursor context replaced its actual handle")
+                remaining()
+                callback(work, lambda: cursor.execute(_SET_TRANSACTION))
+                callback(work, connection_owner._require_connection, connection, physical, 2)
+
+                def active(call):
+                    def invoke():
+                        connection_owner._require_connection(connection, physical, 2)
+                        result = call()
+                        connection_owner._require_connection(connection, physical, 2)
+                        return result
+                    remaining()
+                    result = callback(work, invoke)
+                    remaining()
+                    return result
+
+                def one(sql, values=None):
+                    result = active(lambda: cursor.execute(sql) if values is None else cursor.execute(sql, values))
+                    return active(lambda: result.fetchone())
+
+                def waits():
+                    milliseconds = remaining() // 1_000_000
+                    if milliseconds < 1:
+                        raise SuccessorExecutionOwnerError("successor owner has no positive database wait budget")
+                    for name in _WAIT_TIMEOUTS:
+                        active(lambda name=name: cursor.execute("SET LOCAL " + name + " = " + str(milliseconds)))
+
+                waits()
+                _identity(one(connection_owner._IDENTITY_SQL), configured)
+                if one(*successor_execution_privilege_check(role=role, namespace="serverware_metadata")) is not None:
+                    raise SuccessorExecutionOwnerError("successor database role has unexpected effective privileges")
+                active(lambda: cursor.execute(_SEARCH_PATH))
+                facade = db.PostgresMetadataConnection(connection)
+
+                def catalog():
+                    # This is the ACTUAL complete catalog producer, not a
+                    # caller-provided checker or a digest read from a DB row.
+                    # Expected digest comes from independent source-generated
+                    # installation/release admission, never from this result.
+                    manifest = active(lambda: db._policy_candidate_authority_structure_manifest(facade))
+                    _json, actual = active(lambda: db._policy_candidate_authority_manifest_digest(manifest))
+                    authorization.plan._same(actual, configured[7], work,
+                        "successor installed schema/functions/triggers differ from independent source catalog")
+
+                catalog()
+                waits()
+                if purpose == "issue":
+                    row = one(_ISSUE_SQL, parameters)
+                    authorization.shape._object(row, _ISSUE_FIELDS, "successor custody readback")
+                    wanted = {"pending_decision_digest": expected.pending_decision_digest,
+                        "packet_digest": expected.packet_digest, "issued_at_epoch_ns": expected.issued_at_epoch_ns,
+                        "expires_at_epoch_ns": expected.expires_at_epoch_ns}
+                    for field, value in wanted.items():
+                        if type(row[field]) is not type(value):
+                            raise SuccessorExecutionOwnerError("successor custody readback scalar type differs")
+                        authorization.plan._same(row[field], value, work, "successor actual custody readback")
+                    result = SuccessorCustodyObservation(**wanted)
+                else:
+                    row = one(_EXECUTE_SQL, parameters)
+                    authorization.shape._object(row, frozenset({"marker_json"}), "successor execution response")
+                    marker = _marker_on_work(row["marker_json"], parameters[0], work)
+                    result = SuccessorExecutionObservation(parameters[0], parameters[1], marker)
+                waits()
+                catalog()
+                remaining()
+            if callback(work, lambda: cursor.closed) is not True:
+                raise SuccessorExecutionOwnerError("successor cursor did not close normally")
+            callback(work, connection_owner._require_connection, connection, physical, 2)
+            remaining()
+        if callback(work, lambda: connection.closed) is not True:
+            raise SuccessorExecutionOwnerError("successor connection did not close normally")
+        remaining()
+        return result
+    except BaseException:
+        connection_owner._close_after_failure(connection)
+        raise
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
+class SuccessorExecutionIssuer:
+    """Previously admitted issuer configuration; construction does no I/O."""
+
+    _configuration: tuple
+    _pid: int
+
+    def __init__(self, *, dsn, connect_timeout_seconds, tls_client_dn, tls_client_serial,
+            tls_issuer_dn, query_manifest_digest, expected_structure_manifest_digest):
+        configured = _configuration((dsn, connect_timeout_seconds, authority.SUCCESSOR_ISSUER_ROLE,
+            tls_client_dn, tls_client_serial, tls_issuer_dn, query_manifest_digest,
+            expected_structure_manifest_digest), authority.SUCCESSOR_ISSUER_ROLE)
+        object.__setattr__(self, "_configuration", configured)
+        object.__setattr__(self, "_pid", os.getpid())
+
+    def issue(self, *, operation, originals, expectations, planner_public_key,
+            operation_public_key, enrollment_bytes, root_public_key,
+            reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes,
+            grant_bytes, grant_enrollment_bytes, expected_authorization_digest,
+            expected_database_id, expected_generation_digest, expected_pending_sequence,
+            expected_pending_head_digest, expected_fence, live_window, work,
+            transport_deadline_ns=None):
+        if type(self) is not SuccessorExecutionIssuer or os.getpid() != self._pid:
+            raise SuccessorExecutionOwnerError("successor issuance requires its actual process-bound owner")
+        configured = _configuration(self._configuration, authority.SUCCESSOR_ISSUER_ROLE)
+        window, bound = _window(live_window, transport_deadline_ns)
+        prepared = packet._prepare_on_work(operation=operation, originals=originals, expectations=expectations,
+            planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+            enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+            reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
+            snapshot_bytes=snapshot_bytes, grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
+            expected_authorization_digest=expected_authorization_digest, expected_database_id=expected_database_id,
+            expected_generation_digest=expected_generation_digest, expected_pending_sequence=expected_pending_sequence,
+            expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+            live_window=window, work=work, transport_deadline_ns=bound)
+        work.charge(input_bytes=len(prepared.packet_bytes))
+        text = prepared.packet_bytes.decode("ascii")
+        work.prepare_utf8(prepared.packet_digest)
+        return _run_on_configuration(configured, purpose="issue", parameters=(text, prepared.packet_digest),
+            expected=prepared, live_window=window, work=work, transport_deadline_ns=bound)
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
+class SuccessorExecutionExecutor:
+    """One irreversibly recorded attempt per protected custody identity.
+
+    The caller owns the attempts object's lifetime. No database connection is
+    opened until that actual owner's durable claim completes. Even a provable
+    SQL abort does not release a claim here; recovery is a separate authority.
+    """
+
+    _configuration: tuple
+    _attempts: attempts.SuccessorExecutionAttempts
+    _pid: int
+
+    def __init__(self, *, dsn, connect_timeout_seconds, tls_client_dn, tls_client_serial,
+            tls_issuer_dn, query_manifest_digest, expected_structure_manifest_digest, attempt_owner):
+        configured = _configuration((dsn, connect_timeout_seconds, authority.SUCCESSOR_EXECUTOR_ROLE,
+            tls_client_dn, tls_client_serial, tls_issuer_dn, query_manifest_digest,
+            expected_structure_manifest_digest), authority.SUCCESSOR_EXECUTOR_ROLE)
+        if (type(attempt_owner) is not attempts.SuccessorExecutionAttempts
+                or attempt_owner.structure_manifest_digest != configured[7]):
+            raise SuccessorExecutionOwnerError("successor executor requires its actual catalog-bound attempt journal")
+        object.__setattr__(self, "_configuration", configured)
+        object.__setattr__(self, "_attempts", attempt_owner)
+        object.__setattr__(self, "_pid", os.getpid())
+
+    def execute(self, *, pending_decision_digest, packet_digest, live_window, work,
+            transport_deadline_ns=None):
+        if type(self) is not SuccessorExecutionExecutor or os.getpid() != self._pid:
+            raise SuccessorExecutionOwnerError("successor execution requires its actual process-bound owner")
+        configured = _configuration(self._configuration, authority.SUCCESSOR_EXECUTOR_ROLE)
+        owner = self._attempts
+        if (type(owner) is not attempts.SuccessorExecutionAttempts
+                or owner.structure_manifest_digest != configured[7]):
+            raise SuccessorExecutionOwnerError("successor execution attempt owner changed")
+        evidence.capture._SharedLedger(work)
+        authorization.shape._digest(pending_decision_digest)
+        authorization.shape._digest(packet_digest)
+        parameters = pending_decision_digest, packet_digest
+        window, bound = _window(live_window, transport_deadline_ns)
+        for value in parameters:
+            work.prepare_utf8(value)
+        attempts.SuccessorExecutionAttempts._claim_on_work(owner,
+            pending_decision_digest=parameters[0], packet_digest=parameters[1],
+            live_window=window, work=work, transport_deadline_ns=bound)
+        return _run_on_configuration(configured, purpose="execute", parameters=parameters,
+            expected=None, live_window=window, work=work, transport_deadline_ns=bound)

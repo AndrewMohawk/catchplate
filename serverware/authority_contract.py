@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.138"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.139"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -499,6 +499,43 @@ CURRENT_ROOT_COMMIT_MARKER_COLUMNS = (
     "request_digest", "operation_id", "capability_digest", "snapshot_digest",
     "before_vector_digest", "after_vector_digest", "result_digest",
 )
+SUCCESSOR_ISSUER_ROLE = "serverware_policy_authority_successor_issuer"
+SUCCESSOR_EXECUTOR_ROLE = "serverware_policy_authority_successor_executor"
+SUCCESSOR_ISSUE_FUNCTION = "serverware_policy_authority_issue_successor_execution"
+SUCCESSOR_EXECUTE_FUNCTION = "serverware_policy_authority_execute_successor"
+SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES = MappingProxyType({
+    SUCCESSOR_ISSUE_FUNCTION: ("text", "text"),
+    SUCCESSOR_EXECUTE_FUNCTION: ("text", "text"),
+})
+SUCCESSOR_EXECUTION_CUSTODY_TABLE = "policy_authority_successor_execution_custody"
+SUCCESSOR_EXECUTION_CUSTODY_COLUMNS = (
+    "pending_decision_digest", "packet_digest", "packet_json", "enrollment_digest",
+    "generation_digest", "capability_digest", "operation_id", "fence",
+    "issued_at_epoch_ns", "expires_at_epoch_ns", "issuer_identity_digest",
+)
+SUCCESSOR_EXECUTION_CUSTODY_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthoritySuccessorExecutionCustody/v1",
+    "table": SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+    "columns": SUCCESSOR_EXECUTION_CUSTODY_COLUMNS,
+    "primaryKey": ("pending_decision_digest",),
+    "uniqueKeys": (("packet_digest",), ("enrollment_digest", "capability_digest"),
+        ("enrollment_digest", "operation_id"), ("enrollment_digest", "fence")),
+    "issuerRole": SUCCESSOR_ISSUER_ROLE, "executorRole": SUCCESSOR_EXECUTOR_ROLE,
+    "issuerFunction": SUCCESSOR_ISSUE_FUNCTION, "executorFunction": SUCCESSOR_EXECUTE_FUNCTION,
+    "functionArgumentTypes": ("text", "text"),
+    "packetSchema": "serverware.policyAuthoritySuccessorExecutionPacket/v1",
+    "maximumPacketBytes": 64 * 1024 * 1024,
+    "directRuntimePrivileges": (), "directIssuerPrivileges": (), "directExecutorPrivileges": (),
+    "postgresOnly": True, "sqliteAdmission": False, "publicExecutionEnabled": False,
+    "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
+    "frameworkCustodyExcludedFromBusinessRoots": True,
+    "primaryMaintenance": False, "countedMaintenance": False,
+    "catalogAdmission": "same-transaction-actual-full-manifest-against-independent-source-generated-pin",
+    "issuerIdentityDomain": "serverware.policyAuthoritySuccessorIssuerSession/v1",
+    "executorIdentityDomain": "serverware.policyAuthoritySuccessorExecutorSession/v1",
+    "existingStoreMigration": "separately-reviewed-no-adoption-synthesis-or-cascade",
+    "legacyOperationGates": "unchanged",
+})
 COMPLETION_READER_ROLE = "serverware_policy_authority_completion_reader"
 COMPLETION_READ_CONTRACT = "serverware.policyAuthorityCompletionRead/v1"
 COMPLETION_READ_TABLES = frozenset({
@@ -523,8 +560,8 @@ CURRENT_ROOT_COMMIT_MARKER_CONTRACT = MappingProxyType({
     "issuerPrivileges": (), "executorPrivileges": ("SELECT",),
     "completionReaderRole": COMPLETION_READER_ROLE,
     "completionReaderPrivileges": ("SELECT",),
-    "insertAuthority": "future-fixed-owner-executor-function-after-actual-root-checks",
-    "installedInsertFunction": None, "publicExecutionEnabled": False,
+    "insertAuthority": "dedicated-protected-successor-consume-after-original-admission-and-root-checks",
+    "installedInsertFunction": SUCCESSOR_EXECUTE_FUNCTION, "publicExecutionEnabled": False,
     "transactionOwnership": "same-transaction-as-business-writes-and-actual-after-vector",
     "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
     "frameworkCustodyExcludedFromBusinessRoots": True,
@@ -666,6 +703,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         WEBAUTHN_EVIDENCE_RETAINED_TABLE,
         WEBAUTHN_TRANSITION_RETAINED_TABLE,
         CURRENT_ROOT_COMMIT_MARKER_TABLE,
+        SUCCESSOR_EXECUTION_CUSTODY_TABLE,
         "policy_authority_query_dependency_manifests",
         "policy_authority_schema_contracts",
         "policy_authority_verifier_capabilities",
@@ -1376,6 +1414,7 @@ PHASE2_STORE_TABLES = tuple(sorted({
 }))
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     *PHASE2_STORE_TABLES,
+    SUCCESSOR_EXECUTION_CUSTODY_TABLE,
     "policy_authority_authorization_dependency_manifests",
     "policy_authority_operation_mutation_templates",
 }))
@@ -2850,6 +2889,10 @@ def operation_contract_document() -> dict[str, Any]:
         "completionReadContract": COMPLETION_READ_CONTRACT,
         "completionReaderRole": COMPLETION_READER_ROLE,
         "completionReadTables": sorted(COMPLETION_READ_TABLES),
+        "successorExecutionCustody": dict(SUCCESSOR_EXECUTION_CUSTODY_CONTRACT),
+        "successorExecutionFunctionSignatures": {
+            name: list(arguments) for name, arguments in SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES.items()
+        },
         "proofPrimitives": sorted(PROOF_PRIMITIVES),
         "capabilityIssuerFunctionSignatures": {
             function_name: list(argument_types)

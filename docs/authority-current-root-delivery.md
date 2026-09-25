@@ -3,8 +3,11 @@
 Source `.137` adds a fixed private Unix-socket exchange and a durable local
 completion-delivery owner; `.138` adds signed read-only lookup and explicit
 reconciliation. This is source implementation, not a built, tested,
-provisioned or running service. It does not enable successor SQL execution,
-public finalization, a listener or a production deployment.
+provisioned or running service. Source `.139` separately adds [protected
+successor execution](authority-successor-execution.md): immutable custody,
+actual owners, catalog checks, durable pre-database attempts and fixed SQL
+source installation. Neither path supplies public finalization, a provisioned
+listener or a production deployment.
 
 ## Fixed decision exchange
 
@@ -185,6 +188,8 @@ configuration delivery, trusted measurement, provisioned socket/peer identities,
 independent current checkpoints, native durability/host antirollback proof or
 authorized expired-unaccepted recovery. The [completion producer](authority-current-root-completion.md)
 still depends on genuine committed-state reads and the original plan/grant
-joins. Protected execution/capability custody, installed successor SQL and
-triggers, real writer/outer-commit orchestration and public finalization remain
-separate prerequisites. The consolidated build/verification phase has not run.
+joins. The `.139` protected execution source path includes actual outer-commit
+ownership and maintained SQL effects, but independently admitted cold
+configuration, deployed services, authenticated custody recovery and public
+finalization/orchestration remain separate prerequisites. The consolidated
+frozen build/verification phase has not run.

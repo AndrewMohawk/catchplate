@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.121`, implementation only. All six WebAuthn successor operations
+Status: source `.122`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -67,6 +67,14 @@ still uses the legacy finalizer. Caller append-and-forward preserves the durable
 local identity on uncertain delivery, and an admin-only recovery API/portal
 workspace allows explicit inspection and readback without resending writes.
 These are connected source paths, not executed or production acceptance evidence.
+
+Source `.122` adds [row-derived registration evidence production](authority-registration-evidence-production.md):
+the original challenge and committed publication/high-water rows supply the
+ceremony and complete real attestation context, then the actual producer signs
+and assembles typed evidence input. A fixed admitted-configuration mapper pins
+the independent evidence signer and policy. Upstream state, enrollment and
+signer admission remain mandatory; no independent signer process or public
+registration continuation is provisioned by this source change.
 
 Deployed caller provisioning, public preparation/invocation and business
 successor execution remain unfinished, as do independent evidence production,

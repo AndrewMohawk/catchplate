@@ -6,6 +6,10 @@ worker does not prove row selection, pending-publication absence, unused global
 credential history, enrollment permission, signer configuration or currentness.
 It never accepts a successful attestation DTO: the real shared core parses and
 verifies the original bytes in this invocation before deriving signed claims.
+The fixed from-rows continuation derives its own ceremony and complete trust
+context from those admitted rows, produces actual signed evidence, then
+assembles its typed evidence-admission request and original input bytes. That
+continuation accepts no caller-selected scope or trust-root inventory.
 
 Source-visible ownership, encoding and SHA work share the original meter.
 Bounded native JSON/CBOR/X509/EC/RSA internals remain the core's explicit native
@@ -295,3 +299,88 @@ def _produce_on_work(*, client_data_json, attestation_object, credential_id, tra
         target["attestation_envelope_base64url"] = encoded
         target["attestation_evidence_digest"] = digest
     return original, arguments
+
+
+def _produce_from_rows_on_work(*, client_data_json, attestation_object, credential_id,
+        transports, challenge_row, user_id, label, expected_authorization,
+        high_water_row, published_row, oidc_session_row, sibling_challenge_ids,
+        rp_id, origin, verified_at, private_key, public_key, signer_identity,
+        signer_spki_digest, maximum_age_ns, work):
+    """Return signed envelope, finalization arguments, request and original inputs.
+
+    The caller independently admits row membership, enrollment authorization,
+    publication/high-water provenance, original verification time and the
+    dedicated evidence signer/policy. Possession of those rows is not admission.
+    Scope and full trust context are derived here, not supplied as successful
+    ceremony, attestation or verification DTOs. No current clock, SQL, generic
+    verifier signer, per-request policy inference or new allowance is used.
+    """
+    ledger = capture._SharedLedger(work)
+    for raw, maximum in ((client_data_json, attestation.MAX_CLIENT_DATA_JSON_BYTES),
+            (attestation_object, attestation.MAX_ATTESTATION_OBJECT_BYTES)):
+        if type(raw) is not bytes or not 1 <= len(raw) <= maximum:
+            _fail("registration continuation requires bounded exact original bytes")
+    originals = client_data_json, attestation_object
+    if type(transports) is not tuple or len(transports) > 16:
+        _fail("registration continuation transports are not a bounded exact tuple")
+    if type(sibling_challenge_ids) is not list or len(sibling_challenge_ids) > registration.MAX_SIBLINGS:
+        _fail("registration continuation siblings are not a bounded exact list")
+    if type(verified_at) is not datetime or verified_at.tzinfo is not timezone.utc:
+        _fail("registration continuation requires the original exact UTC verification time")
+    private, public, signer_pin, evaluated_at, age = (
+        private_key, public_key, signer_spki_digest, verified_at, maximum_age_ns)
+    if (not isinstance(private, evidence.Ed25519PrivateKey)
+            or not isinstance(public, evidence.keys.Ed25519PublicKey)):
+        _fail("registration continuation requires the independently admitted evidence key pair")
+    registration._digest(signer_pin)
+    registration._integer(age, "registration continuation lifetime", 1,
+        authority.VERIFIER_RESPONSE_MAX_AGE_NS)
+    work.prepare_copy(transports)
+    owned = capture._JSONCapture(ledger).visit({"challenge": challenge_row,
+        "authorization": expected_authorization, "high": high_water_row,
+        "published": published_row, "session": oidc_session_row,
+        "siblings": sibling_challenge_ids, "identity": signer_identity,
+        "credentialId": credential_id, "transports": list(transports),
+        "userId": user_id, "label": label, "rpId": rp_id, "origin": origin})
+    evidence._identity(owned["identity"])
+    work.prepare_copy(owned["transports"])
+    held_transports = tuple(owned["transports"])
+
+    # All caller graphs, original references, key handles and immutable policy
+    # scalars are held before either derivation performs native parsing or
+    # hashing. Local imports preserve the existing producer/codec dependency.
+    from serverware import authority_webauthn_registration_ceremony as ceremony_source
+    from serverware import authority_webauthn_registration_trust as trust_source
+
+    ceremony = ceremony_source._derive_on_work(client_data_json=originals[0],
+        attestation_object=originals[1], credential_id=owned["credentialId"],
+        transports=held_transports, challenge_row=owned["challenge"],
+        user_id=owned["userId"], label=owned["label"],
+        expected_authorization=owned["authorization"], rp_id=owned["rpId"],
+        origin=owned["origin"], work=work)
+    context = trust_source._context_on_work(published_row=owned["published"],
+        high_water_row=owned["high"], rp_id=owned["rpId"], origin=owned["origin"],
+        verified_at=evaluated_at, work=work)
+    original, arguments = _produce_on_work(client_data_json=ceremony.client_data_json,
+        attestation_object=ceremony.attestation_object, credential_id=ceremony.credential_id,
+        transports=ceremony.transports, scope=ceremony.scope, verification_context=context,
+        challenge_row=owned["challenge"], expected_authorization=owned["authorization"],
+        high_water_row=owned["high"], published_row=owned["published"],
+        oidc_session_row=owned["session"], sibling_challenge_ids=owned["siblings"],
+        private_key=private, public_key=public, signer_identity=owned["identity"],
+        signer_spki_digest=signer_pin, maximum_age_ns=age, work=work)
+    final_arguments = capture._JSONCapture(ledger).visit(arguments)
+    registration._arguments(final_arguments, work)
+
+    # The assembler imports this producer through the actual registration
+    # input codec. It receives this invocation's real signed original, not a
+    # claims/result carrier or caller-selected request commitments.
+    from serverware import authority_webauthn_evidence_invocation as invocation
+
+    request, inputs_bytes = invocation._registration_on_work(envelope_bytes=original,
+        client_data_json=ceremony.client_data_json,
+        attestation_object=ceremony.attestation_object, credential_id=ceremony.credential_id,
+        transports=ceremony.transports, scope=ceremony.scope, verification_context=context,
+        expected_authorization=owned["authorization"], published_row=owned["published"],
+        oidc_session_row=owned["session"], work=work)
+    return original, final_arguments, request, inputs_bytes

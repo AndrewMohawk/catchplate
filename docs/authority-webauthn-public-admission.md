@@ -1,6 +1,6 @@
 # WebAuthn public admission and private preparation
 
-Current source checkpoint: `.121`. This is a source-only integration map, not
+Current source checkpoint: `.122`. This is a source-only integration map, not
 a tested import, running endpoint or deployment claim. Private preparation is
 described in [WebAuthn preparation](authority-webauthn-preparation.md); the public
 admission continuation below is still missing.
@@ -65,6 +65,16 @@ state admission. The actual `_claims_on_work` and `_produce_on_work` in
 [`authority_webauthn_registration_production.py`](../serverware/authority_webauthn_registration_production.py)
 perform semantic/evidence construction; client-supplied derived credentials,
 evidence digests or successful-verification objects cannot replace it.
+
+The private [row-derived production continuation](authority-registration-evidence-production.md)
+now performs that ceremony and full-root extraction from already admitted rows,
+calls the genuine cryptographic producer and assembles the exact evidence
+request and input bytes. A fixed configuration mapper selects the registration
+purpose's actual signer identity, public key, RP/origin and lifetime; it accepts
+no generic verifier-key fallback. It does not independently admit row membership,
+enrollment, currentness or the signer service, and it does not connect either
+browser `/verify` route to successor execution. Those handlers still use their
+legacy finalization path.
 
 ## Trust stage and completion have different prerequisites
 

@@ -11,8 +11,11 @@ independently established historical cutoff or time authority. Its request,
 roots and input commitment must equal the authenticated request, its policy
 must equal held configuration, and its times must fit the original live window.
 Genuine plan signature, membership, query, original-input semantics and root
-effects are then replayed on the same work. Success returns no proof token,
-history, execution permission, custody assertion or renewed clock allowance.
+effects are then replayed on the same work. Verification alone exports no
+history. Dedicated live-origin admission reconstructs history after that real
+replay, admitting only the three bounded planner observations. It establishes
+no independent database-clock truth, current roots, execution, custody or
+renewed clock allowance, and accepts no prior successful-replay carrier.
 """
 from __future__ import annotations
 
@@ -45,11 +48,13 @@ def _observations(claimed, request_context, timing, pins, now):
         raise WebAuthnEvidencePlanLiveError("planner observations exceed the original live request bounds")
 
 
-def _verify_live_on_work(*, envelope_bytes, inputs_bytes, evaluation_context_bytes,
+def _replay_live_on_work(*, admit_history, envelope_bytes, inputs_bytes, evaluation_context_bytes,
         request_context, request_issued_at_epoch_ns, request_expires_at_epoch_ns,
         request_window, pins, maximum_control_age_ns, work):
-    """Genuinely replay a live raw3 response; establish no historical authority."""
+    """Fixed replay core; only the authenticated exchange selects admission."""
     ledger = evidence.capture._SharedLedger(work)
+    if type(admit_history) is not bool:
+        raise WebAuthnEvidencePlanLiveError("evidence live-origin action is not source fixed")
     originals = envelope_bytes, inputs_bytes, evaluation_context_bytes
     for raw, maximum in zip(originals, (plan.contract.MAX_BYTES,
             plan.inputs_wire.MAX_BYTES, retention.context_wire.MAX_BYTES)):
@@ -70,6 +75,7 @@ def _verify_live_on_work(*, envelope_bytes, inputs_bytes, evaluation_context_byt
     # All caller graphs, exact raw-byte references, key handles and immutable
     # time pins are held before decoding or any native key/clock callback.
     decoded = retention.context_wire._decode_on_work(originals[2], work=work)
+    observations = decoded["databaseCutoffUs"], decoded["nowEpochNs"], decoded["deadlineEpochNs"]
     claimed = admission._capture_expectations_on_work(held_pins, decoded, work)
     for name in ("request", "businessBeforeRoots", "authorizationBeforeRoots", "inputsDigest"):
         evidence.plan._same(claimed[name], owned_request[name], work,
@@ -101,3 +107,64 @@ def _verify_live_on_work(*, envelope_bytes, inputs_bytes, evaluation_context_byt
         maximum_clock_skew_ns=held_pins[9], work=work)
     _observations(claimed, owned_request, timing, held_pins, now)
     plan._fresh(payload, claimed, now)
+    if not admit_history:
+        return None
+
+    # Fifteen fields come from held authenticated request originals and actual
+    # configuration pins. Only these three original planner observations are
+    # admitted under the verified response and unchanged live request window.
+    # No arbitrary decoded-context adapter or successful DTO can reach here
+    # without repeating the genuine raw3 signature/proof/semantic replay above.
+    derived = {"request": owned_request["request"],
+        "businessBeforeRoots": owned_request["businessBeforeRoots"],
+        "authorizationBeforeRoots": owned_request["authorizationBeforeRoots"],
+        "inputsDigest": owned_request["inputsDigest"],
+        "configurationDigest": held_pins[7],
+        "plannerIdentity": dict(zip(admission._IDENTITY_FIELDS, held_pins[2])),
+        "plannerSpkiDigest": held_pins[3],
+        "evidenceIdentity": dict(zip(admission._IDENTITY_FIELDS, held_pins[5])),
+        "evidenceSpkiDigest": held_pins[6],
+        "databaseCutoffUs": observations[0], "nowEpochNs": observations[1],
+        "deadlineEpochNs": observations[2], "maximumPlanAgeNs": held_pins[8],
+        "maximumEvidenceAgeNs": held_pins[8], "maximumClockSkewNs": held_pins[9],
+        "rpId": held_pins[10], "origin": held_pins[11], "installationTargetDigest": held_pins[12]}
+    history = evidence.capture._JSONCapture(ledger,
+        maximum_bytes=retention.context_wire.MAX_BYTES).visit(derived)
+    plan._validate_expectations(history, held_pins[0])
+    now = wire._fresh_on_work(timing, window=window, maximum_age_ns=maximum_control_age_ns,
+        maximum_clock_skew_ns=held_pins[9], work=work)
+    _observations(history, owned_request, timing, held_pins, now)
+    plan._fresh(payload, history, now)
+    canonical_history = retention.context_wire._encode_on_work(expectations=history, work=work)
+    work.charge(input_bytes=len(canonical_history) + len(originals[2]))
+    if canonical_history != originals[2]:
+        raise WebAuthnEvidencePlanLiveError("derived live-origin history differs from the authenticated original context")
+    return history
+
+
+def _verify_live_on_work(*, envelope_bytes, inputs_bytes, evaluation_context_bytes,
+        request_context, request_issued_at_epoch_ns, request_expires_at_epoch_ns,
+        request_window, pins, maximum_control_age_ns, work):
+    """Genuinely replay a live raw3 response without exporting history."""
+    return _replay_live_on_work(admit_history=False, envelope_bytes=envelope_bytes,
+        inputs_bytes=inputs_bytes, evaluation_context_bytes=evaluation_context_bytes,
+        request_context=request_context, request_issued_at_epoch_ns=request_issued_at_epoch_ns,
+        request_expires_at_epoch_ns=request_expires_at_epoch_ns, request_window=request_window,
+        pins=pins, maximum_control_age_ns=maximum_control_age_ns, work=work)
+
+
+def _admit_history_on_work(*, envelope_bytes, inputs_bytes, evaluation_context_bytes,
+        request_context, request_issued_at_epoch_ns, request_expires_at_epoch_ns,
+        request_window, pins, maximum_control_age_ns, work):
+    """Admit bounded live-origin observations, not independent clock facts.
+
+    Only the fixed exchange calls this continuation after actual original
+    request and planner-response signature/full-byte authentication. Request
+    context, configuration pins and the original window retain that required
+    upstream provenance; no caller verification result substitutes for it.
+    """
+    return _replay_live_on_work(admit_history=True, envelope_bytes=envelope_bytes,
+        inputs_bytes=inputs_bytes, evaluation_context_bytes=evaluation_context_bytes,
+        request_context=request_context, request_issued_at_epoch_ns=request_issued_at_epoch_ns,
+        request_expires_at_epoch_ns=request_expires_at_epoch_ns, request_window=request_window,
+        pins=pins, maximum_control_age_ns=maximum_control_age_ns, work=work)

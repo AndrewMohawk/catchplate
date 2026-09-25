@@ -137,6 +137,16 @@ response carries original plan bodies and unsigned record/time metadata. Errors,
 missing records and uncertain responses grant neither absence proof nor retry,
 write, signed-receipt or business execution authority.
 
+## Live preparation as a historical origin
+
+Source `.120` adds a separate [private preparation continuation](authority-webauthn-preparation.md).
+It authenticates the actual live planning request/response and genuinely replays
+originals, reconstructs history from held request/configuration authority, and
+admits only the specifically bounded planner observations before intent signing.
+This origin is not a generic stored-context admission mechanism or independent
+database-clock evidence. Archive trust admission, old-control authentication and
+fresh lookup replay remain mandatory for later retrieval and reconciliation.
+
 ## Limits and remaining work
 
 This supports configuration, cohort and key changes only under the currently

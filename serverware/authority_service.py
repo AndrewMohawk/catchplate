@@ -4157,6 +4157,22 @@ class AuthorityProcess:
 
         return transitions._read_roots_on_work(self, operation=operation, request=request, work=work)
 
+    def _prepare_webauthn_transition_custody(self, *, operation, request, inputs_bytes,
+            now_epoch_ns, deadline_epoch_ns, invocation, work):
+        """Prepare exact custody originals from an independently admitted invocation.
+
+        The genuine verifier admits the bounded live planning observations as
+        history before intent and relay preparation. This is not public request
+        admission, current-root authority, reservation or business execution.
+        No custody writer is contacted; the caller must journal the returned
+        raw-seven originals before any separate potentially committing send.
+        """
+        from serverware import authority_webauthn_transition_preparation as preparation
+
+        return preparation._prepare_on_work(self, operation=operation, request=request,
+            inputs_bytes=inputs_bytes, now_epoch_ns=now_epoch_ns,
+            deadline_epoch_ns=deadline_epoch_ns, invocation=invocation, work=work)
+
     def _produce_webauthn_transition_plan_request(self, *, operation, request, inputs_bytes,
             now_epoch_ns, deadline_epoch_ns, invocation, work):
         """Prepare signed originals using independently read primary/count roots."""
@@ -4494,6 +4510,20 @@ class AuthorityProcess:
         verifier = AuthorityProcess._webauthn_evidence_plan_verifier(self, purpose=purpose, work=work)
         return verifying.EvidencePlanVerifier.verify(verifier, envelope_bytes=originals[0],
             inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned, work=work)
+
+    def _prepare_webauthn_evidence_custody(self, *, purpose, request, inputs_bytes,
+            deadline_epoch_ns, work):
+        """Prepare raw-six originals after genuine live-history admission.
+
+        Typed request and original ceremony/installation provenance must be
+        independently admitted upstream. This private composition supplies no
+        public authorization, execution capability, writer contact or retry.
+        The caller must durably retain all returned originals before forwarding.
+        """
+        from serverware import authority_webauthn_evidence_preparation as preparation
+
+        return preparation._prepare_on_work(self, purpose=purpose, request=request,
+            inputs_bytes=inputs_bytes, deadline_epoch_ns=deadline_epoch_ns, work=work)
 
     def _produce_webauthn_evidence_plan_request(self, *, purpose, request, inputs_bytes,
             deadline_epoch_ns, work):

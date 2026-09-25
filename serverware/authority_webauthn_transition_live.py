@@ -2,11 +2,14 @@
 
 The caller first authenticates the dedicated response control over the request
 control and every returned original. Only then may this worker decode the plan
-context. Its cutoff is a bounded planner observation, not independently
-admitted history. Every other expectation is reconstructed from the held signed
-request and configured pins before genuine signature/proof/semantic replay.
-No history or proof token is returned; the original request window is never
-renewed. There is no SQL, custody, execution, retry or replacement allowance.
+context. Its cutoff is a bounded planner observation, not an independent
+database-clock observation. Every other expectation is reconstructed from the
+held signed request and configured pins before genuine signature/proof/semantic
+replay. The existing verifier returns nothing. A separate source-owned live
+history admission returns those reconstructed expectations only after the same
+real replay; it accepts no successful-proof carrier. This history records its
+live origin, not current roots or execution authority. The original request
+window is never renewed. There is no SQL, custody, retry or new allowance.
 """
 from __future__ import annotations
 
@@ -61,6 +64,24 @@ def _verify_live_on_work(*, envelope_bytes, proof_bytes, inputs_bytes, context_b
         request_context, request_issued_at_epoch_ns, request_expires_at_epoch_ns,
         request_window, pins, maximum_control_age_ns, work):
     """Replay authenticated raw4, without adopting planner history authority."""
+    _admit_history_on_work(envelope_bytes=envelope_bytes, proof_bytes=proof_bytes,
+        inputs_bytes=inputs_bytes, context_bytes=context_bytes, request_context=request_context,
+        request_issued_at_epoch_ns=request_issued_at_epoch_ns,
+        request_expires_at_epoch_ns=request_expires_at_epoch_ns, request_window=request_window,
+        pins=pins, maximum_control_age_ns=maximum_control_age_ns, work=work)
+
+
+def _admit_history_on_work(*, envelope_bytes, proof_bytes, inputs_bytes, context_bytes,
+        request_context, request_issued_at_epoch_ns, request_expires_at_epoch_ns,
+        request_window, pins, maximum_control_age_ns, work):
+    """Admit derived live history after actual response authentication and replay.
+
+    The fixed exchange authenticates the original request and response before
+    calling this worker. Only databaseCutoffUs comes from that authenticated
+    response; it remains a bounded planner observation. Request, roots, inputs,
+    original invocation/time and policy/key pins come from that live exchange's
+    held request and measured configuration, never a copied stored context.
+    """
     ledger = evidence.capture._SharedLedger(work)
     originals = envelope_bytes, proof_bytes, inputs_bytes, context_bytes
     for raw in originals:
@@ -113,3 +134,14 @@ def _verify_live_on_work(*, envelope_bytes, proof_bytes, inputs_bytes, context_b
             or payload["expiresAtEpochNs"] > timing["expiresAtEpochNs"]):
         raise WebAuthnTransitionLiveError("signed plan exceeds the original request lifetime")
     plan._fresh(payload, expected, now)
+    # Rejoin after all native verifier/key callbacks, then return only the
+    # privately reconstructed ordinary graph. This is not a proof token.
+    encoded = plan.context._encode_on_work(expectations=expected, work=work)
+    work.charge(input_bytes=len(encoded) + len(originals[3]))
+    if encoded != originals[3]:
+        raise WebAuthnTransitionLiveError("admitted live history changed during genuine replay")
+    now = wire._fresh_on_work(timing, window=window, maximum_age_ns=maximum_control_age_ns,
+        maximum_clock_skew_ns=held[6][1], work=work)
+    _cutoff(expected, timing, held, now)
+    plan._fresh(payload, expected, now)
+    return expected

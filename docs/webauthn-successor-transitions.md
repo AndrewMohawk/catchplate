@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.118`, implementation only. All six WebAuthn successor operations
+Status: source `.120`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -47,6 +47,18 @@ control-interval joins. Genuine historical replay then feeds the current signed
 lookup. Returned originals and unsigned record/time metadata renew no historical
 lifetime, clear no attempt marker and supply no absence, write, retry or signed
 receipt authority. This remains same-source recovery, not cross-source replay.
+
+The actual verifier now has [private preparation methods](authority-webauthn-preparation.md)
+that compose root-backed planning, authenticated live-history admission, intent
+signing and relay preparation into exact raw-six/raw-seven caller originals.
+History is reconstructed from the original authenticated request and configured
+policy, with only the explicitly bounded planner observations admitted after
+genuine replay. No stored context is accepted as independent provenance. These
+methods neither journal nor forward the result and do not admit browser requests.
+The [public admission mapping](authority-webauthn-public-admission.md) records the
+remaining registration, OIDC and trust-publication continuations. The two
+evidence-admit operations are now explicitly internal-only in API classification;
+no public role or legacy execution permission was added.
 
 Deployed caller provisioning, public preparation/invocation and business
 successor execution remain unfinished, as do independent evidence production,

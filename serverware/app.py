@@ -1281,6 +1281,8 @@ _INTERNAL_ONLY_AUTHORITY_OPERATIONS = frozenset(
     {
         "release.audit-drain",
         "credential-nonce.reserve",
+        "webauthn.registration.evidence.admit",
+        "webauthn.trust.installation.admit",
         "webauthn.counter.cas",
         "webauthn.challenge.claim",
         "webauthn.challenge.consume",

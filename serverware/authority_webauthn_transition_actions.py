@@ -8,8 +8,11 @@ original request control. The client authenticates that response before using
 bounded planner observations and performing genuine live raw4 replay.
 
 One original work allowance and unchanged request window span all phases.
-No copied context supplies independent historical authority; no custody,
-reservation, execution, retry or public business invocation follows.
+No copied context supplies independent historical authority. A dedicated live
+exchange admits reconstructed history only after its actual original controls
+and full replay, recording the bounded planner cutoff as an observation. The
+existing client still returns only original raw5. No custody, reservation,
+execution, retry or public business invocation follows here.
 """
 from __future__ import annotations
 
@@ -145,6 +148,20 @@ def _produce_plan_on_configuration(*, operation, payload, configuration_digest, 
 def _request_plan_on_configuration(*, operation, payload, configuration_digest, generation,
         runtime_role_identities,
         control_bytes, context_bytes, inputs_bytes, work):
+    returned, _history = _request_plan_and_admit_history_on_configuration(operation=operation,
+        payload=payload, configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, control_bytes=control_bytes,
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
+    return returned
+
+
+def _request_plan_and_admit_history_on_configuration(*, operation, payload, configuration_digest,
+        generation, runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work):
+    """Exchange real originals and admit only the reconstructed live history.
+
+    This path performs the request/response signature checks itself; neither a
+    successful DTO nor a caller-provided response or history bypasses replay.
+    """
     operation = _operation(operation)
     originals = transport._validate_request(control_bytes, context_bytes, inputs_bytes)
     configured = configuration._capture_on_work(operation=operation, payload=payload,
@@ -173,11 +190,11 @@ def _request_plan_on_configuration(*, operation, payload, configuration_digest, 
     work.charge(input_bytes=len(originals[2]) + len(returned[3]))
     if originals[2] != returned[3]:
         raise WebAuthnTransitionActionError("transition response changed the original input bytes")
-    live._verify_live_on_work(envelope_bytes=returned[1], proof_bytes=returned[2],
+    admitted = live._admit_history_on_work(envelope_bytes=returned[1], proof_bytes=returned[2],
         inputs_bytes=returned[3], context_bytes=returned[4], request_context=context,
         request_issued_at_epoch_ns=issued, request_expires_at_epoch_ns=expires, request_window=window,
         pins=configured.pins, maximum_control_age_ns=configured.maximum_control_age_ns, work=work)
     _fresh(timing, window, configured, work)
-    # Preserve the original response signature with raw4, not adopted history
-    # or a successful execution/custody carrier.
-    return returned
+    # The original response and ordinary derived history remain separate.
+    # Neither is a successful execution or custody carrier.
+    return returned, admitted

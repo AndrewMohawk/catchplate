@@ -4,9 +4,12 @@ The verifier signs independently admitted request/original-input data and real
 root observations. The planner authenticates those originals before opening
 its actual producer, and signs a response binding the request and exact raw3.
 The receiving verifier authenticates that binding before genuine live replay.
-Planner cutoff/time observations stay observations, not independent historical
-authority. No retained-record write, reservation, execution or retry follows.
-All ownership, authentication, I/O guards and replay use the original work.
+Planner cutoff/time observations stay observations, not independent database
+clock truth. The dedicated private preparation exchange explicitly admits
+bounded live-origin history after the same genuine authentication and replay;
+the original exchange return remains unchanged. No retained-record write,
+reservation, execution or retry follows. All ownership, authentication, I/O
+guards and replay use the original work.
 """
 from __future__ import annotations
 
@@ -130,9 +133,11 @@ def _produce_plan_on_configuration(*, purpose, payload, configuration_digest, ge
     return transport._validate_response(response, *raw3)
 
 
-def _request_plan_on_configuration(*, purpose, payload, configuration_digest, generation,
+def _request_plan_on_configuration_core(*, admit_history, purpose, payload, configuration_digest, generation,
         runtime_role_identities,
         control_bytes, context_bytes, inputs_bytes, work):
+    if type(admit_history) is not bool:
+        raise WebAuthnEvidencePlanActionError("evidence planning exchange action is not source fixed")
     _operation(purpose)
     originals = transport._validate_request(control_bytes=control_bytes,
         context_bytes=context_bytes, inputs_bytes=inputs_bytes)
@@ -166,11 +171,38 @@ def _request_plan_on_configuration(*, purpose, payload, configuration_digest, ge
     work.charge(input_bytes=len(originals[2]) + len(returned[2]))
     if originals[2] != returned[2]:
         raise WebAuthnEvidencePlanActionError("evidence planning response changed the original inputs")
-    live._verify_live_on_work(envelope_bytes=returned[1], inputs_bytes=returned[2],
-        evaluation_context_bytes=returned[3], request_context=context,
-        request_issued_at_epoch_ns=issued, request_expires_at_epoch_ns=expires, request_window=window,
-        pins=configured.pins, maximum_control_age_ns=configured.maximum_control_age_ns, work=work)
+    if admit_history:
+        history = live._admit_history_on_work(envelope_bytes=returned[1], inputs_bytes=returned[2],
+            evaluation_context_bytes=returned[3], request_context=context,
+            request_issued_at_epoch_ns=issued, request_expires_at_epoch_ns=expires, request_window=window,
+            pins=configured.pins, maximum_control_age_ns=configured.maximum_control_age_ns, work=work)
+    else:
+        live._verify_live_on_work(envelope_bytes=returned[1], inputs_bytes=returned[2],
+            evaluation_context_bytes=returned[3], request_context=context,
+            request_issued_at_epoch_ns=issued, request_expires_at_epoch_ns=expires, request_window=window,
+            pins=configured.pins, maximum_control_age_ns=configured.maximum_control_age_ns, work=work)
     _fresh(timing, window, configured, work)
-    # Preserve the response signature for the caller's evidence, but return
-    # no adopted historical expectations or successful execution/custody DTO.
-    return returned
+    # Preserve the old return unchanged. The separate fixed preparation path
+    # may receive newly admitted live-origin history, never a reusable proof DTO.
+    return (returned, history) if admit_history else returned
+
+
+def _request_plan_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work):
+    return _request_plan_on_configuration_core(admit_history=False, purpose=purpose,
+        payload=payload, configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, control_bytes=control_bytes,
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
+
+
+def _request_plan_and_admit_history_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work):
+    """Authenticate both original controls, replay raw3, then admit live history.
+
+    This is the source-owned observation-admission path for private preparation,
+    not a generic stored-context adapter or upstream typed-request authorization.
+    """
+    return _request_plan_on_configuration_core(admit_history=True, purpose=purpose,
+        payload=payload, configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, control_bytes=control_bytes,
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)

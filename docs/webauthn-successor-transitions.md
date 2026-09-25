@@ -1,14 +1,15 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.99`, implementation only. All six WebAuthn successor operations
+Status: source `.100`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
 legacy service, SQL execution and witness gates exclude these successors.
 Revocation and the two evidence-admission programs produce signed originals;
 registration finalization, trust staging and completion now retain original
-inputs and replay actual semantics, query bindings and capacity effects after
-their read-proof acquisitions, but are not signed-plan producers. All source
+inputs and canonical unsigned proof records, replaying actual primary/count/query
+proofs, semantics, capacity effects and indexed writes after their read-proof
+acquisitions. They are not signed-plan producers. All source
 remains unbuilt and unexecuted. Independent authority, successor execution and
 release gates remain.
 
@@ -38,6 +39,36 @@ They still need signed-plan integration. Registry selection does not supply
 public invocation, successor reservation, one-use capability, authorized atomic
 execution, recovery or independent production infrastructure. Earlier revision
 sections below describe their respective source checkpoints, not later closure.
+
+## Unsigned transition proof records and replay
+
+Source `.100` extends the three existing `acquire_originals` methods without
+changing ordinary `acquire`. After the real read scopes close,
+`authority_webauthn_transition_proof_production.py` packages the acquisition as
+canonical `serverware.policyAuthorityWebAuthnTransitionProof/v1` bytes and invokes
+`authority_webauthn_transition_proof.py` for genuine offline replay before return.
+The result keeps the acquisition, input bytes/digest and semantic observations,
+and adds `proof_bytes` and `proof_digest`; none is an authority token.
+
+Replay first joins the request, input commitment, historical database cutoff,
+primary roots and full potential counted-head inventory to independently held
+expectations. Actual primary membership and counted-complete-query proofs precede
+the original-input semantic replay. Registration and stage regenerate their
+source query declarations and bind ordered query addresses to the genuinely
+joined leaves; completion uses its actual exact-key queries. Real kernels,
+capacity finalization and complete effect/work comparisons remain mandatory.
+Write derivation repeats the original read proofs, then invokes the actual
+indexed-write engine on those semantic mutations and compares both after-root
+classes and every counted head. Only the actual read/write subset enters the
+counted engines; unused potential heads are validated and preserved unchanged.
+
+Encoding, proof math, signatures required by the semantic workers, comparisons
+and remaining-clamped mathematical work share the original cumulative allowance.
+The record is unsigned: it creates no new signed plan, admitted historical or
+current-root authority, custody, reservation, execution capability or public
+business route. The `.98` registry split and legacy exclusions are unchanged.
+Source remains unbuilt and unexecuted; release and independent-infrastructure
+requirements remain in force.
 
 ## Original inputs and replay for the three transition owners
 

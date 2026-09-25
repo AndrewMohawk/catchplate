@@ -1,6 +1,6 @@
 # Completing the WebAuthn authority transitions
 
-Status: source `.99`, implementation only, not an enabled public protocol or
+Status: source `.100`, implementation only, not an enabled public protocol or
 migration. All six WebAuthn successor operations now have genuine configured
 programs in the separate `typed-successor-planning` registry. Legacy `KERNELS` and
 `PLANNING_PROGRAMS`, service routing, SQL execution and witness admission exclude
@@ -25,6 +25,21 @@ stage retains candidate/assertion/context; completion retains raw installation
 envelope/bundle/state, with committed-stage history independently supplied.
 This same-work replay supplies neither signed plans nor full offline primary/count
 proof replay, durable custody or execution. The `.98` registry split is unchanged.
+
+Source `.100` extends those same `acquire_originals` methods with canonical
+unsigned transition proof bytes and their framed digest; ordinary `acquire`
+remains unchanged. After normal read-scope exits, actual replay joins independently
+held request/input/cutoff/root/head expectations, verifies primary membership and
+counted/query proofs, repeats original-input semantics and capacity finalization,
+then derives real indexed writes and compares complete effects, after-roots and
+full counted-head inventories. Registration/stage complete-query addresses are
+bound in order to genuine joined leaves; completion retains its exact-key path.
+Unused potential heads stay validated and unchanged. The returned carrier adds
+`proof_bytes`/`proof_digest` to the acquisition, input bytes/digest and semantic
+observations, all on the same cumulative work allowance. These are unsigned proof
+records, not newly signed plans, current-root or historical admission, custody or
+public execution. The `.98` registry and all independent-authority, infrastructure
+and frozen-build verification prerequisites remain unchanged and unverified.
 
 The remainder records the original design and revision-specific gaps. The current
 [successor implementation status](webauthn-successor-transitions.md) tracks the

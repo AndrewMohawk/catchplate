@@ -7,9 +7,10 @@ its admitted manifest and source trace; the genuine acquisition repeats query,
 membership, semantic, capacity and write-root computation on the same work.
 Results escape only after normal cursor, transaction and connection exits.
 The separate acquire_originals methods additionally retain canonical original
-inputs before database acquisition and repeat actual semantic/query/capacity
-computation after closing the scope. They do not replace membership or counted
-proof verification, sign plans or preserve independently admitted history.
+inputs before database acquisition, package the actual raw proof material after
+closing the scope, and repeat genuine primary/count/query, semantic/capacity
+and indexed-write computation. Unsigned proof bytes do not sign plans or
+establish independent historical admission.
 
 Configuration, request/current-root/time, assertion/capability and committed
 stage or physical readback provenance remain independent caller obligations.
@@ -143,11 +144,30 @@ def _hold_candidate(context):
     return der, schema, verified_at
 
 
-def _acquired_transition(acquisition, work):
-    """Ordinary claimed effects for genuine replay, never a proof shortcut."""
-    work.prepare_copy(acquisition.mutations)
-    return {"mutations": list(acquisition.mutations), "result": acquisition.kernel.result,
-        "kernelWorkUnits": acquisition.kernel.work_units, "workUnits": acquisition.work_units}
+def _retain_proof(acquisition, inputs_bytes, inputs_digest, configured, owned, operation, work):
+    """Keep the actual owner's held policy; never adopt it from proof bytes."""
+    from serverware import authority_webauthn_transition_proof_production as production
+
+    policy = {"nowEpochNs": owned["nowEpochNs"], "deadlineEpochNs": owned["deadlineEpochNs"],
+        "maximumAgeNs": configured[-2], "maximumClockSkewNs": configured[-1]}
+    identity = dict(zip(_IDENTITY_FIELDS, configured[4]))
+    if operation == registration.OPERATION:
+        policy.update({"signerIdentity": identity, "signerSpkiDigest": configured[5],
+            "rpId": configured[6], "origin": configured[7]})
+    elif operation == stage.OPERATION:
+        policy.update({"verifierIdentity": identity, "capabilityId": owned["inputs"]["capabilityId"],
+            "candidateSigningKeyId": configured[5], "developmentEnabled": configured[6],
+            "requireApproval": configured[7], "requireApproverWebauthn": configured[8]})
+    elif operation == completion.OPERATION:
+        policy.update({"installerIdentity": identity, "installerSpkiDigest": configured[5],
+            "installationTargetDigest": configured[6], "committedStage": owned["inputs"]["committedStage"]})
+    else:
+        raise WebAuthnTransitionPlanningError("proof retention operation is not source fixed")
+    return production._package_from_acquisition_on_work(acquisition=acquisition,
+        inputs_bytes=inputs_bytes, inputs_digest=inputs_digest, request=owned["request"],
+        business_before_roots=owned["businessBeforeRoots"],
+        authorization_before_roots=owned["authorizationBeforeRoots"],
+        counted_before_heads=owned["expectedCountedHeads"], policy=policy, public_key=configured[3], work=work)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -201,15 +221,7 @@ class RegistrationTransitionPlanner:
                 maximum_age_ns=configured[8], maximum_clock_skew_ns=configured[9], query_work=work, trace=trace)
         if not retain_originals:
             return result
-        replay = registration_replay._replay_on_work(request=owned["request"],
-            selected_rows=result.selected_rows, database_now=result.state.database_now,
-            query_reads=result.state.query_reads, inputs_bytes=inputs_bytes, expected_inputs_digest=inputs_digest,
-            expected_transition=_acquired_transition(result, work), evidence_public_key=configured[3],
-            expected_signer_identity=dict(zip(_IDENTITY_FIELDS, configured[4])),
-            expected_signer_spki_digest=configured[5], expected_rp_id=configured[6], expected_origin=configured[7],
-            now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
-            maximum_age_ns=configured[8], maximum_clock_skew_ns=configured[9], work=work)
-        return originals._RetainedAcquisition(result, inputs_bytes, inputs_digest, replay)
+        return _retain_proof(result, inputs_bytes, inputs_digest, configured, owned, registration.OPERATION, work)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -289,16 +301,7 @@ class TrustStageTransitionPlanner:
                 maximum_age_ns=configured[9], maximum_clock_skew_ns=configured[10], query_work=work, trace=trace)
         if not retain_originals:
             return result
-        replay = stage_replay._replay_on_work(request=owned["request"], selected_rows=result.selected_rows,
-            database_now=result.state.database_now, query_reads=result.state.query_reads,
-            inputs_bytes=inputs_bytes, expected_inputs_digest=inputs_digest,
-            expected_transition=_acquired_transition(result, work), verifier_public_key=configured[3],
-            verifier_identity=dict(zip(_IDENTITY_FIELDS, configured[4])), capability_id=owned["inputs"]["capabilityId"],
-            expected_candidate_signing_key_id=configured[5], development_enabled=configured[6],
-            require_approval=configured[7], require_approver_webauthn=configured[8],
-            now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
-            maximum_age_ns=configured[9], maximum_clock_skew_ns=configured[10], work=work)
-        return originals._RetainedAcquisition(result, inputs_bytes, inputs_digest, replay)
+        return _retain_proof(result, inputs_bytes, inputs_digest, configured, owned, stage.OPERATION, work)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -367,13 +370,4 @@ class TrustCompletionTransitionPlanner:
                 maximum_clock_skew_ns=configured[8], query_work=work, trace=trace)
         if not retain_originals:
             return result
-        replay = completion_replay._replay_on_work(request=owned["request"], selected_rows=result.selected_rows,
-            database_now=result.state.database_now, query_reads=result.state.query_reads,
-            inputs_bytes=inputs_bytes, expected_inputs_digest=inputs_digest,
-            expected_transition=_acquired_transition(result, work), installation_target_digest=configured[6],
-            expected_committed_stage=owned["inputs"]["committedStage"], installer_public_key=configured[3],
-            expected_installer_identity=dict(zip(_IDENTITY_FIELDS, configured[4])),
-            expected_installer_spki_digest=configured[5], now_epoch_ns=owned["nowEpochNs"],
-            deadline_epoch_ns=owned["deadlineEpochNs"], maximum_age_ns=configured[7],
-            maximum_clock_skew_ns=configured[8], work=work)
-        return originals._RetainedAcquisition(result, inputs_bytes, inputs_digest, replay)
+        return _retain_proof(result, inputs_bytes, inputs_digest, configured, owned, completion.OPERATION, work)

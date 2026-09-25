@@ -998,6 +998,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_registration_replay.py \
 	serverware/authority_webauthn_stage_replay.py \
 	serverware/authority_webauthn_completion_replay.py \
+	serverware/authority_webauthn_complete_proofs.py \
+	serverware/authority_webauthn_completion_proofs.py \
+	serverware/authority_webauthn_transition_proof_contract.py \
+	serverware/authority_webauthn_transition_proof_wire.py \
+	serverware/authority_webauthn_transition_proof.py \
+	serverware/authority_webauthn_transition_proof_production.py \
 	serverware/authority_transition_policy.py \
 	serverware/authority_transition_webauthn.py \
 	serverware/authority_transition_webauthn_registration.py \
@@ -2800,6 +2806,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_registration_replay.py \
 				serverware/authority_webauthn_stage_replay.py \
 				serverware/authority_webauthn_completion_replay.py \
+				serverware/authority_webauthn_complete_proofs.py \
+				serverware/authority_webauthn_completion_proofs.py \
+				serverware/authority_webauthn_transition_proof_contract.py \
+				serverware/authority_webauthn_transition_proof_wire.py \
+				serverware/authority_webauthn_transition_proof.py \
+				serverware/authority_webauthn_transition_proof_production.py \
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_evidence_acquisition.py \

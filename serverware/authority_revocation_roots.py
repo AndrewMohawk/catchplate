@@ -98,12 +98,13 @@ def _callback(work, function, *args, **kwargs):
     batch._SharedLedger(work)
     limits, metrics = work.limits, work.metrics
     values = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
-    result = function(*args, **kwargs)
-    batch._SharedLedger(work)
-    if (work.limits is not limits or work.metrics != metrics
-            or (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes) != values):
-        raise RevocationRootReadError("revocation root callback changed its shared work")
-    return result
+    try:
+        return function(*args, **kwargs)
+    finally:
+        batch._SharedLedger(work)
+        if (work.limits is not limits or work.metrics != metrics
+                or (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes) != values):
+            raise RevocationRootReadError("revocation root callback changed its shared work")
 
 
 def _physical_stamp(acquisition):

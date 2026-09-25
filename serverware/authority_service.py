@@ -3985,6 +3985,49 @@ class AuthorityProcess:
             generation=generation, read_dsn=read_dsn,
             planner_private_key=planner_private_key, work=work)
 
+    def _webauthn_evidence_plan_persistence(self, *, purpose, work):
+        """Construct one private purpose-pinned writer without opening SQL.
+
+        The real signed configuration, active writer launch and protected
+        descriptor remain upstream admission requirements. Own the complete
+        payload before callbacks and capture generation last. The fixed mapper
+        derives public keys, evidence policy and database pins from that same
+        graph; this factory accepts no request, key, DSN or policy override.
+        It does not admit original plans or enable an operation or route.
+        """
+        if type(purpose) is not str or purpose not in ("registration", "installation"):
+            raise AuthorityServiceError("WebAuthn evidence persistence purpose is not supported")
+        if (type(self) is not AuthorityProcess or self.role_name != "planner-writer"
+                or self.process_mode != "policy-authority-planner-writer"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("WebAuthn evidence plan writer process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        from serverware import authority_revocation_configuration
+        from serverware import authority_webauthn_evidence_plan_writer_configuration
+
+        mapper = (
+            authority_webauthn_evidence_plan_writer_configuration._registration_plan_persistence_from_configuration_on_work
+            if purpose == "registration" else
+            authority_webauthn_evidence_plan_writer_configuration._installation_plan_persistence_from_configuration_on_work
+        )
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("WebAuthn evidence plan writer configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("planner-writer"))
+        writer_dsn = authority_revocation_configuration.production._callback(
+            work, lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))
+        # The fixed mapper immediately owns this last launch snapshot; no
+        # process configuration or descriptor is looked up again afterward.
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return mapper(payload=owned_payload, configuration_digest=configuration_digest,
+            generation=generation, writer_dsn=writer_dsn, work=work)
+
     def _produce_revocation_observed_plan(self, *, request, evidence, context,
             root_inventory, work):
         """Private measured-planner composition, not a serving purpose.

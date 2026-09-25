@@ -1,8 +1,10 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.89`, implementation only. Evidence-plan storage now has a
-separate immutable PostgreSQL custody table and private three-original
-write/read APIs with genuine replay against independent historical pins.
+Status: source `.90`, implementation only. Evidence-plan storage now has a
+configured writer owner and protected service factory around the immutable
+PostgreSQL custody table and genuine three-original replay. The owner holds
+its public-key/policy/database pins and owns outer transaction and connection
+cleanup; per-call historical expectations remain independently required.
 These helpers do not register missing kernels or repair service startup. They
 are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
@@ -417,8 +419,47 @@ reject this custody table and require a separately reviewed migration instead
 of dropping or synthesizing retained originals. No schema or grant has been
 installed, and no transaction has been executed in this implementation batch.
 
-Configured cross-process custody ownership, authenticated historical recovery,
+## Configured plan custody owner
+
+`authority_webauthn_evidence_plan_persistence.EvidencePlanPersistence` holds one
+immutable configuration: writer endpoint and timeout, database role/TLS
+identity, fixed operation, planner/evidence public keys and identities/SPKIs,
+configuration commitment, evidence/plan age and clock skew, and RP/origin or
+installation target. Construction is inert. Its fixed `persist` and `read`
+methods cannot receive replacement keys, a connection, a signer, a clock or an
+operation callback.
+
+Each call owns its bounded original-byte references or retained-record digest
+and all eighteen independent expectations before native callbacks. It joins
+the held configuration and purpose pins, including the same configured age for
+plan and evidence, and checks both actual public-key SPKIs. Neither current
+configuration nor a stored evaluation context establishes historical request,
+root, time or key admission. The actual store still performs full original-byte
+signature, semantic and proof replay on the same invocation work.
+
+The genuine database facade and its existing registry gate are imported before
+any socket opens. The bounded PostgreSQL connection uses the actual writer
+runner for role/TLS/privilege admission and a SERIALIZABLE, read-write,
+non-deferrable outer transaction. The store keeps its nested savepoint. Results
+return only after normal outer transaction and connection exits and a closed
+handle check. The opener closes any returned handle if its work guard rejects
+it. The shared native callback now checks work in `finally`; failure cleanup
+still runs even with invalid work. An uncertain commit or failed post-exit
+check is not evidence of rollback and does not authorize an automatic retry.
+
+The fixed measured-configuration mapper requires the selected operation in
+the signed planner allowlist and its explicit enabled evidence purpose policy.
+It checks planner/writer process pins and writer-to-planner key aliases, then
+constructs the actual public keys. Relevant scalar settings are held before
+native key callbacks. The private planner-writer service factory owns the
+configuration before active-launch and protected writer-descriptor callbacks,
+and captures generation last. No private signer, route, policy extension,
+permission expansion or registered handler is added.
+
+Cross-process serving, independently authenticated historical recovery,
 capability/current-root admission and authorized atomic execution remain open.
+The six missing-kernel and two missing-handler startup boundaries remain
+unchanged. This source has not opened a connection or proved a committed write.
 
 ## Retained evidence and consumption
 

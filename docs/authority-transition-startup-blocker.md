@@ -1,6 +1,6 @@
 # Authority transition startup blocker
 
-Status: source `.98` closes the six-program source inventory through a separate
+Status: source `.116`; `.98` closed the six-program source inventory through a separate
 genuine `typed-successor-planning` registry. Fixed lazy factories now select
 actual configured owners; no placeholder legacy kernel or disabled closure
 check replaces them. Legacy kernel/planning inventories and legacy service,
@@ -8,12 +8,14 @@ SQL execution and witness gates explicitly exclude these successors.
 
 Revocation and the two evidence-admission owners produce signed originals.
 Registration finalization, trust staging and completion now have actual
-read-acquisition owners, but not signed-plan producers. This source closure
+read-acquisition owners, signed-plan producers and private authenticated
+planning/custody paths. Supported-version historical configuration/cohort/key
+resolution is also implemented in source. This source closure
 does not demonstrate successful import or runtime startup: the current source
 is unbuilt and unexecuted. Public invocation, successor reservation/capability/
 atomic execution and independent production infrastructure remain unfinished.
 See [current successor status](webauthn-successor-transitions.md) for those
-boundaries. The historical failure below is not a new `.98` execution result.
+boundaries. The historical failure below is not a current execution result.
 
 ## Historical startup diagnosis
 

@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.107`, implementation only. All six WebAuthn successor operations
+Status: source `.116`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -22,12 +22,27 @@ does not automatically forward or commit. Authenticated lookup now forwards one
 verifier-signed control and independent history unchanged through planner to
 writer, with genuine historical raw-four replay at each receiving hop. Its fresh
 lookup window does not renew an expired plan; returned record/time metadata is
-unsigned and supplies no absence, retry or reconciliation authority. Current
-pins must still match history; no historical rollover resolver is provided.
-Public invocation, independent historical resolution, durable caller
-orchestration/recovery and successor
-execution remain unfinished; independent authority and release gates remain.
-Root observations do not hold roots current for later execution.
+unsigned and supplies no absence, retry or reconciliation authority.
+
+[Supported-version historical resolution](authority-historical-replay.md) now
+admits historical configuration roots, artifact trust states, cohorts and keys
+from a bounded archive signed by the current configuration root. Actual cold
+package/configuration/cohort verification precedes immutable snapshot selection
+for evidence and transition retrieval. Current lookup authentication, database
+settings and live windows remain separate from historical replay authority;
+the signed lookup interval must fit the archive authorization, and original
+plan lifetimes are never renewed. Exact source/schema pins still exclude
+arbitrary cross-source replay. Stored context cannot supply independent request,
+root or evaluation-time provenance.
+
+Public invocation, durable caller orchestration/recovery and successor execution
+remain unfinished, as do independent evidence production/infrastructure and
+frozen-build verification. Root observations do not hold roots current for later
+execution; reservation, one-use capability and atomic execution gates remain.
+The revision-specific sections below retain their original checkpoint status.
+Separate [opaque caller journal storage](control-plane-custody-journal.md) adds
+only a local PREPARED/ATTEMPTED prerequisite; no provisioned caller or
+authenticated caller-to-verifier handoff yet connects it to forwarding.
 
 ## Durable transition originals
 

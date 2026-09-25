@@ -25,6 +25,7 @@ from serverware import authority_planner as planner
 from serverware import authority_transition_webauthn_registration_admission as registration
 from serverware import authority_transition_webauthn_installation_admission as installation
 from serverware import authority_webauthn_evidence_input_wire as input_wire
+from serverware import authority_webauthn_evidence_kernel as configured_kernel
 from serverware import authority_webauthn_registration_inputs as registration_inputs
 from serverware import authority_webauthn_installation_inputs as installation_inputs
 
@@ -157,7 +158,18 @@ def _acquire_owned(cursor, *, operation, owned, raw, ceremony, public_key, query
         # bytes. This framed commitment spends the same remaining allowance
         # before any root, clock, business-row or proof SQL callback.
         original_inputs_digest = input_wire._digest_on_work(original_inputs_bytes, query_work)
-        queries = adapter._query_recipe_on_work(arguments=arguments, work=query_work)
+        # Hold the purpose policy before SQL. Both live acquisition and retained
+        # replay use this same configured, metered original-input computation;
+        # no post-read caller key or successful evidence carrier is accepted.
+        kernel_owner = configured_kernel.EvidenceAdmissionKernel(operation=operation,
+            public_key=public_key, expected_identity=inputs["identity"],
+            expected_spki_digest=inputs["signerSpkiDigest"], maximum_age_ns=owned["maximumAgeNs"],
+            maximum_clock_skew_ns=owned["maximumClockSkewNs"],
+            rp_id=context.rp_id if operation == registration.OPERATION else None,
+            origin=context.origin if operation == registration.OPERATION else None,
+            installation_target_digest=inputs["target"] if operation == installation.OPERATION else None)
+        queries = configured_kernel.EvidenceAdmissionKernel.queries_on_work(
+            kernel_owner, arguments=arguments, work=query_work)
         if (any(type(query) is not core.BoundedQuery for query in queries)
                 or sum(query.maximum_rows for query in queries) > spec["maximumQueryRows"]):
             raise WebAuthnEvidenceAcquisitionError("evidence admission queries are not exact bounded PK declarations")
@@ -209,33 +221,22 @@ def _acquire_owned(cursor, *, operation, owned, raw, ceremony, public_key, query
             _, records = reads._validate_query_reads(operation, queries=queries,
                 query_reads=records, selected_rows=selected, work=query_work)
             acquisition.require_idle(cursor, trace, query_work)
-        kernel_context = core.KernelContext(operation, arguments, selected,
-            database_now, request_digest, query_reads=records)
-        if operation == registration.OPERATION:
-            kernel = registration._kernel_transition_on_work(kernel_context,
-                envelope_bytes=raw[0], client_data_json=raw[1], attestation_object=raw[2],
-                credential_id=inputs["credentialId"], transports=inputs["transports"],
-                scope=scope, verification_context=context, expected_authorization=inputs["authorization"],
-                public_key=public_key, expected_signer_identity=inputs["identity"],
-                expected_signer_spki_digest=inputs["signerSpkiDigest"],
-                maximum_age_ns=owned["maximumAgeNs"], maximum_clock_skew_ns=owned["maximumClockSkewNs"],
-                work=query_work)
-        else:
-            kernel = installation._kernel_transition_on_work(kernel_context,
-                installation_envelope_bytes=raw[0], installed_bundle_bytes=raw[1], installed_state_bytes=raw[2],
-                installation_target_digest=inputs["target"], expected_committed_stage=inputs["stage"],
-                observed_at=ceremony, installer_public_key=public_key,
-                expected_installer_identity=inputs["identity"], expected_installer_spki_digest=inputs["signerSpkiDigest"],
-                maximum_age_ns=owned["maximumAgeNs"], maximum_clock_skew_ns=owned["maximumClockSkewNs"],
-                work=query_work)
+        evaluated = configured_kernel.EvidenceAdmissionKernel.transition_on_work(
+            kernel_owner, request=request, selected_rows=selected, database_now=database_now,
+            inputs_bytes=original_inputs_bytes, expected_inputs_digest=original_inputs_digest, work=query_work)
+        kernel = evaluated.kernel
+        # The shared computation regenerates its own exact query recipe. Join
+        # it back to the actual proved SQL observations before deriving roots.
+        # Neither a matching result nor a local observation replaces that join.
+        _, records = reads._validate_query_reads(operation, queries=evaluated.queries,
+            query_reads=records, selected_rows=selected, work=query_work)
+        queries = evaluated.queries
         query_work.prepare_copy(kernel.mutations)
         mutations = tuple(kernel.mutations)
         if (len(mutations) > 1 or any(item["table"] != evidence.EVIDENCE_TABLE
                 or item["operation"] != "INSERT" for item in mutations)):
             raise WebAuthnEvidenceAcquisitionError("evidence admission proposed a non-INSERT business effect")
-        work_units = planner.authority_audit_capacity.transition_work_units(operation=operation,
-            query_work_units=sum(query.work_units for query in queries),
-            kernel_work_units=kernel.work_units, mutations=mutations)
+        work_units = evaluated.work_units
         limits = planner.authority_complete_read_write._write_limits(spec, batch._SharedLedger(query_work))
         writer = planner.authority_index_mutation_reader._AcquisitionBudget(
             shared_acquisition=acquisition, work=query_work)

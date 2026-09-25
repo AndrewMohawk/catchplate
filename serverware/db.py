@@ -77,6 +77,10 @@ from serverware.authority_store.webauthn_evidence_retention import (
     persist_webauthn_evidence_plan_record,
     read_webauthn_evidence_plan_record,
 )
+from serverware.authority_store.webauthn_evidence_entrypoints import (
+    admit_webauthn_registration_evidence,
+    admit_webauthn_trust_installation_evidence,
+)
 from serverware.authority_store.metadata_schema import (
     _execute_metadata_schema_statements,
     _metadata_table_exists,

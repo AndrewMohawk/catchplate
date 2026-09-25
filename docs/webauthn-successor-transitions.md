@@ -1,10 +1,10 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.91`, implementation only. Evidence plans now have separate
-configured writer and verifier owners and private service compositions. Both
-use the same held public-key/policy checks and genuine three-original replay;
-only the writer owns a database connection. Historical expectations remain
-independently required, and verified plans do not authorize business execution.
+Status: source `.92`, implementation only. The two evidence-admission database
+APIs now dispatch typed semantic requests through the real authority boundary.
+Live planning and retained replay use the same configured, metered original-input
+kernel computation. Writer and verifier owners remain separate; only the writer
+owns a database connection. Verified plans still do not authorize execution.
 These helpers do not register missing kernels or repair service startup. They
 are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
@@ -91,9 +91,47 @@ or audit-outbox/capacity rows. The executor's framework audit remains required.
 Configured read-only ownership, private proof acquisition and signed-plan
 replay are described below. Independent request/root admission, serving and
 authorized atomic execution remain unfinished.
-The adapters do not register configured kernels or supply the two required
-callable database handlers. All six missing-kernel closure failures remain;
-operator-role admission stays denied. This source does not repair startup.
+The database facade now exports `admit_webauthn_registration_evidence` and
+`admit_webauthn_trust_installation_evidence` as genuine dispatch-only APIs.
+Registration accepts the evidence digest, registration challenge, published
+predecessor and optional OIDC session identifiers; installation accepts the
+evidence digest and publication identifier. Both submit the fixed semantic
+request and return the actual authority-dispatch result. They accept no row,
+proof, connection, capability or caller-supplied business intent and perform
+no SQL. Execution belongs to the fixed database executor, not a second Python
+INSERT implementation. Existing controlled-writer wrapping and privileged-role
+dispatch guards still apply.
+
+The configured metered kernel below is not installed into the legacy registry.
+All six missing-kernel closure failures remain; operator-role admission stays
+denied. Completing the callable API surface does not repair startup.
+
+## Shared metered evidence kernel
+
+`EvidenceAdmissionKernel` holds one fixed operation's evidence public key,
+identity/SPKI, age/skew and RP/origin or installation target. Construction is
+inert; calls cannot replace those pins. Its explicit `queries_on_work` and
+`transition_on_work` methods call the real source recipes and original-input
+computation. There is no unmetered fallback or placeholder registry entry.
+
+The shared computation owns request, selected rows and independent input/key
+expectations, rechecks request/operation/input commitments and the actual SPKI,
+decodes original ceremony or installation bytes, and invokes the genuine
+purpose-specific verification and transition logic. It returns the actual
+kernel, regenerated queries, input commitment and business work total. It
+accepts neither expected mutations as computation input nor a successful proof
+or attestation carrier.
+
+Live acquisition holds this configured kernel before SQL and commits its actual
+original inputs before reading rows. Genuine root, primary-membership and query
+checks still precede the transition. Its regenerated queries are joined back
+to the actual SQL observations before real primary-write/root derivation.
+Retained replay uses the same kernel, but first owns the complete historical
+expected transition and independently compares all effects and work totals
+after computation. Both paths spend the same original allowance; the added
+real capture, hash and codec work receives no replacement budget. These
+interfaces prepare genuine configured planning integration without relabeling
+the separate plan protocol as v3 or bypassing capability/current-root execution.
 
 ## Evidence admission read and write-proof acquisition
 
@@ -458,8 +496,9 @@ permission expansion or registered handler is added.
 
 Cross-process serving, independently authenticated historical recovery,
 capability/current-root admission and authorized atomic execution remain open.
-The six missing-kernel and two missing-handler startup boundaries remain
-unchanged. This source has not opened a connection or proved a committed write.
+The six missing-kernel startup boundaries remain. The two dispatch-only handler
+APIs are now present, but this source has not opened a connection or proved a
+committed write.
 
 ## Verifier-side original-plan handoff
 

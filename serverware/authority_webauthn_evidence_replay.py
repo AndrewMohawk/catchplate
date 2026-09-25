@@ -15,18 +15,11 @@ No registry entry, SQL, clock sample or fresh work allowance is introduced.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_request_commitment as commitment
-from serverware import authority_transition_webauthn_registration_admission as registration
-from serverware import authority_transition_webauthn_installation_admission as installation
-from serverware import authority_webauthn_registration_inputs as registration_inputs
-from serverware import authority_webauthn_installation_inputs as installation_inputs
-from serverware import authority_webauthn_evidence_input_wire as wire
+from serverware import authority_webauthn_evidence_computation as computation
 
 
-evidence, authority, core = registration.evidence, registration.authority, registration.core
+registration, installation, wire = computation.registration, computation.installation, computation.wire
+evidence, authority, core = computation.evidence, computation.authority, computation.core
 _TRANSITION_FIELDS = frozenset({"mutations", "result", "kernelWorkUnits", "workUnits"})
 
 
@@ -34,14 +27,9 @@ class WebAuthnEvidenceReplayError(ValueError):
     pass
 
 
-@dataclass(frozen=True, slots=True)
-class _EvidenceReplayObservation:
-    """Actual replay observations, not proof, custody or execution authority."""
-
-    kernel: core.KernelTransition
-    queries: tuple
-    work_units: int
-    inputs_digest: str
+# Preserve the existing observation type reference without wrapping a genuine
+# computation result in a new successful-proof carrier.
+_EvidenceReplayObservation = computation._EvidenceComputationObservation
 
 
 def _replay_on_work(*, operation, request, selected_rows, database_now, inputs_bytes,
@@ -51,7 +39,6 @@ def _replay_on_work(*, operation, request, selected_rows, database_now, inputs_b
     evidence.capture._SharedLedger(work)
     if type(operation) is not str or operation not in (registration.OPERATION, installation.OPERATION):
         raise WebAuthnEvidenceReplayError("evidence replay operation is not source fixed")
-    adapter = registration if operation == registration.OPERATION else installation
     spec = authority.operation_spec(operation)
     if (type(selected_rows) is not tuple or len(selected_rows) > spec["maximumBusinessQueryRows"]
             or any(type(row) is not dict for row in selected_rows)
@@ -88,49 +75,28 @@ def _replay_on_work(*, operation, request, selected_rows, database_now, inputs_b
     shape._array(expected["mutations"], spec["maximumBusinessMutations"], "expected evidence mutations")
     shape._integer(expected["kernelWorkUnits"], spec["maximumBusinessWorkUnits"], minimum=1)
     shape._integer(expected["workUnits"], spec["maximumWorkUnits"], minimum=1)
-    actual = owned["request"]
-    if type(actual) is not dict or actual.get("operation") != operation or actual.get("handler") != adapter.HANDLER:
-        raise WebAuthnEvidenceReplayError("evidence replay request differs from the fixed operation")
-    adapter._arguments(actual.get("arguments"), work)
-    digest = commitment._typed_request_digest(actual, work=work)
-    if commitment._request_different(digest, actual.get("requestDigest"), work=work):
-        raise WebAuthnEvidenceReplayError("evidence replay typed request commitment changed")
-    work.prepare_utf8(operation)
-    work.prepare_utf8(digest)
-    work.charge(hashes=1)
-    if commitment._request_different(commitment.operation_id(operation, digest), actual.get("operationId"), work=work):
-        raise WebAuthnEvidenceReplayError("evidence replay operation commitment changed")
-    inputs_digest = wire._digest_on_work(inputs_bytes, work)
-    evidence.plan._same(inputs_digest, owned["expectedInputsDigest"], work,
-        "evidence originals differ from the independent historical input commitment")
-    evidence.keys._public_binding(public_key, owned["spkiDigest"], work)
-    queries = adapter._query_recipe_on_work(arguments=actual["arguments"], work=work)
+    # Construction holds independently admitted purpose policy; it is not a
+    # successful verification. The fixed configured method always invokes the
+    # same original-input computation used by live acquisition on this work.
+    from serverware import authority_webauthn_evidence_kernel as configured_kernel
+
+    kernel = configured_kernel.EvidenceAdmissionKernel(operation=operation, public_key=public_key,
+        expected_identity=owned["identity"], expected_spki_digest=owned["spkiDigest"],
+        maximum_age_ns=owned["maximumAgeNs"], maximum_clock_skew_ns=owned["maximumClockSkewNs"],
+        rp_id=owned["rpId"], origin=owned["origin"], installation_target_digest=owned["installationTargetDigest"])
     work.prepare_copy(owned["selected"])
-    context = core.KernelContext(operation, actual["arguments"], tuple(owned["selected"]),
-        wire._from_epoch_us(cutoff_us), digest)
-    if operation == registration.OPERATION:
-        originals = registration_inputs._decode_on_work(inputs_bytes, work=work)
-        evidence.plan._same((originals["verification_context"].rp_id, originals["verification_context"].origin),
-            (owned["rpId"], owned["origin"]), work,
-            "retained registration RP/origin differs from independent configuration")
-        kernel = registration._kernel_transition_on_work(context, **originals,
-            public_key=public_key, expected_signer_identity=owned["identity"],
-            expected_signer_spki_digest=owned["spkiDigest"], maximum_age_ns=owned["maximumAgeNs"],
-            maximum_clock_skew_ns=owned["maximumClockSkewNs"], work=work)
-    else:
-        originals = installation_inputs._decode_on_work(inputs_bytes, work=work)
-        kernel = installation._kernel_transition_on_work(context, **originals,
-            installation_target_digest=owned["installationTargetDigest"], installer_public_key=public_key,
-            expected_installer_identity=owned["identity"], expected_installer_spki_digest=owned["spkiDigest"],
-            maximum_age_ns=owned["maximumAgeNs"], maximum_clock_skew_ns=owned["maximumClockSkewNs"], work=work)
-    total_work = capacity.transition_work_units(operation=operation,
-        query_work_units=sum(query.work_units for query in queries),
-        kernel_work_units=kernel.work_units, mutations=kernel.mutations)
-    work.prepare_copy(kernel.mutations)
-    evidence.plan._same({"mutations": list(kernel.mutations), "result": kernel.result,
-        "kernelWorkUnits": kernel.work_units, "workUnits": total_work}, expected, work,
+    try:
+        evaluated = configured_kernel.EvidenceAdmissionKernel.transition_on_work(kernel,
+            request=owned["request"], selected_rows=tuple(owned["selected"]),
+            database_now=wire._from_epoch_us(cutoff_us), inputs_bytes=inputs_bytes,
+            expected_inputs_digest=owned["expectedInputsDigest"], work=work)
+    except computation.WebAuthnEvidenceComputationError as exc:
+        raise WebAuthnEvidenceReplayError(str(exc)) from exc
+    work.prepare_copy(evaluated.kernel.mutations)
+    evidence.plan._same({"mutations": list(evaluated.kernel.mutations), "result": evaluated.kernel.result,
+        "kernelWorkUnits": evaluated.kernel.work_units, "workUnits": evaluated.work_units}, expected, work,
         "genuine evidence replay differs from the complete historical transition")
-    return _EvidenceReplayObservation(kernel, queries, total_work, inputs_digest)
+    return evaluated
 
 
 def _replay_registration_on_work(*, request, selected_rows, database_now, inputs_bytes,

@@ -984,6 +984,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/revocation_retained_sql.py \
 	serverware/authority_store/revocation_retention.py \
 	serverware/authority_store/webauthn_evidence_retention.py \
+	serverware/authority_store/webauthn_evidence_entrypoints.py \
 	serverware/authority_store/root_transition_sql.py \
 	serverware/authority_store/schema.py \
 	serverware/authority_store/v9_schema_source.py \
@@ -1002,6 +1003,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_assertion.py \
 	serverware/authority_webauthn_evidence.py \
 	serverware/authority_webauthn_evidence_acquisition.py \
+	serverware/authority_webauthn_evidence_computation.py \
+	serverware/authority_webauthn_evidence_kernel.py \
 	serverware/authority_webauthn_evidence_planning.py \
 	serverware/authority_webauthn_evidence_policy.py \
 	serverware/authority_webauthn_evidence_configuration.py \
@@ -2755,6 +2758,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_store/revocation_capability_sql.py \
 				serverware/authority_store/revocation_retention.py \
 				serverware/authority_store/webauthn_evidence_retention.py \
+				serverware/authority_store/webauthn_evidence_entrypoints.py \
 				serverware/authority_store/revocation_counted_sql.py \
 				serverware/authority_store/revocation_execution.py \
 				serverware/authority_store/revocation_writer_request.py \
@@ -2769,6 +2773,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_evidence_acquisition.py \
+				serverware/authority_webauthn_evidence_computation.py \
+				serverware/authority_webauthn_evidence_kernel.py \
 				serverware/authority_webauthn_evidence_planning.py \
 				serverware/authority_webauthn_evidence_policy.py \
 				serverware/authority_webauthn_evidence_configuration.py \

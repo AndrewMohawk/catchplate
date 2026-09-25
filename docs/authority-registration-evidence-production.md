@@ -8,6 +8,11 @@ It does not provision an independent signer, process, socket or browser route.
 Public registration still uses the actual legacy finalizer in
 [`webauthn.verify_registration`](../serverware/webauthn.py).
 
+The later [original-evidence signing integration](authority-original-evidence-signing.md)
+adds raw source-proof replay and an actual private source-read owner before this
+row-derived composition, plus the separate installation-purpose mapper. This
+page records the row-input production boundary introduced in `.122`.
+
 ## Required upstream authority
 
 The owning signer must independently admit all of the following before using

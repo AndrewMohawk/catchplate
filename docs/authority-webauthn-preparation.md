@@ -1,6 +1,6 @@
 # Private WebAuthn custody preparation
 
-Source `.122`; implementation only, unbuilt and unexecuted. The actual verifier
+Source `.123`; implementation only, unbuilt and unexecuted. The actual verifier
 now composes live planning, historical-observation admission, retain-intent
 signing and planner-relay preparation. It returns exact originals for the caller
 journal. It does not expose a public endpoint or contact the custody writer.
@@ -51,6 +51,14 @@ and input bytes accepted by `_prepare_webauthn_evidence_custody`, alongside the
 original envelope and finalization arguments. That producer is a private
 continuation, not a provisioned signer or a public route. Original row,
 configuration, signer and enrollment admission remain upstream requirements.
+
+The [original-evidence signing composition](authority-original-evidence-signing.md)
+now includes genuine pre-signing registration source memberships and a private
+planner-owned source-read path, avoiding the need for an envelope before its
+source rows can be acquired. Installation has its own fixed configured signing
+mapper and original-input handoff. Neither supplies an independently deployed
+signer, public successor orchestration or permission to skip later full evidence
+admission and custody.
 
 ## Live origin of historical expectations
 

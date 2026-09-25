@@ -2686,7 +2686,7 @@ def _read_bounded_transition_rows(
     cursor: Any,
     *,
     operation: str,
-    request: Mapping[str, Any],
+    request: Mapping[str, Any] | None,
     queries: tuple[authority_transition_core.Query, ...],
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
@@ -2708,6 +2708,11 @@ def _read_bounded_transition_rows(
     # A complete declaration must never fall through to ordinary SQL LIMIT+1.
     # The earlier database-clock read is not independent time authority.
     has_complete = any(type(query) is authority_complete_query.CompleteIndexQuery for query in queries)
+    if request is None and (
+            operation != "webauthn.registration.evidence.admit"
+            or authority_contract.operation_spec(operation)["selectors"]
+            or has_complete or complete_acquisition is not None):
+        raise AuthorityPlannerError("request-free reads are outside the fixed registration source subset")
     if has_complete:
         # Only the private successor acquisition worker may enter this branch.
         # No current public v3 producer constructs or passes it, and v3 payload
@@ -2721,7 +2726,11 @@ def _read_bounded_transition_rows(
     manifest_by_table = {
         str(entry["table"]): entry for entry in manifest
     }
-    extracted = authority_contract.extract_selectors(operation, request)
+    # The fixed registration source worker regenerates and proves its own
+    # three/four PK recipe before any evidence envelope or typed request exists.
+    # It has no source request selectors; every ordinary request path remains
+    # subject to the existing selector extraction.
+    extracted = {} if request is None else authority_contract.extract_selectors(operation, request)
     selected: dict[tuple[str, bytes], dict[str, Any]] = {}
     query_reads: list[authority_query_reads.QueryRead] = []
 

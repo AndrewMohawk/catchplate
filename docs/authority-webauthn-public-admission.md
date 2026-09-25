@@ -1,6 +1,6 @@
 # WebAuthn public admission and private preparation
 
-Current source checkpoint: `.122`. This is a source-only integration map, not
+Current source checkpoint: `.123`. This is a source-only integration map, not
 a tested import, running endpoint or deployment claim. Private preparation is
 described in [WebAuthn preparation](authority-webauthn-preparation.md); the public
 admission continuation below is still missing.
@@ -75,6 +75,20 @@ no generic verifier-key fallback. It does not independently admit row membership
 enrollment, currentness or the signer service, and it does not connect either
 browser `/verify` route to successor execution. Those handlers still use their
 legacy finalization path.
+
+The two actual `/verify` handlers now call fixed raw-input helpers after their
+real operator-role or pending-OIDC-session/current-RBAC admission. They capture
+once and enter the shared genuine verification/finalization continuation under
+the existing trust lock. Options-time MFA and approval consumption are unchanged;
+no preparation path reruns or consumes them. These helpers do not export an
+authenticated-user or successful-attestation token to a separate service.
+
+The private planner now has a [pre-signing source-read continuation](authority-original-evidence-signing.md)
+over the existing registration read families. Actual row memberships and exact
+query/address associations can feed the configured evidence producer before a
+signed envelope exists. Root, enrollment, time and signer provenance still need
+independent admission and an authenticated cross-service handoff; no public
+browser route calls this private preparation chain yet.
 
 ## Trust stage and completion have different prerequisites
 

@@ -168,6 +168,47 @@ class EvidenceAdmissionPlanner:
             expected_spki_digest=configured[6], maximum_age_ns=configured[7],
             maximum_clock_skew_ns=configured[8], installation_target_digest=configured[11], work=work)
 
+    def acquire_registration_source(self, *, registration_challenge_id,
+            published_publication_id, oidc_session_id, business_before_roots,
+            authorization_before_roots, now_epoch_ns, deadline_epoch_ns, work):
+        """Acquire fixed pre-signing memberships, never a successful admission.
+
+        Selectors, full before-root authority, original time and enrollment
+        provenance must already be independently admitted. No signed envelope
+        or invented evidence request is accepted or required. The actual
+        configured read-only owner and original work remain unchanged.
+        """
+        configured = EvidenceAdmissionPlanner._snapshot(self, registration.OPERATION)
+        evidence.capture._SharedLedger(work)
+        owned = reads._CopyBudget(work).copy({
+            "challenge": registration_challenge_id, "publication": published_publication_id,
+            "session": oidc_session_id, "businessBeforeRoots": business_before_roots,
+            "authorizationBeforeRoots": authorization_before_roots,
+            "nowEpochNs": now_epoch_ns, "deadlineEpochNs": deadline_epoch_ns})
+        for name in ("challenge", "publication"):
+            production.registration._text(owned[name], "registration source " + name + " ID", 4096, work)
+        if owned["session"] is not None:
+            production.registration._text(owned["session"], "registration source session ID", 4096, work)
+        for name in ("nowEpochNs", "deadlineEpochNs"):
+            production.registration._integer(owned[name], name, 1)
+        if owned["nowEpochNs"] >= owned["deadlineEpochNs"]:
+            raise WebAuthnEvidencePlanningError("registration source acquisition has expired")
+        # All invocation graphs and fixed configuration references are held
+        # before key/driver callbacks; no caller or self fields are reopened.
+        evidence.keys._public_binding(configured[4], configured[6], work)
+        from serverware import authority_webauthn_registration_source_acquisition as source
+
+        with planning._read_scope(configured[:3], operation=registration.OPERATION,
+                work=work) as (cursor, manifest, trace):
+            result = source._acquire_on_work(cursor,
+                registration_challenge_id=owned["challenge"],
+                published_publication_id=owned["publication"], oidc_session_id=owned["session"],
+                manifest=manifest, business_before_roots=owned["businessBeforeRoots"],
+                authorization_before_roots=owned["authorizationBeforeRoots"],
+                now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
+                maximum_clock_skew_ns=configured[8], query_work=work, trace=trace)
+        return result
+
     def acquire_registration(self, *, request, business_before_roots, authorization_before_roots,
             envelope_bytes, client_data_json, attestation_object, credential_id, transports,
             scope, verification_context, expected_authorization, now_epoch_ns, deadline_epoch_ns, work):

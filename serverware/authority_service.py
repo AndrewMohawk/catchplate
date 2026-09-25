@@ -4335,6 +4335,48 @@ class AuthorityProcess:
             runtime_role_identities=owned_runtime_identities,
             generation=generation, read_dsn=read_dsn, work=work)
 
+    def _read_webauthn_registration_source(self, *, registration_challenge_id,
+            published_publication_id, oidc_session_id, business_before_roots,
+            authorization_before_roots, now_epoch_ns, deadline_epoch_ns, work):
+        """Acquire fixed pre-signing originals through the actual planner owner.
+
+        The selected enrollment and independent root/time expectations require
+        prior admission. No caller supplies a DSN, manifest, key, evidence
+        digest or signed request to this read-only continuation. The original
+        observations return only after normal transaction exit and live launch
+        continuity checks; they are not root authority or a signing grant.
+        No route, privilege, replacement allowance or custody write is added.
+        """
+        from serverware import authority_query_reads as reads
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_evidence_planning as planning
+
+        if (type(self) is not AuthorityProcess or self.role_name != "planner"
+                or self.process_mode != "policy-authority-planner"):
+            raise AuthorityServiceError("registration source read requires the actual planner process")
+        ledger = configuration.capability.capture._SharedLedger(work)
+        owned = reads._CopyBudget(work).copy({
+            "challenge": registration_challenge_id, "publication": published_publication_id,
+            "session": oidc_session_id, "business": business_before_roots,
+            "authorization": authorization_before_roots, "now": now_epoch_ns,
+            "deadline": deadline_epoch_ns})
+        initial_generation = configuration.capability.capture._JSONCapture(ledger).visit(
+            configuration.production._callback(work, lambda: dict(authority_launch_guard.generation())))
+        owner = AuthorityProcess._webauthn_evidence_planner(self, purpose="registration", work=work)
+        result = planning.EvidenceAdmissionPlanner.acquire_registration_source(owner,
+            registration_challenge_id=owned["challenge"], published_publication_id=owned["publication"],
+            oidc_session_id=owned["session"], business_before_roots=owned["business"],
+            authorization_before_roots=owned["authorization"], now_epoch_ns=owned["now"],
+            deadline_epoch_ns=owned["deadline"], work=work)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner"))
+        final_generation = configuration.capability.capture._JSONCapture(ledger).visit(
+            configuration.production._callback(work, lambda: dict(authority_launch_guard.generation())))
+        configuration.capability.plan._same(
+            tuple(initial_generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "registration source read launch generation changed")
+        return result
+
     def _webauthn_evidence_plan_producer(self, *, purpose, work):
         """Construct one private configured producer without opening SQL.
 

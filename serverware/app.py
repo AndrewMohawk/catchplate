@@ -240,6 +240,9 @@ from serverware.setup_receipts import (
 )
 from serverware.webauthn import (
     WebAuthnError,
+    _RegistrationOriginals,
+    _capture_registration_originals,
+    _verify_registration_originals,
     authority_approval_options,
     credential_trust_context,
     credential_trust_status,
@@ -254,7 +257,6 @@ from serverware.webauthn import (
     registration_options,
     verify_control_plane_mutation_assertion,
     verify_oidc_session_binding_assertion,
-    verify_registration,
     verify_lost_active_key_revocation,
     verify_recovery_registration,
 )
@@ -3037,6 +3039,50 @@ def _oidc_first_enrollment_authorization(
     }
 
 
+def _operator_registration_originals(
+    *, label: str, response: dict[str, Any], identity: AdminIdentity,
+) -> _RegistrationOriginals:
+    """Capture finish inputs after the real operator authentication dependency.
+
+    Only the actual authenticated handler supplies this identity, after its
+    admin/approver role dependency and normal CSRF middleware. The live
+    challenge retains the enrollment authorization established at options;
+    this read-only capture neither reruns nor consumes MFA or approvals.
+    Returned original bytes/scope are not an authentication or membership
+    proof and cannot substitute for the real registration continuation.
+    """
+    user_id = identity.user_id
+    held_label, held_response = label, response
+    return _capture_registration_originals(user_id, held_label, held_response,
+        require_authorization=True)
+
+
+def _oidc_registration_originals(
+    *, label: str, response: dict[str, Any], session: dict[str, Any],
+) -> _RegistrationOriginals:
+    """Capture finish inputs from the handler's genuinely admitted live session.
+
+    The handler must first call _pending_oidc_session_for_request, preserving
+    real cookie/session lookup and current authoritative RBAC admission. This
+    parameter is not a browser-supplied session or a transferable authority
+    carrier. All identity/scope scalars are held before canonical hashing or
+    input-capture callbacks; the existing six-field authorization recipe is
+    joined to the actual unused challenge without activating the session.
+    """
+    session_id, user_id, pending_expires_at = (
+        session["id"], session["user_id"], session["pending_expires_at"])
+    held_label, held_response = label, response
+    held_session = {"id": session_id, "user_id": user_id,
+        "pending_expires_at": pending_expires_at}
+    payload_digest = _control_plane_payload_digest({
+        "type": "serverware.oidc_session_first_enrollment",
+        "session_id": session_id, "user_id": user_id,
+        "pending_expires_at": pending_expires_at, "label": held_label})
+    expected = _oidc_first_enrollment_authorization(held_session, payload_digest)
+    return _capture_registration_originals(str(user_id), held_label, held_response,
+        require_authorization=True, expected_authorization=expected)
+
+
 @app.post("/api/auth/session/webauthn/register/options")
 def operator_session_webauthn_register_options(
     payload: WebAuthnRegistrationStart, request: Request
@@ -3091,24 +3137,13 @@ def operator_session_webauthn_register_verify(
     payload: WebAuthnRegistrationFinish, request: Request
 ) -> dict[str, Any]:
     _, session = _pending_oidc_session_for_request(request)
-    payload_digest = _control_plane_payload_digest(
-        {
-            "type": "serverware.oidc_session_first_enrollment",
-            "session_id": session["id"],
-            "user_id": session["user_id"],
-            "pending_expires_at": session["pending_expires_at"],
-            "label": payload.label,
-        }
-    )
-    expected = _oidc_first_enrollment_authorization(session, payload_digest)
+    label, response = payload.label, payload.response
     try:
-        credential = verify_registration(
-            str(session["user_id"]),
-            payload.label,
-            payload.response,
-            require_authorization=True,
-            expected_authorization=expected,
-        )
+        with trust_bundle_lock(exclusive=False):
+            originals = _oidc_registration_originals(
+                label=label, response=response, session=session)
+            credential = _verify_registration_originals(originals,
+                require_authorization=True)
     except WebAuthnError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     credential.pop("_registration_authorization", None)
@@ -15294,13 +15329,13 @@ def webauthn_register_verify(
     payload: WebAuthnRegistrationFinish,
     identity: AdminIdentity = Depends(require_role("admin", "approver")),
 ) -> dict[str, Any]:
+    held_identity, label, response = identity, payload.label, payload.response
     try:
-        credential = verify_registration(
-            identity.user_id,
-            payload.label,
-            payload.response,
-            require_authorization=True,
-        )
+        with trust_bundle_lock(exclusive=False):
+            originals = _operator_registration_originals(
+                label=label, response=response, identity=held_identity)
+            credential = _verify_registration_originals(originals,
+                require_authorization=True)
     except WebAuthnError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     credential.pop("_registration_authorization", None)

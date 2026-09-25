@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.122`, implementation only. All six WebAuthn successor operations
+Status: source `.123`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -75,6 +75,16 @@ and assembles typed evidence input. A fixed admitted-configuration mapper pins
 the independent evidence signer and policy. Upstream state, enrollment and
 signer admission remain mandatory; no independent signer process or public
 registration continuation is provisioned by this source change.
+
+Source `.123` connects a fixed [pre-signing source-read and proof path](authority-original-evidence-signing.md)
+to the actual configured planner owner and a private process method. It acquires
+and verifies challenge, publication, high-water and optional session rows without
+inventing an evidence digest, and the signing composition replays their original
+proofs. Installation gains an explicit independent-purpose signing mapper.
+The actual public verify handlers share read-only enrollment-input capture and
+the existing genuine verification/finalization body; they still perform legacy
+finalization. No independent signer service, public successor path, SQL execution
+permission or production readiness is established by these integrations.
 
 Deployed caller provisioning, public preparation/invocation and business
 successor execution remain unfinished, as do independent evidence production,

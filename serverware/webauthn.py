@@ -1470,10 +1470,31 @@ def verify_registration(
     require_authorization: bool = False,
     expected_authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    authorization_required = require_authorization
     originals = _capture_registration_originals(user_id, label, response,
-        require_authorization=authorization_required,
+        require_authorization=require_authorization,
         expected_authorization=expected_authorization)
+    return _verify_registration_originals(originals,
+        require_authorization=require_authorization)
+
+
+def _verify_registration_originals(
+    originals: _RegistrationOriginals,
+    *,
+    require_authorization: bool = False,
+) -> dict[str, Any]:
+    """Continue actual registration under the caller's existing trust lock.
+
+    The fixed public wrapper or authenticated enrollment handler must have
+    just run _capture_registration_originals and retain trust_read_locked (or
+    its actual shared trust_bundle_lock) through this whole continuation.
+    This ordinary raw-input carrier is not attestation, authentication, row
+    membership or authorization proof. No successful verification is accepted:
+    actual parsing, duplicate detection, live-trust attestation verification
+    and the existing atomic finalizer still run below without a second capture.
+    """
+    if type(originals) is not _RegistrationOriginals or type(require_authorization) is not bool:
+        raise WebAuthnError("registration continuation requires exact original inputs")
+    authorization_required = require_authorization
     scope = originals.scope
     parsed = attestation_core.parse_registration_data(
         originals.client_data_json, originals.attestation_object, originals.credential_id,

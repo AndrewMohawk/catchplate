@@ -13,8 +13,9 @@ The application asks to use an API; it does not need possession of that API's
 long-lived credential.
 
 > **Status: pre-production.** The current source is unbuilt and unexecuted, and
-> control-plane startup deliberately fails closed on four missing WebAuthn
-> authority transitions. See the [startup blocker](docs/authority-transition-startup-blocker.md).
+> successful startup and production flows have not been verified. The six
+> WebAuthn successor programs now exist in source, but public integration and
+> production deployment remain unfinished. See the [current implementation status](docs/webauthn-successor-transitions.md).
 > The architecture below describes the intended system, not a deployed or
 > verified production service.
 
@@ -172,6 +173,6 @@ follow the [source-freeze and verification workflow](goal.md#resource-conscious-
 | [Credential constraints](docs/credential-constraints.md) | Policy language, supported authentication modes, adapters, and response restrictions. |
 | [Rust data plane](data-plane/README.md) | Proxy implementation and transport contracts. |
 | [Project requirements](goal.md) | Architecture, implementation roadmap, and acceptance criteria. |
-| [Startup blocker](docs/authority-transition-startup-blocker.md) | Exact missing authority transitions and dependencies. |
+| [Successor implementation status](docs/webauthn-successor-transitions.md) | Current authentication integration and execution gaps; links to the historical startup diagnosis. |
 | [Release stages](docs/release-stages.md) | Separate build, publish, sign, deploy, and independent verification responsibilities. |
 | [Dependency snapshot](docs/production-dependency-snapshot.md) | Immutable offline dependency preparation and its remaining release boundary. |

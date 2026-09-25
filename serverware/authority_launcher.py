@@ -21,9 +21,9 @@ from typing import Any, Callable, Mapping
 
 
 LAUNCH_MANIFEST_SCHEMA = (
-    "serverware.signedPolicyAuthorityLaunchManifest/v5"
+    "serverware.signedPolicyAuthorityLaunchManifest/v6"
 )
-LAUNCH_PAYLOAD_SCHEMA = "serverware.policyAuthorityLaunchManifest/v5"
+LAUNCH_PAYLOAD_SCHEMA = "serverware.policyAuthorityLaunchManifest/v6"
 GENERATION_CONTEXT_SCHEMA = (
     "serverware.authorityGenerationLaunchContext/v4"
 )
@@ -1777,7 +1777,7 @@ def _enter(
             or not binding["kind"]
             or not isinstance(binding.get("ownerUid"), int)
             or isinstance(binding.get("ownerUid"), bool)
-            or binding["ownerUid"] < 0
+            or binding["ownerUid"] != 0
             or not isinstance(binding.get("mode"), int)
             or isinstance(binding.get("mode"), bool)
             or not 0 <= binding["mode"] <= 0o7777

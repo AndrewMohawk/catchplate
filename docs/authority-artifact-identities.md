@@ -1,10 +1,11 @@
 # Authority artifact identities
 
-Source revisions `.108` through `.112` separate file, policy, generation, role
-and bootstrap-control identities. Direct final-generation and final-launch
+Source revisions `.108` through `.113` separate file, policy, generation, role,
+bootstrap-control and runtime credential identities. Direct final-generation and final-launch
 configuration pins are replaced by static commitments. The launch manifest no
-longer contains a credential hash of itself; attestation and configuration-to-
-credential-set cycles remain. This is an implementation checkpoint, not a
+longer contains a credential hash of itself, and configuration no longer declares
+a digest of the credential set containing that configuration. Attestation-linked
+cycles remain. This is an implementation checkpoint, not a
 successful build, launch or production release.
 
 ## Operation contract
@@ -40,12 +41,14 @@ to the complete source document, and derives the semantic digest. The artifact
 validator and stage-zero admission independently enforce the source and
 generation commitments. Neither identity substitutes for the other.
 
-The current closed contracts are `serverware.authorityArtifactBundle/v6`,
-`serverware.authorityGenerationStatement/v6`,
-`serverware.signedAuthorityArtifactPackage/v6`, and
-`serverware.unsignedAuthorityArtifactPackage/v6`. Revision `.108` introduced v3
+The current closed contracts are `serverware.authorityArtifactBundle/v7`,
+`serverware.authorityGenerationStatement/v7`,
+`serverware.signedAuthorityArtifactPackage/v7`, and
+`serverware.unsignedAuthorityArtifactPackage/v7`. Revision `.108` introduced v3
 for the operation contract; `.109` added configuration identities in v4; `.110`
 binds configuration v3 in v5 packages; `.111` binds configuration v4 in v6 packages.
+Revision `.113` binds service configuration v5 and witness configuration v4 in
+v7 packages; generation launch context retains its unchanged v4 shape.
 Existing digest domains remain unchanged;
 each canonical body carries its schema version. Older packages are not admitted
 through a compatibility fallback.
@@ -166,14 +169,14 @@ credential admission, generation high-water, and active role checks remain.
 
 ## Root-verified bootstrap control
 
-Signed launch manifest and payload v5 separate the manifest's delivery from
-ordinary credentials. Stage-zero request v3 requires an exact `bootstrapControl`:
+Signed launch manifest and payload v6 separate the manifest's delivery from
+ordinary credentials. Stage-zero request v4 requires an exact `bootstrapControl`:
 
 | Field | Required meaning |
 | --- | --- |
 | `name` | `SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD` |
 | `fd` | The planned, separately preserved descriptor, at least 3 |
-| `envelopeSchema` | `serverware.signedPolicyAuthorityLaunchManifest/v5` |
+| `envelopeSchema` | `serverware.signedPolicyAuthorityLaunchManifest/v6` |
 | `maximumBytes` | 67108864, the unchanged manifest byte ceiling |
 
 The slot contains no manifest hash. It identifies a document to admit, not an
@@ -208,9 +211,47 @@ that immutable observation separately and rechecks descriptor continuity when
 requiring an active launch. An observed raw checksum is not inserted into the
 manifest or request, nor does it substitute for the signature. Stage-zero
 interface, handoff, launch-identity schemas and their changed signature/digest
-domains advance together to v3. Old documents are not silently adopted.
+domains are v4. The initial split used launch v5/stage-zero v3; `.113` advances
+these versions with the explicit root-custody contract. Old documents are not
+silently adopted.
 
-## Remaining attestation and credential dependencies
+## Runtime credential custody
+
+Service configuration v5 removes the role field `credentialSetDigest`. The
+earlier generator and loader only shape-checked that field; they did not join it
+to the actual runtime set. Treating it as the full set digest would require the
+configuration to contain a hash depending on its own bytes. No replacement
+policy object or unchecked digest is introduced.
+
+Static policy remains the existing role commitment: the complete admitted
+role manifest binds the exact ordinary credential names, and the configured
+`roleBindingDigests` join those roles. Runtime content identity remains the
+actual signed request/certificate commitment, including each credential's size
+and raw file hash. `credential_set_digest` accepts only a list or tuple bounded
+to 256 before copying, validates every exact descriptor and sorted unique name,
+then hashes the unchanged nine-field public projection under
+`serverware.authorityCredentialSet/v1`. The descriptor number remains a separate
+request binding, not part of that content-set projection.
+
+Stage-zero v4 distinguishes custody from assignment: `ownerUid` must be zero,
+matching the existing root-owned sealed delivery and service readers, while
+`ownerRole` still must equal the exact admitted service role. The previous
+runtime-UID equality conflicted with those real delivery requirements. Ordinary
+file ownership, private mode, seals, size, raw hash and role/name checks remain;
+no writable file or additional credential is granted to a service.
+
+Before loading its launch private key, `AuthorityProcess` captures the genuine
+guard request and generation, checks current role/process and generation
+sequence/digest, and computes the actual credential-set digest. It holds these
+expected scalars with the admitted stage-zero request digest, then compares the
+original launch certificate's corresponding fields after key construction.
+Canonical original bytes and the launch public-key binding remain checked.
+This repeats consistency at service startup; root signature, authorized issuer,
+complete request and certificate admission still belong to the actual launcher.
+Nothing is inserted into the signed configuration payload. Public credential
+release evidence retains its separate runtime `credentialSetDigest`.
+
+## Remaining attestation dependencies
 
 Direct generation and role-launch pins no longer force the static configuration
 to contain those final identities. The receipt back-reference remains enforced:
@@ -225,9 +266,8 @@ receipt that binds the configuration payload itself and final runtime identities
 The role split does not make that receipt constructible or remove its verification.
 Attestation is still an ordinary hashed credential: its receipt binds final
 launch identity, while the launch commits that receipt's original bytes.
-Static `credentialSetDigest` also includes the configuration bytes whose payload
-contains that same credential-set commitment. Both dependencies still require
-explicit phase separation; no digest check is bypassed by the bootstrap change.
+These receipt dependencies still require explicit phase separation; no receipt
+or runtime credential digest check is bypassed by the bootstrap/custody changes.
 
 The next implementation must version and integrate an acyclic binding across
 static policy production, artifact verification, launch and runtime attestation.

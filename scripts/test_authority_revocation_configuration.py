@@ -36,7 +36,7 @@ import test_authority_revocation_issuance as issuance_oracle
 import test_authority_revocation_plan as oracle
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v4"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v5"
 GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
 VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 ISSUER_SESSION = "serverware.policyAuthorityCapabilityIssuerSession/v1"

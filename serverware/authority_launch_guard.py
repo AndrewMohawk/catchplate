@@ -172,7 +172,7 @@ def activate(
         or control["name"] != "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
         or type(control["fd"]) is not int
         or control["fd"] != bootstrap_control_identity[0]
-        or control["envelopeSchema"] != "serverware.signedPolicyAuthorityLaunchManifest/v5"
+        or control["envelopeSchema"] != "serverware.signedPolicyAuthorityLaunchManifest/v6"
         or type(control["maximumBytes"]) is not int
         or control["maximumBytes"] != 64 * 1024 * 1024
         or control["fd"] not in retained_descriptors

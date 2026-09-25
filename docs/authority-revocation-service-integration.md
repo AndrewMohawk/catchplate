@@ -71,6 +71,11 @@ The mapper additionally scans the owned admitted role map and compares the
 five configured semantic role pins on the same work allowance. Static role
 runtime closures are checked by the actual loader against admitted package
 versions; dynamic attestation continues to bind the real final launch.
+Service configuration v5 no longer declares an unused static credential-set
+digest. Existing role commitments remain static policy; startup derives the
+actual content-bound set from the guard-held request and joins it to the original
+launch certificate, without overlaying the signed configuration. Root-owned
+sealed credential custody is distinct from the exact assigned service role.
 This successor requires a positive generation;
 the general service's generation-zero behavior is not changed.
 

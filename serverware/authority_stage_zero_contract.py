@@ -19,24 +19,24 @@ from .authority_artifact_spec import (
 )
 
 
-STAGE_ZERO_REQUEST_SCHEMA = "serverware.authorityNativeStageZeroRequest/v3"
+STAGE_ZERO_REQUEST_SCHEMA = "serverware.authorityNativeStageZeroRequest/v4"
 LAUNCH_IDENTITY_PAYLOAD_SCHEMA = (
-    "serverware.authorityLaunchIdentityCertificatePayload/v3"
+    "serverware.authorityLaunchIdentityCertificatePayload/v4"
 )
 SIGNED_LAUNCH_IDENTITY_SCHEMA = (
-    "serverware.signedAuthorityLaunchIdentityCertificate/v3"
+    "serverware.signedAuthorityLaunchIdentityCertificate/v4"
 )
-STAGE_ZERO_HANDOFF_SCHEMA = "serverware.authorityNativeStageZeroHandoff/v3"
-STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityNativeStageZeroInterface/v3"
+STAGE_ZERO_HANDOFF_SCHEMA = "serverware.authorityNativeStageZeroHandoff/v4"
+STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityNativeStageZeroInterface/v4"
 STAGE_ZERO_REQUEST_DIGEST_DOMAIN = (
-    "serverware.authorityNativeStageZeroRequestDigest/v3"
+    "serverware.authorityNativeStageZeroRequestDigest/v4"
 )
-LAUNCH_ID_DOMAIN = "serverware.authorityLaunchIdentity/v3"
+LAUNCH_ID_DOMAIN = "serverware.authorityLaunchIdentity/v4"
 LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN = (
-    "serverware.authorityLaunchIdentityCertificateSignature/v3"
+    "serverware.authorityLaunchIdentityCertificateSignature/v4"
 )
 BOOTSTRAP_CONTROL_NAME = "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
-BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA = "serverware.signedPolicyAuthorityLaunchManifest/v5"
+BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA = "serverware.signedPolicyAuthorityLaunchManifest/v6"
 MAX_BOOTSTRAP_CONTROL_BYTES = 64 * 1024 * 1024
 LISTENER_IDENTITY_DOMAIN = "serverware.authorityListenerIdentity/v1"
 CREDENTIAL_SET_DOMAIN = "serverware.authorityCredentialSet/v1"
@@ -563,7 +563,7 @@ def _validate_credential(value: object) -> None:
         credential["ownerUid"],
         name="credential owner uid",
         minimum=0,
-        maximum=2**32 - 2,
+        maximum=0,
     )
     seals = _integer(
         credential["seals"],
@@ -1202,9 +1202,9 @@ def validate_stage_zero_request(
             raise StageZeroContractError(
                 "credential is assigned to another role"
             )
-        if entry["ownerUid"] != role["runtimeUid"]:
+        if entry["ownerUid"] != 0:
             raise StageZeroContractError(
-                "credential owner UID differs from role runtime UID"
+                "credential material is not root-owned"
             )
     for entry in mutable_state:
         _validate_mutable_state_descriptor(entry)
@@ -1698,6 +1698,8 @@ def listener_identity_digest(listener: Mapping[str, Any]) -> str:
 
 
 def credential_set_digest(credentials: Sequence[Mapping[str, Any]]) -> str:
+    if type(credentials) not in (list, tuple) or len(credentials) > MAX_CREDENTIALS:
+        raise StageZeroContractError("credentials have an invalid item count")
     values = list(credentials)
     for credential in values:
         _validate_credential(credential)
@@ -2840,7 +2842,7 @@ CREDENTIAL_JSON_SCHEMA = _closed_schema(
         "size": INTEGER_JSON_SCHEMA,
         "sha256": SHA256_JSON_SCHEMA,
         "mode": INTEGER_JSON_SCHEMA,
-        "ownerUid": INTEGER_JSON_SCHEMA,
+        "ownerUid": {"type": "integer", "const": 0},
         "seals": INTEGER_JSON_SCHEMA,
         "delivery": {"const": "retained-sealed-memfd"},
     }

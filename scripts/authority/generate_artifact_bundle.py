@@ -58,10 +58,10 @@ CLOSURE_SIGNATURE_DOMAIN = (
 )
 ROLE_SET_DIGEST_DOMAIN = "serverware.authorityRoleSet/v1"
 SERVICE_CONFIGURATION_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v4"
+    "serverware.signedPolicyAuthorityServiceConfiguration/v5"
 )
 SERVICE_CONFIGURATION_PAYLOAD_SCHEMA = (
-    "serverware.policyAuthorityServiceConfiguration/v4"
+    "serverware.policyAuthorityServiceConfiguration/v5"
 )
 WITNESS_CONFIGURATION_SCHEMA = (
     "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v4"
@@ -120,7 +120,6 @@ SERVICE_ROLE_COMMON_FIELDS = frozenset(
         "tlsIssuerDn",
         "measurementDigest",
         "attestationReceiptDigest",
-        "credentialSetDigest",
         "responseSigningSpkiDigest",
         "requestTimeoutSeconds",
         "databaseConnectTimeoutSeconds",
@@ -813,7 +812,6 @@ def _validate_configuration_document(
             for digest_field in (
                 "measurementDigest",
                 "attestationReceiptDigest",
-                "credentialSetDigest",
                 "responseSigningSpkiDigest",
             ):
                 _digest(

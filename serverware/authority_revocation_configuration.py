@@ -24,7 +24,7 @@ from serverware import authority_revocation_invocation as invocation
 from serverware import authority_revocation_issuance as configured
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v4"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v5"
 GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
 MAX_CONFIGURATION_DIGESTS = 4096
 _GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest",

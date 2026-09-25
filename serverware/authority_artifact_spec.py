@@ -25,10 +25,10 @@ except ImportError:  # The contract fails closed when crypto is unavailable.
     Ed25519PublicKey = None
 
 
-ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v6"
-GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v6"
-SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v6"
-UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v6"
+ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v7"
+GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v7"
+SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v7"
+UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v7"
 ROLE_BINDING_DOMAIN = "serverware.authorityRoleBinding/v1"
 ROLE_RUNTIME_CLOSURE_SCHEMA = "serverware.policyAuthorityRoleRuntimeClosure/v1"
 CONFIGURATION_GENERATION_BINDING_SCHEMA = (
@@ -36,7 +36,7 @@ CONFIGURATION_GENERATION_BINDING_SCHEMA = (
 )
 CONFIGURATION_PAYLOAD_SCHEMAS = MappingProxyType(
     {
-        "authority-service": "serverware.policyAuthorityServiceConfiguration/v4",
+        "authority-service": "serverware.policyAuthorityServiceConfiguration/v5",
         "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v4",
     }
 )

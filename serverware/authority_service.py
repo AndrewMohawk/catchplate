@@ -70,9 +70,9 @@ from serverware.authority_store.verifier_read_sql import (
 SOURCE_REVISION = (
     authority_contract.SOURCE_REVISION
 )
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v4"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v5"
 SIGNED_CONFIG_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v4"
+    "serverware.signedPolicyAuthorityServiceConfiguration/v5"
 )
 ATTESTATION_SCHEMA = (
     "serverware.policyAuthorityCredentialReleaseAttestation/v2"
@@ -1449,7 +1449,6 @@ class MeasuredConfiguration:
             "tlsIssuerDn",
             "measurementDigest",
             "attestationReceiptDigest",
-            "credentialSetDigest",
             "responseSigningSpkiDigest",
             "requestTimeoutSeconds",
             "databaseConnectTimeoutSeconds",
@@ -1521,7 +1520,6 @@ class MeasuredConfiguration:
                     for field in (
                         "measurementDigest",
                         "attestationReceiptDigest",
-                        "credentialSetDigest",
                     )
                 )
                 or any(
@@ -3167,6 +3165,48 @@ class AuthorityProcess:
         # Never make the writer a generic internal-envelope signer. A future
         # ACK path must bind this separate key to its exact custody protocol.
         self.writer_response_signing_key: Ed25519PrivateKey | None = None
+        from serverware import authority_stage_zero_contract
+
+        launch_request = dict(authority_launch_guard.stage_zero_request())
+        generation = dict(authority_launch_guard.generation())
+        launch_assurance = dict(authority_launch_guard.launch_assurance())
+        request_role = launch_request.get("role")
+        request_generation = launch_request.get("generation")
+        generation_sequence = generation.get("sequence")
+        generation_digest = _require_digest(
+            generation.get("digest"), "active launch generation digest"
+        )
+        request_digest = _require_digest(
+            generation.get("stageZeroRequestDigest"), "active stage-zero request digest"
+        )
+        if (
+            type(request_role) is not dict
+            or request_role.get("role") != role
+            or request_role.get("processMode") != PROCESS_MODES[role]
+            or type(request_generation) is not dict
+            or type(generation_sequence) is not int
+            or type(request_generation.get("sequence")) is not int
+            or request_generation.get("sequence") != generation_sequence
+            or request_generation.get("digest") != generation_digest
+        ):
+            raise AuthorityServiceError("active credential request role or generation changed")
+        try:
+            actual_credential_set_digest = authority_stage_zero_contract.credential_set_digest(
+                launch_request["credentials"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AuthorityServiceError("active credential set is invalid") from exc
+        # Keep the admitted request identity and actual set outside signed
+        # configuration, and hold all expected scalars before key callbacks.
+        expected_launch_binding = (
+            role, generation_sequence, generation_digest,
+            request_digest, actual_credential_set_digest,
+        )
+        expected_assurance = (
+            launch_assurance.get("trustMode"),
+            launch_assurance.get("coLocated"),
+            launch_assurance.get("hardwareBacked"),
+        )
         launch_descriptors = dict(
             authority_launch_guard.launch_identity_descriptors()
         )
@@ -3202,9 +3242,6 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "stage-zero launch identity exceeds its bound"
             )
-        self.launch_identity_key = _load_ed25519_private_key(
-            launch_private_value
-        )
         try:
             launch_certificate = json.loads(launch_certificate_value)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -3221,29 +3258,33 @@ class AuthorityProcess:
                 "stage-zero launch certificate is not canonical"
             )
         launch_payload = launch_certificate["payload"]
+        certificate_launch_binding = (
+            launch_payload.get("role"), launch_payload.get("generationSequence"),
+            launch_payload.get("generationDigest"), launch_payload.get("requestDigest"),
+            launch_payload.get("credentialSetDigest"),
+        )
+        certificate_assurance = (
+            launch_payload.get("trustMode"), launch_payload.get("coLocated"),
+            launch_payload.get("hardwareBacked"),
+        )
+        certificate_public_key = _b64url_decode(
+            launch_payload.get("launchPublicKeyBase64Url"), size=32
+        )
+        self.launch_identity_key = _load_ed25519_private_key(
+            launch_private_value
+        )
         launch_public = self.launch_identity_key.public_key().public_bytes(
             serialization.Encoding.Raw,
             serialization.PublicFormat.Raw,
         )
-        generation = dict(authority_launch_guard.generation())
-        launch_assurance = dict(
-            authority_launch_guard.launch_assurance()
-        )
         if (
-            launch_payload.get("role") != role
-            or launch_payload.get("generationDigest")
-                != generation.get("digest")
-            or launch_payload.get("trustMode")
-                != launch_assurance.get("trustMode")
-            or launch_payload.get("coLocated")
-                is not launch_assurance.get("coLocated")
-            or launch_payload.get("hardwareBacked")
-                is not launch_assurance.get("hardwareBacked")
-            or _b64url_decode(
-                launch_payload.get("launchPublicKeyBase64Url"),
-                size=32,
-            )
-                != launch_public
+            certificate_launch_binding != expected_launch_binding
+            or type(certificate_launch_binding[1]) is not int
+            or certificate_assurance[0] != expected_assurance[0]
+            or certificate_assurance[1] is not expected_assurance[1]
+            or certificate_assurance[2] is not expected_assurance[2]
+            or certificate_public_key != launch_public
+            or _canonical(launch_certificate) != launch_certificate_value
         ):
             raise AuthorityServiceError(
                 "stage-zero launch identity binding changed"

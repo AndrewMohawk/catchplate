@@ -513,7 +513,7 @@ def _open_trusted_host_local_witness_state(
         or set(manifest) != {"schema", "payload", "signature"}
         or canonical_manifest != manifest_value
         or manifest.get("schema")
-            != "serverware.signedPolicyAuthorityLaunchManifest/v5"
+            != "serverware.signedPolicyAuthorityLaunchManifest/v6"
         or not isinstance(payload, dict)
         or payload.get("role") != "witness"
         or payload.get("processMode") != "policy-authority-replay-witness"

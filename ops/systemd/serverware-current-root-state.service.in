@@ -1,0 +1,64 @@
+# Unrendered, uninstalled deployment input. The approved release export and all
+# trust originals, latest checkpoint, identities and journal are provisioned
+# separately. No automatic restart or checkpoint derivation is authorized.
+[Unit]
+Description=Serverware independently enrolled current-root state (trusted-host-local)
+BindsTo=serverware-current-root-state.socket
+After=local-fs.target serverware-current-root-state.socket
+RequiresMountsFor=@CURRENT_ROOT_RELEASE_ROOT@ @CURRENT_ROOT_TRUST_DIR@ @CURRENT_ROOT_KEY_FILE@ @CURRENT_ROOT_JOURNAL_DIR@
+AssertPathIsDirectory=@CURRENT_ROOT_RELEASE_ROOT@
+AssertPathIsDirectory=@CURRENT_ROOT_TRUST_DIR@
+AssertPathIsDirectory=@CURRENT_ROOT_JOURNAL_DIR@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Exec is not readiness or admission. Delivery drops root and all supplementary
+# groups; the nonroot singleton independently admits its exact five descriptors.
+User=root
+Group=root
+RootDirectory=@CURRENT_ROOT_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@CURRENT_ROOT_TRUST_DIR@:/run/serverware/current-root-trust
+BindReadOnlyPaths=@CURRENT_ROOT_KEY_FILE@:/run/secrets/serverware-current-root-state-signing-key
+BindReadOnlyPaths=/run/serverware/current-root:/run/serverware/current-root
+BindPaths=@CURRENT_ROOT_JOURNAL_DIR@:/var/lib/serverware/current-root-state
+ReadWritePaths=/var/lib/serverware/current-root-state
+Sockets=serverware-current-root-state.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/current_root_state_launcher.py --root-delivery
+Restart=no
+TimeoutStartSec=35s
+TimeoutStopSec=35s
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native

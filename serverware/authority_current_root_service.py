@@ -86,7 +86,7 @@ class CurrentRootDecisionService:
             raise CurrentRootServiceError("forked process cannot use current-root serving")
         return configured
 
-    def serve_connection(self, connection):
+    def serve_connection(self, connection, *, transport_deadline_ns=None):
         """Own one accepted socket, serve at most one request, then close it."""
         if type(connection) is not socket.socket:
             raise CurrentRootServiceError("current-root serving requires an actual accepted socket")
@@ -95,6 +95,11 @@ class CurrentRootDecisionService:
             owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = configured
             reserve_peer, complete_peer = (reserve_uid, reserve_gid), (complete_uid, complete_gid)
             deadline_ns = io._deadline_ns(timeout)
+            if transport_deadline_ns is not None:
+                if type(transport_deadline_ns) is not int or transport_deadline_ns < 1:
+                    raise CurrentRootServiceError("current-root inherited service deadline is invalid")
+                deadline_ns = min(deadline_ns, transport_deadline_ns)
+            transport._check_deadline(deadline_ns)
             uid, gid, _pid = io._call_until(connection, deadline_ns,
                 lambda: _accepted_peer(connection))
             peer = (uid, gid)

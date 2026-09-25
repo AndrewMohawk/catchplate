@@ -14,6 +14,13 @@ issuer/executor owners, source-installed fixed SQL functions, full catalog
 checks and a durable pre-database attempt journal. This is source integration,
 not deployed execution, public activation or completed verification.
 
+The [.142 state-service lifecycle](current-root-state-startup.md) adds dedicated
+root-signed cold admission, protected five-descriptor delivery, real journal
+recovery against an independent exact checkpoint, and bounded serial serving.
+It is explicitly trusted-host-local source, not native measurement or an
+independent rollback witness. Service templates are not installed, and no
+production roles, keys, journal or latest-checkpoint authority were provisioned.
+
 ## Independent enrollment, distinct authorities
 
 A dedicated root signs enrollment of a stable database identity, frozen

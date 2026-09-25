@@ -51,6 +51,7 @@ from serverware import authority_planner
 from serverware import authority_transition_registry
 from serverware import authority_transport
 from serverware import authority_custody_caller_transport as custody_caller_transport
+from serverware import authority_custody_reconcile_transport as custody_reconcile_transport
 from serverware import authority_revocation_planner_custody_transport as custody_transport
 from serverware import authority_revocation_custody_read_transport as custody_read_transport
 from serverware import authority_revocation_planning_transport as planning_transport
@@ -3064,12 +3065,14 @@ class AuthorityRuntimeRelay:
                     "authority relay peer identity is not allowed"
                 )
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
-            detached = prefix in custody_caller_transport.REQUEST_MAGICS
+            reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
+            detached = reconciling or prefix in custody_caller_transport.REQUEST_MAGICS
             if detached:
                 from serverware import authority_custody_caller_service
 
                 authority_custody_caller_service._serve_relay(
-                    trust, connection, deadline_ns=deadline_ns, prefix=prefix)
+                    trust, connection, deadline_ns=deadline_ns, prefix=prefix,
+                    reconciling=reconciling)
                 return
             # Preserve legacy canonical JSON framing after reading its length
             # prefix. Detached custody never falls through to this protocol.
@@ -9321,6 +9324,7 @@ class AuthorityServer:
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
             detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
                 *custody_caller_transport.REQUEST_MAGICS,
+                *custody_reconcile_transport.REQUEST_MAGICS,
                 custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC,
                 custody_read_transport.REQUEST_MAGIC,
                 evidence_custody_transport.REGISTRATION_REQUEST_MAGIC,
@@ -9341,11 +9345,13 @@ class AuthorityServer:
                 *transition_custody_transport.FORWARD_REQUEST_MAGICS,
                 *transition_custody_read_transport.REQUEST_MAGICS,
                 *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
-            if prefix in custody_caller_transport.REQUEST_MAGICS:
+            reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
+            if reconciling or prefix in custody_caller_transport.REQUEST_MAGICS:
                 from serverware import authority_custody_caller_service
 
                 authority_custody_caller_service._serve_verifier(
-                    self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                    self.process, connection, deadline_ns=deadline_ns, prefix=prefix,
+                    reconciling=reconciling)
                 return
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)

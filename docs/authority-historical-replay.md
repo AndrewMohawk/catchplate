@@ -1,6 +1,6 @@
 # Supported-version historical replay
 
-Source checkpoint `.116`; implementation only, unbuilt and unexecuted.
+Source checkpoint `.118`; implementation only, unbuilt and unexecuted.
 This authorizes verification of retained WebAuthn evidence and transition plans,
 not activation of an old generation, renewed credentials, or business execution.
 
@@ -111,6 +111,32 @@ inside the same archive interval. Existing live lookup-window checks remain in
 force through database/transport/replay and final return. An archive valid only
 at startup is not an indefinite grant to use retired keys.
 
+## Explicit caller reconciliation
+
+Source `.118` adds a separate private, lookup-only path from the caller journal
+through the runtime relay to the verifier. It carries the exact retained
+evidence raw-six or transition raw-seven originals under the independently
+admitted current configuration scope. It does not forward a custody write or
+clear the journal's durable attempt marker.
+
+The original intent's configuration, generation and issue time are initially
+untrusted lookup locators. They can select only a snapshot already admitted by
+the current-root-signed archive, solely to obtain its static signature key.
+Where several eligible cohorts share that configuration/generation, the first
+eligible snapshot can bootstrap signature verification; it cannot supply the
+final historical identity. After authenticating the original controls and their
+complete byte commitments, the verifier resolves the actual planner receipt and
+authenticated historical expectations, joins the control intervals to that
+snapshot, and performs genuine original-plan replay. Received headers and stored
+context never enroll keys or establish independent history.
+
+Only then does the existing current signed lookup retrieve the retained record.
+Its fresh window remains bounded by current archive authorization; it renews no
+original intent, relay, plan, evidence or invocation lifetime. The dedicated
+response carries original plan bodies and unsigned record/time metadata. Errors,
+missing records and uncertain responses grant neither absence proof nor retry,
+write, signed-receipt or business execution authority.
+
 ## Limits and remaining work
 
 This supports configuration, cohort and key changes only under the currently
@@ -121,6 +147,8 @@ replay needs an explicitly versioned replay implementation.
 No SQL mutation, new database grant, automatic retry, old-generation activation
 or execution capability is added. Missing data and late/failed responses remain
 uncertain observations, not proof of absence or rollback. Durable caller
-retention/reconciliation, public orchestration, successor execution, independent
-evidence production and production infrastructure remain separate work.
+retention and explicit private reconciliation now have source implementations;
+deployed caller provisioning, public preparation/orchestration, successor
+execution, independent evidence production and production infrastructure remain
+separate work.
 Broad fixture adaptation and all build/runtime verification remain deferred.

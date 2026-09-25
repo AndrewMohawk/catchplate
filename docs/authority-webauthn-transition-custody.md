@@ -1,6 +1,6 @@
 # Private WebAuthn transition custody
 
-Status: source `.117`, implementation only; unbuilt and unexecuted. This is the
+Status: source `.118`, implementation only; unbuilt and unexecuted. This is the
 private retention and authenticated lookup path for `webauthn.registration.finalize`,
 `webauthn.trust.stage` and `webauthn.trust.complete`, not execution of those
 business transitions. See the [successor overview](webauthn-successor-transitions.md)
@@ -40,8 +40,10 @@ retries. Before a potentially committing forward, the caller must durably retain
 the exact request originals needed for later reconciliation. Source `.117` adds
 a separate [caller journal and private forwarding client](control-plane-custody-journal.md)
 that writes an irreversible local attempt marker before one explicit send via
-the existing runtime relay and verifier. Deployment provisioning, public
-preparation/orchestration and lookup-based reconciliation remain unfinished.
+the existing runtime relay and verifier. Deployment provisioning and public
+preparation/orchestration remain unfinished. Source `.118` adds the separate
+explicit lookup-only reconciliation path described below; it does not repeat
+that forward or release the attempt barrier.
 
 All three hops use dedicated eight-byte operation/action prefixes, complete
 length vectors, exact EOF and a 64 MiB aggregate including controls. Controls
@@ -85,6 +87,26 @@ per serving invocation. No replay is claimed before originals are retrieved.
 Missing records raise; they are not proofs of absence, rollback or permission
 to retry or reconcile an uncertain earlier write.
 
+## Explicit reconciliation of retained caller originals
+
+The caller can explicitly send its original raw-seven record through a distinct
+current-configuration-bound relay/verifier route. No new retain intent, relay
+or custody write is produced. The original intent header first locates an
+already root-admitted archive configuration/generation and issue interval for
+signature verification. This unauthenticated locator cannot enroll a key.
+After authenticating the original signatures and byte commitments, the verifier
+selects the actual planner-receipt/history snapshot, binds all original control
+intervals to it, and genuinely replays the plan before making the existing fresh
+authenticated lookup.
+
+Retrieval returns raw four plus unsigned record/time metadata, with genuine
+historical replay at the existing receiving hops. The fresh lookup is bounded
+by current archive authorization and does not renew historical controls, plans,
+evidence or invocation times. The local attempt marker stays irreversible;
+missing or failed retrieval is not absence proof, a signed receipt, permission
+to write, or authority to resend. This supports only the currently admitted
+source/schema implementation, not arbitrary cross-source replay.
+
 ## Commit and failure boundaries
 
 The original intent/relay windows remain in force across authentication, replay
@@ -101,9 +123,10 @@ does not prove rollback or absence and does not authorize an automatic retry.
 Transport completion, source inspection and a returned ordinary object do not
 establish tested deployment behavior or exactly-once business execution.
 
-Authenticated retrieval and supported-version historical trust resolution are
-implemented at source level. Cross-source replay, durable caller retention/reconciliation, authorized recovery,
-public orchestration and atomic successor execution remain unfinished. This
+Authenticated retrieval, supported-version historical trust resolution, caller
+retention and explicit lookup-only reconciliation are implemented at source
+level. Deployed caller provisioning, cross-source replay, public
+preparation/orchestration and atomic successor execution remain unfinished. This
 path does not keep roots current, reserve a logical operation, issue execution
 authority or complete the public workflow.
 Infrastructure admission and the consolidated runtime/build validation phase

@@ -1,9 +1,11 @@
 """Fixed opaque caller-custody handlers behind the real peer-checked routers.
 
 The runtime relay does not admit history or controls. The verifier invokes its
-actual custody forwarding path, which performs those checks on one existing
-work allowance. An unsigned response pair is not a remote durability receipt;
-a late failure may follow commit and never authorizes retry.
+actual custody forwarding or read-only reconciliation path on one existing
+work allowance. Reconciliation returns original retained bodies with unsigned
+metadata, not write permission. An unsigned response is not a remote durability
+receipt; a late failure after forwarding may follow commit and never authorizes
+retry.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import os
 import time
 
 from serverware import authority_custody_caller_transport as transport
+from serverware import authority_custody_reconcile_transport as reconcile_transport
 
 
 def _send_pair(connection, result, *, deadline_ns):
@@ -41,13 +44,16 @@ def _relay_deadline(interval, deadline_ns):
     return clipped
 
 
-def _serve_verifier(process, connection, *, deadline_ns, prefix):
+def _serve_verifier(process, connection, *, deadline_ns, prefix, reconciling=False):
     """Receive all originals and EOF before allocating the sole verifier work."""
     # The outer service imports this module lazily after its actual classes
     # exist. No registry, synthetic owner or caller-selected callback is used.
     from serverware import authority_service as service
     from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
+    if type(reconciling) is not bool:
+        raise service.AuthorityServiceError("caller custody reconciliation mode is not exact")
+    wire = reconcile_transport if reconciling else transport
     if (
         type(process) is not service.AuthorityProcess
         or process.role_name != "verifier"
@@ -59,7 +65,7 @@ def _serve_verifier(process, connection, *, deadline_ns, prefix):
         raise service.AuthorityServiceError("caller custody requires the actual measured configuration")
     configuration_digest = transport._configuration_digest(configuration.digest)
     transport._check_deadline(deadline_ns)
-    received_configuration, family, selector, originals = transport._recv_request(
+    received_configuration, family, selector, originals = wire._recv_request(
         connection, deadline_ns=deadline_ns, prefix=prefix,
     )
     if received_configuration != configuration_digest:
@@ -70,7 +76,18 @@ def _serve_verifier(process, connection, *, deadline_ns, prefix):
     transport._check_deadline(deadline_ns)
     if process.configuration is not configuration:
         raise service.AuthorityServiceError("caller custody configuration changed during reception")
-    if family == "evidence":
+    if reconciling:
+        if family == "evidence":
+            from serverware import authority_webauthn_evidence_custody_recovery as recovery
+
+            result = recovery._recover_on_work(process, purpose=selector, originals=originals, work=work)
+        elif family == "transition":
+            from serverware import authority_webauthn_transition_custody_recovery as recovery
+
+            result = recovery._recover_on_work(process, operation=selector, originals=originals, work=work)
+        else:
+            raise service.AuthorityServiceError("caller custody reconciliation family is not source fixed")
+    elif family == "evidence":
         result = service.AuthorityProcess._forward_webauthn_evidence_custody(
             process, purpose=selector, intent_bytes=originals[0],
             relay_bytes=originals[1], envelope_bytes=originals[2],
@@ -91,14 +108,22 @@ def _serve_verifier(process, connection, *, deadline_ns, prefix):
         # Forwarding may already have committed; this is not rollback or
         # permission to repeat a journal attempt.
         raise service.AuthorityServiceError("caller custody configuration changed during forwarding")
-    _send_pair(connection, result, deadline_ns=deadline_ns)
+    if reconciling:
+        wire._check_deadline(deadline_ns)
+        wire._send_response(connection, family=family, selector=selector,
+            response=result, deadline_ns=deadline_ns)
+    else:
+        _send_pair(connection, result, deadline_ns=deadline_ns)
 
 
-def _serve_relay(trust, connection, *, deadline_ns, prefix):
+def _serve_relay(trust, connection, *, deadline_ns, prefix, reconciling=False):
     """Forward unchanged originals without extending the incoming deadline."""
     from serverware import authority_service as service
     from serverware import authority_launch_guard as guard
 
+    if type(reconciling) is not bool:
+        raise service.AuthorityServiceError("caller custody reconciliation mode is not exact")
+    wire = reconcile_transport if reconciling else transport
     if type(trust) is not service.AuthorityRuntimeClient:
         raise service.AuthorityServiceError("caller custody relay trust is not the actual runtime client")
     # These fields come from the already admitted hot-runtime trust object.
@@ -126,20 +151,25 @@ def _serve_relay(trust, connection, *, deadline_ns, prefix):
     deadline_ns = _relay_deadline(interval, deadline_ns)
     guard.require_active("runtime")
     transport._check_deadline(deadline_ns)
-    received_configuration, family, selector, originals = transport._recv_request(
+    received_configuration, family, selector, originals = wire._recv_request(
         connection, deadline_ns=deadline_ns, prefix=prefix,
     )
     if received_configuration != configuration_digest:
         raise service.AuthorityServiceError("caller custody scope differs from the admitted runtime trust")
     deadline_ns = _relay_deadline(interval, deadline_ns)
-    result = transport._socket_request(
+    result = wire._socket_request(
         verifier_path, configuration_digest=configuration_digest,
         family=family, selector=selector, originals=originals,
         deadline_ns=deadline_ns, expected_peer_uid=verifier_uid,
         expected_peer_gid=verifier_gid,
     )
     deadline_ns = _relay_deadline(interval, deadline_ns)
-    _send_pair(connection, result, deadline_ns=deadline_ns)
+    if reconciling:
+        wire._check_deadline(deadline_ns)
+        wire._send_response(connection, family=family, selector=selector,
+            response=result, deadline_ns=deadline_ns)
+    else:
+        _send_pair(connection, result, deadline_ns=deadline_ns)
     # Even a final expiry is uncertain after forwarding; it is not rollback
     # evidence and cannot release a caller journal's attempt barrier.
     _relay_deadline(interval, deadline_ns)

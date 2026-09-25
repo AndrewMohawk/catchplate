@@ -1,7 +1,8 @@
 # Opaque caller custody journal
 
-Caller storage and private forwarding at authority source `.117`; unbuilt and
-unexecuted. Local storage remains separate from signed custody/replay authority.
+Caller storage, private forwarding and explicit read-only reconciliation at
+authority source `.118`; unbuilt and unexecuted. Local storage remains separate
+from signed custody/replay authority.
 
 `control_plane_custody_records.py` encodes exact original bytes without admitting
 their signatures, history, keys or policy:
@@ -105,15 +106,54 @@ durability receipt or business-execution result. The authority's verifier
 mutable-state policy, SQL privileges, legacy public operation gates and work
 ceilings are unchanged.
 
+## Explicit read-only reconciliation
+
+`reconcile(localdigest)` requires an existing ATTEMPTED entry and rechecks its
+exact originals and attempt marker on disk. It makes one explicit lookup request
+through the same root-pinned runtime relay and measured verifier, under a new
+bounded transport deadline and the caller's original live runtime attestation.
+It does not call the retention forwarding path, claim another attempt, clear
+the original marker or automatically repeat any exchange.
+
+```text
+ATTEMPTED originals -> authenticate original intent and relay
+                   -> replay against admitted historical configuration
+                   -> sign a fresh lookup-only request
+                   -> read retained originals -> exact original-byte comparison
+```
+
+Original retention controls may have expired. Their configuration, generation
+and issue time are used only to locate a verifier key in the archive already
+admitted by the current root. They cannot introduce a new key. The verifier
+authenticates the original intent and every body commitment before decoding
+history, then resolves the actual historical planner receipt and evaluation
+time. It authenticates the original relay, joins both complete control intervals
+to that actual archived configuration, and replays the original plan against its
+original policy and lifetime constraints.
+
+Only after those checks does the verifier issue a fresh current-configuration
+lookup control through the existing planner/writer read path. The current
+archive and lookup authorization must remain live; none of this renews the old
+plan, controls or business-execution authority. Returned raw-three evidence or
+raw-four transition bodies must exactly match the stored originals. The verifier
+also joins their retained-record identity through the existing read replay.
+
+The result remains an unsigned peer observation with a retention timestamp,
+not a signed durability receipt. Missing rows, timeouts and invalid replies are
+errors, not proof of absence or permission to resend. Reconciliation currently
+supports only the exact current source contract; old-source records remain
+loadable but need a separately implemented versioned historical replay path.
+No local RECONCILED marker or terminal business state is created.
+
 ## Integration still required
 
 Deployment provisioning of the caller directory and signed descriptor inventory,
-public invocation/preparation, authenticated lookup-based reconciliation, and
-business successor orchestration/execution remain unfinished. The private
+public invocation/preparation, versioned cross-source replay, durable recovery
+observations and business successor orchestration/execution remain unfinished. The private
 client is not automatically installed into control-plane startup or public HTTP
 routes. This source path has not been built, launched or exercised.
 
 The [historical resolver](authority-historical-replay.md) supplies a separate
 trust-admission boundary; these opaque stored bytes cannot replace it. Explicit
-caller recovery, independent provisioning and frozen build/runtime verification
-remain required.
+deployment integration, independent provisioning and frozen build/runtime
+verification remain required.

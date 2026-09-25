@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.117`, implementation only. All six WebAuthn successor operations
+Status: source `.118`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -39,11 +39,18 @@ The [caller journal](control-plane-custody-journal.md) now has a private configu
 forwarding client and dedicated control-plane-to-relay-to-verifier ingress.
 Exact originals and a durable one-attempt marker precede its single send;
 current configuration and existing peer topology are checked at each boundary.
-It does not prepare public invocations, automatically retry or reconcile outcomes.
+Explicit private reconciliation now sends those same originals through a
+separate lookup-only route. An original intent header can locate a static key
+only in the already root-admitted archive; signature and complete-byte
+authentication precede actual planner-receipt/history selection and all original
+control-interval joins. Genuine historical replay then feeds the current signed
+lookup. Returned originals and unsigned record/time metadata renew no historical
+lifetime, clear no attempt marker and supply no absence, write, retry or signed
+receipt authority. This remains same-source recovery, not cross-source replay.
 
-Public invocation, complete caller orchestration/recovery and successor execution
-remain unfinished, as do independent evidence production/infrastructure and
-frozen-build verification. Root observations do not hold roots current for later
+Deployed caller provisioning, public preparation/invocation and business
+successor execution remain unfinished, as do independent evidence production,
+infrastructure and frozen-build verification. Root observations do not hold roots current for later
 execution; reservation, one-use capability and atomic execution gates remain.
 The revision-specific sections below retain their original checkpoint status.
 

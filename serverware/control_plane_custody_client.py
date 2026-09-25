@@ -8,8 +8,9 @@ open in that admitted set; this module provisions neither a directory nor trust.
 Append and forward are separate actions. Forwarding burns the journal's durable
 ATTEMPTED marker before one relay exchange and never clears it after failure.
 An unsigned digest/time response is an observation, not a signed durability
-receipt, replay result, execution authority or permission to retry. There is no
-automatic signing, preparation, reconciliation, server startup or HTTP route.
+receipt, replay result, execution authority or permission to retry. Explicit
+reconciliation uses a separate read-only path and never clears ATTEMPTED.
+There is no automatic signing, preparation, retry, server startup or HTTP route.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import time
 
 from serverware import authority_contract as authority
 from serverware import authority_custody_caller_transport as transport
+from serverware import authority_custody_reconcile_transport as reconciliation
 from serverware import authority_service as service
 from serverware import control_plane_custody_journal as journal
 from serverware import control_plane_custody_records as records
@@ -169,7 +171,7 @@ class ControlPlaneCustodyClient:
         digest, source = record.digest, record.source_revision
         family, selector, originals = record.family, record.selector, record.originals
         if source != authority.SOURCE_REVISION:
-            raise CustodyClientError("old-source custody originals require separate reconciliation")
+            raise CustodyClientError("old-source custody originals require versioned historical replay")
         originals = transport._validate_originals(family, selector, originals)
         _process(binding)
         # Sample monotonic first: sampling and marker publication consume this
@@ -191,6 +193,48 @@ class ControlPlaneCustodyClient:
         _process(binding)
         _receipt_now(binding)
         transport._check_deadline(deadline_ns)
+        return observation
+
+    def reconcile(self, localdigest):
+        """Explicitly read back an attempted record without repeating its write.
+
+        The verifier authenticates original controls against admitted historical
+        keys and requests a fresh lookup, not a new retention attempt. A missing
+        row or failed response is not proof of absence. Successful originals
+        remain ordinary peer observations, not signed durability receipts.
+        Neither result changes the irreversible local attempt marker.
+        """
+        binding = _snapshot(self)
+        digest = journal._digest(localdigest)
+        inventory = journal.CustodyJournal.inventory(binding.journal)
+        entry = next((item for item in inventory if item.digest == digest), None)
+        if type(entry) is not journal.JournalEntry or entry.attempted is not True:
+            raise CustodyClientError("custody reconciliation requires a retained attempted record")
+        # load rechecks the exact originals and existing attempt marker on disk;
+        # inventory alone is not the durable storage check.
+        record = journal.CustodyJournal.load(binding.journal, digest)
+        if type(record) is not records.PreparedRecord or record.digest != digest:
+            raise CustodyClientError("journal did not return the exact prepared originals")
+        if record.source_revision != authority.SOURCE_REVISION:
+            raise CustodyClientError("old-source custody originals require versioned historical replay")
+        family, selector = record.family, record.selector
+        originals = reconciliation._validate_originals(family, selector, record.originals)
+        _process(binding)
+        started_monotonic_ns = time.monotonic_ns()
+        now_epoch_ns = _receipt_now(binding)
+        deadline_ns = started_monotonic_ns + min(binding.maximum_deadline_ns,
+            binding.attestation_interval[1] - now_epoch_ns)
+        reconciliation._check_deadline(deadline_ns)
+        observation = reconciliation._socket_request(binding.relay_path,
+            configuration_digest=binding.configuration_digest,
+            family=family, selector=selector, originals=originals,
+            deadline_ns=deadline_ns, expected_peer_uid=binding.relay_uid,
+            expected_peer_gid=binding.relay_gid)
+        _process(binding)
+        _receipt_now(binding)
+        reconciliation._check_deadline(deadline_ns)
+        if observation[:-2] != originals[2:-1]:
+            raise CustodyClientError("custody reconciliation returned different original plan bytes")
         return observation
 
     def close(self):

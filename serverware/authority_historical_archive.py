@@ -412,3 +412,48 @@ def _lookup_on_work(snapshots, *, configuration_digest, planner_attestation_rece
     return _HistoricalSnapshot(thaw.visit(selected.payload), selected.configuration_digest,
         thaw.visit(selected.generation), thaw.visit(selected.runtime_role_identities),
         selected.valid_from_epoch_ns, selected.valid_until_epoch_ns)
+
+
+def _lookup_control_on_work(snapshots, *, configuration_digest, generation_digest,
+        issued_at_epoch_ns, work):
+    """Locate an already-admitted static control key, not admitted history.
+
+    An unauthenticated ORIGINAL INTENT header may supply these locators. They
+    select only startup root-admitted records and never enroll a key. Multiple
+    eligible cohorts under one canonically verified configuration/generation
+    have the same static verifier keys; the first eligible inventory entry is
+    deterministic and sufficient only to bootstrap signature verification.
+
+    After authenticating the original control, the caller MUST resolve its
+    actual planner receipt and historical expectations through _lookup_on_work
+    and join every control interval to that selected snapshot. This result is
+    not a substitute for those joins, current archive lifetime enforcement,
+    original signature authentication or genuine historical plan replay.
+    """
+    ledger = capture._SharedLedger(work)
+    if type(snapshots) is not _CapturedArchive:
+        raise HistoricalArchiveError("control lookup requires this call's captured archive")
+    cohort._digest(configuration_digest, "original control configuration locator")
+    cohort._digest(generation_digest, "original control generation locator")
+    cohort._positive(issued_at_epoch_ns, "original control issue locator")
+    records = snapshots.records
+    if type(records) is not tuple or not 1 <= len(records) <= MAX_ENTRIES + 1:
+        raise HistoricalArchiveError("control lookup record inventory is invalid")
+    metadata = capture._JSONCapture(ledger, maximum_bytes=16384)
+    metadata.visit([configuration_digest, generation_digest, issued_at_epoch_ns])
+    selected = None
+    for record in records:
+        if type(record) is not _FrozenSnapshot:
+            raise HistoricalArchiveError("control lookup record type changed")
+        metadata.visit([record.configuration_digest, record.generation_digest,
+            record.valid_from_epoch_ns, record.valid_until_epoch_ns])
+        if (selected is None and record.configuration_digest == configuration_digest
+                and record.generation_digest == generation_digest
+                and record.valid_from_epoch_ns <= issued_at_epoch_ns < record.valid_until_epoch_ns):
+            selected = record
+    if selected is None:
+        raise HistoricalArchiveError("original control has no already-admitted historical key locator")
+    thaw = _Thaw(ledger, maximum_bytes=authority.MAX_RESULT_BYTES)
+    return _HistoricalSnapshot(thaw.visit(selected.payload), selected.configuration_digest,
+        thaw.visit(selected.generation), thaw.visit(selected.runtime_role_identities),
+        selected.valid_from_epoch_ns, selected.valid_until_epoch_ns)

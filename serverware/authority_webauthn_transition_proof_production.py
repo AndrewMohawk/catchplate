@@ -1,13 +1,17 @@
 """Retain actual acquisition proofs and replay them from canonical originals.
 
 An exact acquisition class is an ordinary carrier, not trusted proof success.
-The outgoing bytes are genuinely replayed against held request/root/head/policy
-expectations before return. Their cutoff is an actual acquisition observation;
-independent historical admission, signatures and durable custody remain outside
-this private producer. No trace or successful-result object substitutes for raw
-primary proofs, counted query frontiers or indexed write frontiers.
+The retained-proof path genuinely replays its bytes against held request/root/
+head/policy expectations before return. A separate encoding-only seam supplies
+unverified originals to the signed producer, which performs its own mandatory
+replay. Their cutoff is an actual acquisition observation; independent history,
+signatures and durable custody remain outside this module. No trace or
+successful-result object substitutes for raw primary proofs, counted query
+frontiers or indexed write frontiers.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from serverware import authority_radix_mutation as primary
 from serverware import authority_webauthn_transition_proof as proof
@@ -18,6 +22,14 @@ contract, evidence, wire = proof.contract, proof.evidence, proof.wire
 
 class WebAuthnTransitionProofProductionError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _EncodedTransitionProof:
+    """Unverified originals and owned expectations, never a proof-success token."""
+
+    proof_bytes: bytes
+    expectations: dict
 
 
 def _list(values, maximum, work):
@@ -34,9 +46,14 @@ def _expected_array(values, maximum, work):
     return list(values)
 
 
-def _package_from_acquisition_on_work(*, acquisition, inputs_bytes, inputs_digest, request,
-        business_before_roots, authorization_before_roots, counted_before_heads, policy, public_key, work):
-    """Produce unsigned proof originals only after real raw proof/semantic replay."""
+def _encode_from_acquisition_on_work(*, acquisition, inputs_bytes, inputs_digest, request,
+        business_before_roots, authorization_before_roots, counted_before_heads, policy, work):
+    """Encode ordinary acquisition claims; callers must genuinely replay them.
+
+    This private seam lets a signed producer perform its own mandatory raw
+    replay once, without mistaking an acquisition or retained carrier for
+    proof authority. Merely receiving these bytes establishes no validity.
+    """
     ledger = evidence.capture._SharedLedger(work)
     wire._raw(inputs_bytes, 2, wire.MAX_BYTES)
     # The actual planner remains a lazy import, with its genuine source closure.
@@ -146,7 +163,17 @@ def _package_from_acquisition_on_work(*, acquisition, inputs_bytes, inputs_diges
         "authorizationAfterRoots": owned["authorizationAfterRoots"], "countedAfterHeads": counted_after}
     contract.validate_payload_shape(document)
     original = evidence.capability._wire(document, ledger, contract.MAX_BYTES, contract.MAX_NODES)
-    replayed = proof._replay_on_work(proof_bytes=original, inputs_bytes=inputs_bytes,
-        expectations=owned["expectations"], public_key=public_key, work=work)
-    return proof._RetainedProofAcquisition(acquisition, inputs_bytes, owned["inputsDigest"],
+    return _EncodedTransitionProof(original, owned["expectations"])
+
+
+def _package_from_acquisition_on_work(*, acquisition, inputs_bytes, inputs_digest, request,
+        business_before_roots, authorization_before_roots, counted_before_heads, policy, public_key, work):
+    """Retain unsigned originals only after genuine raw proof/semantic replay."""
+    encoded = _encode_from_acquisition_on_work(acquisition=acquisition,
+        inputs_bytes=inputs_bytes, inputs_digest=inputs_digest, request=request,
+        business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+        counted_before_heads=counted_before_heads, policy=policy, work=work)
+    replayed = proof._replay_on_work(proof_bytes=encoded.proof_bytes, inputs_bytes=inputs_bytes,
+        expectations=encoded.expectations, public_key=public_key, work=work)
+    return proof._RetainedProofAcquisition(acquisition, inputs_bytes, encoded.expectations["inputsDigest"],
         replayed.semantics, replayed.proof_bytes, replayed.proof_digest)

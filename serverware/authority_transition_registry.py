@@ -186,6 +186,8 @@ def _registry_closure_errors() -> tuple[str, ...]:
                 ("factory", callable(program.factory)),
                 ("kernel-factory", callable(program.kernel_factory) if evidence_operation
                     else program.kernel_factory is None),
+                ("plan-factory", callable(program.plan_factory) if expected_result == "read-acquisition"
+                    else program.plan_factory is None),
             ) if not valid
         )
         if invalid_fields:

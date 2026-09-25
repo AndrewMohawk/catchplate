@@ -1,6 +1,6 @@
 # Completing the WebAuthn authority transitions
 
-Status: source `.100`, implementation only, not an enabled public protocol or
+Status: source `.101`, implementation only, not an enabled public protocol or
 migration. All six WebAuthn successor operations now have genuine configured
 programs in the separate `typed-successor-planning` registry. Legacy `KERNELS` and
 `PLANNING_PROGRAMS`, service routing, SQL execution and witness admission exclude
@@ -10,11 +10,27 @@ been tested. Database admission and external authority requirements remain.
 Revocation and the two evidence-admission programs select actual configured
 signed-original producers. Evidence acquisition and retained replay select the
 same configured kernel factory. Registration finalization, trust staging and
-completion now select genuine read-acquisition owners, sharing the existing
-guarded transaction scope and work allowance; they do not yet produce signed
-plans. None of these registrations supplies public invocation, successor
+completion retain their genuine base read-acquisition owners and now also have
+separate signed-plan owners selected by fixed registry `plan_factory` entries.
+They share the existing guarded transaction scope and work allowance.
+None of these registrations supplies public invocation, successor
 reservation/capability/atomic execution, physical readback or production
 readiness. All source is unbuilt and unexecuted.
+
+Source `.101` returns canonical original envelope/proof/inputs/context bytes for
+these three signed plans. The closed payload commits the full detached originals
+and source/configuration/planner/time pins. Actual proof, query, semantic,
+capacity and indexed-write replay precedes signing and repeats after authenticating
+the received signature and all commitments against independently owned expectations.
+The configured owner holds the real reader and separate signer, preserves original
+historical time/deadline, and keeps one live window clipped to evidence/assertion
+expiry, caller deadline and plan age through closed read scopes and pre/post-sign
+checks. Its encoding-only acquisition packer avoids an extra offline replay;
+neither the packed bytes nor signed context admits roots, keys or history.
+Service-configuration mappers, authenticated invocation/transport, durable custody
+and successor reservation/current-root/atomic execution/recovery for these three
+plans remain unfinished. Legacy exclusions, independent infrastructure and
+unexecuted frozen-build verification prerequisites remain unchanged.
 
 Source `.99` adds `acquire_originals` to the three transition read owners without
 changing `acquire`. It owns invocation graphs before callbacks and retains a

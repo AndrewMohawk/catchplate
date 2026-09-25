@@ -1004,6 +1004,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_transition_proof_wire.py \
 	serverware/authority_webauthn_transition_proof.py \
 	serverware/authority_webauthn_transition_proof_production.py \
+	serverware/authority_webauthn_transition_plan_contract.py \
+	serverware/authority_webauthn_transition_plan_context.py \
+	serverware/authority_webauthn_transition_plan.py \
+	serverware/authority_webauthn_transition_plan_owner.py \
 	serverware/authority_transition_policy.py \
 	serverware/authority_transition_webauthn.py \
 	serverware/authority_transition_webauthn_registration.py \
@@ -2812,6 +2816,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_transition_proof_wire.py \
 				serverware/authority_webauthn_transition_proof.py \
 				serverware/authority_webauthn_transition_proof_production.py \
+				serverware/authority_webauthn_transition_plan_contract.py \
+				serverware/authority_webauthn_transition_plan_context.py \
+				serverware/authority_webauthn_transition_plan.py \
+				serverware/authority_webauthn_transition_plan_owner.py \
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_evidence_acquisition.py \

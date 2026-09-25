@@ -1,16 +1,18 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.100`, implementation only. All six WebAuthn successor operations
+Status: source `.101`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
 legacy service, SQL execution and witness gates exclude these successors.
 Revocation and the two evidence-admission programs produce signed originals;
-registration finalization, trust staging and completion now retain original
-inputs and canonical unsigned proof records, replaying actual primary/count/query
-proofs, semantics, capacity effects and indexed writes after their read-proof
-acquisitions. They are not signed-plan producers. All source
-remains unbuilt and unexecuted. Independent authority, successor execution and
+registration finalization, trust staging and completion now also have separate
+signed-plan owners and fixed registry `plan_factory` entries. Their base factories
+remain read-acquisition owners. The new plans commit canonical original proofs,
+inputs and full evaluation context and genuinely replay them before signing and
+after signature verification. All source remains unbuilt and unexecuted.
+Service-configuration, invocation, custody and successor-execution integration
+for these three signed plans remains unfinished; independent authority and
 release gates remain.
 
 ## Genuine successor program selection
@@ -32,13 +34,52 @@ counted-write tracing; the two evidence-admission operations use ordinary
 exact-key traces. No replacement allowance or caller-supplied proof result is
 introduced.
 
-These three owners return ordinary acquisition/retention observations.
+These three base owners return ordinary acquisition/retention observations.
 Configuration, request/current-root/time authority, assertion/capability bindings and committed
 stage or physical-readback provenance remain independently admitted inputs.
-They still need signed-plan integration. Registry selection does not supply
+Their separate fixed `plan_factory` entries construct the actual
+`TransitionPlanOwner` described below. Registry selection does not supply
 public invocation, successor reservation, one-use capability, authorized atomic
 execution, recovery or independent production infrastructure. Earlier revision
 sections below describe their respective source checkpoints, not later closure.
+
+## Signed transition plans and held production owners
+
+Source `.101` adds the separate
+`serverware.policyAuthorityWebAuthnTransitionPlan/v1` payload and
+`serverware.policyAuthorityWebAuthnTransitionPlanEnvelope/v1` envelope,
+without relabelling any legacy or evidence-admission protocol. The canonical
+raw-four result contains the signed envelope, original proof record, original
+inputs and full evaluation context. Its closed 14-field payload binds all three
+detached byte commitments/counts, operation, source, configuration, planner
+identity/SPKI and original issue/expiry times. The context preserves the five
+independently supplied plan expectations, including the complete proof policy,
+request, input commitment, roots, counted heads and historical cutoff.
+
+`authority_webauthn_transition_plan.py` genuinely replays primary/count/query
+proofs, original-input semantics, capacity and indexed writes before signing.
+Verification authenticates the planner signature and all detached commitments
+before decoding the context, comparing it to independently owned expectations
+and repeating the same replay. Context bytes and signatures do not admit their
+own historical authority; historical verification does not renew a live window.
+
+`TransitionPlanOwner` holds an actual fixed read owner and separately admitted
+planner signer/pins. Its `produce_registration`, `produce_stage` and
+`produce_completion` methods own caller graphs before callbacks and preserve one
+actual live window through acquisition, replay, pre/post-sign checks and return.
+Expiry is clipped to the original evidence/assertion expiry, caller deadline and
+configured plan age; original policy time/deadline and database cutoff are not
+rewritten. After normal read-scope exits, an encoding-only packer supplies bytes
+to the signer, avoiding an extra offline replay while granting no proof authority.
+All phases use the original work allowance.
+
+These three signed-plan owners still need service-configuration mapping,
+authenticated invocation/transport, durable raw-four custody, successor
+reservation/capability/current-root/atomic execution and recovery. Raw proof
+records contain selected rows and remain inside the semantic/storage boundary,
+not a public response or witness request. No public business path or legacy
+executor is enabled. Source is unbuilt and unexecuted; independent production
+infrastructure and consolidated frozen-build verification remain required.
 
 ## Unsigned transition proof records and replay
 
@@ -1039,7 +1080,8 @@ and existing input/resource ceilings are unchanged.
 Admission has configured read-only and live plan-production owners with
 purpose-scoped measured configuration, but no authorized durable evidence INSERT
 executor. Final registration, trust staging and completion now have genuine
-configured acquisition owners; their signed-plan integration remains pending.
+configured acquisition and separate signed-plan owners; service configuration,
+authenticated invocation, custody and successor execution remain pending.
 Current roots, signer pins, request permission, assertion/capability authority
 and committed-stage/physical-readback provenance are still independent
 prerequisites, not values authenticated by copying.

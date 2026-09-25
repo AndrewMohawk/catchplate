@@ -4,7 +4,9 @@ These owners require configured keys and original invocation work; they are
 not legacy TransitionKernel adapters. Registration describes available source
 paths, not admission, reservation, or business execution authority. Imports
 stay lazy so the actual read owners can use planner primitives without an
-import-time registry cycle.
+import-time registry cycle. The three transition read factories remain
+read-acquisition producers; their separate operation-bound plan factories
+add the actual configured signer without changing that base result contract.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ class SuccessorPlanningProgram:
     result_kind: str
     factory: Callable[..., object]
     kernel_factory: Callable[..., object] | None = None
+    plan_factory: Callable[..., object] | None = None
 
 
 def _revocation(*, read_dsn, connect_timeout_seconds, database_identity,
@@ -138,12 +141,59 @@ def _completion(*, read_dsn, connect_timeout_seconds, database_identity,
         maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns)
 
 
-def _program(operation, factory, result_kind, kernel_factory=None):
+def _transition_owner(operation, *, read_planner, planner_private_key, planner_public_key,
+        expected_planner_identity, expected_planner_spki_digest, configuration_digest, maximum_plan_age_ns):
+    from serverware import authority_webauthn_transition_plan_owner as owner
+    from serverware import authority_webauthn_transition_planning as planning
+
+    owner_type = {
+        "webauthn.registration.finalize": planning.RegistrationTransitionPlanner,
+        "webauthn.trust.stage": planning.TrustStageTransitionPlanner,
+        "webauthn.trust.complete": planning.TrustCompletionTransitionPlanner,
+    }[operation]
+    # The selected operation is source fixed; a reader for another successor
+    # cannot turn this factory into a generic operation or legacy dispatcher.
+    planning._snapshot(read_planner, owner_type, operation)
+    return owner.TransitionPlanOwner(read_planner=read_planner,
+        planner_private_key=planner_private_key, planner_public_key=planner_public_key,
+        expected_planner_identity=expected_planner_identity,
+        expected_planner_spki_digest=expected_planner_spki_digest,
+        configuration_digest=configuration_digest, maximum_plan_age_ns=maximum_plan_age_ns)
+
+
+def _registration_plan(*, read_planner, planner_private_key, planner_public_key,
+        expected_planner_identity, expected_planner_spki_digest, configuration_digest, maximum_plan_age_ns):
+    return _transition_owner("webauthn.registration.finalize", read_planner=read_planner,
+        planner_private_key=planner_private_key, planner_public_key=planner_public_key,
+        expected_planner_identity=expected_planner_identity,
+        expected_planner_spki_digest=expected_planner_spki_digest,
+        configuration_digest=configuration_digest, maximum_plan_age_ns=maximum_plan_age_ns)
+
+
+def _stage_plan(*, read_planner, planner_private_key, planner_public_key,
+        expected_planner_identity, expected_planner_spki_digest, configuration_digest, maximum_plan_age_ns):
+    return _transition_owner("webauthn.trust.stage", read_planner=read_planner,
+        planner_private_key=planner_private_key, planner_public_key=planner_public_key,
+        expected_planner_identity=expected_planner_identity,
+        expected_planner_spki_digest=expected_planner_spki_digest,
+        configuration_digest=configuration_digest, maximum_plan_age_ns=maximum_plan_age_ns)
+
+
+def _completion_plan(*, read_planner, planner_private_key, planner_public_key,
+        expected_planner_identity, expected_planner_spki_digest, configuration_digest, maximum_plan_age_ns):
+    return _transition_owner("webauthn.trust.complete", read_planner=read_planner,
+        planner_private_key=planner_private_key, planner_public_key=planner_public_key,
+        expected_planner_identity=expected_planner_identity,
+        expected_planner_spki_digest=expected_planner_spki_digest,
+        configuration_digest=configuration_digest, maximum_plan_age_ns=maximum_plan_age_ns)
+
+
+def _program(operation, factory, result_kind, kernel_factory=None, plan_factory=None):
     return SuccessorPlanningProgram(operation=operation,
         handler=authority_contract.operation_spec(operation)["handler"],
         program_id=authority_contract.transition_program_id(operation),
         planning_mode="typed-successor-planning", result_kind=result_kind,
-        factory=factory, kernel_factory=kernel_factory)
+        factory=factory, kernel_factory=kernel_factory, plan_factory=plan_factory)
 
 
 PROGRAMS: Final[Mapping[str, SuccessorPlanningProgram]] = MappingProxyType({
@@ -151,10 +201,12 @@ PROGRAMS: Final[Mapping[str, SuccessorPlanningProgram]] = MappingProxyType({
         _program("webauthn.credential.revoke", _revocation, "signed-originals"),
         _program("webauthn.registration.evidence.admit", _registration_evidence,
             "signed-originals", _registration_evidence_kernel),
-        _program("webauthn.registration.finalize", _registration, "read-acquisition"),
-        _program("webauthn.trust.complete", _completion, "read-acquisition"),
+        _program("webauthn.registration.finalize", _registration, "read-acquisition",
+            plan_factory=_registration_plan),
+        _program("webauthn.trust.complete", _completion, "read-acquisition",
+            plan_factory=_completion_plan),
         _program("webauthn.trust.installation.admit", _installation_evidence,
             "signed-originals", _installation_evidence_kernel),
-        _program("webauthn.trust.stage", _stage, "read-acquisition"),
+        _program("webauthn.trust.stage", _stage, "read-acquisition", plan_factory=_stage_plan),
     )
 })

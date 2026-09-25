@@ -181,12 +181,21 @@ class _EnrollmentOwner:
 
     def request_registration_evidence(self, originals, *, source_originals,
             verified_at, deadline_epoch_ns, work, deadline_ns=None):
-        """Issue once, exchange once, and return genuinely replayed raw evidence.
+        """Preserve the evidence/request/inputs result from one grant/exchange."""
+        _, response, request, inputs = _EnrollmentOwner._request_registration_evidence_exchange(
+            self, originals, source_originals=source_originals, verified_at=verified_at,
+            deadline_epoch_ns=deadline_epoch_ns, work=work, deadline_ns=deadline_ns)
+        return response[0], request, inputs
+
+    def _request_registration_evidence_exchange(self, originals, *, source_originals,
+            verified_at, deadline_epoch_ns, work, deadline_ns=None):
+        """Issue once, exchange once, and retain exact request8/response2.
 
         Enrollment and source-acquisition authority remain caller prerequisites.
         The endpoint and configuration come only from this cold root-admitted
         owner; no browser/caller field can select them. This neither retries a
         grant/exchange nor performs custody or registration finalization.
+        Returned derived fields never replace independent original replay.
         """
         _require_pid()
         with _LOCK:
@@ -262,7 +271,7 @@ class _EnrollmentOwner:
                 deadline_epoch_ns=clipped_deadline, work=work)
             issuer.authorization.clock._check_on_work(window, work=work)
             callback(work, lambda: client.transport._check_deadline(monotonic_deadline))
-            result = client._request_on_configuration(payload=payload,
+            result = client._request_exchange_on_configuration(payload=payload,
                 configuration_digest=digest, generation=generation,
                 runtime_role_identities=runtime, endpoint=held_endpoint,
                 request_originals=request, deadline_ns=monotonic_deadline, work=work)

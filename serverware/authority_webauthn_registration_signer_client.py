@@ -18,9 +18,13 @@ from serverware import authority_webauthn_registration_signer_transport as trans
 from serverware import authority_webauthn_registration_signer_wire as wire
 
 
-def _request_on_configuration(*, payload, configuration_digest, generation,
+def _request_exchange_on_configuration(*, payload, configuration_digest, generation,
         runtime_role_identities, endpoint, request_originals, work, deadline_ns=None):
-    """Return (original evidence, regenerated request, original verified inputs)."""
+    """Return original request8/response2 plus regenerated request and inputs.
+
+    Retained originals allow independent replay by the next configured owner;
+    neither the tuple nor its ordinary derived fields are an admission token.
+    """
     ledger = configuration.capability.capture._SharedLedger(work)
     originals = wire._request_originals(request_originals)
     held_endpoint = transport._endpoint(endpoint)
@@ -36,12 +40,22 @@ def _request_on_configuration(*, payload, configuration_digest, generation,
     # Snapshot the complete caller graph before the first socket/native work.
     # Consistency/provenance and original signatures are independently enforced
     # in the actual fixed consumer; the endpoint is never learned from response.
-    received = configuration.production._callback(work,
+    received = wire._response_originals(configuration.production._callback(work,
         lambda: transport._socket_request(held_endpoint, originals=originals,
-            deadline_ns=deadline_ns))
+            deadline_ns=deadline_ns)))
     request, inputs = response._verify_on_configuration(payload=owned,
         configuration_digest=digest, generation=launch, runtime_role_identities=runtime,
         request_originals=originals, response_originals=received, work=work)
     if deadline_ns is not None:
         configuration.production._callback(work, lambda: transport._check_deadline(deadline_ns))
+    return originals, received, request, inputs
+
+
+def _request_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, endpoint, request_originals, work, deadline_ns=None):
+    """Preserve the original evidence/request/inputs result from one exchange."""
+    _, received, request, inputs = _request_exchange_on_configuration(payload=payload,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, endpoint=endpoint,
+        request_originals=request_originals, work=work, deadline_ns=deadline_ns)
     return received[0], request, inputs

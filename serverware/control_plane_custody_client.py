@@ -108,13 +108,13 @@ def _snapshot(client):
     return binding
 
 
-def _forward_prepared(client, binding, local_digest):
+def _forward_prepared(client, binding, local_digest, *, deadline_ns=None):
     """Continue only after actual append returned its durable content identity."""
     digest = journal._digest(local_digest)
     try:
         if client._binding is not binding or client._closed:
             raise CustodyClientError("custody caller changed after durable preparation")
-        observation = ControlPlaneCustodyClient.forward_once(client, digest)
+        observation = ControlPlaneCustodyClient.forward_once(client, digest, deadline_ns=deadline_ns)
         if client._binding is not binding or client._closed:
             raise CustodyClientError("custody caller changed during forwarding")
         if type(observation) is not tuple or len(observation) != 2:
@@ -249,6 +249,41 @@ class ControlPlaneCustodyClient:
         source._check_deadline(bound)
         return source._originals(originals)
 
+    def prepare_registration_custody(self, originals, *, deadline_epoch_ns, work,
+            deadline_ns=None):
+        """Return opaque journal-ready raw6 after actual verifier preparation.
+
+        Input is exact signer request8 + response2, never a successful-proof
+        carrier or caller-generated typed request. This neither writes the
+        local journal nor forwards to the remote writer.
+        """
+        from serverware import authority_webauthn_registration_custody_caller as preparing
+        from serverware import authority_webauthn_registration_signer_response as verifying
+
+        held = preparing._request_originals(originals)
+        verifying.evidence.plan.contract._integer(deadline_epoch_ns, minimum=1)
+        expiry, inherited = deadline_epoch_ns, deadline_ns
+        if inherited is not None:
+            verifying.evidence.plan.contract._integer(inherited, minimum=1)
+        binding = _snapshot(self)
+        callback = verifying.evidence.production._callback
+        before = callback(work, time.monotonic_ns)
+        now = callback(work, lambda: _receipt_now(binding))
+        bound = min(before + binding.maximum_deadline_ns,
+            before + min(expiry, binding.attestation_interval[1]) - now)
+        if inherited is not None:
+            bound = min(bound, inherited)
+        preparing._check_deadline(bound)
+        result = callback(work, lambda: preparing._socket_request(binding.relay_path,
+            configuration_digest=binding.configuration_digest, deadline_epoch_ns=expiry,
+            originals=held, deadline_ns=bound, expected_peer_uid=binding.relay_uid,
+            expected_peer_gid=binding.relay_gid))
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("registration custody caller changed during preparation")
+        callback(work, lambda: _receipt_now(binding))
+        preparing._check_deadline(bound)
+        return preparing._response_originals(result)
+
     def append_evidence(self, purpose, originals):
         """Durably prepare opaque raw6 only; do not forward or sign anything."""
         binding = _snapshot(self)
@@ -259,7 +294,7 @@ class ControlPlaneCustodyClient:
         binding = _snapshot(self)
         return journal.CustodyJournal.append_transition(binding.journal, operation, originals)
 
-    def append_and_forward_evidence(self, purpose, originals):
+    def append_and_forward_evidence(self, purpose, originals, *, deadline_ns=None):
         """Append actual raw6 durably, then attempt its forwarding exactly once.
 
         Append failure propagates without forwarding. An ordinary later
@@ -268,7 +303,7 @@ class ControlPlaneCustodyClient:
         """
         binding = _snapshot(self)
         digest = ControlPlaneCustodyClient.append_evidence(self, purpose, originals)
-        return _forward_prepared(self, binding, digest)
+        return _forward_prepared(self, binding, digest, deadline_ns=deadline_ns)
 
     def append_and_forward_transition(self, operation, originals):
         """Append actual raw7 durably, then use the unchanged one-attempt path.
@@ -309,7 +344,7 @@ class ControlPlaneCustodyClient:
         journal.CustodyJournal._require_ready(binding.journal)
         return result
 
-    def forward_once(self, localdigest):
+    def forward_once(self, localdigest, *, deadline_ns=None):
         """Claim one durable attempt, then make one fixed relay exchange.
 
         Any failure after the claim may follow a remote commit. The attempt
@@ -317,6 +352,9 @@ class ControlPlaneCustodyClient:
         Old-source originals remain loadable in the journal but cannot be sent
         as a new attempt by this current-source client.
         """
+        inherited = deadline_ns
+        if inherited is not None:
+            transport._check_deadline(inherited)
         binding = _snapshot(self)
         record = journal.CustodyJournal.load(binding.journal, localdigest)
         if type(record) is not records.PreparedRecord:
@@ -333,6 +371,8 @@ class ControlPlaneCustodyClient:
         now_epoch_ns = _receipt_now(binding)
         deadline_ns = started_monotonic_ns + min(binding.maximum_deadline_ns,
             binding.attestation_interval[1] - now_epoch_ns)
+        if inherited is not None:
+            deadline_ns = min(deadline_ns, inherited)
         transport._check_deadline(deadline_ns)
         journal.CustodyJournal.claim_attempt(binding.journal, digest)
         _process(binding)

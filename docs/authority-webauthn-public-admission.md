@@ -1,6 +1,6 @@
 # WebAuthn public admission and private preparation
 
-Current source checkpoint: `.130`. This is a source-only integration map, not a
+Current source checkpoint: `.131`. This is a source-only integration map, not a
 tested import, running endpoint or deployment claim. Private preparation is
 described in [WebAuthn preparation](authority-webauthn-preparation.md); the public
 admission continuation below is still missing.
@@ -175,6 +175,16 @@ accepts no time, endpoint, key, root, configuration or work-budget override. One
 original request window reaches both private transports without renewal. It
 does not authenticate a raw-input carrier or call either public handler, and
 does not durably retain the resulting originals or forward a custody request.
+
+The separate private [registration custody continuation](control-plane-registration-custody.md)
+now preserves the exact signer request8/response2 and sends those originals
+through the existing relay to the verifier. The verifier independently replays
+the configured grant/source/attestation/evidence checks before actual custody
+preparation. `prepare_registration_custody(originals)` durably appends the exact
+prepared raw6 and returns only a local digest; the explicitly named
+`prepare_and_forward_registration_custody` then permits one journal-marked
+forward attempt. Neither path authenticates the caller's raw carrier, connects
+the public handlers, registers a credential or authorizes reset/retry.
 
 ## Trust stage and completion have different prerequisites
 

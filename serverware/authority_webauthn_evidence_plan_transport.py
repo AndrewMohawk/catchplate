@@ -95,7 +95,7 @@ def _send_response(connection, originals, *, deadline_ns):
     _check_deadline(deadline_ns)
 
 
-def _socket_request(endpoint, *, purpose, control_bytes, context_bytes, inputs_bytes):
+def _socket_request(endpoint, *, purpose, control_bytes, context_bytes, inputs_bytes, deadline_ns=None):
     """Return complete response control and raw3 from one pinned peer.
 
     The exact endpoint tuple is (path, timeout_seconds, expected_peer_uid,
@@ -120,7 +120,11 @@ def _socket_request(endpoint, *, purpose, control_bytes, context_bytes, inputs_b
     if any(type(value) is not int or not 0 <= value <= 0xFFFFFFFF
             for value in (expected_peer_uid, expected_peer_gid)):
         raise AuthorityTransportError("evidence plan peer identity is invalid")
-    deadline_ns = _deadline_ns(timeout_seconds)
+    bounded_deadline = _deadline_ns(timeout_seconds)
+    if deadline_ns is not None:
+        _check_deadline(deadline_ns)
+        bounded_deadline = min(bounded_deadline, deadline_ns)
+    deadline_ns = bounded_deadline
     header = magic + b"".join(len(raw).to_bytes(8, "big") for raw in originals)
     _check_deadline(deadline_ns)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

@@ -40,10 +40,13 @@ def _operation(purpose):
     return _OPERATIONS[purpose]
 
 
-def _fresh(timing, window, configured, work):
-    return wire._fresh_on_work(timing, window=window,
+def _fresh(timing, window, configured, work, transport_deadline_ns=None):
+    now = wire._fresh_on_work(timing, window=window,
         maximum_age_ns=configured.maximum_control_age_ns,
         maximum_clock_skew_ns=configured.pins[9], work=work)
+    if transport_deadline_ns is not None:
+        evidence.production._callback(work, lambda: transport._check_deadline(transport_deadline_ns))
+    return now
 
 
 def _produce_request_on_configuration(*, purpose, payload, configuration_digest, generation,
@@ -135,10 +138,13 @@ def _produce_plan_on_configuration(*, purpose, payload, configuration_digest, ge
 
 def _request_plan_on_configuration_core(*, admit_history, purpose, payload, configuration_digest, generation,
         runtime_role_identities,
-        control_bytes, context_bytes, inputs_bytes, work):
+        control_bytes, context_bytes, inputs_bytes, work, transport_deadline_ns=None):
     if type(admit_history) is not bool:
         raise WebAuthnEvidencePlanActionError("evidence planning exchange action is not source fixed")
     _operation(purpose)
+    inherited_deadline = transport_deadline_ns
+    if inherited_deadline is not None:
+        evidence.plan.contract._integer(inherited_deadline, minimum=1)
     originals = transport._validate_request(control_bytes=control_bytes,
         context_bytes=context_bytes, inputs_bytes=inputs_bytes)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
@@ -150,16 +156,18 @@ def _request_plan_on_configuration_core(*, admit_history, purpose, payload, conf
         verifier_public_key=configured.verifier_public_key,
         maximum_control_age_ns=configured.maximum_control_age_ns, work=work)
     context, window = verified.context, verified.window
+    effective_deadline = None if inherited_deadline is None else min(inherited_deadline, window[4])
     issued, expires = verified.issued_at_epoch_ns, verified.expires_at_epoch_ns
     timing = {"issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     endpoint = configured.planner_endpoint
-    _fresh(timing, window, configured, work)
+    _fresh(timing, window, configured, work, effective_deadline)
     received = evidence.production._callback(work, lambda: transport._socket_request(endpoint,
-        purpose=purpose, control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2]))
+        purpose=purpose, control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2],
+        deadline_ns=effective_deadline))
     if type(received) is not tuple or len(received) != 4:
         raise WebAuthnEvidencePlanActionError("evidence planning response is not an exact four-tuple")
     returned = transport._validate_response(*received)
-    _fresh(timing, window, configured, work)
+    _fresh(timing, window, configured, work, effective_deadline)
     # Authenticate exact context bytes and every other original before any
     # returned context is decoded or used even as claimed planner observations.
     response_wire._verify_on_work(control_bytes=returned[0], request_control_bytes=originals[0],
@@ -181,22 +189,23 @@ def _request_plan_on_configuration_core(*, admit_history, purpose, payload, conf
             evaluation_context_bytes=returned[3], request_context=context,
             request_issued_at_epoch_ns=issued, request_expires_at_epoch_ns=expires, request_window=window,
             pins=configured.pins, maximum_control_age_ns=configured.maximum_control_age_ns, work=work)
-    _fresh(timing, window, configured, work)
+    _fresh(timing, window, configured, work, effective_deadline)
     # Preserve the old return unchanged. The separate fixed preparation path
     # may receive newly admitted live-origin history, never a reusable proof DTO.
     return (returned, history) if admit_history else returned
 
 
 def _request_plan_on_configuration(*, purpose, payload, configuration_digest, generation,
-        runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work):
+        runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work, transport_deadline_ns=None):
     return _request_plan_on_configuration_core(admit_history=False, purpose=purpose,
         payload=payload, configuration_digest=configuration_digest, generation=generation,
         runtime_role_identities=runtime_role_identities, control_bytes=control_bytes,
-        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work,
+        transport_deadline_ns=transport_deadline_ns)
 
 
 def _request_plan_and_admit_history_on_configuration(*, purpose, payload, configuration_digest, generation,
-        runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work):
+        runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work, transport_deadline_ns=None):
     """Authenticate both original controls, replay raw3, then admit live history.
 
     This is the source-owned observation-admission path for private preparation,
@@ -205,4 +214,5 @@ def _request_plan_and_admit_history_on_configuration(*, purpose, payload, config
     return _request_plan_on_configuration_core(admit_history=True, purpose=purpose,
         payload=payload, configuration_digest=configuration_digest, generation=generation,
         runtime_role_identities=runtime_role_identities, control_bytes=control_bytes,
-        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work,
+        transport_deadline_ns=transport_deadline_ns)

@@ -9,9 +9,10 @@ exchange. It neither retries nor falls back to legacy finalization.
 Only the two existing cold owners supply runtime/configuration/key/endpoint
 authority. One standard work allowance and one original live window cover this
 composition. No caller-selected time, work, root, endpoint or session override
-is accepted. The returned evidence-admission invocation is not registration
-success: durable custody, current roots, complete OIDC sibling/history and
-atomic business execution remain separate prerequisites.
+is accepted. Separate entrypoints prepare evidence, durably retain prepared
+custody, or explicitly append then forward once. None returns registration
+success: current roots, complete OIDC sibling/history and atomic business
+execution remain separate prerequisites.
 """
 from __future__ import annotations
 
@@ -24,14 +25,20 @@ class RegistrationPreparationError(ValueError):
 
 def prepare_registration_evidence(originals):
     """Return actual (evidence envelope, evidence-admit request, input bytes)."""
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    exchange, _custody, _window = _prepare_registration_exchange_on_work(
+        originals, _ValidationWork(QueryReadValidationLimits()))
+    return exchange[1][0], exchange[2], exchange[3]
+
+
+def _prepare_registration_exchange_on_work(originals, work):
+    """Same real composition, preserving raw8/raw2 for independent replay."""
     from serverware import control_plane_custody_client as custody_client
     from serverware import control_plane_custody_startup as custody_startup
     from serverware import control_plane_enrollment_startup as enrollment_startup
     from serverware import authority_webauthn_enrollment_issuer as issuer
     from serverware import db, webauthn
-    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
-
-    work = _ValidationWork(QueryReadValidationLimits())
     ledger = issuer.evidence.capture._SharedLedger(work)
     if type(originals) is not webauthn._RegistrationOriginals:
         raise RegistrationPreparationError("registration preparation requires actual original inputs")
@@ -119,7 +126,7 @@ def prepare_registration_evidence(originals):
     # window. The genuine consumer still enforces every original-time join.
     verified_at = callback(work, lambda: datetime.now(timezone.utc))
     clock._check_on_work(window, work=work)
-    result = enrollment_startup._EnrollmentOwner.request_registration_evidence(
+    result = enrollment_startup._EnrollmentOwner._request_registration_evidence_exchange(
         enrollment, captured, source_originals=source_originals,
         verified_at=verified_at, deadline_epoch_ns=deadline,
         deadline_ns=monotonic_deadline, work=work)
@@ -130,4 +137,56 @@ def prepare_registration_evidence(originals):
             or callback(work, lambda: custody_client._snapshot(custody)) is not binding):
         raise RegistrationPreparationError("registration cold owners changed during preparation")
     clock._check_on_work(window, work=work)
-    return result
+    return result, custody, window
+
+
+def _prepare_registration_custody_on_work(originals, work):
+    from serverware import authority_webauthn_enrollment_issuer as issuer
+    from serverware import control_plane_custody_client as custody_client
+    from serverware import control_plane_custody_startup as custody_startup
+
+    exchange, custody, window = _prepare_registration_exchange_on_work(originals, work)
+    # No replay-success carrier crosses the next service boundary. The actual
+    # verifier receives every original and reconstructs the invocation itself.
+    work.prepare_copy(exchange[0])
+    work.prepare_copy(exchange[1])
+    raw_ten = exchange[0] + exchange[1]
+    clock = issuer.authorization.clock
+    clock._check_on_work(window, work=work)
+    prepared = custody_client.ControlPlaneCustodyClient.prepare_registration_custody(
+        custody, raw_ten, deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+    clock._check_on_work(window, work=work)
+    if issuer.evidence.production._callback(work, custody_startup.require_started) is not custody:
+        raise RegistrationPreparationError("registration custody owner changed during preparation")
+    clock._check_on_work(window, work=work)
+    return custody, prepared, window
+
+
+def prepare_registration_custody(originals):
+    """Durably append real prepared raw6, returning only its local content ID.
+
+    The append can finish after the preparation window; that retains opaque
+    evidence, not renewed authority. This function never forwards or retries.
+    """
+    from serverware import control_plane_custody_client as custody_client
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    custody, prepared, _window = _prepare_registration_custody_on_work(
+        originals, _ValidationWork(QueryReadValidationLimits()))
+    return custody_client.ControlPlaneCustodyClient.append_evidence(custody, "registration", prepared)
+
+
+def prepare_and_forward_registration_custody(originals):
+    """Append first, then attempt forwarding once under the original deadline.
+
+    The existing typed outcome error retains the local content ID on ordinary
+    post-append failure; the journal's attempt marker is never cleared. A peer
+    observation is neither remote durability proof nor credential finalization.
+    """
+    from serverware import control_plane_custody_client as custody_client
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    custody, prepared, window = _prepare_registration_custody_on_work(
+        originals, _ValidationWork(QueryReadValidationLimits()))
+    return custody_client.ControlPlaneCustodyClient.append_and_forward_evidence(
+        custody, "registration", prepared, deadline_ns=window[4])

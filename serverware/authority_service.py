@@ -61,6 +61,7 @@ from serverware import authority_webauthn_evidence_custody_read_transport as evi
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
 from serverware import authority_webauthn_registration_source_transport as registration_source_transport
 from serverware import authority_webauthn_registration_source_caller as registration_source_caller
+from serverware import authority_webauthn_registration_custody_caller as registration_custody_caller
 from serverware import authority_webauthn_transition_transport as transition_plan_transport
 from serverware import authority_webauthn_transition_custody_transport as transition_custody_transport
 from serverware import authority_webauthn_transition_custody_read_transport as transition_custody_read_transport
@@ -3084,7 +3085,12 @@ class AuthorityRuntimeRelay:
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
             reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
             detached = (reconciling or prefix in custody_caller_transport.REQUEST_MAGICS
-                or prefix == registration_source_caller.REQUEST_MAGIC)
+                or prefix in (registration_source_caller.REQUEST_MAGIC,
+                    registration_custody_caller.REQUEST_MAGIC))
+            if prefix == registration_custody_caller.REQUEST_MAGIC:
+                registration_custody_caller._serve_relay(
+                    trust, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             if prefix == registration_source_caller.REQUEST_MAGIC:
                 registration_source_caller._serve_relay(
                     trust, connection, deadline_ns=deadline_ns, prefix=prefix)
@@ -4710,7 +4716,7 @@ class AuthorityProcess:
             inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned, work=work)
 
     def _prepare_webauthn_evidence_custody(self, *, purpose, request, inputs_bytes,
-            deadline_epoch_ns, work):
+            deadline_epoch_ns, work, transport_deadline_ns=None):
         """Prepare raw-six originals after genuine live-history admission.
 
         Typed request and original ceremony/installation provenance must be
@@ -4721,7 +4727,8 @@ class AuthorityProcess:
         from serverware import authority_webauthn_evidence_preparation as preparation
 
         return preparation._prepare_on_work(self, purpose=purpose, request=request,
-            inputs_bytes=inputs_bytes, deadline_epoch_ns=deadline_epoch_ns, work=work)
+            inputs_bytes=inputs_bytes, deadline_epoch_ns=deadline_epoch_ns, work=work,
+            transport_deadline_ns=transport_deadline_ns)
 
     def _prepare_webauthn_registration_evidence(self, *, envelope_bytes, client_data_json,
             attestation_object, credential_id, transports, scope, verification_context,
@@ -4811,7 +4818,7 @@ class AuthorityProcess:
             verifier_private_key=signer, work=work)
 
     def _request_webauthn_evidence_plan(self, *, purpose, control_bytes,
-            context_bytes, inputs_bytes, work):
+            context_bytes, inputs_bytes, work, transport_deadline_ns=None):
         """Send original planning inputs; authenticate and replay the response.
 
         The returned response control and raw3 are observations, not retained
@@ -4823,12 +4830,15 @@ class AuthorityProcess:
 
         originals = evidence_plan_transport._validate_request(control_bytes=control_bytes,
             context_bytes=context_bytes, inputs_bytes=inputs_bytes)
+        if transport_deadline_ns is not None:
+            evidence_plan_transport._check_deadline(transport_deadline_ns)
         payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, work=work)
         result = actions._request_plan_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=generation,
             runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
-            context_bytes=originals[1], inputs_bytes=originals[2], work=work)
+            context_bytes=originals[1], inputs_bytes=originals[2], work=work,
+            transport_deadline_ns=transport_deadline_ns)
         configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
         final_generation = configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
@@ -4968,7 +4978,7 @@ class AuthorityProcess:
 
     def _request_webauthn_evidence_custody_relay(self, *, purpose, intent_bytes,
             envelope_bytes, inputs_bytes, evaluation_context_bytes,
-            historical_expectations_bytes, work):
+            historical_expectations_bytes, work, transport_deadline_ns=None):
         """Ask only for a relay, then genuinely verify its original response."""
         _webauthn_evidence_custody_purpose(purpose)
         from serverware import authority_webauthn_evidence_custody_actions as actions
@@ -4977,13 +4987,16 @@ class AuthorityProcess:
             envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
+        if transport_deadline_ns is not None:
+            evidence_custody_transport._check_deadline(transport_deadline_ns)
         payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, work=work)
         return actions._request_relay_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=generation,
             runtime_role_identities=runtime_role_identities, intent_bytes=originals[0],
             envelope_bytes=originals[1], inputs_bytes=originals[2], evaluation_context_bytes=originals[3],
-            historical_expectations_bytes=originals[4], work=work)
+            historical_expectations_bytes=originals[4], work=work,
+            transport_deadline_ns=transport_deadline_ns)
 
     def _forward_webauthn_evidence_custody(self, *, purpose, intent_bytes, relay_bytes,
             envelope_bytes, inputs_bytes, evaluation_context_bytes,
@@ -9630,6 +9643,7 @@ class AuthorityServer:
                 evidence_plan_transport.INSTALLATION_REQUEST_MAGIC,
                 registration_source_transport.REQUEST_MAGIC,
                 registration_source_caller.REQUEST_MAGIC,
+                registration_custody_caller.REQUEST_MAGIC,
                 *transition_plan_transport.REQUEST_MAGICS,
                 *transition_custody_transport.REQUEST_MAGICS,
                 *transition_custody_transport.RELAY_REQUEST_MAGICS,
@@ -9637,6 +9651,10 @@ class AuthorityServer:
                 *transition_custody_read_transport.REQUEST_MAGICS,
                 *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
             reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
+            if prefix == registration_custody_caller.REQUEST_MAGIC:
+                registration_custody_caller._serve_verifier(
+                    self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             if prefix == registration_source_caller.REQUEST_MAGIC:
                 registration_source_caller._serve_verifier(
                     self.process, connection, deadline_ns=deadline_ns, prefix=prefix)

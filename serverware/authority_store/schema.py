@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
 from serverware.authority_store import counted_installation
+from serverware.authority_store.completion_read_sql import COMPLETION_READ_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store import metadata_schema_source
 from serverware.authority_store import postgres_trigger_manifest
 from serverware.authority_store import v9_schema_source
@@ -221,6 +222,10 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "verifierReadRole": _METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
             "verifierReadTables": sorted(authority_contract.VERIFIER_READ_TABLES),
             "verifierReadPrivilegeSqlDigest": VERIFIER_READ_PRIVILEGE_SQL_DIGEST,
+            "completionReadContract": authority_contract.COMPLETION_READ_CONTRACT,
+            "completionReadRole": authority_contract.COMPLETION_READER_ROLE,
+            "completionReadTables": sorted(authority_contract.COMPLETION_READ_TABLES),
+            "completionReadPrivilegeSqlDigest": COMPLETION_READ_PRIVILEGE_SQL_DIGEST,
             "metadataSchemaProgramDigest":
                 _policy_candidate_authority_framed_digest(
                     "serverware.metadataSchemaProgram/v1",

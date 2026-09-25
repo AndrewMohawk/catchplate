@@ -14,7 +14,8 @@ flowchart TD
     C --> D[Durable current-root pending decision]
     D --> E[Original grant, pending receipt and plan admission]
     E -. protected issuer integration still required .-> F[Atomic SQL writes and commit marker]
-    F -. postcommit owner still required .-> G[Independent current-root completion]
+    F --> G[Fixed read-only completion producer]
+    G -. cold ownership and delivery still required .-> H[Durable current-root completion]
 ```
 
 The grant precedes the pending decision. Its original signed-byte identity
@@ -93,18 +94,29 @@ postcommit receipt commits that marker, never the reverse. A matching marker
 or its absence does not prove that the database was not rolled back.
 
 Existing legacy execution gates are unchanged. A protected capability-custody
-and issuer bridge, source-exact function installation/ACL/trigger admission,
-actual outer-commit ownership and purpose-bound postcommit producer must be
-connected before this path can execute. No direct DML permission is added.
+and issuer bridge, source-exact function installation/ACL/trigger admission and
+actual outer-commit ownership must be connected before this path can execute.
+No direct DML permission is added.
 The fragment does not fabricate a legacy writer token or set a bypass GUC;
 existing or future controlled-writer guards must be admitted as part of the
 actual installed owner and lifecycle.
+
+Source `.136` now supplies the [fixed read-only completion
+producer](authority-current-root-completion.md). It authenticates original
+pending/plan/grant bytes historically under an independently current exact
+pending checkpoint, reads the committed marker and all roots in one admitted
+transaction, and requires exact expected-marker/full-after-vector equality.
+Only after normal database closure does the enrolled completion key sign the
+fresh complete control. Its inner observation record is not independently
+signed. This can follow grant expiry but cannot execute, reset or release a
+transition without the matched committed marker; no installed SQL entrypoint
+or cold completion service follows from the producer's existence.
 
 ## Remaining production boundary
 
 Independent caller authorization, cold configuration and key ownership,
 trusted measurement, latest-head/pending authority, protected SQL activation,
-postcommit confirmation and uncertain-outcome recovery are still required.
+cold postcommit ownership/delivery and uncertain-outcome recovery are still required.
 An expired or unanswered request cannot clear a pending fence or authorize
 automatic SQL re-execution. Independent production infrastructure and the
 consolidated frozen build/verification phase remain outstanding.

@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.135"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.136"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -499,6 +499,13 @@ CURRENT_ROOT_COMMIT_MARKER_COLUMNS = (
     "request_digest", "operation_id", "capability_digest", "snapshot_digest",
     "before_vector_digest", "after_vector_digest", "result_digest",
 )
+COMPLETION_READER_ROLE = "serverware_policy_authority_completion_reader"
+COMPLETION_READ_CONTRACT = "serverware.policyAuthorityCompletionRead/v1"
+COMPLETION_READ_TABLES = frozenset({
+    CURRENT_ROOT_COMMIT_MARKER_TABLE,
+    "policy_authority_authenticated_table_roots",
+    "policy_authority_counted_index_heads",
+})
 CURRENT_ROOT_COMMIT_MARKER_CONTRACT = MappingProxyType({
     "schema": "serverware.policyAuthorityCurrentRootCommitMarkerStorage/v1",
     "table": CURRENT_ROOT_COMMIT_MARKER_TABLE,
@@ -514,6 +521,8 @@ CURRENT_ROOT_COMMIT_MARKER_CONTRACT = MappingProxyType({
     "postgresOnly": True, "sqliteAdmission": False,
     "runtimePrivileges": (), "verifierPrivileges": (), "plannerPrivileges": (),
     "issuerPrivileges": (), "executorPrivileges": ("SELECT",),
+    "completionReaderRole": COMPLETION_READER_ROLE,
+    "completionReaderPrivileges": ("SELECT",),
     "insertAuthority": "future-fixed-owner-executor-function-after-actual-root-checks",
     "installedInsertFunction": None, "publicExecutionEnabled": False,
     "transactionOwnership": "same-transaction-as-business-writes-and-actual-after-vector",
@@ -2838,6 +2847,9 @@ def operation_contract_document() -> dict[str, Any]:
         "postgresCountedMaintenance": dict(POSTGRES_COUNTED_MAINTENANCE_CONTRACT),
         "verifierReadContract": VERIFIER_READ_CONTRACT,
         "verifierReadTables": sorted(VERIFIER_READ_TABLES),
+        "completionReadContract": COMPLETION_READ_CONTRACT,
+        "completionReaderRole": COMPLETION_READER_ROLE,
+        "completionReadTables": sorted(COMPLETION_READ_TABLES),
         "proofPrimitives": sorted(PROOF_PRIMITIVES),
         "capabilityIssuerFunctionSignatures": {
             function_name: list(argument_types)

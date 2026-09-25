@@ -19,6 +19,10 @@ the actual purpose-specific grant and current pending authority, compare real
 database state, apply the exact effects and retain postcommit evidence. No
 successful-result carrier is accepted as an input; no SQL or allowance exists
 here, and returned data grants no retry or authority.
+
+A separate historical completion entrypoint shares original replay but never
+returns selected rows or mutations. Its fresh local observation window cannot
+renew the expired reserve; actual marker/root observation remains mandatory.
 """
 from __future__ import annotations
 
@@ -64,6 +68,19 @@ class _ExecutionCandidate:
     reserve_receipt_bytes: bytes
     snapshot_bytes: bytes
     work_units: int
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _PendingCompletion:
+    """Historical same-call scope only; deliberately no executable mutations."""
+
+    operation: str
+    marker: dict
+    after_vector_bytes: bytes
+    reserve_request_bytes: bytes
+    reserve_receipt_bytes: bytes
+    snapshot_bytes: bytes
+    original_interval: tuple[int, int]
 
 
 def _originals(operation, originals, enrollment_bytes, reserve_request_bytes,
@@ -152,12 +169,12 @@ def _marker(material, request, request_digest, receipt, receipt_digest, snapshot
     return evidence.capture._JSONCapture(evidence.capture._SharedLedger(work)).visit(marker)
 
 
-def _admit_on_work(*, operation, originals, expectations, planner_public_key,
+def _derive_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        live_window, work, transport_deadline_ns=None):
-    """Genuinely replay originals, without supplying execution/currentness authority.
+        live_window, work, transport_deadline_ns, historical_controls):
+    """Fixed replay shared by separate live-execution/historical-completion paths.
 
     ``original_interval`` in the candidate is the effective ORIGINAL RESERVE
     issue/expiry, exactly equal to the state receipt. The original plan's own
@@ -165,6 +182,8 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
     Neither interval is rewritten or extended. The caller must keep checking
     its same window and original grant around actual downstream execution.
     """
+    if type(historical_controls) is not bool:
+        raise CurrentRootExecutionAdmissionError("pending admission purpose is not source-selected")
     evidence.capture._SharedLedger(work)
     held_operation = operation
     held = _originals(held_operation, originals, enrollment_bytes,
@@ -183,9 +202,13 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
     expected = replay._expectations(held_operation, expectations, planner_key, operation_key, work)
     window, inherited = scope[5:]
     initial_now = _live(window, inherited, work)
-    material, request, request_digest = authorization._verify_request_on_work(
-        request_bytes=reserve, enrollment_bytes=enrollment, root_public_key=held_root,
-        now_epoch_ns=initial_now, work=work)
+    if historical_controls:
+        material, request, request_digest = authorization._verify_historical_request_on_work(
+            request_bytes=reserve, enrollment_bytes=enrollment, root_public_key=held_root, work=work)
+    else:
+        material, request, request_digest = authorization._verify_request_on_work(
+            request_bytes=reserve, enrollment_bytes=enrollment, root_public_key=held_root,
+            now_epoch_ns=initial_now, work=work)
     if request["action"] != "reserve":
         raise CurrentRootExecutionAdmissionError("execution admission accepts only an original reserve")
     receipt = authorization._verify_receipt_on_work(receipt_bytes=receipt_original,
@@ -193,7 +216,9 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
     receipt_digest = authorization._receipt_digest_on_work(receipt_original, work)
     _pending(material, request, request_digest, receipt, receipt_digest, scope, work)
     evidence.plan._same(request["operation"], held_operation, work, "execution operation differs from reserve")
-    authorization._fresh(request, material, _live(window, inherited, work))
+    now = _live(window, inherited, work)
+    if not historical_controls:
+        authorization._fresh(request, material, now)
     before_bytes = vector._encode_on_work(request["beforeVector"], work=work)
     replayed = replay._replay_on_work(operation=held_operation, originals=plan_originals,
         expectations=expected, planner_public_key=planner_key, operation_public_key=operation_key,
@@ -224,8 +249,55 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         evidence.plan._same(receipt[field], actual, work,
             "execution state receipt differs from actual complete vectors")
     marker = _marker(material, request, request_digest, receipt, receipt_digest, expected_snapshot, work)
-    authorization._fresh(request, material, _live(window, inherited, work))
+    now = _live(window, inherited, work)
+    if historical_controls:
+        return _PendingCompletion(held_operation, marker, replayed.after_vector_bytes,
+            reserve, receipt_original, snapshot_original,
+            (request["issuedAtEpochNs"], request["expiresAtEpochNs"]))
+    authorization._fresh(request, material, now)
     return _ExecutionCandidate(held_operation, replayed.request, replayed.selected_rows,
         replayed.mutations, replayed.result, replayed.before_vector_bytes, replayed.after_vector_bytes,
         marker, (request["issuedAtEpochNs"], request["expiresAtEpochNs"]), reserve,
         receipt_original, snapshot_original, replayed.work_units)
+
+
+def _admit_on_work(*, operation, originals, expectations, planner_public_key,
+        operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
+        reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
+        expected_pending_sequence, expected_pending_head_digest, expected_fence,
+        live_window, work, transport_deadline_ns=None):
+    """Live original controls plus genuine replay; no execution authority alone."""
+    return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+        reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
+        snapshot_bytes=snapshot_bytes, expected_database_id=expected_database_id,
+        expected_generation_digest=expected_generation_digest,
+        expected_pending_sequence=expected_pending_sequence,
+        expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+        live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
+        historical_controls=False)
+
+
+def _admit_for_completion_on_work(*, operation, originals, expectations, planner_public_key,
+        operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
+        reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
+        expected_pending_sequence, expected_pending_head_digest, expected_fence,
+        live_window, work, transport_deadline_ns=None):
+    """Historical pending scope for actual postcommit observation, never execution.
+
+    This still verifies every original signature, original interval, exact
+    independently current pending checkpoint, and genuine original plan. The
+    caller's fresh completion window is checked throughout; expired execution
+    authority is not renewed. No selected rows or mutations are returned.
+    """
+    return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+        reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
+        snapshot_bytes=snapshot_bytes, expected_database_id=expected_database_id,
+        expected_generation_digest=expected_generation_digest,
+        expected_pending_sequence=expected_pending_sequence,
+        expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+        live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
+        historical_controls=True)

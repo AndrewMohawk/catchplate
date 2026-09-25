@@ -11,6 +11,8 @@ SELECTs. The actual backend virtual transaction identity works for read-only
 transactions without allocating a permanent XID. Its continuity and inherited
 settings are checked; this is not protection against a hostile database/driver.
 Unknown, missing or duplicate root rows fail rather than becoming defaults.
+The fixed private commit mode adds one marker SELECT and one transaction sample
+ahead of those roots; it never accepts an arbitrary query or validator callback.
 
 Every variable returned scalar/copy and real vector computation spends the
 same work. Physical limits describe ordered scalar frames, not native driver
@@ -24,6 +26,7 @@ import re
 
 from serverware import authority_current_root_vector as vector
 from serverware import authority_revocation_root_reader as connection_reader
+from serverware.authority_store import current_root_commit_observation as commit
 
 
 roots = vector.roots
@@ -67,6 +70,9 @@ _TRANSACTION_BYTES = 10 * 8 + len("transaction") + 6 + 10 + 31 + 12 + 2 * 3 + 3 
 _LIMITS = reader._ReadAcquisitionLimits(max_sql_reads=5,
     max_parameter_bytes=_PARAMETER_BYTES,
     max_transport_bytes=_PRIMARY_BYTES + _HEAD_BYTES + 3 * _TRANSACTION_BYTES)
+_COMMIT_LIMITS = reader._ReadAcquisitionLimits(max_sql_reads=7,
+    max_parameter_bytes=_PARAMETER_BYTES + commit.PARAMETER_BYTES,
+    max_transport_bytes=_PRIMARY_BYTES + _HEAD_BYTES + 4 * _TRANSACTION_BYTES + commit.TRANSPORT_BYTES)
 
 
 class CurrentRootObservationError(ValueError):
@@ -74,22 +80,28 @@ class CurrentRootObservationError(ValueError):
 
 
 class _Trace:
-    """One fixed admission/primary/continuity/head/continuity sequence."""
+    """Fixed roots-only or marker+roots sequence, bound before callbacks."""
 
-    __slots__ = ("phase",)
+    __slots__ = ("phase", "pending_decision_digest")
 
-    def __init__(self):
+    def __init__(self, pending_decision_digest):
         self.phase = 0
+        self.pending_decision_digest = pending_decision_digest
 
     def read(self, table, key):
         phase = self.phase
-        if type(phase) is not int or not 0 <= phase < 5:
+        with_marker = self.pending_decision_digest is not None
+        if type(phase) is not int or not 0 <= phase < (7 if with_marker else 5):
             raise CurrentRootObservationError("complete root trace exceeded its fixed reads")
-        if phase in (0, 2, 4):
+        if phase % 2 == 0:
             expected_table, expected = _TRANSACTION_TABLE, {"profile": _TRANSACTION_PROFILE, "rowLimit": 2}
+        elif with_marker and phase == 1:
+            expected_table, expected = commit.TABLE, {"profile": commit.PROFILE,
+                "pendingDecisionDigest": self.pending_decision_digest, "rowLimit": 2}
         else:
             names, field, expected_table, profile = ((PRIMARY_TABLES, "tableNames", roots.PRIMARY_TABLE,
-                _PRIMARY_PROFILE) if phase == 1 else (INDEX_IDS, "indexIds", heads.HEAD_TABLE, heads.READ_PROFILE))
+                _PRIMARY_PROFILE) if phase == (3 if with_marker else 1)
+                else (INDEX_IDS, "indexIds", heads.HEAD_TABLE, heads.READ_PROFILE))
             expected = {"profile": profile, field: list(names), "rowLimit": len(names) + 1}
         if type(table) is not str or table != expected_table or type(key) is not dict or key != expected:
             raise CurrentRootObservationError("complete root physical marker changed")
@@ -101,8 +113,8 @@ class _Cursor:
 
     __slots__ = ("binding", "acquisition")
 
-    def __init__(self, cursor, connection, physical, work):
-        self.binding = cursor, connection, physical, work
+    def __init__(self, cursor, connection, physical, work, pending_decision_digest):
+        self.binding = cursor, connection, physical, work, pending_decision_digest
         self.acquisition = None
 
     def _stamp(self):
@@ -111,17 +123,22 @@ class _Cursor:
             raise CurrentRootObservationError("complete root acquisition is not actual")
         acquisition.require_active()
         limits, trace = acquisition.limits, acquisition.trace
+        with_marker = self.binding[4] is not None
+        expected_limits = _COMMIT_LIMITS if with_marker else _LIMITS
+        reads = 7 if with_marker else 5
+        returned = len(PRIMARY_TABLES) + len(INDEX_IDS) + (5 if with_marker else 3)
         if (acquisition.cursor is not self or acquisition.work is not self.binding[3]
-                or type(trace) is not _Trace or type(trace.phase) is not int or not 1 <= trace.phase <= 5
+                or type(trace) is not _Trace or type(trace.phase) is not int or not 1 <= trace.phase <= reads
+                or trace.pending_decision_digest is not self.binding[4]
                 or type(limits) is not reader._ReadAcquisitionLimits
                 or (limits.max_sql_reads, limits.max_parameter_bytes, limits.max_transport_bytes)
-                    != (_LIMITS.max_sql_reads, _LIMITS.max_parameter_bytes, _LIMITS.max_transport_bytes)
+                    != (expected_limits.max_sql_reads, expected_limits.max_parameter_bytes,
+                        expected_limits.max_transport_bytes)
                 or acquisition._read_phase_active is not True):
             raise CurrentRootObservationError("complete root acquisition binding changed")
         counters = (acquisition.sql_reads, acquisition.returned_rows,
             acquisition.parameter_bytes, acquisition.transport_bytes)
-        maxima = (5, len(PRIMARY_TABLES) + len(INDEX_IDS) + 3,
-            _PARAMETER_BYTES, _LIMITS.max_transport_bytes)
+        maxima = (reads, returned, expected_limits.max_parameter_bytes, expected_limits.max_transport_bytes)
         if any(type(value) is not int or not 0 <= value <= maximum for value, maximum in zip(counters, maxima)):
             raise CurrentRootObservationError("complete root acquisition counters changed")
         flags = acquisition.active, acquisition.failed, acquisition._reading, acquisition._read_phase_active
@@ -131,9 +148,9 @@ class _Cursor:
 
     def _call(self, callback):
         binding, acquisition = self.binding, self.acquisition
-        if type(binding) is not tuple or len(binding) != 4:
+        if type(binding) is not tuple or len(binding) != 5:
             raise CurrentRootObservationError("complete root cursor binding is invalid")
-        _, connection, physical, work = binding
+        _, connection, physical, work, _ = binding
         before = self._stamp()
 
         def invoke():
@@ -191,18 +208,47 @@ def _observe_on_work(connection, *, work):
     accepted. The caller must admit the database/TLS/role/ACL and retain its
     outer transaction. This function never commits, rolls back or closes it.
     """
+    return _observe(connection, pending_decision_digest=None, work=work)
+
+
+def _observe_with_marker_on_work(connection, *, pending_decision_digest, work):
+    """Private fixed commit mode; no caller-defined query or admission DTO."""
+    held = commit._scope_on_work(pending_decision_digest, work)
+    return _observe(connection, pending_decision_digest=held, work=work)
+
+
+def _observe(connection, *, pending_decision_digest, work):
     vector.capture._SharedLedger(work)
+    # Scope and both physical recipes are fixed before any connection/hash
+    # callback. A supplied digest is only the original immutable row locator.
+    with_marker = pending_decision_digest is not None
+    limits = _COMMIT_LIMITS if with_marker else _LIMITS
+    read_count = 7 if with_marker else 5
+    row_count = len(PRIMARY_TABLES) + len(INDEX_IDS) + (5 if with_marker else 3)
+    marker = None
     physical = roots._callback(work, connection_reader._connection_identity, connection, 2)
     bindings = vector._source_bindings_on_work(work=work)
     empty = roots._primary_empty_root(work)
     manager = roots._callback(work, connection.cursor)
     with connection_reader._context(manager, work) as raw_cursor:
-        cursor, trace = _Cursor(raw_cursor, connection, physical, work), _Trace()
-        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work, limits=_LIMITS)
+        cursor = _Cursor(raw_cursor, connection, physical, work, pending_decision_digest)
+        trace = _Trace(pending_decision_digest)
+        acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work, limits=limits)
         cursor.acquisition = acquisition
         with acquisition.read_phase(cursor, trace, work):
             with acquisition.scope(cursor, trace, work):
                 original = _transaction(acquisition, work)
+                if with_marker:
+                    marker_rows = acquisition.read(commit.TABLE,
+                        {"profile": commit.PROFILE, "pendingDecisionDigest": pending_decision_digest, "rowLimit": 2},
+                        commit.SQL, (pending_decision_digest, 2), 1)
+                    if len(marker_rows) != 1:
+                        raise CurrentRootObservationError("current-root marker is absent or ambiguous")
+                    marker = commit._owned_marker(marker_rows[0], pending_decision_digest, acquisition, work)
+                    current = _transaction(acquisition, work)
+                    work.prepare_comparison(original, current)
+                    if current != original:
+                        raise CurrentRootObservationError("complete root caller transaction changed across marker lookup")
                 primary_rows = acquisition.read(roots.PRIMARY_TABLE,
                     {"profile": _PRIMARY_PROFILE, "tableNames": list(PRIMARY_TABLES), "rowLimit": len(PRIMARY_TABLES) + 1},
                     _PRIMARY_SQL, (len(PRIMARY_TABLES) + 1,), len(PRIMARY_TABLES))
@@ -229,16 +275,18 @@ def _observe_on_work(connection, *, work):
                         "indexRevision": row["index_revision"], "rootDigest": row["root_digest"],
                         "leafCount": row["leaf_count"]} for row in counted]}
                 encoded = vector._encode_on_work(document, work=work)
+                if with_marker:
+                    commit._bind_after_on_work(marker, encoded, work)
                 current = _transaction(acquisition, work)
                 work.prepare_comparison(original, current)
                 if current != original:
                     raise CurrentRootObservationError("complete root caller transaction changed before return")
-                if (trace.phase != 5 or acquisition.sql_reads != 5
-                        or acquisition.returned_rows != len(PRIMARY_TABLES) + len(INDEX_IDS) + 3
-                        or acquisition.parameter_bytes != _PARAMETER_BYTES):
+                if (trace.phase != read_count or acquisition.sql_reads != read_count
+                        or acquisition.returned_rows != row_count
+                        or acquisition.parameter_bytes != limits.max_parameter_bytes):
                     raise CurrentRootObservationError("complete root physical sequence did not finish exactly")
         acquisition.require_idle(cursor, trace, work)
     if roots._callback(work, lambda: raw_cursor.closed) is not True:
         raise CurrentRootObservationError("complete root cursor did not close normally")
     roots._callback(work, connection_reader._require_connection, connection, physical, 2)
-    return encoded
+    return (marker, encoded) if with_marker else encoded

@@ -1,8 +1,9 @@
 # Current-root decisions and trust boundaries
 
-These are the `.133` current-root decisions with `.134` computation/storage
-prerequisites, separate from the existing replay-witness protocol. This is
-source-only work, not an executed or provisioned authority, production approval
+These are the `.133` current-root decisions with `.134` computation/storage and
+`.136` read-only completion prerequisites, separate from the existing
+replay-witness protocol. This is source-only work, not an executed or provisioned
+authority, production approval
 or successor-execution permission. See the
 [integration boundary](authority-current-root-witness-integration.md) for the
 remaining database and executor work.
@@ -57,6 +58,14 @@ caller's work. `_verify_request_on_work` checks the supplied evaluation instant;
 scope and vector/byte commitments without sampling a clock or renewing them.
 Completion binds original opaque writer-receipt bytes, not proof that SQL
 committed. Standalone receipt verification does not establish durable publication.
+
+Source `.136` supplies a [fixed committed-state completion
+producer](authority-current-root-completion.md): genuine historical pending,
+plan and grant admission, followed by an actual read-only marker/full-vector
+observation. It requires exact expected-marker/after-vector equality and normal
+database closure before the enrolled completion key signs the complete control.
+The inner observation is unsigned on its own. A fresh completion can follow
+grant expiry without renewing execution authority or clearing unresolved state.
 
 [`CurrentRootDecisionOwner`](../serverware/authority_current_root_decisions.py)
 takes the actual journal, original enrollment/root key, state private key and
@@ -113,15 +122,15 @@ provisioning, deployment, native/TEE guarantee or independent latest-head servic
 is supplied by this source slice. The existing replay-witness purposes and
 legacy operation gates are not widened.
 
-Successor SQL execution still needs the exact fenced decision/capability
-admission, protected same-transaction marker insertion, maintained complete
-roots and purpose-bound postcommit/recovery integration. The `.134` marker
-schema is immutable framework storage with executor SELECT only and no insert
-function; the raw complete-vector observer supplies no enrollment/currentness.
-Its configured read owner now supplies the real admitted PostgreSQL read-only
-connection lifecycle, not cold configuration-signature or latest-head admission.
+Successor SQL execution still needs protected integration of actual fenced
+decision/capability admission, same-transaction marker insertion and maintained
+complete roots. The marker schema is immutable framework storage with executor
+SELECT only and no insert function. The `.136` completion reader has a separate
+fixed role with SELECT on only the marker, primary roots and counted heads; its
+actual postcommit producer does not supply cold configuration/key custody,
+independent latest-head authority or durable completion delivery/recovery.
 Every application writer must participate or be excluded. Registration evidence
 custody and signed planning remain distinct from inserting the business evidence
-row or finalizing a
-credential. This source-only work has not been built, tested, imported or run;
+row or finalizing a credential. This source-only work has not been built, tested,
+imported or run;
 no startup or SQL execution is claimed.

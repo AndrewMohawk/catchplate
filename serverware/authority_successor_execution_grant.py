@@ -16,6 +16,8 @@ revocation database issuer has no independent all-operation authorizer key.
 A trusted caller-authorization/signing owner, cold enrollment, key provisioning,
 durable reservation and executor admission remain separate prerequisites.
 There is no clock, SQL, I/O, new work allowance, retry or execution here.
+The separate historical control entrypoint authenticates original commitments
+for completion without claiming that an expired grant is executable again.
 """
 from __future__ import annotations
 
@@ -205,9 +207,9 @@ def _admit_enrollment_on_work(*, grant_enrollment_bytes, current_root_enrollment
     return _Enrollment(payload, digest, authorizer)
 
 
-def _verify_control_on_work(*, grant_bytes, grant_enrollment_bytes, current_root_enrollment_bytes,
+def _verify_control(*, grant_bytes, grant_enrollment_bytes, current_root_enrollment_bytes,
         root_public_key, planner_public_key, operation_public_key,
-        expected_authorization_digest, now_epoch_ns, work):
+        expected_authorization_digest, now_epoch_ns, historical, work):
     """Authenticate original control/scope/time, without claiming plan replay.
 
     A combined owner must compare every plan claim to its own genuine same-call
@@ -215,6 +217,8 @@ def _verify_control_on_work(*, grant_bytes, grant_enrollment_bytes, current_root
     be copied from this grant or from a planner's returned context.
     """
     capture._SharedLedger(work)
+    if type(historical) is not bool or historical and now_epoch_ns is not None:
+        raise SuccessorExecutionGrantError("grant admission purpose is not source-selected")
     raw = authorization._original(grant_bytes, MAX_GRANT_BYTES, "execution grant")
     enrollment_raw = authorization._original(grant_enrollment_bytes, MAX_ENROLLMENT_BYTES, "grant enrollment")
     current_raw = authorization._original(current_root_enrollment_bytes,
@@ -223,7 +227,8 @@ def _verify_control_on_work(*, grant_bytes, grant_enrollment_bytes, current_root
     for key in (root_key, planner_key, operation_key):
         authorization._public(key)
     shape._digest(expected_authorization_digest)
-    shape._integer(now_epoch_ns, minimum=1)
+    if not historical:
+        shape._integer(now_epoch_ns, minimum=1)
     expected_scope, now = expected_authorization_digest, now_epoch_ns
     envelope = _read(raw, enrollment=False, work=work)
     material = _admit_enrollment_on_work(grant_enrollment_bytes=enrollment_raw,
@@ -248,8 +253,9 @@ def _verify_control_on_work(*, grant_bytes, grant_enrollment_bytes, current_root
             ("requestAuthorizationDigest", expected_scope)):
         plan._same(payload[name], expected, work, "execution grant " + name)
     issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
-    if (expires - issued > policy_pins[5]
-            or issued > now + policy_pins[6]
+    if expires - issued > policy_pins[5]:
+        raise SuccessorExecutionGrantError("execution grant original interval exceeds its enrolled age")
+    if not historical and (issued > now + policy_pins[6]
             or now - issued > policy_pins[5] or now >= expires):
         raise SuccessorExecutionGrantError("execution grant is not live within its original enrolled interval")
     operation_size = work.prepare_utf8(payload["operation"])
@@ -261,6 +267,33 @@ def _verify_control_on_work(*, grant_bytes, grant_enrollment_bytes, current_root
     plan._same(payload["operationId"], identity, work, "execution grant actual operation identity")
     _unchanged(raw, envelope, MAX_GRANT_BYTES, work)
     return payload, plan._frame(GRANT_IDENTITY_DOMAIN, (raw,), work)
+
+
+def _verify_control_on_work(*, grant_bytes, grant_enrollment_bytes, current_root_enrollment_bytes,
+        root_public_key, planner_public_key, operation_public_key,
+        expected_authorization_digest, now_epoch_ns, work):
+    """Original signatures/scope plus actual supplied-instant grant freshness."""
+    return _verify_control(grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
+        current_root_enrollment_bytes=current_root_enrollment_bytes, root_public_key=root_public_key,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        expected_authorization_digest=expected_authorization_digest, now_epoch_ns=now_epoch_ns,
+        historical=False, work=work)
+
+
+def _verify_historical_control_on_work(*, grant_bytes, grant_enrollment_bytes,
+        current_root_enrollment_bytes, root_public_key, planner_public_key, operation_public_key,
+        expected_authorization_digest, work):
+    """Original grant commitments for completion, with no live authority claim.
+
+    Original issue/expiry and enrolled maximum age remain checked. No supplied
+    or self-declared historical instant is substituted for a real current clock.
+    This cannot authorize SQL, revive a grant or release a pending fence.
+    """
+    return _verify_control(grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
+        current_root_enrollment_bytes=current_root_enrollment_bytes, root_public_key=root_public_key,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        expected_authorization_digest=expected_authorization_digest, now_epoch_ns=None,
+        historical=True, work=work)
 
 
 def _replay_claims(replayed, work):

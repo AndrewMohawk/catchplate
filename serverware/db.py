@@ -47,6 +47,7 @@ from serverware.authority_store import schema as _authority_schema
 from serverware.authority_store import v9_schema_source as _authority_v9_schema_source
 from serverware.authority_store import planner_writer_sql as _authority_planner_writer_sql
 from serverware.authority_store import verifier_read_sql as _authority_verifier_read_sql
+from serverware.authority_store import completion_read_sql as _authority_completion_read_sql
 from serverware.authority_store.authority_dispatch import (
     _POLICY_AUTHORITY_CONTROLLED_WRITER_HANDLERS,
     _authority_marshal_value,
@@ -219,6 +220,9 @@ _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE = (
 )
 _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE = (
     "serverware_policy_authority_planner_writer"
+)
+_METADATA_STORE_AUTHORITY_COMPLETION_READER_ROLE = (
+    _authority_completion_read_sql.COMPLETION_READER_ROLE
 )
 _POLICY_AUTHORITY_OWNER_APPLY_FUNCTION = (
     "serverware_policy_authority_execute_v9"
@@ -1913,6 +1917,7 @@ _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES = (
     _authority_planner_writer_sql.PLANNER_WRITER_TABLE_PRIVILEGES
 )
 _POLICY_AUTHORITY_VERIFIER_READ_TABLES = authority_contract.VERIFIER_READ_TABLES
+_POLICY_AUTHORITY_COMPLETION_READ_TABLES = authority_contract.COMPLETION_READ_TABLES
 _POLICY_CANARY_TRANSITIONS = {
     "staged": frozenset({"distributing", "failed", "cancelled", "expired", "superseded"}),
     "distributing": frozenset({"observing", "failed", "cancelled", "expired", "superseded"}),
@@ -3559,6 +3564,15 @@ def _seal_postgres_schema_acl(
     ] = (),
     error_type: type[Exception] = MetadataStoreError,
 ) -> None:
+    completion_enabled = schema in {
+        _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME,
+        "serverware_candidate_authority_expected_v9",
+    }
+    if completion_enabled and _METADATA_STORE_AUTHORITY_COMPLETION_READER_ROLE in {
+        runtime_role, authority_executor_role, authority_verifier_role,
+        authority_owner_role, authority_capability_issuer_role, authority_planner_writer_role,
+    }:
+        raise error_type("metadata completion reader must be a separate fixed role")
     if schema == _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME and (
         type(runtime_read_only_tables) is not frozenset
         or runtime_read_only_tables
@@ -3663,6 +3677,12 @@ def _seal_postgres_schema_acl(
     planner_writer_role_name = _policy_candidate_authority_identifier(
         planner_writer_role
     )
+    # Auxiliary schemas retain their existing role inventory. The two actual
+    # authority schemas use the independently provisioned fixed completion role.
+    completion_role = (
+        _METADATA_STORE_AUTHORITY_COMPLETION_READER_ROLE if completion_enabled else runtime_role
+    )
+    completion_role_name = _policy_candidate_authority_identifier(completion_role)
     if planner_writer_role not in {
         runtime_role, executor_role, verifier_role, capability_issuer_role,
     } and (
@@ -3740,6 +3760,7 @@ def _seal_postgres_schema_acl(
             "AND role_record.rolname <> %s "
             "AND role_record.rolname <> %s "
             "AND role_record.rolname <> %s "
+            "AND role_record.rolname <> %s "
             "AND role_record.rolname <> %s",
             (
                 schema,
@@ -3750,6 +3771,7 @@ def _seal_postgres_schema_acl(
                 verifier_role,
                 capability_issuer_role,
                 planner_writer_role,
+                completion_role,
             ),
         ).fetchall()
         for unexpected_role in unexpected_roles:
@@ -3884,6 +3906,14 @@ def _seal_postgres_schema_acl(
                 + " FROM "
                 + executor_role_name
             )
+        if completion_enabled:
+            cur.execute(
+                "REVOKE CREATE, TEMPORARY ON DATABASE " + database_name + " FROM " + completion_role_name
+            )
+            cur.execute("REVOKE ALL ON SCHEMA " + schema_name + " FROM " + completion_role_name)
+            for kind in ("TABLES", "SEQUENCES", "FUNCTIONS"):
+                cur.execute("REVOKE ALL ON ALL " + kind + " IN SCHEMA " + schema_name
+                    + " FROM " + completion_role_name)
         if verifier_role not in {runtime_role, executor_role}:
             cur.execute(
                 "REVOKE TEMPORARY ON DATABASE "
@@ -4067,6 +4097,11 @@ def _seal_postgres_schema_acl(
                     + " TO "
                     + executor_role_name
                 )
+        if completion_enabled:
+            cur.execute("GRANT USAGE ON SCHEMA " + schema_name + " TO " + completion_role_name)
+            for table in sorted(_POLICY_AUTHORITY_COMPLETION_READ_TABLES):
+                table_name = _policy_candidate_authority_identifier(table)
+                cur.execute("GRANT SELECT ON " + schema_name + "." + table_name + " TO " + completion_role_name)
         if verifier_role not in {runtime_role, executor_role}:
             cur.execute(
                 "GRANT USAGE ON SCHEMA "
@@ -4236,6 +4271,7 @@ def _seal_postgres_schema_acl(
             "AND grantee.rolname <> %s "
             "AND grantee.rolname <> %s "
             "AND grantee.rolname <> %s "
+            "AND grantee.rolname <> %s "
             "AND grantee.rolname <> %s LIMIT 1",
             (
                 schema,
@@ -4243,6 +4279,7 @@ def _seal_postgres_schema_acl(
                 executor_role,
                 verifier_role,
                 planner_writer_role,
+                completion_role,
             ),
         ).fetchone()
         unexpected_function = cur.execute(
@@ -4777,6 +4814,7 @@ def _seal_postgres_schema_acl(
                     verifier_role,
                     capability_issuer_role,
                     planner_writer_role,
+                    completion_role,
                     expected_owner_role,
                 )
                 if role
@@ -5026,6 +5064,14 @@ def _seal_postgres_schema_acl(
             ).fetchone()
             if verifier_privilege_violation is not None:
                 raise error_type("PostgreSQL verifier effective privileges are not source exact")
+        if completion_enabled:
+            completion_privilege_violation = cur.execute(
+                *_authority_completion_read_sql.completion_read_privilege_check(
+                    role=completion_role, namespace=schema,
+                )
+            ).fetchone()
+            if completion_privilege_violation is not None:
+                raise error_type("PostgreSQL completion reader effective privileges are not source exact")
 
 
 def _audit_pg_connect():

@@ -1,7 +1,9 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.92`, implementation only. The two evidence-admission database
-APIs now dispatch typed semantic requests through the real authority boundary.
+Status: source `.93`, implementation only. Separate verifier intents and planner
+relays now authenticate retain-only requests for original evidence plans.
+The two evidence-admission database APIs dispatch typed semantic requests
+through the real authority boundary.
 Live planning and retained replay use the same configured, metered original-input
 kernel computation. Writer and verifier owners remain separate; only the writer
 owns a database connection. Verified plans still do not authorize execution.
@@ -526,6 +528,66 @@ last. No descriptor, private signer, database, new clock sample, network route
 or registry activation is introduced. Returned observations establish only the
 local historical replay performed by this call, not original-custody durability,
 historical input provenance, root currentness, a one-use capability or execution.
+
+## Signed retain-only custody handoff
+
+Source `.93` adds two separate flat controls, not legacy internal/v3 envelopes
+or revocation-v4 requests. The 19-field
+`serverware.signedPolicyAuthorityWebAuthnEvidenceCustodyIntent/v1` commits the
+retained-record identity and the exact byte digest/count of four detached
+originals: signed plan, original inputs, evaluation context and independently
+supplied historical expectations. The 13-field
+`serverware.signedPolicyAuthorityWebAuthnEvidenceCustodyRelay/v1` commits the
+complete original intent's digest/count and the same retained-record identity.
+Each binds source, fixed retain/relay purpose, configuration digest, generation
+sequence/digest, one of the two evidence-admission operations and issue/expiry
+times. Each signature uses its own schema as the framing domain.
+
+Controls are canonical, losslessly decoded JSON bounded to 4 MiB, 4,096 nodes
+and depth one. Each detached original retains its existing 64 MiB ceiling;
+these local ceilings do not expand the cumulative work allowance or promise
+that combined maxima fit. Actual raw-byte hashes, codecs, captures, signatures
+and repeated plan/proof/semantic replay all use the same remaining work.
+
+The verifier producer owns independent history and genuinely verifies the
+three-original record before signing its intent. The planner authenticates the
+intent and its configured scope, checks all four original-byte commitments,
+then decodes the authenticated history and repeats genuine retained-plan replay
+before signing a relay. The receiver verifies both controls and repeats that
+same replay; no successful-verification carrier can skip it. Actual verifier
+and planner raw32 keys must differ, and each producer checks its private/public
+pair. Signing reserves final output work beforehand and rechecks the owned
+canonical graph afterward. These checks do not enroll keys or establish the
+upstream authority of the verifier's historical inputs.
+
+Each opened local monotonic/epoch window is nonrenewable. Relay signing retains
+the authenticated intent's window; the receiver tracks both control windows.
+Control age is at most 30 seconds and allowed skew at most five seconds, with
+stricter supplied bounds preserved. Intent expiry cannot exceed the original
+signed plan expiry or historical deadline; relay expiry cannot extend the
+authenticated intent. Pre/post-signing and final verification checks retain
+the original times. A new invocation cannot renew a signed lifetime, and a
+late rejection cannot undo a signature or establish that a commit did not occur.
+
+`authority_webauthn_evidence_custody_persistence._persist_on_configuration`
+composes this handoff with the existing held writer configuration. It verifies
+both original controls and genuinely replays the detached originals before the
+database import gate or connection. It then decodes the authenticated history
+again and joins it to the held purpose policy; no returned verification carrier
+supplies the store's expectations. The fixed private operation invokes the real
+store inside the actual writer's outer transaction and joins the persisted
+record digest to the authenticated controls. Both original control windows
+are checked before and after storage while the transaction is still owned,
+then again after normal outer exit and connection close. The store's genuine
+replay and nested savepoint remain intact. Post-commit expiry or delivery
+uncertainty cannot be reported as rollback or automatic retry authority.
+
+This retain-only protocol adds no network route, signed custody-read protocol,
+registry enablement, execution capability, terminal witness or durable signed
+acknowledgment. Content-addressed idempotency is not exactly-once signing,
+delivery or execution, and no automatic retry is supplied. Implementation
+remains source-only and unexecuted, with consolidated verification and existing
+startup, infrastructure and release gates still required.
 
 ## Retained evidence and consumption
 

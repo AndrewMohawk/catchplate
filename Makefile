@@ -1004,6 +1004,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_evidence.py \
 	serverware/authority_webauthn_evidence_acquisition.py \
 	serverware/authority_webauthn_evidence_computation.py \
+	serverware/authority_webauthn_evidence_custody_wire.py \
+	serverware/authority_webauthn_evidence_custody_intent.py \
+	serverware/authority_webauthn_evidence_custody_relay.py \
+	serverware/authority_webauthn_evidence_custody_persistence.py \
 	serverware/authority_webauthn_evidence_kernel.py \
 	serverware/authority_webauthn_evidence_planning.py \
 	serverware/authority_webauthn_evidence_policy.py \
@@ -2774,6 +2778,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_evidence_acquisition.py \
 				serverware/authority_webauthn_evidence_computation.py \
+				serverware/authority_webauthn_evidence_custody_wire.py \
+				serverware/authority_webauthn_evidence_custody_intent.py \
+				serverware/authority_webauthn_evidence_custody_relay.py \
+				serverware/authority_webauthn_evidence_custody_persistence.py \
 				serverware/authority_webauthn_evidence_kernel.py \
 				serverware/authority_webauthn_evidence_planning.py \
 				serverware/authority_webauthn_evidence_policy.py \

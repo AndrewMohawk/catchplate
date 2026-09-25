@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.106`, implementation only. All six WebAuthn successor operations
+Status: source `.107`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -18,8 +18,14 @@ planning exchange backed by genuine independent verifier root observations.
 Configured PostgreSQL raw-four custody now has a separate authenticated private
 [transition custody exchange](authority-webauthn-transition-custody.md), with
 verifier intent, planner relay and explicit forwarding to the writer. Preparation
-does not automatically forward or commit. Public invocation, independent
-historical resolution, durable caller orchestration/recovery and successor
+does not automatically forward or commit. Authenticated lookup now forwards one
+verifier-signed control and independent history unchanged through planner to
+writer, with genuine historical raw-four replay at each receiving hop. Its fresh
+lookup window does not renew an expired plan; returned record/time metadata is
+unsigned and supplies no absence, retry or reconciliation authority. Current
+pins must still match history; no historical rollover resolver is provided.
+Public invocation, independent historical resolution, durable caller
+orchestration/recovery and successor
 execution remain unfinished; independent authority and release gates remain.
 Root observations do not hold roots current for later execution.
 

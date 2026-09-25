@@ -1,7 +1,7 @@
 # Private WebAuthn transition custody
 
-Status: source `.106`, implementation only; unbuilt and unexecuted. This is the
-private retention path for `webauthn.registration.finalize`,
+Status: source `.107`, implementation only; unbuilt and unexecuted. This is the
+private retention and authenticated lookup path for `webauthn.registration.finalize`,
 `webauthn.trust.stage` and `webauthn.trust.complete`, not execution of those
 business transitions. See the [successor overview](webauthn-successor-transitions.md)
 for signed planning and the `.105` PostgreSQL custody checkpoint.
@@ -47,6 +47,37 @@ before sending and use one absolute transport deadline. The actual measured
 configuration preserves verifier → planner → writer topology, explicit
 transition policy and distinct verifier/planner keys; no ACL is widened.
 
+## Authenticated lookup
+
+Source `.107` adds a dedicated verifier-signed, 13-field lookup control. Raw two
+is `(control, independent history)`: the control binds the requested record
+digest, complete history digest/count, fixed operation and current
+configuration/generation. The planner forwards those same original bytes to
+the writer without signing a replacement or a relay. Each hop authenticates
+the control and history commitment before decoding or using that history.
+
+The writer uses the actual retained-record SELECT and genuine historical
+raw-four replay, returning only after normal transaction and connection exit.
+This uses the existing SERIALIZABLE writer owner, not a newly restricted
+database READ ONLY transaction; the lookup makes no application mutations.
+The response is `(envelope, proof, inputs, context, record digest, retention time)`.
+Planner and verifier each repeat genuine original-plan signature, proof and
+semantic replay against the separately authenticated history before accepting
+their received response. The response metadata remains unsigned: its timestamp
+is checked against original plan history and the current future-time bound,
+not treated as a signed durability receipt.
+
+A fresh bounded lookup window permits retrieval after a historical plan has
+expired, without renewing any plan, evidence or invocation time. Current pinned
+configuration and source must still match the supplied history, and the control
+must match the current generation; there is no historical key-rollover resolver.
+Raw-two requests and raw-four
+responses plus metadata retain the 64 MiB aggregate limit, preallocation length
+checks, configured peers, absolute deadlines, exact EOF and one shared allowance
+per serving invocation. No replay is claimed before originals are retrieved.
+Missing records raise; they are not proofs of absence, rollback or permission
+to retry or reconcile an uncertain earlier write.
+
 ## Commit and failure boundaries
 
 The original intent/relay windows remain in force across authentication, replay
@@ -63,9 +94,10 @@ does not prove rollback or absence and does not authorize an automatic retry.
 Transport completion, source inspection and a returned ordinary object do not
 establish tested deployment behavior or exactly-once business execution.
 
-Independent historical resolution, durable caller retention/reconciliation,
-authenticated retrieval/recovery, public orchestration and atomic successor
-execution remain unfinished. This path does not keep roots current, reserve a
-logical operation, issue execution authority or complete the public workflow.
+Authenticated retrieval is implemented at source level. Independent historical
+resolution, durable caller retention/reconciliation, authorized recovery,
+public orchestration and atomic successor execution remain unfinished. This
+path does not keep roots current, reserve a logical operation, issue execution
+authority or complete the public workflow.
 Infrastructure admission and the consolidated runtime/build validation phase
 remain separate release requirements.

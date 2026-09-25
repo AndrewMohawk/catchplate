@@ -59,6 +59,7 @@ from serverware import authority_webauthn_evidence_custody_read_transport as evi
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
 from serverware import authority_webauthn_transition_transport as transition_plan_transport
 from serverware import authority_webauthn_transition_custody_transport as transition_custody_transport
+from serverware import authority_webauthn_transition_custody_read_transport as transition_custody_read_transport
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_transition_policy as transition_policy
 from serverware import authority_webauthn_trust
@@ -4109,6 +4110,38 @@ class AuthorityProcess:
         return custody._persist_on_work(self, operation=operation, intent_bytes=intent_bytes,
             relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, proof_bytes=proof_bytes,
             inputs_bytes=inputs_bytes, context_bytes=context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _produce_webauthn_transition_custody_read_request(self, *, operation,
+            retained_record_digest, expectations, work):
+        """Prepare lookup-only authority over independently held identity and history."""
+        from serverware import authority_webauthn_transition_custody_read_service as custody_read
+
+        return custody_read._produce_on_work(self, operation=operation,
+            retained_record_digest=retained_record_digest, expectations=expectations, work=work)
+
+    def _read_webauthn_transition_custody(self, *, operation, control_bytes,
+            historical_expectations_bytes, work):
+        """Authenticate original lookup bytes before the actual configured read owner."""
+        from serverware import authority_webauthn_transition_custody_read_service as custody_read
+
+        return custody_read._read_on_work(self, operation=operation, control_bytes=control_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _request_webauthn_transition_custody_read(self, *, operation, control_bytes,
+            historical_expectations_bytes, work):
+        """Retrieve via the planner and genuinely replay historical originals."""
+        from serverware import authority_webauthn_transition_custody_read_service as custody_read
+
+        return custody_read._request_on_work(self, operation=operation, control_bytes=control_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _forward_webauthn_transition_custody_read(self, *, operation, control_bytes,
+            historical_expectations_bytes, work):
+        """Forward the unchanged lookup control and verify the writer's originals."""
+        from serverware import authority_webauthn_transition_custody_read_service as custody_read
+
+        return custody_read._forward_on_work(self, operation=operation, control_bytes=control_bytes,
             historical_expectations_bytes=historical_expectations_bytes, work=work)
 
     def _webauthn_evidence_planner(self, *, purpose, work):
@@ -9005,6 +9038,47 @@ class AuthorityServer:
         transition_custody_transport._check_deadline(deadline_ns)
         transition_custody_transport._send_response(connection, record_digest, retained_at, deadline_ns=deadline_ns)
 
+    def _serve_webauthn_transition_custody_read(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Serve a signed lookup without renewal, mutation or absence success.
+
+        The peer was admitted before prefix routing. Complete bounded raw2 and
+        exact EOF precede one original allowance. The writer closes its actual
+        read owner before returning raw4 plus unsigned digest/time observations.
+        The planner genuinely replays those originals before forwarding them.
+        """
+        process = self.process
+        forwarded = prefix in transition_custody_read_transport.FORWARD_REQUEST_MAGICS
+        direct = prefix in transition_custody_read_transport.REQUEST_MAGICS
+        if not (forwarded or direct):
+            raise AuthorityServiceError("transition custody read purpose is invalid")
+        role = "planner-writer" if forwarded else "planner"
+        if (type(process) is not AuthorityProcess or process.role_name != role
+                or process.process_mode != "policy-authority-" + role):
+            raise AuthorityServiceError("transition custody read has the wrong service role")
+        if forwarded:
+            operation, originals = transition_custody_read_transport._recv_forward_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        else:
+            operation, originals = transition_custody_read_transport._recv_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        transition_custody_read_transport._check_deadline(deadline_ns)
+        if forwarded:
+            result = AuthorityProcess._read_webauthn_transition_custody(process,
+                operation=operation, control_bytes=originals[0],
+                historical_expectations_bytes=originals[1], work=work)
+            response = (result["envelope_bytes"], result["proof_bytes"], result["inputs_bytes"],
+                result["context_bytes"], result["retained_record_digest"], result["retained_at_epoch_ns"])
+        else:
+            response = AuthorityProcess._forward_webauthn_transition_custody_read(process,
+                operation=operation, control_bytes=originals[0],
+                historical_expectations_bytes=originals[1], work=work)
+        transition_custody_read_transport._check_deadline(deadline_ns)
+        transition_custody_read_transport._send_response(connection, response, deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -9033,7 +9107,9 @@ class AuthorityServer:
                 *transition_plan_transport.REQUEST_MAGICS,
                 *transition_custody_transport.REQUEST_MAGICS,
                 *transition_custody_transport.RELAY_REQUEST_MAGICS,
-                *transition_custody_transport.FORWARD_REQUEST_MAGICS)
+                *transition_custody_transport.FORWARD_REQUEST_MAGICS,
+                *transition_custody_read_transport.REQUEST_MAGICS,
+                *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
@@ -9071,6 +9147,10 @@ class AuthorityServer:
                     *transition_custody_transport.RELAY_REQUEST_MAGICS,
                     *transition_custody_transport.FORWARD_REQUEST_MAGICS):
                 self._serve_webauthn_transition_custody(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix in (*transition_custody_read_transport.REQUEST_MAGICS,
+                    *transition_custody_read_transport.FORWARD_REQUEST_MAGICS):
+                self._serve_webauthn_transition_custody_read(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

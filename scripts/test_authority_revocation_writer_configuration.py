@@ -184,7 +184,7 @@ class RevocationWriterConfigurationTests(unittest.TestCase):
             generation = fixture.generation
             if mode == "zero": generation["sequence"] = 0
             elif mode == "bool": generation["sequence"] = True
-            elif mode == "digest": generation["digest"] = oracle.sha(b"other generation")
+            elif mode == "digest": generation["configurationBindingDigest"] = oracle.sha(b"other generation intent")
             elif mode == "predecessor": generation["predecessorDigest"] = oracle.sha(b"other predecessor")
             elif mode == "floor": generation["minimumRollbackSequence"] = 4
             elif mode == "manifest": generation["operationManifestDigest"] = oracle.sha(b"other operation manifest")

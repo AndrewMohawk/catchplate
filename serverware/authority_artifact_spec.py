@@ -25,14 +25,17 @@ except ImportError:  # The contract fails closed when crypto is unavailable.
     Ed25519PublicKey = None
 
 
-ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v4"
-GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v4"
-SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v4"
-UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v4"
+ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v5"
+GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v5"
+SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v5"
+UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v5"
+CONFIGURATION_GENERATION_BINDING_SCHEMA = (
+    "serverware.authorityConfigurationGenerationBinding/v1"
+)
 CONFIGURATION_PAYLOAD_SCHEMAS = MappingProxyType(
     {
-        "authority-service": "serverware.policyAuthorityServiceConfiguration/v2",
-        "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v2",
+        "authority-service": "serverware.policyAuthorityServiceConfiguration/v3",
+        "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v3",
     }
 )
 KEY_AUTHORIZATION_SCHEMA = "serverware.authorityKeyAuthorizations/v1"
@@ -1865,6 +1868,74 @@ def _validate_trust_mode(value: object) -> None:
     }[mode]
     if flags != expected:
         raise ArtifactContractError("trust-mode claims are contradictory")
+
+
+def configuration_generation_binding(generation: Mapping[str, Any]) -> dict[str, Any]:
+    """Project preconfiguration intent, without admitting a generation statement.
+
+    Full statements and predeclared metadata may carry other fields. Only these
+    scalar commitments and the exact trust-mode claims participate; no final
+    package, configuration, generation, launch, or attestation digest is read.
+    The recorded operation contract is shape-checked, not enrolled or replaced
+    by the current source contract; current admission keeps its separate pin.
+    """
+    fields = {
+        "generationId", "sequence", "predecessorDigest",
+        "minimumRollbackSequence", "validFrom", "validUntil",
+        "operationManifestDigest", "trustMode",
+    }
+    if not isinstance(generation, Mapping) or not fields.issubset(generation):
+        raise ArtifactContractError("configuration generation metadata is incomplete")
+    generation_id = _require_identifier(
+        generation["generationId"], name="configuration generation identifier"
+    )
+    sequence = _require_int(
+        generation["sequence"], name="configuration generation sequence",
+        minimum=0, maximum=2**63 - 1,
+    )
+    predecessor = generation["predecessorDigest"]
+    if predecessor is not None:
+        _require_digest(predecessor, name="configuration predecessor digest")
+    if (sequence == 0) != (predecessor is None):
+        raise ArtifactContractError("only the genesis binding can omit its predecessor")
+    minimum_rollback = _require_int(
+        generation["minimumRollbackSequence"], name="configuration rollback floor",
+        minimum=0, maximum=sequence,
+    )
+    valid_from = _require_timestamp(generation["validFrom"], name="configuration validFrom")
+    valid_until = _require_timestamp(generation["validUntil"], name="configuration validUntil")
+    if valid_until <= valid_from:
+        raise ArtifactContractError("configuration generation validity is not increasing")
+    operation_digest = _require_digest(
+        generation["operationManifestDigest"], name="configuration operation contract"
+    )
+    trust_mode = _require_mapping(
+        generation["trustMode"], name="configuration trust mode",
+        keys={
+            "mode", "hardwareBacked", "externalWitnessRequired",
+            "teeQuoteRequired", "imaAppraisalRequired",
+        },
+    )
+    _require_identifier(trust_mode["mode"], name="configuration trust mode")
+    _validate_trust_mode(trust_mode)
+    return {
+        "schema": CONFIGURATION_GENERATION_BINDING_SCHEMA,
+        "generationId": generation_id,
+        "sequence": sequence,
+        "predecessorDigest": predecessor,
+        "minimumRollbackSequence": minimum_rollback,
+        "validFrom": generation["validFrom"],
+        "validUntil": generation["validUntil"],
+        "operationManifestDigest": operation_digest,
+        "trustMode": trust_mode["mode"],
+    }
+
+
+def configuration_generation_binding_digest(generation: Mapping[str, Any]) -> str:
+    return domain_digest(
+        CONFIGURATION_GENERATION_BINDING_SCHEMA,
+        canonical_json_bytes(configuration_generation_binding(generation)),
+    )
 
 
 def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
@@ -3754,6 +3825,24 @@ STRING_ARRAY_JSON_SCHEMA = {
     "type": "array",
     "items": TEXT_JSON_SCHEMA,
 }
+CONFIGURATION_GENERATION_BINDING_JSON_SCHEMA = _closed_object_schema(
+    {
+        "schema": {"const": CONFIGURATION_GENERATION_BINDING_SCHEMA},
+        "generationId": {
+            "type": "string", "minLength": 1, "maxLength": 256,
+            "pattern": "^[A-Za-z][A-Za-z0-9._:/-]*$",
+        },
+        "sequence": {"type": "integer", "minimum": 0, "maximum": 2**63 - 1},
+        "predecessorDigest": {"anyOf": [SHA256_JSON_SCHEMA, {"type": "null"}]},
+        "minimumRollbackSequence": {
+            "type": "integer", "minimum": 0, "maximum": 2**63 - 1,
+        },
+        "validFrom": TIMESTAMP_JSON_SCHEMA,
+        "validUntil": TIMESTAMP_JSON_SCHEMA,
+        "operationManifestDigest": SHA256_JSON_SCHEMA,
+        "trustMode": {"enum": sorted(TRUST_MODES)},
+    }
+)
 ROOT_IDENTITY_JSON_SCHEMA = _closed_object_schema(
     {
         "runtimePath": TEXT_JSON_SCHEMA,
@@ -4514,6 +4603,7 @@ __all__ = [
     "GENERATION_STATEMENT_SCHEMA",
     "SIGNED_PACKAGE_SCHEMA",
     "UNSIGNED_PACKAGE_SCHEMA",
+    "CONFIGURATION_GENERATION_BINDING_SCHEMA",
     "CONFIGURATION_PAYLOAD_SCHEMAS",
     "KEY_AUTHORIZATION_SCHEMA",
     "KEY_REVOCATION_SCHEMA",
@@ -4528,6 +4618,7 @@ __all__ = [
     "VerifiedAuthorityKey",
     "VerifiedArtifactPackage",
     "ARTIFACT_FILE_JSON_SCHEMA",
+    "CONFIGURATION_GENERATION_BINDING_JSON_SCHEMA",
     "CONFIGURATION_REFERENCE_JSON_SCHEMA",
     "CONFIGURATION_PAYLOAD_BINDING_JSON_SCHEMA",
     "ARTIFACT_BUNDLE_JSON_SCHEMA",
@@ -4538,6 +4629,8 @@ __all__ = [
     "assemble_signed_artifact_package",
     "canonical_json_bytes",
     "closure_receipt_digest",
+    "configuration_generation_binding",
+    "configuration_generation_binding_digest",
     "configuration_payload_bindings",
     "domain_digest",
     "ed25519_public_key_from_seed",

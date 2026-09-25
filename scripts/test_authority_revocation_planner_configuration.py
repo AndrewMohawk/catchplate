@@ -184,7 +184,7 @@ class RevocationPlannerConfigurationTests(unittest.TestCase):
             launch = fixture.generation
             if mode == "zero": launch["sequence"] = 0
             if mode == "bool": launch["sequence"] = True
-            if mode == "digest": launch["digest"] = oracle.sha(b"foreign generation")
+            if mode == "digest": launch["configurationBindingDigest"] = oracle.sha(b"foreign generation intent")
             if mode == "predecessor": launch["predecessorDigest"] = oracle.sha(b"foreign predecessor")
             if mode == "floor": launch["minimumRollbackSequence"] = 4
             if mode == "manifest": launch["operationManifestDigest"] = oracle.sha(b"foreign operation source")

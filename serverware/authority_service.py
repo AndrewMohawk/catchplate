@@ -70,9 +70,9 @@ from serverware.authority_store.verifier_read_sql import (
 SOURCE_REVISION = (
     authority_contract.SOURCE_REVISION
 )
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v2"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v3"
 SIGNED_CONFIG_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v2"
+    "serverware.signedPolicyAuthorityServiceConfiguration/v3"
 )
 ATTESTATION_SCHEMA = (
     "serverware.policyAuthorityCredentialReleaseAttestation/v2"
@@ -404,7 +404,7 @@ def _webauthn_evidence_custody_context(process, *, role_name, signing, work,
 
 
 def _revocation_writer_from_owned_configuration(*, owned_payload, configuration_digest, work):
-    """Continue from already captured measured settings, never mutable self.
+    """Return the genuine writer and held final launch identity, never self.
 
     This fixed private continuation accepts no caller-supplied callback and
     rereads no mutable process attributes. The real mapper checks the held configuration and
@@ -421,9 +421,13 @@ def _revocation_writer_from_owned_configuration(*, owned_payload, configuration_
     # capture; no descriptor or other callback can interpose here.
     generation = authority_revocation_configuration.production._callback(
         work, lambda: dict(authority_launch_guard.generation()))
-    return authority_revocation_writer_configuration._persistence_from_configuration_on_work(
+    held_launch = (generation["sequence"], generation["digest"])
+    authority_revocation_configuration.capability.shape._integer(held_launch[0], minimum=1)
+    authority_revocation_configuration.capability.shape._digest(held_launch[1])
+    persistence = authority_revocation_writer_configuration._persistence_from_configuration_on_work(
         payload=owned_payload, configuration_digest=configuration_digest,
         generation=generation, persistence_dsn=persistence_dsn, work=work)
+    return persistence, held_launch
 
 
 def _close_inherited_descriptors(
@@ -1100,7 +1104,7 @@ class MeasuredConfiguration:
             "launchNonceDigest",
             "queryManifestDigest",
             "generationSequence",
-            "generationDigest",
+            "generationBindingDigest",
             "generationPredecessorDigest",
             "generationMinimumRollbackSequence",
             "credentialReleaseTrust",
@@ -1172,7 +1176,7 @@ class MeasuredConfiguration:
                 for field in (
                     "launchNonceDigest",
                     "queryManifestDigest",
-                    "generationDigest",
+                    "generationBindingDigest",
                     "issuerSessionIdentityDigest",
                     "executorSessionIdentityDigest",
                     "issuerCredentialIssuanceDigest",
@@ -1215,6 +1219,9 @@ class MeasuredConfiguration:
 
     def _verify_generation_binding(self) -> None:
         generation = dict(authority_launch_guard.generation())
+        # Final generation identity is admitted by the launch chain; it must
+        # not be equated to the configuration's static metadata commitment.
+        _require_digest(generation.get("digest"), "authority launch generation digest")
         file_digest = _require_digest(
             self.file_digest, "authority configuration file digest"
         )
@@ -1227,11 +1234,11 @@ class MeasuredConfiguration:
         }
         if (
             generation.get("schema")
-                != "serverware.authorityGenerationLaunchContext/v2"
+                != "serverware.authorityGenerationLaunchContext/v3"
             or generation.get("sequence")
                 != self.payload.get("generationSequence")
-            or generation.get("digest")
-                != self.payload.get("generationDigest")
+            or generation.get("configurationBindingDigest")
+                != self.payload.get("generationBindingDigest")
             or generation.get("predecessorDigest")
                 != self.payload.get("generationPredecessorDigest")
             or generation.get("minimumRollbackSequence")
@@ -5182,8 +5189,9 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation writer configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
-        return _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
+        persistence, _held_launch = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
             configuration_digest=configuration_digest, work=work)
+        return persistence
 
     def _persist_and_reserve_revocation_plan(self, *, envelope_bytes, evaluation_context_bytes,
             planned_at_epoch_ns, envelope_id, planner_transaction_id, work, **expectations):
@@ -5217,7 +5225,7 @@ class AuthorityProcess:
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
         authority_revocation_writer_action._assert_policy_on_work(owned_payload, owned, work)
-        persistence = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
+        persistence, _held_launch = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
             configuration_digest=configuration_digest, work=work)
         return persistence.persist_and_reserve_execution(**arguments, work=work, **owned)
 
@@ -5270,14 +5278,10 @@ class AuthorityProcess:
         if (type(owned_payload.get("roles")) is not dict
                 or type(owned_payload["roles"].get("planner-writer")) is not dict):
             raise AuthorityServiceError("revocation writer configuration has no exact writer role")
-        generation_sequence = owned_payload["generationSequence"]
-        generation_digest = owned_payload["generationDigest"]
         maximum_age_ns = owned_payload["roles"]["planner-writer"]["maximumInternalAgeNs"]
         writer_response_spki_digest = owned_payload["roles"]["planner-writer"]["responseSigningSpkiDigest"]
         other_response_spki_digests = tuple(owned_payload["roles"][name]["responseSigningSpkiDigest"]
             for name in ("verifier", "planner", "issuer", "executor"))
-        authority_revocation_configuration.capability.shape._integer(generation_sequence, minimum=1)
-        authority_revocation_configuration.capability.shape._digest(generation_digest)
         authority_revocation_configuration.capability.shape._integer(maximum_age_ns, minimum=1)
         authority_revocation_configuration.capability.shape._digest(writer_response_spki_digest)
         for pin in other_response_spki_digests:
@@ -5288,8 +5292,9 @@ class AuthorityProcess:
             work, lambda: launch_private_key.public_key())
         if not isinstance(launch_public_key, Ed25519PublicKey):
             raise AuthorityServiceError("revocation writer launch key did not derive Ed25519")
-        persistence = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
+        persistence, held_launch = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
             configuration_digest=configuration_digest, work=work)
+        generation_sequence, generation_digest = held_launch
         configuration_snapshot = persistence._snapshot_configuration()
         return authority_revocation_writer_composition._persist_commitments_on_configuration(
             configuration_snapshot, intent_bytes=intent_bytes, relay_bytes=relay_bytes,

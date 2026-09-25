@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -37,9 +38,9 @@ from serverware import authority_witness_capacity as capacity
 from serverware.authority_witness_journal import JournalConflict, WitnessJournalIO
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityReplayWitnessConfiguration/v2"
+CONFIG_SCHEMA = "serverware.policyAuthorityReplayWitnessConfiguration/v3"
 SIGNED_CONFIG_SCHEMA = (
-    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v2"
+    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v3"
 )
 REQUEST_SCHEMA = "serverware.policyAuthorityReplayWitnessRequest/v2"
 WITNESS_RECEIPT_SCHEMA = (
@@ -49,7 +50,7 @@ WITNESS_STATE_RECORD_SCHEMA = (
     "serverware.policyAuthorityReplayWitnessStateRecord/v1"
 )
 GENERATION_CONTEXT_SCHEMA = (
-    "serverware.authorityGenerationLaunchContext/v2"
+    "serverware.authorityGenerationLaunchContext/v3"
 )
 LAUNCH_KEY_ID_DOMAIN = (
     "serverware.authorityLaunchPublicKey/v1"
@@ -325,6 +326,7 @@ def _validate_generation_value(
         "roleManifestDigests",
         "configurationDigests",
         "configurationPayloadBindings",
+        "configurationBindingDigest",
         "trustMode",
         "externalHighWater",
         "launchIdentityIssuer",
@@ -341,6 +343,11 @@ def _validate_generation_value(
         authority_artifact_spec.validate_generation_statement(statement)
         generation_digest = (
             authority_artifact_spec.generation_statement_digest(
+                statement
+            )
+        )
+        configuration_binding_digest = (
+            authority_artifact_spec.configuration_generation_binding_digest(
                 statement
             )
         )
@@ -397,6 +404,8 @@ def _validate_generation_value(
             != statement["configurationDigests"]
         or generation.get("configurationPayloadBindings")
             != statement["configurationPayloadBindings"]
+        or generation.get("configurationBindingDigest")
+            != configuration_binding_digest
         or generation.get("trustMode")
             != statement["trustMode"]["mode"]
         or not isinstance(role_digests, dict)
@@ -440,6 +449,7 @@ def _validate_generation_value(
                 "packageDigest",
                 "artifactBundleDigest",
                 "operationManifestDigest",
+                "configurationBindingDigest",
                 "artifactVerificationReceiptDigest",
                 "provisioningReceiptDigest",
                 "provisioningPlanDigest",
@@ -582,7 +592,7 @@ def _public_key_digest(key: Ed25519PublicKey) -> str:
     ).hexdigest()
 
 
-def _load_configuration() -> tuple[dict[str, Any], str]:
+def _load_configuration() -> tuple[dict[str, Any], str, dict[str, Any]]:
     root_key = _load_public_key(
         _read_descriptor(
             "SERVERWARE_POLICY_AUTHORITY_WITNESS_ROOT_PUBLIC_KEY",
@@ -622,7 +632,7 @@ def _load_configuration() -> tuple[dict[str, Any], str]:
         "schema",
         "sourceRevision",
         "launchManifestDigest",
-        "generation",
+        "generationBindingDigest",
         "operationManifestDigest",
         "authorityConfigurationDigests",
         "identityDigest",
@@ -643,12 +653,10 @@ def _load_configuration() -> tuple[dict[str, Any], str]:
         "minimumSequence",
         "minimumReceiptDigest",
     }
-    launch_generation = dict(authority_launch_guard.generation())
-    payload_generation = _validate_generation_value(
-        payload.get("generation"),
+    launch_generation = _validate_generation_value(
+        dict(authority_launch_guard.generation()),
         require_current_validity=True,
     )
-    payload["generation"] = payload_generation
     file_digest = "sha256:" + hashlib.sha256(config_value).hexdigest()
     digest = _domain_digest(CONFIG_SCHEMA, payload_bytes)
     own_binding = {
@@ -664,24 +672,20 @@ def _load_configuration() -> tuple[dict[str, Any], str]:
         != authority_contract.SOURCE_REVISION
         or payload.get("launchManifestDigest")
         != authority_launch_guard.require_active("witness")
-        or _canonical(payload["generation"])
-            != _canonical(launch_generation)
-        or payload["generation"].get("schema")
-            != GENERATION_CONTEXT_SCHEMA
-        or not _is_digest(
-            payload["generation"].get("digest")
-        )
+        or not _is_digest(payload.get("generationBindingDigest"))
+        or payload.get("generationBindingDigest")
+            != launch_generation["configurationBindingDigest"]
         or payload.get("operationManifestDigest")
             != authority_contract.OPERATION_MANIFEST_DIGEST
         or payload.get("operationManifestDigest")
-            != payload["generation"].get("operationManifestDigest")
+            != launch_generation["operationManifestDigest"]
         or file_digest not in launch_generation["configurationDigests"]
         or own_binding not in launch_generation["configurationPayloadBindings"]
         or not isinstance(
             payload.get("authorityConfigurationDigests"), list
         )
         or payload["authorityConfigurationDigests"]
-            != _service_configuration_digests(payload_generation)
+            != _service_configuration_digests(launch_generation)
         or not Path(str(payload.get("socketPath", ""))).is_absolute()
         or payload.get("socketPath")
             != "/run/serverware/authority-witness/authority.sock"
@@ -726,7 +730,7 @@ def _load_configuration() -> tuple[dict[str, Any], str]:
         )
     ):
         raise WitnessError("witness configuration binding changed")
-    return payload, digest
+    return payload, digest, launch_generation
 
 
 def _peer_identity(connection: socket.socket) -> tuple[int, int, int]:
@@ -849,9 +853,22 @@ class WitnessStateStore:
         *,
         configuration: dict[str, Any],
         configuration_digest: str,
+        generation: dict[str, Any],
     ) -> None:
+        # The static signed payload never acquires a derived generation. Both
+        # graphs are held before native key loading; only the separately
+        # admitted launch context supplies final generation and journal state.
+        configuration = deepcopy(configuration)
+        generation = deepcopy(generation)
         self.configuration = configuration
         self.configuration_digest = configuration_digest
+        self.generation = _validate_generation_value(
+            generation, require_current_validity=True,
+        )
+        if configuration.get("generationBindingDigest") != (
+            self.generation["configurationBindingDigest"]
+        ):
+            raise WitnessError("witness configuration generation binding changed")
         self.verifier_key = Ed25519PublicKey.from_public_bytes(
             _b64url_decode(
                 configuration[
@@ -1079,7 +1096,7 @@ class WitnessStateStore:
             capacity.require_completion_capacity(self._capacity_usage, self._capacity_limits)
         except capacity.WitnessCapacityError as exc:
             raise WitnessError("witness recovered reservations exceed completion capacity") from exc
-        current_generation = self.configuration["generation"]
+        current_generation = self.generation
         if self.state_generation is not None:
             stored_sequence = self.state_generation["sequence"]
             current_sequence = current_generation["sequence"]
@@ -1250,7 +1267,7 @@ class WitnessStateStore:
 
     def _persist_generation_activation(self) -> None:
         with self._journal_io.ready():
-            generation = self.configuration["generation"]
+            generation = self.generation
             activation_id = _domain_digest(
                 "serverware.policyAuthorityWitnessGenerationActivation/v1",
                 _canonical(generation),
@@ -1667,11 +1684,11 @@ class WitnessStateStore:
         generation = (
             dict(expected_generation)
             if expected_generation is not None
-            else self.configuration["generation"]
+            else self.generation
         )
         is_historical_generation = (
             generation["digest"]
-            != self.configuration["generation"]["digest"]
+            != self.generation["digest"]
         )
         if (
             set(request) != required
@@ -1886,7 +1903,7 @@ class WitnessStateStore:
             record.get("generation"),
             require_current_validity=False,
         )
-        configured_generation = self.configuration["generation"]
+        configured_generation = self.generation
         state_sequence, _digest_suffix = _parse_state_record_name(
             record_name
         )
@@ -2340,7 +2357,7 @@ class WitnessStateStore:
                     or predecessor.get("requestDigest")
                         != request.get("requestDigest")
                     or predecessor.get("generationDigest")
-                        != self.configuration["generation"][
+                        != self.generation[
                             "digest"
                         ]
                     or (
@@ -2396,9 +2413,9 @@ class WitnessStateStore:
                     request["deadlineMonotonicNs"],
                 "issuedAtEpochNs": time.time_ns(),
                 "generationSequence":
-                    self.configuration["generation"]["sequence"],
+                    self.generation["sequence"],
                 "generationDigest":
-                    self.configuration["generation"][
+                    self.generation[
                         "digest"
                     ],
                 "canonicalRequestDigest":
@@ -2441,7 +2458,7 @@ class WitnessStateStore:
                 "schema": WITNESS_STATE_RECORD_SCHEMA,
                 "kind": "transition",
                 "stateSequence": self.state_sequence + 1,
-                "generation": self.configuration["generation"],
+                "generation": self.generation,
                 "transitionId": transition_id,
                 "envelopeId": request["envelopeId"],
                 "parentEnvelopeId": request["parentEnvelopeId"],
@@ -2629,10 +2646,11 @@ def main() -> int:
         raise WitnessError(
             "witness process was not isolated by the measured launcher"
         )
-    configuration, configuration_digest = _load_configuration()
+    configuration, configuration_digest, generation = _load_configuration()
     witness = WitnessStateStore(
         configuration=configuration,
         configuration_digest=configuration_digest,
+        generation=generation,
     )
     WitnessServer(
         witness=witness,

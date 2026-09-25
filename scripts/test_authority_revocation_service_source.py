@@ -197,11 +197,11 @@ class RevocationServiceSourceTests(unittest.TestCase):
             configuration_digest=configuration_digest, generation=generation, work=work)""")
         self.assertEqual(ast.literal_eval(assigned(module, "_GENERATION_FIELDS")),
             ("schema", "sequence", "digest", "predecessorDigest", "minimumRollbackSequence",
-             "operationManifestDigest", "configurationPayloadBindings"))
+             "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest"))
         self.assertEqual(ast.literal_eval(assigned(module, "MAX_CONFIGURATION_DIGESTS")), 4096)
         bounded = calls(prefix, "capability.shape._bounded_object")
         self.assertEqual(len(bounded), 1)
-        self.shape(bounded[0], 'capability.shape._bounded_object(generation, 21, "issuer launch context")')
+        self.shape(bounded[0], 'capability.shape._bounded_object(generation, 22, "issuer launch context")')
         self.shape(assigned(prefix, "owned"), "_ConfigurationCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)")
         self.shape(assigned(prefix, "launch"), """capability.capture._JSONCapture(ledger,
             maximum_bytes=authority.MAX_REQUEST_BYTES).visit({name: generation[name] for name in _GENERATION_FIELDS})""")
@@ -249,7 +249,7 @@ class RevocationServiceSourceTests(unittest.TestCase):
         self.assertEqual(len(calls(generation, "work.prepare_scan")), 1)
         self.assertFalse(calls(generation, "sorted"))
         self.assertFalse(calls(generation, "set"))
-        self.assertIn("previous >= digest", ast.unparse(generation))
+        self.assertIn("previous >= file_digest", ast.unparse(generation))
         self.assertIn("digest == configuration_digest", ast.unparse(generation))
         self.shape(assigned(factory, "maximum_age_ns"), "min(issuer['maximumInternalAgeNs'], authority.VERIFIER_RESPONSE_MAX_AGE_NS)")
         self.shape(assigned(factory, "maximum_clock_skew_ns"), "authority.VERIFIER_MAX_CLOCK_SKEW_NS")

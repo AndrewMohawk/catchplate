@@ -28,6 +28,8 @@ from serverware.authority_artifact_spec import (
     artifact_bundle_digest,
     canonical_json_bytes,
     closure_receipt_digest,
+    configuration_generation_binding,
+    configuration_generation_binding_digest,
     configuration_payload_bindings,
     domain_digest,
     package_signature_message,
@@ -54,16 +56,16 @@ CLOSURE_SIGNATURE_DOMAIN = (
 )
 ROLE_SET_DIGEST_DOMAIN = "serverware.authorityRoleSet/v1"
 SERVICE_CONFIGURATION_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v2"
+    "serverware.signedPolicyAuthorityServiceConfiguration/v3"
 )
 SERVICE_CONFIGURATION_PAYLOAD_SCHEMA = (
-    "serverware.policyAuthorityServiceConfiguration/v2"
+    "serverware.policyAuthorityServiceConfiguration/v3"
 )
 WITNESS_CONFIGURATION_SCHEMA = (
-    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v2"
+    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v3"
 )
 WITNESS_CONFIGURATION_PAYLOAD_SCHEMA = (
-    "serverware.policyAuthorityReplayWitnessConfiguration/v2"
+    "serverware.policyAuthorityReplayWitnessConfiguration/v3"
 )
 SERVICE_CONFIGURATION_ROLES = frozenset(
     {"verifier", "planner", "planner-writer", "issuer", "executor"}
@@ -86,7 +88,7 @@ SERVICE_CONFIGURATION_FIELDS = frozenset(
         "launchNonceDigest",
         "queryManifestDigest",
         "generationSequence",
-        "generationDigest",
+        "generationBindingDigest",
         "generationPredecessorDigest",
         "generationMinimumRollbackSequence",
         "credentialReleaseTrust",
@@ -160,7 +162,7 @@ WITNESS_CONFIGURATION_FIELDS = frozenset(
         "schema",
         "sourceRevision",
         "launchManifestDigest",
-        "generation",
+        "generationBindingDigest",
         "operationManifestDigest",
         "authorityConfigurationDigests",
         "identityDigest",
@@ -662,6 +664,8 @@ def _validate_configuration_document(
     file_entry: Mapping[str, Any],
     *,
     source_revision: str,
+    expected_generation_binding: Mapping[str, Any],
+    expected_generation_binding_digest: str,
 ) -> tuple[str | None, str | None]:
     role = reference["role"]
     if role not in {AUTHORITY_SERVICE_CONFIGURATION_ROLE, "witness"}:
@@ -705,6 +709,11 @@ def _validate_configuration_document(
         or payload["sourceRevision"] != source_revision
     ):
         raise GeneratorError(f"{role} configuration schema changed")
+    if (
+        _digest(payload["generationBindingDigest"], name="configuration generation binding")
+        != expected_generation_binding_digest
+    ):
+        raise GeneratorError(f"{role} configuration binds another generation intent")
     if role == "witness":
         authority_configuration_digests = payload[
             "authorityConfigurationDigests"
@@ -745,9 +754,19 @@ def _validate_configuration_document(
             )
         ):
             raise GeneratorError(
-                "witness-v2 configuration topology is not exact"
+                "witness-v3 configuration topology is not exact"
             )
     else:
+        if (
+            type(payload["generationSequence"]) is not int
+            or type(payload["generationMinimumRollbackSequence"]) is not int
+            or payload["generationSequence"] != expected_generation_binding["sequence"]
+            or payload["generationPredecessorDigest"]
+                != expected_generation_binding["predecessorDigest"]
+            or payload["generationMinimumRollbackSequence"]
+                != expected_generation_binding["minimumRollbackSequence"]
+        ):
+            raise GeneratorError("authority service generation metadata changed")
         roles = payload["roles"]
         if (
             not isinstance(roles, Mapping)
@@ -931,6 +950,26 @@ def _build_bundle(
     trust: Mapping[str, Any],
     validation_time: str,
 ) -> tuple[dict[str, Any], int]:
+    generation_input = _closed(
+        spec["generation"],
+        name="generation input",
+        keys={
+            "sequence", "generationId", "predecessorDigest",
+            "minimumRollbackSequence", "validFrom", "validUntil",
+            "witnessCheckpoint",
+        },
+    )
+    generation_metadata = {
+        field: generation_input[field]
+        for field in (
+            "generationId", "sequence", "predecessorDigest",
+            "minimumRollbackSequence", "validFrom", "validUntil",
+        )
+    }
+    generation_metadata["operationManifestDigest"] = authority_contract.OPERATION_MANIFEST_DIGEST
+    generation_metadata["trustMode"] = spec["trustMode"]
+    expected_generation_binding = configuration_generation_binding(generation_metadata)
+    expected_generation_binding_digest = configuration_generation_binding_digest(generation_metadata)
     artifact_root = _runtime_path(
         spec["artifactRoot"], name="artifact root"
     )
@@ -1048,6 +1087,8 @@ def _build_bundle(
                 configuration,
                 file_by_path[configuration["path"]],
                 source_revision=spec["sourceRevision"],
+                expected_generation_binding=expected_generation_binding,
+                expected_generation_binding_digest=expected_generation_binding_digest,
             )
             configuration["payloadSchema"] = payload_schema
             configuration["payloadDigest"] = payload_digest

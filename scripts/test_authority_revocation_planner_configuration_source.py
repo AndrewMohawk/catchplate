@@ -268,9 +268,10 @@ class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
             ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(
                 {name: generation[name] for name in _GENERATION_FIELDS})''')
         self.shape(assigned(shared, "_GENERATION_FIELDS"), '''("schema", "sequence", "digest",
-            "predecessorDigest", "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings")''')
+            "predecessorDigest", "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings",
+            "configurationBindingDigest")''')
         bounded = call(prefix, "capability.shape._bounded_object")
-        self.shape(bounded, 'capability.shape._bounded_object(generation, 21, "issuer launch context")')
+        self.shape(bounded, 'capability.shape._bounded_object(generation, 22, "issuer launch context")')
         encoded = call(prefix, "_configuration_wire")
         self.shape(encoded, "_configuration_wire(owned, ledger)")
         committed = call(prefix, "capability.plan._frame")

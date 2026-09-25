@@ -36,12 +36,12 @@ import test_authority_revocation_issuance as issuance_oracle
 import test_authority_revocation_plan as oracle
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v2"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v2"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v3"
+GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v3"
 VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 ISSUER_SESSION = "serverware.policyAuthorityCapabilityIssuerSession/v1"
 GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest", "minimumRollbackSequence",
-    "operationManifestDigest", "configurationPayloadBindings")
+    "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest")
 
 
 def raw_key(key):
@@ -82,7 +82,8 @@ class ConfigurationFixture:
             "maximumInternalAgeNs": 60_000_000_000, "requestTimeoutSeconds": 1.25,
             "databaseConnectTimeoutSeconds": 2.5}
         self.payload = {"schema": CONFIG_SCHEMA, "sourceRevision": authority_contract.SOURCE_REVISION,
-            "roles": roles, "generationSequence": 3, "generationDigest": cap.generation_digest,
+            "roles": roles, "generationSequence": 3,
+            "generationBindingDigest": oracle.sha(b"configured generation intent"),
             "generationPredecessorDigest": oracle.sha(b"configured generation predecessor"),
             "generationMinimumRollbackSequence": 2,
             "issuerCredentialIssuanceDigest": oracle.sha(b"configured issuer credential issuance"),
@@ -93,7 +94,8 @@ class ConfigurationFixture:
             *(value.encode("utf-8") for value in self.issuer_frames()))
         self.generation = {"schema": GENERATION_SCHEMA, "sequence": 3, "digest": cap.generation_digest,
             "predecessorDigest": self.payload["generationPredecessorDigest"], "minimumRollbackSequence": 2,
-            "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST, "configurationPayloadBindings": []}
+            "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST, "configurationPayloadBindings": [],
+            "configurationBindingDigest": self.payload["generationBindingDigest"]}
         self.commit_payload()
         self.rebuild_originals()
 
@@ -154,7 +156,7 @@ def independent_configuration_work(fixture):
     add, graph, same = oracle.add, oracle.graph_cost, oracle.canonical_comparison
     payload, generation = fixture.payload, fixture.generation
     launch = {name: generation[name] for name in GENERATION_FIELDS}
-    joined = (generation["sequence"], generation["digest"], generation["predecessorDigest"],
+    joined = (generation["sequence"], generation["configurationBindingDigest"], generation["predecessorDigest"],
         generation["minimumRollbackSequence"], generation["operationManifestDigest"])
     phases = {"capture": add(graph(payload, 1, 1), graph(launch, 1, 1)),
         "commitment": add(graph(payload), oracle.frame_cost(CONFIG_SCHEMA, (oracle.wire(payload),)),
@@ -275,7 +277,7 @@ class RevocationConfigurationTests(unittest.TestCase):
                 launch = fixture.generation
                 if mode == "zero": launch["sequence"] = 0
                 if mode == "bool": launch["sequence"] = True
-                if mode == "digest": launch["digest"] = oracle.sha(b"different generation")
+                if mode == "digest": launch["configurationBindingDigest"] = oracle.sha(b"different generation intent")
                 if mode == "predecessor": launch["predecessorDigest"] = oracle.sha(b"different predecessor")
                 if mode == "floor": launch["minimumRollbackSequence"] = 4
                 if mode == "manifest": launch["operationManifestDigest"] = oracle.sha(b"different manifest")

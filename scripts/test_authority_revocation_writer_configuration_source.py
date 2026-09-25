@@ -55,7 +55,11 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         delegated = call(adapter, "_revocation_writer_from_owned_configuration")
         self.shape(delegated, '''_revocation_writer_from_owned_configuration(
             owned_payload=owned_payload, configuration_digest=configuration_digest, work=work)''')
-        self.assertIs(adapter.body[-1].value, delegated)
+        pair, = [node for node in adapter.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Tuple) and [ast.unparse(item) for item in target.elts]
+                    == ["persistence", "_held_launch"] for target in node.targets)]
+        self.assertIs(pair.value, delegated)
+        self.shape(adapter.body[-1].value, "persistence")
         self.assertFalse(calls(adapter, "authority_revocation_configuration.production._callback"))
         continuation = self.continuation
         self.assertEqual(continuation.args.args, [])
@@ -77,8 +81,12 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         self.shape(mapped, '''authority_revocation_writer_configuration._persistence_from_configuration_on_work(
             payload=owned_payload, configuration_digest=configuration_digest,
             generation=generation, persistence_dsn=persistence_dsn, work=work)''')
-        self.assertIs(continuation.body[-1].value, mapped)
-        self.assertIs(continuation.body[-2].value, callbacks[2])
+        self.assertIs(assigned(continuation, "persistence"), mapped)
+        held = assigned(continuation, "held_launch")
+        self.shape(held, '(generation["sequence"], generation["digest"])')
+        self.shape(continuation.body[-1].value, "(persistence, held_launch)")
+        self.assertLess(callbacks[2].lineno, held.lineno)
+        self.assertLess(held.lineno, mapped.lineno)
         ordered = (guards[0], assigned(adapter, "configuration"), payload_pin, ledger,
                    digest, guards[1], owned, delegated)
         self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))

@@ -58,15 +58,23 @@ existing measured payload/digest and the actual launch-generation context to
 `_issuer_from_configuration_on_work`. Arbitrary dataclass or dictionary
 construction is not equivalent to this admission chain.
 
-The inert mapper owns the full payload and the seven launch bindings used by
+The inert mapper owns the full payload and the eight launch bindings used by
 measured configuration admission before key callbacks. It recomputes the
 canonical configuration commitment, requires semantic service membership in
-launch-context v2's sorted, file-unique `configurationPayloadBindings`, and
-joins generation, predecessor, rollback floor and operation manifest. The
+launch-context v3's sorted, file-unique `configurationPayloadBindings`, and
+joins the predeclared generation binding, sequence, predecessor, rollback floor
+and operation manifest. The final generation digest comes separately from the
+admitted launch and remains the identity used for actual protocol operations. The
 actual loader separately checks the original file hash and its complete
 role/schema/raw/payload binding; the mapper is not file or root admission.
 This successor requires a positive generation;
 the general service's generation-zero behavior is not changed.
+
+The private writer continuation returns its actual persistence owner together
+with a held sequence/final-digest pair from the same generation-last snapshot.
+Commitment processing uses that immutable pair rather than reading a final
+generation digest from static configuration or reacquiring launch state after
+native key callbacks.
 
 The issuer and verifier mappers share that exact pre-key capture/commitment
 body. The issuer retains its original five-hash schedule; the verifier maps

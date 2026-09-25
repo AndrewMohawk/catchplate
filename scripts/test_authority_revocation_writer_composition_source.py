@@ -83,11 +83,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)''')
         self.shape(guards[3].test, '''type(owned_payload.get("roles")) is not dict
             or type(owned_payload["roles"].get("planner-writer")) is not dict''')
-        sequence = assigned(adapter, "generation_sequence")
-        generation = assigned(adapter, "generation_digest")
         age = assigned(adapter, "maximum_age_ns")
-        self.shape(sequence, 'owned_payload["generationSequence"]')
-        self.shape(generation, 'owned_payload["generationDigest"]')
         self.shape(age, 'owned_payload["roles"]["planner-writer"]["maximumInternalAgeNs"]')
         writer_pin = assigned(adapter, "writer_response_spki_digest")
         others = assigned(adapter, "other_response_spki_digests")
@@ -101,7 +97,6 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.assertEqual([ast.unparse(node) for node in calls(adapter,
             "authority_revocation_configuration.capability.shape._digest")], [
                 "authority_revocation_configuration.capability.shape._digest(configuration_digest)",
-                "authority_revocation_configuration.capability.shape._digest(generation_digest)",
                 "authority_revocation_configuration.capability.shape._digest(writer_response_spki_digest)",
                 "authority_revocation_configuration.capability.shape._digest(pin)"])
         launch = assigned(adapter, "launch_public_key")
@@ -111,11 +106,18 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(guards[5].test, "not isinstance(launch_public_key, Ed25519PublicKey)")
         self.assertEqual([ast.unparse(node) for node in calls(adapter,
             "authority_revocation_configuration.capability.shape._integer")], [
-                "authority_revocation_configuration.capability.shape._integer(generation_sequence, minimum=1)",
                 "authority_revocation_configuration.capability.shape._integer(maximum_age_ns, minimum=1)"])
         factory = call(adapter, "_revocation_writer_from_owned_configuration")
         self.shape(factory, '''_revocation_writer_from_owned_configuration(owned_payload=owned_payload,
             configuration_digest=configuration_digest, work=work)''')
+        factory_pair, = [node for node in adapter.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Tuple) and [ast.unparse(item) for item in target.elts]
+                    == ["persistence", "held_launch"] for target in node.targets)]
+        self.assertIs(factory_pair.value, factory)
+        generation_pair, = [node for node in adapter.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Tuple) and [ast.unparse(item) for item in target.elts]
+                    == ["generation_sequence", "generation_digest"] for target in node.targets)]
+        self.shape(generation_pair.value, "held_launch")
         snapshot = assigned(adapter, "configuration_snapshot")
         self.shape(snapshot, "persistence._snapshot_configuration()")
         delegated = call(adapter, "authority_revocation_writer_composition._persist_commitments_on_configuration")
@@ -128,8 +130,8 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             writer_private_key=writer_private_key, launch_public_key=launch_public_key, work=work)''')
         self.assertIs(adapter.body[-1].value, delegated)
         ordered = (private, launch_private, payload_pin, originals, ledger, owned,
-                   sequence, generation, age, writer_pin, others, pin_loop, guards[4],
-                   launch, guards[5], factory, snapshot, delegated)
+                   age, writer_pin, others, pin_loop, guards[4],
+                   launch, guards[5], factory, generation_pair, snapshot, delegated)
         self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
         self.assertEqual(len(calls(adapter, "persistence._snapshot_configuration")), 1)
         self.assertFalse(calls(adapter, "min"))
@@ -156,8 +158,16 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(mapper, '''authority_revocation_writer_configuration._persistence_from_configuration_on_work(
             payload=owned_payload, configuration_digest=configuration_digest,
             generation=generation, persistence_dsn=persistence_dsn, work=work)''')
-        self.assertIs(continuation.body[-1].value, mapper)
-        self.assertIs(continuation.body[-2].value, callbacks[2])
+        self.assertIs(assigned(continuation, "persistence"), mapper)
+        held = assigned(continuation, "held_launch")
+        self.shape(held, '(generation["sequence"], generation["digest"])')
+        self.shape(continuation.body[-1].value, "(persistence, held_launch)")
+        sequence_check = call(continuation, "authority_revocation_configuration.capability.shape._integer")
+        digest_check = call(continuation, "authority_revocation_configuration.capability.shape._digest")
+        self.shape(sequence_check, 'authority_revocation_configuration.capability.shape._integer(held_launch[0], minimum=1)')
+        self.shape(digest_check, 'authority_revocation_configuration.capability.shape._digest(held_launch[1])')
+        self.assertEqual([node.lineno for node in (callbacks[2], held, sequence_check, digest_check, mapper)],
+                         sorted(node.lineno for node in (callbacks[2], held, sequence_check, digest_check, mapper)))
         self.assertEqual([node.lineno for node in (*callbacks, mapper)],
                          sorted(node.lineno for node in (*callbacks, mapper)))
         _, mapper_tree = source("serverware/authority_revocation_writer_configuration.py", 64 * 1024)
@@ -180,9 +190,9 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(call(shared, "_generation_binding"), "_generation_binding(owned, launch, configuration_digest, work)")
         binding = definition(config_tree, "_generation_binding")
         self.shape(call(binding, "capability.plan._same"), '''capability.plan._same(
-            (generation["sequence"], generation["digest"], generation["predecessorDigest"],
+            (generation["sequence"], generation["configurationBindingDigest"], generation["predecessorDigest"],
              generation["minimumRollbackSequence"], generation["operationManifestDigest"]),
-            (payload["generationSequence"], payload["generationDigest"], payload["generationPredecessorDigest"],
+            (payload["generationSequence"], payload["generationBindingDigest"], payload["generationPredecessorDigest"],
              payload["generationMinimumRollbackSequence"], authority.OPERATION_MANIFEST_DIGEST), work,
             "issuer configuration differs from the active launch generation")''')
         for function in (continuation, self.adapter):

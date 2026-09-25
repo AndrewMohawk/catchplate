@@ -185,7 +185,10 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
         continuation = call(action, "_revocation_writer_from_owned_configuration")
         self.shape(continuation, '''_revocation_writer_from_owned_configuration(
             owned_payload=owned_payload, configuration_digest=configuration_digest, work=work)''')
-        self.assertIs(assigned(action, "persistence"), continuation)
+        pair, = [node for node in action.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Tuple) and [ast.unparse(item) for item in target.elts]
+                    == ["persistence", "_held_launch"] for target in node.targets)]
+        self.assertIs(pair.value, continuation)
         atomic = call(action, "persistence.persist_and_reserve_execution")
         self.shape(atomic, "persistence.persist_and_reserve_execution(**arguments, work=work, **owned)")
         self.assertIs(action.body[-1].value, atomic)
@@ -218,8 +221,12 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
         self.shape(mapped, '''authority_revocation_writer_configuration._persistence_from_configuration_on_work(
             payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
             persistence_dsn=persistence_dsn, work=work)''')
-        self.assertIs(continuation.body[-2].value, callbacks[2])
-        self.assertIs(continuation.body[-1].value, mapped)
+        self.assertIs(assigned(continuation, "persistence"), mapped)
+        held = assigned(continuation, "held_launch")
+        self.shape(held, '(generation["sequence"], generation["digest"])')
+        self.shape(continuation.body[-1].value, "(persistence, held_launch)")
+        self.assertLess(callbacks[2].lineno, held.lineno)
+        self.assertLess(held.lineno, mapped.lineno)
         self.assertFalse(any(isinstance(node, ast.Name) and node.id in {"self", "opener", "operation"}
                              for node in ast.walk(continuation)))
         _, mapper = source("serverware/authority_revocation_writer_configuration.py", 64 * 1024)

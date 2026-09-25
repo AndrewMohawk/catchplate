@@ -284,6 +284,62 @@ class ControlPlaneCustodyClient:
         preparing._check_deadline(bound)
         return preparing._response_originals(result)
 
+    def prepare_registration_finalization(self, originals, *, sibling_challenge_ids,
+            deadline_epoch_ns, work, deadline_ns=None):
+        """Return opaque raw7 from original signer raw10 and bounded lookup hints.
+
+        The configured verifier authenticates and regenerates the invocation;
+        sibling IDs are never population proof. No signing, journal append,
+        writer forwarding or registration/session activation happens here.
+        """
+        from serverware import authority_webauthn_registration_custody_caller as raw
+        from serverware import authority_webauthn_registration_finalization_caller as preparing
+        from serverware import authority_webauthn_registration_signer_response as verifying
+
+        ledger = verifying.evidence.capture._SharedLedger(work)
+        held = raw._request_originals(originals)
+        verifying.evidence.plan.contract._integer(deadline_epoch_ns, minimum=1)
+        expiry, inherited = deadline_epoch_ns, deadline_ns
+        if inherited is not None:
+            verifying.evidence.plan.contract._integer(inherited, minimum=1)
+        if (type(sibling_challenge_ids) is not list
+                or len(sibling_challenge_ids) > verifying.production.registration.MAX_SIBLINGS):
+            raise CustodyClientError("registration finalization sibling hints exceed their source bound")
+        siblings = verifying.evidence.capture._JSONCapture(ledger,
+            maximum_bytes=preparing.MAX_HINTS_BYTES).visit(sibling_challenge_ids)
+        previous = None
+        for value in siblings:
+            verifying.production.registration._text(value, "sibling challenge ID", 4096, work)
+            if previous is not None:
+                work.prepare_comparison(previous, value)
+                if previous >= value:
+                    raise CustodyClientError("registration finalization sibling hints are not sorted unique")
+            previous = value
+        hints = verifying.evidence.capability._wire(siblings, ledger,
+            preparing.MAX_HINTS_BYTES, 64)
+        work.charge(input_bytes=sum(len(value) for value in held) + len(hints))
+        request = preparing._request_originals(held + (hints,))
+        binding = _snapshot(self)
+        callback = verifying.evidence.production._callback
+        before = callback(work, time.monotonic_ns)
+        now = callback(work, lambda: _receipt_now(binding))
+        bound = min(before + binding.maximum_deadline_ns,
+            before + min(expiry, binding.attestation_interval[1]) - now)
+        if inherited is not None:
+            bound = min(bound, inherited)
+        preparing._check_deadline(bound)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("registration finalization caller changed before exchange")
+        result = callback(work, lambda: preparing._socket_request(binding.relay_path,
+            configuration_digest=binding.configuration_digest, deadline_epoch_ns=expiry,
+            originals=request, deadline_ns=bound, expected_peer_uid=binding.relay_uid,
+            expected_peer_gid=binding.relay_gid))
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("registration finalization caller changed during preparation")
+        callback(work, lambda: _receipt_now(binding))
+        preparing._check_deadline(bound)
+        return preparing._response_originals(result)
+
     def append_evidence(self, purpose, originals):
         """Durably prepare opaque raw6 only; do not forward or sign anything."""
         binding = _snapshot(self)

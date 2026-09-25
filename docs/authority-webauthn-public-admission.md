@@ -6,6 +6,15 @@ registration `/prepare` endpoints now reach local evidence custody preparation;
 they do not enable successor business execution. Private mechanisms are described
 in [WebAuthn preparation](authority-webauthn-preparation.md).
 
+Source `.141` adds a separate private
+[finalization preparation bridge](registration-finalization-preparation.md):
+the caller reuses original signer request8/response2, derives sibling selectors
+after genuine replay, and reaches actual finalization planning through the
+existing authenticated relay/verifier topology. It retains prepared raw7 locally
+without forwarding or activating a session. Actual business evidence admission
+and complete population proofs remain required; the HTTP routes below are
+unchanged.
+
 ## Existing public boundary
 
 [`ControlledAuthorityExecuteRequest` and

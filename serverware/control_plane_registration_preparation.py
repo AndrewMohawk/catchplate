@@ -12,7 +12,9 @@ composition. No caller-selected time, work, root, endpoint or session override
 is accepted. Separate entrypoints prepare evidence, durably retain prepared
 custody, or explicitly append then forward once. None returns registration
 success: current roots, complete OIDC sibling/history and atomic business
-execution remain separate prerequisites.
+execution remain separate prerequisites. The separate finalization preparation
+entrypoint consumes retained signer originals, derives sibling selectors only
+after genuine replay, and durably retains prepared raw7 without signing anew.
 """
 from __future__ import annotations
 
@@ -192,3 +194,97 @@ def prepare_and_forward_registration_custody(originals):
         originals, _ValidationWork(QueryReadValidationLimits()))
     return custody_client.ControlPlaneCustodyClient.append_and_forward_evidence(
         custody, "registration", prepared, deadline_ns=window[4])
+
+
+def prepare_registration_finalization(*, request_originals, response_originals):
+    """Replay retained signer originals, observe hints, prepare and retain raw7.
+
+    The actual authenticated application must own this original exchange and
+    complete its separate evidence business admission first. Re-running the
+    signer here would change the evidence identity, so no grant/signing helper
+    is called. This returns only the local prepared-record digest, never a
+    credential, active session, remote receipt or permission to execute.
+    """
+    from serverware import authority_webauthn_enrollment_issuer as issuer
+    from serverware import authority_webauthn_registration_custody_caller as raw
+    from serverware import authority_webauthn_registration_signer_response as verifying
+    from serverware import control_plane_custody_client as custody_client
+    from serverware import control_plane_custody_startup as custody_startup
+    from serverware import control_plane_enrollment_startup as enrollment_startup
+    from serverware import db
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    work = _ValidationWork(QueryReadValidationLimits())
+    ledger = issuer.evidence.capture._SharedLedger(work)
+    request = verifying.wire._request_originals(request_originals)
+    response = verifying.wire._response_originals(response_originals)
+    work.charge(input_bytes=sum(len(value) for value in request)
+        + sum(len(value) for value in response))
+    originals = raw._request_originals(request + response)
+    callback = issuer.evidence.production._callback
+    custody = callback(work, custody_startup.require_started)
+    enrollment = callback(work, enrollment_startup.require_started)
+    if (type(custody) is not custody_client.ControlPlaneCustodyClient
+            or type(enrollment) is not enrollment_startup._EnrollmentOwner):
+        raise RegistrationPreparationError("registration finalization requires both actual cold owners")
+    binding = callback(work, lambda: custody_client._snapshot(custody))
+    material = enrollment._material
+    if (material is None or material.issuer_policy is None
+            or enrollment._custody is not custody or enrollment._binding is not binding
+            or material.configuration_digest != binding.configuration_digest):
+        raise RegistrationPreparationError("registration finalization cold configurations differ")
+    digest = material.configuration_digest
+    payload = issuer.configuration._ConfigurationCapture(ledger,
+        maximum_bytes=issuer.authority.MAX_REQUEST_BYTES).visit(material.configuration_payload)
+    generation = issuer.evidence.capture._JSONCapture(ledger).visit(material.generation)
+    runtime = issuer.evidence.capture._JSONCapture(ledger,
+        maximum_bytes=8192).visit(material.runtime_role_identities)
+    skew = material.issuer_policy["maximumClockSkewNs"]
+    clock = issuer.authorization.clock
+    window = clock._open_on_work(deadline_epoch_ns=binding.attestation_interval[1],
+        maximum_lifetime_ns=min(binding.maximum_deadline_ns,
+            issuer.authority.VERIFIER_RESPONSE_MAX_AGE_NS),
+        maximum_clock_skew_ns=skew, work=work)
+    last_epoch = window[0]
+
+    def current():
+        nonlocal last_epoch
+        if (enrollment._material is not material or enrollment._binding is not binding
+                or callback(work, custody_startup.require_started) is not custody
+                or callback(work, enrollment_startup.require_started) is not enrollment
+                or callback(work, lambda: custody_client._snapshot(custody)) is not binding):
+            raise RegistrationPreparationError("registration finalization cold owners changed")
+        now = clock._check_on_work(window, work=work)
+        if now < last_epoch:
+            raise RegistrationPreparationError("registration finalization clock reversed")
+        last_epoch = now
+        callback(work, lambda: raw._check_deadline(window[4]))
+
+    current()
+    # Empty hints are used only to derive selectors from genuine original
+    # grant/source/attestation/evidence replay. This is NOT complete population
+    # admission, and this temporary request never reaches a planner or writer.
+    derived, _inputs = verifying._verify_finalization_on_configuration(payload=payload,
+        configuration_digest=digest, generation=generation, runtime_role_identities=runtime,
+        request_originals=request, response_originals=response,
+        sibling_challenge_ids=[], work=work)
+    current()
+    arguments = derived["arguments"]
+    intent = arguments["semantic_intent"]
+    user_id, challenge_id, session_id = intent["userId"], intent["challengeId"], arguments["oidc_session_id"]
+    siblings = []
+    if session_id is not None:
+        siblings = callback(work, lambda: db.observe_webauthn_registration_sibling_challenge_ids(
+            user_id=user_id, registration_challenge_id=challenge_id))
+    current()
+    # Send originals, not the temporary derived request. The actual verifier
+    # repeats genuine replay and proves complete history/siblings plus the
+    # unconsumed v2 evidence row at its own actual planning cutoff.
+    prepared = custody_client.ControlPlaneCustodyClient.prepare_registration_finalization(
+        custody, originals, sibling_challenge_ids=siblings,
+        deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+    current()
+    # As with evidence preparation, a late append retains opaque originals;
+    # it grants no lifetime renewal. No remote writer is contacted here.
+    return custody_client.ControlPlaneCustodyClient.append_transition(
+        custody, verifying.production.registration.OPERATION, prepared)

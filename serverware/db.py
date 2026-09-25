@@ -83615,6 +83615,61 @@ def get_unused_webauthn_challenge(
     return row_to_webauthn_challenge(row) if row else None
 
 
+def observe_webauthn_registration_sibling_challenge_ids(
+    *, user_id: str, registration_challenge_id: str,
+) -> list[str]:
+    """Observe bounded sibling lookup hints, not an authenticated population.
+
+    The authenticated caller supplies its original user/selected challenge.
+    This fixed read matches successor finalization's live sibling predicate,
+    including registration challenges with an approval or another session.
+    The actual complete-query proof must still establish membership and the
+    complete population at its own cutoff. Races may deny later preparation;
+    these IDs grant no currentness, reservation, commit or retry authority.
+    """
+    def selector(value: str) -> str:
+        if (type(value) is not str or not 1 <= len(value) <= 4096
+                or "\x00" in value):
+            raise MetadataStoreError("WebAuthn sibling selector is not bounded exact text")
+        try:
+            if len(value.encode("utf-8")) > 4096:
+                raise MetadataStoreError("WebAuthn sibling selector exceeds its byte bound")
+        except UnicodeError as exc:
+            raise MetadataStoreError("WebAuthn sibling selector is not Unicode") from exc
+        return value
+
+    held_user = selector(user_id)
+    selected = selector(registration_challenge_id)
+    with connect() as conn:
+        now_s = _metadata_utcnow(conn).isoformat()
+        rows = conn.execute(
+            """
+            SELECT id FROM webauthn_challenges
+            WHERE user_id = ?
+              AND challenge_type = 'registration'
+              AND used_at IS NULL
+              AND expires_at > ?
+              AND id != ?
+            ORDER BY id
+            LIMIT 33
+            """,
+            (held_user, now_s, selected),
+        ).fetchall()
+    # The source registration transition accepts at most 32 sibling hints;
+    # observing one extra row must fail, never silently truncate the list.
+    if len(rows) > 32:
+        raise MetadataStoreError("WebAuthn sibling population exceeds its source bound")
+    identities: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        identity = selector(row["id"])
+        if identity == selected or identity in seen:
+            raise MetadataStoreError("WebAuthn sibling selectors are duplicated or include the selected challenge")
+        seen.add(identity)
+        identities.append(identity)
+    return sorted(identities)
+
+
 def claim_webauthn_challenge(
     challenge: str,
     *,

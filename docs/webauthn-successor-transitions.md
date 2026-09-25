@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.128`, implementation only. All six WebAuthn successor operations
+Status: source `.141`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -11,6 +11,18 @@ signed-plan owners and fixed registry `plan_factory` entries. Their base factori
 remain read-acquisition owners. The new plans commit canonical original proofs,
 inputs and full evaluation context and genuinely replay them before signing and
 after signature verification. All source remains unbuilt and unexecuted.
+
+Source `.141` connects [registration finalization preparation](registration-finalization-preparation.md):
+the server observes bounded OIDC sibling lookup hints, then sends original
+signer request/response bytes plus those hints through the authenticated
+control-plane → runtime relay → verifier raw11/raw7 bridge. The actual verifier
+replays the originals and invokes genuine transition preparation; complete
+population proofs and an unconsumed v2 business evidence row remain mandatory.
+The caller durably appends the prepared raw7 locally, without forwarding,
+business evidence admission, credential/session mutation or public finalization.
+Sibling hints are not completeness or currentness authority, and no new HTTP
+route or legacy `/verify` behavior is enabled by this private continuation.
+
 An optional signed policy now maps these three operations to their real read,
 signed-production and configured raw-four verification owners through private
 service factories. The three transitions now have an authenticated private
@@ -119,10 +131,15 @@ It transports only original evidence and input bytes, returning a regenerated
 evidence-admission request. It does not supply complete OIDC sibling coverage,
 independent cold signer launch or registration business execution.
 
-Deployed caller provisioning, public preparation/invocation and business
-successor execution remain unfinished, as do independent evidence production,
-infrastructure and frozen-build verification. Root observations do not hold roots current for later
-execution; reservation, one-use capability and atomic execution gates remain.
+Authenticated public `/prepare` endpoints now retain evidence custody only;
+public `/verify` remains on legacy finalization. Separate source components now
+provide [protected successor execution and recovery](authority-successor-execution.md),
+not deployed end-to-end authentication. Independent caller authorization,
+key/history/configuration/catalog/checkpoint provenance, measured-service
+provisioning, public business orchestration/finalization, production infrastructure
+and frozen-build verification remain unfinished. Root observations and custody
+IDs do not reserve current state, authorize evidence admission or bypass the
+purpose-specific grant, pending-decision and irreversible-attempt boundaries.
 The revision-specific sections below retain their original checkpoint status.
 
 ## Durable transition originals

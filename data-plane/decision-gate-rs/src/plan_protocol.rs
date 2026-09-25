@@ -7,6 +7,9 @@ use std::path::{Component, Path};
 #[path = "native_postgres_contract_v12.rs"]
 pub mod native_postgres_contract_v12;
 
+#[path = "body_output_contract_v12.rs"]
+pub mod body_output_contract_v12;
+
 pub type Digest = [u8; 32];
 pub type PlanResult<T> = Result<T, PlanProtocolError>;
 
@@ -1108,20 +1111,7 @@ impl BodyContract {
                 }
             }
         }
-        if self.expected_output_paths.len() > 256 {
-            return Err(PlanProtocolError::Invalid(
-                "body output path set is excessive",
-            ));
-        }
-        let mut outputs = BTreeSet::new();
-        for path in &self.expected_output_paths {
-            require_relative_path(path, "body output path")?;
-            if !outputs.insert(path) {
-                return Err(PlanProtocolError::Invalid(
-                    "body output path set contains a duplicate",
-                ));
-            }
-        }
+        body_output_contract_v12::validate_output_paths(&self.expected_output_paths)?;
         if let Some(native) = &self.native_postgres {
             native.validate()?;
             if self.lane != LogicalLane::Unit

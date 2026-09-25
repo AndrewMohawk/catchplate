@@ -105,6 +105,9 @@ The [shared body contract](controller-body-evidence.md) additionally binds this
 native digest and all ordinary result claims into the required v13 observer
 signature. Its original terminal wire is bounded to the existing 4 MiB plan
 frame. The independent observer acquisition/publisher is still unfinished.
+The [general output collector](controller-body-output.md) now binds actual
+stdout/stderr and the signed payload manifest. Its native 33-file subset must
+equal the separately reconciled native digest, rejecting cross-pass drift.
 
 ## Remaining prerequisites
 

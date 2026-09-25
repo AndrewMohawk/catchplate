@@ -1,8 +1,9 @@
 # Controller body result and observer binding
 
 Status: source-implemented admission repairs, unbuilt and unexecuted. A real
-controller-owned body runner, complete stream/output collection, live runtime
-observer and terminal publisher remain unfinished. This document does not
+controller-owned body runner, live runtime observer and terminal publisher
+remain unfinished. [Controller-side stream/output collection](controller-body-output.md)
+is now source-implemented but unexecuted. This document does not
 authorize verification or provide passing execution evidence.
 
 ## Why this contract changed
@@ -106,15 +107,16 @@ Neither layer synthesizes absent evidence or bypasses cleanup.
 The actual create path still invokes the signed payload executable directly.
 It does not yet install a controller-owned runner, hand off an independently
 held launch context, observe runtime events or publish the terminal file.
-The future owner must preserve the original command rather than injecting a
+The future body owner must preserve the original command rather than injecting a
 final plan ID into its signed arguments, which could introduce a commitment
-cycle. It must collect complete payload-only stdout/stderr, independently read
-all signed output paths, and reserve control filenames so the manifest never
-hashes itself or the terminal result.
+cycle. The lifecycle now subscribes before start, captures bounded separate
+stdout/stderr, independently reads the signed output tree and publishes its
+manifest under reserved controller filenames. This does not supply the missing
+original terminal publisher or observer.
 
 Docker's rotating log is not a complete stream capture. Native combined logs
-are not separate stdout/stderr evidence. Nonzero generic stream/manifest digests
-still do not prove that their files were independently collected. Static
+are not separate stdout/stderr evidence. Generic stream/manifest digests must
+now match actual controller capture and collection, not merely be nonzero. Static
 measurement must use real retained executable descriptors; runtime acquisition
 must own the actual launch, process identity, namespaces, mapping events and
 terminal observations. Signing caller-supplied dictionaries is not that owner.

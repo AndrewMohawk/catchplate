@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+#[path = "docker_body_capture_v12.rs"]
+pub(crate) mod docker_body_capture_v12;
+
 use crate::coder_controller_v11::{
     constant_time_eq, sha256, ControllerError, Digest, Result,
 };
@@ -353,10 +356,31 @@ pub fn execute_bounded_docker_http_v12(
     body: DockerRequestBodyV12,
     contract: &DockerHttpExchangeContractV12,
 ) -> DockerDirectHttpOutcomeV12 {
+    execute_bounded_docker_http_v12_with_cancellation(
+        daemon,
+        request_head,
+        body,
+        contract,
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+pub fn execute_bounded_docker_http_v12_with_cancellation(
+    daemon: &mut UnixStream,
+    request_head: Vec<u8>,
+    body: DockerRequestBodyV12,
+    contract: &DockerHttpExchangeContractV12,
+    cancelled: Arc<AtomicBool>,
+) -> DockerDirectHttpOutcomeV12 {
     let sent = Arc::new(AtomicU64::new(0));
     let received = Arc::new(AtomicU64::new(0));
     let result = (|| -> Result<DockerDirectHttpReceiptV12> {
         contract.validate()?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(ControllerError::Rejected(
+                "Docker direct exchange was cancelled before send",
+            ));
+        }
         if request_head.is_empty()
             || request_head.len() > HTTP_HEAD_MAX_BYTES_V11
             || !request_head.ends_with(b"\r\n\r\n")
@@ -389,7 +413,6 @@ pub fn execute_bounded_docker_http_v12(
         let mut reader = daemon.try_clone()?;
         let deadline = contract.deadline_boottime_ns;
         let sent_worker = Arc::clone(&sent);
-        let cancelled = Arc::new(AtomicBool::new(false));
         let cancelled_worker = Arc::clone(&cancelled);
         let upload = std::thread::Builder::new()
             .name("serverware-private-dind-http-upload-v12".to_owned())
@@ -518,9 +541,11 @@ pub fn execute_bounded_docker_http_v12(
             ));
         }
         let completed_boottime_ns = boottime_now_ns_v11()?;
-        if completed_boottime_ns >= deadline {
+        if completed_boottime_ns >= deadline
+            || cancelled.load(Ordering::Acquire)
+        {
             return Err(ControllerError::Rejected(
-                "Docker direct response completed after its deadline",
+                "Docker direct response completed after its deadline or cancellation",
             ));
         }
         Ok(DockerDirectHttpReceiptV12 {
@@ -537,6 +562,8 @@ pub fn execute_bounded_docker_http_v12(
     match result {
         Ok(receipt) => DockerDirectHttpOutcomeV12::Complete(receipt),
         Err(error) => {
+            cancelled.store(true, Ordering::Release);
+            let _ = daemon.shutdown(std::net::Shutdown::Both);
             let sent = sent.load(Ordering::Acquire);
             let received = received.load(Ordering::Acquire);
             if sent == 0 {

@@ -15,6 +15,12 @@ mod native_postgres_reports_v12;
 #[path = "native_postgres_output_v12.rs"]
 mod native_postgres_output_v12;
 
+#[path = "body_output_files_v12.rs"]
+mod body_output_files_v12;
+
+#[path = "body_output_v12.rs"]
+mod body_output_v12;
+
 #[cfg(test)]
 #[path = "runner_output_tests_v12.rs"]
 mod runner_output_tests_v12;
@@ -24,6 +30,10 @@ use self::runner_isolation_v12::{
     execution_host_config_v12, validate_runner_inspect_v12,
 };
 use self::runner_output_storage_v12::RunnerOutputStorageV12;
+use self::body_output_v12::CaptureOutputsV12;
+use crate::plan_protocol::body_output_contract_v12::{
+    native_subset_sha256, stream_byte_limit,
+};
 use crate::plan_protocol::RunnerExecutionBoundsV12;
 use crate::runtime_evidence::body_result_v12::{
     BodyExecutionResultV12, MAX_BODY_RESULT_BYTES_V12,
@@ -68,9 +78,11 @@ use crate::docker_policy::{
 use crate::docker_transport::{
     canonical_docker_request_head_v12, docker_http_response_body_v12,
     execute_bounded_docker_http_v12, DockerDirectHttpOutcomeV12,
+    execute_bounded_docker_http_v12_with_cancellation,
     DockerHttpExchangeContractV12, DockerRequestBodyV12,
     validate_docker_json_message_sequence_v12,
 };
+use crate::docker_transport::docker_body_capture_v12::BodyCaptureV12;
 use crate::readiness::{
     ChromiumResultV12, DockerUpgradeResultV12, ReadinessFixtureTrust,
     ReadinessProbe, ReadinessProbeResultV12, ReadinessResponseV12,
@@ -96,7 +108,7 @@ use std::os::unix::process::CommandExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -4200,12 +4212,13 @@ impl PrivateDindLifecycleV12 {
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
         )?;
-        let body_deadline = if body_contract.native_postgres.is_some() {
+        let body_deadline = {
             let now = boottime_now_ns_v11()?;
             let deadline = now.checked_add(body_contract.command.timeout_ns)
-                .ok_or(ControllerError::Rejected("native body timeout overflows"))?
+                .ok_or(ControllerError::Rejected("repository body timeout overflows"))?
                 .min(operation.request.deadline_boottime_ns);
-            if deadline.saturating_sub(now)
+            if body_contract.native_postgres.is_some()
+                && deadline.saturating_sub(now)
                 < crate::plan_protocol::native_postgres_contract_v12::REQUIRED_RUNTIME_NS
             {
                 return Err(ControllerError::Rejected(
@@ -4213,9 +4226,22 @@ impl PrivateDindLifecycleV12 {
                 ));
             }
             deadline
-        } else { operation.request.deadline_boottime_ns };
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut captured_outputs = CaptureOutputsV12::create(
+            output_fd.as_raw_fd(), runner.uid, runner.gid, body_deadline,
+        )?;
+        let (stdout, stderr) = captured_outputs.take_streams()?;
+        let capture = BodyCaptureV12::start(
+            self.connect_private_dind_v12(operation, body_deadline)?, &runner.id,
+            stdout, stderr,
+            stream_byte_limit(runner.identity.execution_bounds.output_bytes)
+                .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?,
+            body_deadline, Arc::clone(&cancelled),
+        )?;
+        capture.require_pending()?;
         let id = &runner.id;
-        let start = self.docker_http_v12_with_deadline(
+        let start = self.docker_http_v12_with_cancellation(
             operation,
             "POST",
             &format!("/v1.45/containers/{id}/start"),
@@ -4223,9 +4249,11 @@ impl PrivateDindLifecycleV12 {
             DockerRequestBodyV12::Empty,
             DockerStreamModeV11::BoundedHttp,
             body_deadline,
+            Arc::clone(&cancelled),
         )?;
         require_docker_success_v12(&start, &[204])?;
-        let wait = self.docker_http_v12_with_deadline(
+        capture.health()?;
+        let wait = self.docker_http_v12_with_cancellation(
             operation,
             "POST",
             &format!(
@@ -4235,6 +4263,7 @@ impl PrivateDindLifecycleV12 {
             DockerRequestBodyV12::Empty,
             DockerStreamModeV11::FullDuplex,
             body_deadline,
+            Arc::clone(&cancelled),
         )?;
         let wait_body = require_docker_success_v12(&wait, &[200])?;
         let exit_status = wait_body
@@ -4243,6 +4272,10 @@ impl PrivateDindLifecycleV12 {
             .ok_or(ControllerError::Invalid(
                 "Docker wait response lacks StatusCode",
             ))?;
+        // Only observed EOF on a complete framed stream can produce these
+        // hashes. Any earlier error cancels the HTTP wait and Drop joins the
+        // capture worker; the existing outer abort path still owns teardown.
+        let captured = capture.finish()?;
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
         )?;
@@ -4258,19 +4291,20 @@ impl PrivateDindLifecycleV12 {
             PRIVATE_DIND_BODY_RESULT_V12,
             operation.request.lane.ordinal(),
         );
-        let result = read_runner_result_v12(
+        let (result, terminal_name) = match read_runner_result_v12(
             output_fd.as_raw_fd(), &result_name, runner.uid, runner.gid,
             MAX_BODY_RESULT_BYTES_V12 as u64,
-        ).or_else(|error| match error {
-            ControllerError::Io(ref io_error)
+        ) {
+            Ok(result) => (result, result_name),
+            Err(ControllerError::Io(ref io_error))
                 if io_error.kind() == std::io::ErrorKind::NotFound => {
-                read_runner_result_v12(
+                (read_runner_result_v12(
                     output_fd.as_raw_fd(), PRIVATE_DIND_BODY_RESULT_V12,
                     runner.uid, runner.gid, MAX_BODY_RESULT_BYTES_V12 as u64,
-                )
+                )?, PRIVATE_DIND_BODY_RESULT_V12.to_owned())
             }
-            other => Err(other),
-        })?;
+            Err(error) => return Err(error),
+        };
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
         )?;
@@ -4298,7 +4332,7 @@ impl PrivateDindLifecycleV12 {
         // independently authenticates the pinned observer and static roles.
         parsed.validate_terminal()
             .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
-        match (&body_contract.native_postgres, &native_inputs) {
+        let native_observed = match (&body_contract.native_postgres, &native_inputs) {
             (Some(native), Some((artifacts, source))) => {
                 if exit_status != 0 {
                     return Err(ControllerError::Rejected(
@@ -4323,11 +4357,43 @@ impl PrivateDindLifecycleV12 {
                 if boottime_now_ns_v11()? >= body_deadline {
                     return Err(ControllerError::Rejected("native PostgreSQL result deadline expired"));
                 }
+                Some(observed)
             }
-            (None, None) if parsed.native_postgres_output_sha256.is_none() => {}
+            (None, None) if parsed.native_postgres_output_sha256.is_none() => None,
             _ => return Err(ControllerError::Rejected(
                 "native PostgreSQL result was not selected by its signed body",
             )),
+        };
+        let outputs = captured_outputs.finish(
+            &body_contract.expected_output_paths, &terminal_name,
+            &runner.identity.execution_bounds,
+            (captured.stdout_sha256, captured.stdout_bytes),
+            (captured.stderr_sha256, captured.stderr_bytes), body_deadline,
+        )?;
+        if parsed.stdout_sha256 != outputs.stdout_sha256
+            || parsed.stderr_sha256 != outputs.stderr_sha256
+            || parsed.output_manifest_sha256 != outputs.output_manifest_sha256
+            || outputs.terminal_file_sha256 != sha256(&result)
+            || outputs.terminal_file_bytes != result.len() as u64
+        {
+            return Err(ControllerError::Rejected(
+                "body result differs from actual captured streams and collected output manifest",
+            ));
+        }
+        if let Some(native) = native_observed {
+            let manifest_native = native_subset_sha256(&outputs.files)
+                .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
+            if manifest_native != native {
+                return Err(ControllerError::Rejected(
+                    "native originals changed between report reconciliation and generic collection",
+                ));
+            }
+        }
+        runner_output_storage_v12::verify(
+            output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
+        )?;
+        if boottime_now_ns_v11()? >= body_deadline {
+            return Err(ControllerError::Rejected("body output collection exceeded its original deadline"));
         }
         Ok(result)
     }
@@ -5020,6 +5086,15 @@ impl PrivateDindLifecycleV12 {
         stream_mode: DockerStreamModeV11,
         deadline_boottime_ns: u64,
     ) -> Result<Vec<u8>> {
+        self.docker_http_v12_with_cancellation(operation, method, target, headers,
+            body, stream_mode, deadline_boottime_ns, Arc::new(AtomicBool::new(false)))
+    }
+
+    fn connect_private_dind_v12(
+        &self,
+        operation: &DockerLaneOperationV12,
+        deadline_boottime_ns: u64,
+    ) -> Result<UnixStream> {
         if deadline_boottime_ns > operation.request.deadline_boottime_ns
             || boottime_now_ns_v11()? >= deadline_boottime_ns
         {
@@ -5041,6 +5116,23 @@ impl PrivateDindLifecycleV12 {
             }
             handle.socket.clone()
         };
+        connect_private_dind_stream_v12(&socket, deadline_boottime_ns)
+    }
+
+    fn docker_http_v12_with_cancellation(
+        &self,
+        operation: &DockerLaneOperationV12,
+        method: &str,
+        target: &str,
+        headers: Vec<(String, String)>,
+        body: DockerRequestBodyV12,
+        stream_mode: DockerStreamModeV11,
+        deadline_boottime_ns: u64,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Vec<u8>> {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(ControllerError::Rejected("private DinD body transport was cancelled"));
+        }
         let body_bytes = match &body {
             DockerRequestBodyV12::Empty => 0,
             DockerRequestBodyV12::Bytes(bytes) => bytes.len() as u64,
@@ -5052,7 +5144,7 @@ impl PrivateDindLifecycleV12 {
             &headers,
             body_bytes,
         )?;
-        let mut daemon = connect_private_dind_stream_v12(&socket, deadline_boottime_ns)?;
+        let mut daemon = self.connect_private_dind_v12(operation, deadline_boottime_ns)?;
         let contract = DockerHttpExchangeContractV12 {
             stream_mode,
             max_request_bytes: PRIVATE_DIND_MAX_HTTP_BYTES_V12,
@@ -5060,11 +5152,12 @@ impl PrivateDindLifecycleV12 {
             max_stream_bytes: PRIVATE_DIND_MAX_HTTP_BYTES_V12,
             deadline_boottime_ns,
         };
-        match execute_bounded_docker_http_v12(
+        match execute_bounded_docker_http_v12_with_cancellation(
             &mut daemon,
             head,
             body,
             &contract,
+            cancelled,
         ) {
             DockerDirectHttpOutcomeV12::Complete(receipt) => {
                 Ok(receipt.response)

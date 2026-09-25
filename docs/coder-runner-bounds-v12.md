@@ -177,6 +177,11 @@ closed profile; this checkpoint does not establish that existing image
 artifacts already do. The fixed Docker log driver has an 8 MiB single-file
 rotation bound, which is not a substitute for complete bounded fixture-log
 capture by the separate, unexecuted native runner.
+The controller now separately implements pre-start attach capture for the signed
+command's stdout/stderr, with original deadlines and independent stream caps,
+and collects the complete signed output tree. See
+[body output ownership](controller-body-output.md); these source paths remain
+unexecuted and do not make the rotating log complete evidence.
 
 The result reader retains an output-directory descriptor across execution
 and rechecks its device, inode, ownership and mode identity. It reads one of

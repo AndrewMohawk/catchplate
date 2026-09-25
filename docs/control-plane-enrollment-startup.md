@@ -1,9 +1,11 @@
 # Cold enrollment issuer startup
 
-Source `.127`; implementation only, unbuilt and unexecuted. This implements
+Source `.128`; implementation only, unbuilt and unexecuted. This implements
 protected trusted-host-local key delivery and a private grant issuer. It does
 not provision services, establish Nitro/KMS custody, or connect public
-registration to the independent signer and successor execution.
+registration to the independent signer and successor execution. The private
+[signer exchange](registration-evidence-signer-exchange.md) is implemented
+separately; independent launch and public orchestration remain open.
 
 ## Decision and trust boundary
 
@@ -74,8 +76,11 @@ is `SERVERWARE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE`; missing host files ar
 not created. This is Compose interpolation, not a process key-path override.
 Select the overlay only with an enabled policy; disabled policy needs no dummy
 key. The bootstrap uses the existing authority-trust directory mount. The
-readiness runner's default single-Compose-file contract has not yet enrolled
-this overlay; rendering or mounting it alone is not release acceptance.
+readiness runner retains its single-Compose-file contract. The new
+[offline preparer](enrollment-compose-preparation.md) can compose one standalone
+artifact from the fixed base and enabled overlay after actual signed-bootstrap
+admission. That artifact still needs independent immutable release enrollment;
+preparing or mounting it alone is not release acceptance.
 
 ## Startup, issuance and shutdown
 
@@ -105,7 +110,7 @@ not parallel overrides. The original UTC evaluation time is preserved. Grant
 deadline is capped at the original runtime-attestation expiry, and receipt/key
 continuity is checked before and after issuance on the request's existing work.
 
-Public orchestration, authenticated independent signer transport, replay-store
+Public orchestration, independent signer launch/endpoint admission, replay-store
 rollback/capacity operations, current-root business execution, deployed key/service
 provisioning and consolidated frozen verification remain unfinished. See the
 [enrollment decision](enrollment-authorization-decision.md) for issuer-compromise

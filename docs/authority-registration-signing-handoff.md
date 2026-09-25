@@ -1,15 +1,17 @@
 # Registration source-to-signer handoff
 
-Source-only `.127` implementation; unbuilt and unexecuted. The independent
+Source-only `.128` implementation; unbuilt and unexecuted. The independent
 registration signer consumes the four original source-exchange byte strings
 and a dedicated signed enrollment grant. It durably consumes one grant attempt
 before evidence signing. Public enrollment orchestration is still unfinished.
 
 The [cold issuer owner](control-plane-enrollment-startup.md) now binds protected
 key delivery to the actual runtime root and original descriptor inventory,
-including real HTTP-response key separation. Its private issuance API is ready
-for authenticated application orchestration; no public route or independent
-signer transport is connected by that startup work.
+including real HTTP-response key separation. The new
+[signer exchange](registration-evidence-signer-exchange.md) composes request
+encoding, peer-checked transport, a real replay/signing owner and genuine
+response reconstruction. Independent cold signer launch and public application
+orchestration remain unfinished.
 
 ```text
 implemented source branch:
@@ -82,7 +84,8 @@ The concrete replay store publishes and syncs an immutable attempt marker before
 evidence signing. Identical retries, reset and automatic expiry cleanup are not
 allowed; uncertain I/O fails closed. Its local storage/locks are not independent
 anti-rollback authority. Production continuity and capacity management remain
-required, as do protected issuer key delivery and authenticated service wiring.
+required. Protected issuer delivery and the private signer exchange are present
+in source; independent signer launch admission and public wiring remain open.
 
 The existing operator and OIDC finish handlers still use their legacy
 continuation. This private composition does not redirect those routes, consume

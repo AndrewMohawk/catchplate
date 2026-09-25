@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.127`, implementation only. All six WebAuthn successor operations
+Status: source `.128`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -112,6 +112,12 @@ widening legacy execution. Source `.127` adds protected issuer delivery and
 root, exact inherited descriptors and actual HTTP-response key separation.
 Public orchestration, deployed provisioning and independent replay-state
 continuity/capacity management remain unfinished.
+
+Source `.128` connects a [private signer exchange](registration-evidence-signer-exchange.md)
+to actual replay/signing ownership and genuine caller-side response reconstruction.
+It transports only original evidence and input bytes, returning a regenerated
+evidence-admission request. It does not supply complete OIDC sibling coverage,
+independent cold signer launch or registration business execution.
 
 Deployed caller provisioning, public preparation/invocation and business
 successor execution remain unfinished, as do independent evidence production,

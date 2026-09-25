@@ -1,6 +1,6 @@
 # WebAuthn public admission and private preparation
 
-Current source checkpoint: `.127`. This is a source-only integration map, not
+Current source checkpoint: `.128`. This is a source-only integration map, not
 a tested import, running endpoint or deployment claim. Private preparation is
 described in [WebAuthn preparation](authority-webauthn-preparation.md); the public
 admission continuation below is still missing.
@@ -107,7 +107,9 @@ Its private producer and configured verification now bind original browser
 inputs and user/session/challenge authorization, with a durable one-attempt
 marker before evidence signing. Protected key delivery and the fixed cold issuer
 owner now exist in [enrollment startup](control-plane-enrollment-startup.md);
-public/signer orchestration is still missing. Neither source-role signatures nor the generic response key
+the private [signer exchange](registration-evidence-signer-exchange.md) adds
+original-byte transport, real signing/replay ownership and caller verification.
+Independent signer launch and public orchestration are still missing. Neither source-role signatures nor the generic response key
 supplies enrollment authority. Public routes remain on their legacy continuation.
 
 ## Trust stage and completion have different prerequisites

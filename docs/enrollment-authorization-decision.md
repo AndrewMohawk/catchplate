@@ -1,6 +1,6 @@
 # Decision: dedicated control-plane enrollment authorization
 
-Accepted by the user on 2026-09-25. Source checkpoint `.127`; implementation
+Accepted by the user on 2026-09-25. Source checkpoint `.128`; implementation
 only, unbuilt and unexecuted. Reasonable architecture choices within the agreed
 scope will be made and recorded for later review. This does not authorize new
 external access, production provisioning or bypassing release gates.
@@ -46,8 +46,10 @@ issuer and recipient from the admitted configuration and signs through the
 fixed grant producer. Its caller must already have performed the actual
 control-plane authentication; a raw identity dictionary is not a proof of that.
 Protected cold key delivery and the fixed private issuer owner are implemented
-in [enrollment startup](control-plane-enrollment-startup.md). Public-route
-orchestration and actual independent signer transport remain unfinished.
+in [enrollment startup](control-plane-enrollment-startup.md). The private
+[signer exchange](registration-evidence-signer-exchange.md) now implements
+transport and genuine response reconstruction; public-route orchestration and
+independent signer launch admission remain unfinished.
 
 The closed `webauthnEnrollmentAuthorization` configuration extension is optional
 but mandatory for this signing path. Absent/null grants no enrollment authority.
@@ -105,7 +107,7 @@ admission; this module does not claim to supply that infrastructure.
   in the immutable deployment/readiness closure. No key or service is provisioned
   by this source change, and there is no generic response-key fallback.
 - Connect the existing authenticated operator/OIDC finish handlers to the issuer,
-  authenticated signer transport, custody and successor orchestration. Current
+  independently admitted signer endpoint, custody and successor orchestration. Current
   public handlers still perform legacy finalization.
 - Preserve complete sibling/history, prior publication and current-root/fence
   requirements. The grant and local replay marker do not replace those checks.

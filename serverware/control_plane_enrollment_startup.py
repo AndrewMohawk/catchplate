@@ -179,6 +179,68 @@ class _EnrollmentOwner:
         _live(self)
         return self._private_key is not None
 
+    def prepare_registration_signer_request(self, originals, *, source_originals,
+            verified_at, deadline_epoch_ns, work):
+        """Issue the real grant and frame raw eight, without sending anything.
+
+        The actual authenticated application must have admitted enrollment
+        before this call. Source-four framing checks are not source signature,
+        root or membership admission. No endpoint, retry, new evaluation time,
+        approval consumption or finalization authority is introduced here.
+        """
+        _require_pid()
+        with _LOCK:
+            from serverware import webauthn
+            from serverware import authority_webauthn_enrollment_issuer as issuer
+            from serverware import authority_webauthn_registration_signer_wire as wire
+
+            if self._private_key is None or self._material is None:
+                raise EnrollmentStartupError("enrollment authorization is disabled or closed")
+            if type(source_originals) is not tuple or len(source_originals) != 4:
+                raise EnrollmentStartupError("signer preparation requires exact original source four")
+            source = (wire.source_request._raw2(source_originals[0], source_originals[1])
+                + wire.source_response._raw2(source_originals[2], source_originals[3]))
+            if type(originals) is not webauthn._RegistrationOriginals:
+                raise EnrollmentStartupError("signer preparation requires the real original-input carrier")
+            scope = originals.scope
+            if type(scope) is not issuer.production.attestation.CeremonyScope:
+                raise EnrollmentStartupError("signer preparation requires the original ceremony scope")
+            raw_client, raw_attestation, transports = issuer.authorization._originals(
+                originals.client_data_json, originals.attestation_object, originals.transports)
+            authorization_bytes = scope.authorization_json
+            instant, deadline = verified_at, deadline_epoch_ns
+            if type(instant) is not datetime or instant.tzinfo is not timezone.utc:
+                raise EnrollmentStartupError("signer preparation requires the unchanged original UTC time")
+            issuer.evidence.plan.contract._integer(deadline, minimum=1)
+            if (type(authorization_bytes) is not bytes
+                    or not 2 <= len(authorization_bytes) <= issuer.authorization.MAX_BYTES
+                    or sum(len(raw) for raw in source) + len(raw_client) + len(raw_attestation)
+                        + wire.REQUEST_MINIMUMS[4] + wire.REQUEST_MINIMUMS[7] > wire.MAX_BYTES):
+                raise EnrollmentStartupError("signer preparation originals exceed their fixed bounds")
+            issuer.evidence.capture._SharedLedger(work)
+            work.prepare_copy(transports)
+            held = issuer.authorization._capture({"credentialId": originals.credential_id,
+                "transports": list(transports), "challengeId": scope.challenge_id,
+                "challenge": scope.challenge, "userId": scope.user_id, "label": scope.label,
+                "rpId": originals.rp_id, "origin": originals.origin}, work)
+            work.prepare_copy(held["transports"])
+            held_transports = tuple(held["transports"])
+            # Every source/browser byte reference, scalar and ceremony member
+            # is now held before the actual core constructor's JSON callback.
+            held_scope = issuer.production.attestation.CeremonyScope(
+                held["challengeId"], held["challenge"], held["userId"], held["label"],
+                authorization_bytes, _work=work)
+            captured = webauthn._RegistrationOriginals(raw_client, raw_attestation,
+                held["credentialId"], held_transports, held_scope, held["rpId"], held["origin"])
+            grant = _EnrollmentOwner.issue_registration(self, captured,
+                verified_at=instant, deadline_epoch_ns=deadline, work=work)
+            result = wire._produce_request_on_work(source_originals=source,
+                enrollment_authorization_bytes=grant, client_data_json=raw_client,
+                attestation_object=raw_attestation, credential_id=held["credentialId"],
+                transports=held_transports, verified_at=instant, work=work)
+            _live(self, work=work)
+            return result
+
     def issue_registration(self, originals, *, verified_at, deadline_epoch_ns, work):
         """Bind real authenticated app admission, not arbitrary browser claims."""
         _require_pid()

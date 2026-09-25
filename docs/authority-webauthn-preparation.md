@@ -1,6 +1,6 @@
 # Private WebAuthn custody preparation
 
-Source `.127`; implementation only, unbuilt and unexecuted. The actual verifier
+Source `.128`; implementation only, unbuilt and unexecuted. The actual verifier
 now composes live planning, historical-observation admission, retain-intent
 signing and planner-relay preparation. It returns exact originals for the caller
 journal. It does not expose a public endpoint or contact the custody writer.
@@ -75,6 +75,9 @@ a dedicated control-plane grant, verified and durably consumed by that signer.
 Protected issuer delivery and its [cold owner](control-plane-enrollment-startup.md)
 now exist in source. Public integration and deployed signer/issuer provisioning
 remain unfinished.
+The [private signer exchange](registration-evidence-signer-exchange.md) now
+delivers original envelope/input bytes and regenerates the evidence-admission
+request through actual caller replay, never unsigned finalization metadata.
 Source-control, grant and evidence-envelope lifetimes stay separate, without
 renewal or implicit clipping.
 

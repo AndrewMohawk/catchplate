@@ -1,10 +1,10 @@
 # Current-root decisions and trust boundaries
 
-These are the `.133` current-root decisions with `.134` computation/storage and
-`.136` read-only completion prerequisites, separate from the existing
-replay-witness protocol. This is source-only work, not an executed or provisioned
-authority, production approval
-or successor-execution permission. See the
+These are the `.133` current-root decisions with `.134` computation/storage,
+`.136` read-only completion and `.138` signed lookup/reconciliation, separate
+from the existing replay-witness protocol. This is source-only work, not an
+executed or provisioned authority, production approval or successor-execution
+permission. See the
 [integration boundary](authority-current-root-witness-integration.md) for the
 remaining database and executor work.
 
@@ -87,10 +87,20 @@ publication, without a second parser allowance. The separate delivery journal
 retains exact request/acknowledgment originals and cannot declare its own latest
 checkpoint or refresh an expired, never-accepted request.
 
+Source `.138` adds `lookup(query_bytes, transport_deadline_ns=...)` under the
+actual owner's existing lock and journal-continuity checks. It signs a fresh
+nonce/query-bound observation of actual state and history without appending a
+decision. `accepted` carries the unchanged original historical receipt;
+`notRecorded` is only a statement about that serialized history, not SQL
+noncommit or retry authority. The completion-peer-only transport and explicit
+[delivery reconciliation statuses](authority-current-root-delivery.md#explicit-read-only-reconciliation)
+do not replace independently current startup checkpoints or hostile-host
+antirollback protection.
+
 An exact historical replay returns the original recorded decision/receipt; it
 does not obtain a new fence or renew a lifetime. Pending state survives expiry.
-There is no abort, reset, generation rollover or fresh-currentness endpoint in
-this slice. Timeout or a missing database marker is not proof of noncommit and
+There is no abort, reset, generation rollover or independent-currentness endpoint
+in this slice. Timeout or a missing database marker is not proof of noncommit and
 does not release the pending decision for retry.
 
 ## Local durability is not latest-head authority
@@ -135,8 +145,10 @@ decision/capability admission, same-transaction marker insertion and maintained
 complete roots. The marker schema is immutable framework storage with executor
 SELECT only and no insert function. The `.136` completion reader has a separate
 fixed role with SELECT on only the marker, primary roots and counted heads; its
-actual postcommit producer does not supply cold configuration/key custody,
-independent latest-head authority or durable completion delivery/recovery.
+actual postcommit producer does not supply cold configuration/key custody or
+independent latest-head authority. Separate durable delivery and signed lookup
+now exist as source, but cold activation and expired-unaccepted recovery remain
+unimplemented.
 Every application writer must participate or be excluded. Registration evidence
 custody and signed planning remain distinct from inserting the business evidence
 row or finalizing a credential. This source-only work has not been built, tested,

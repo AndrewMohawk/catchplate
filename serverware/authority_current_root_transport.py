@@ -1,4 +1,4 @@
-"""Fixed UDS framing for original reserve/complete controls and receipts.
+"""Fixed UDS framing for decision controls, queries and signed originals.
 
 The bodies are opaque originals, not parsed claims or accepted signatures.
 Each length is admitted before body allocation; each receiver requires exact
@@ -9,7 +9,9 @@ The configured duration may shorten, never renew, the supplied deadline.
 The serving owner must admit its peer before reading a prefix and bind the
 received action to that peer before calling the genuine decision owner. It
 owns and closes the accepted socket. A response remains unverified original
-receipt bytes here; callers must authenticate it and join their exact request.
+receipt/observation bytes here; callers must authenticate it and join their
+exact request or query. Query framing is separate from reserve/complete and
+does not widen the decision client action allowlist.
 Failures, including after publication, grant neither absence nor retry rights.
 No JSON, signature admission, work allowance, store or authority is added.
 """
@@ -27,9 +29,13 @@ AuthorityTransportError = authority_transport.AuthorityTransportError
 RESERVE_REQUEST_MAGIC = b"SWCDRS01"
 COMPLETE_REQUEST_MAGIC = b"SWCDCP01"
 RESPONSE_MAGIC = b"SWCDOK01"
+QUERY_REQUEST_MAGIC = b"SWCDQR01"
+OBSERVATION_RESPONSE_MAGIC = b"SWCDST01"
 REQUEST_MAGICS = (RESERVE_REQUEST_MAGIC, COMPLETE_REQUEST_MAGIC)
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 16 * 1024
+MAX_QUERY_BYTES = 4 * 1024
+MAX_OBSERVATION_BYTES = 32 * 1024
 _ACTIONS = ("reserve", "complete")
 _NANOSECONDS = 1_000_000_000
 
@@ -92,10 +98,35 @@ def _send_response(connection, receipt_bytes, *, deadline_ns):
     _check_deadline(deadline_ns)
 
 
-def _exchange_on_configuration(config, *, action, request_bytes, deadline_ns):
+def _recv_lookup(connection, *, prefix, deadline_ns):
+    """Receive only after the serving owner has admitted the completion peer."""
+    if type(prefix) is not bytes or prefix != QUERY_REQUEST_MAGIC:
+        raise AuthorityTransportError("current-root query magic is invalid")
+    length = int.from_bytes(io._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big")
+    if not 2 <= length <= MAX_QUERY_BYTES:
+        raise AuthorityTransportError("current-root query length exceeds its source bound")
+    query = io._recv_exact_until(connection, length, deadline_ns=deadline_ns)
+    io._require_eof(connection, deadline_ns)
+    return query
+
+
+def _send_observation(connection, observation_bytes, *, deadline_ns):
+    observation = _original(observation_bytes, MAX_OBSERVATION_BYTES, "observation")
+    header = OBSERVATION_RESPONSE_MAGIC + len(observation).to_bytes(8, "big")
+    io._send_exact_until(connection, header, deadline_ns=deadline_ns)
+    io._send_exact_until(connection, observation, deadline_ns=deadline_ns)
+    _check_deadline(deadline_ns)
+
+
+def _socket_exchange(config, *, purpose, original_bytes, deadline_ns):
     configured = _validate_configuration(config)
-    magic = _action(action)
-    request = _original(request_bytes, MAX_REQUEST_BYTES, "request")
+    if type(purpose) is str and purpose == "query":
+        magic, maximum = QUERY_REQUEST_MAGIC, MAX_QUERY_BYTES
+        response_magic, response_maximum = OBSERVATION_RESPONSE_MAGIC, MAX_OBSERVATION_BYTES
+    else:
+        magic, maximum = _action(purpose), MAX_REQUEST_BYTES
+        response_magic, response_maximum = RESPONSE_MAGIC, MAX_RECEIPT_BYTES
+    request = _original(original_bytes, maximum, "request")
     original_deadline = deadline_ns
     # _check_deadline samples the real monotonic clock once. This optional
     # configured duration only narrows the caller's already fixed deadline;
@@ -116,12 +147,12 @@ def _exchange_on_configuration(config, *, action, request_bytes, deadline_ns):
         io._send_exact_until(connection, header, deadline_ns=bound)
         io._send_exact_until(connection, request, deadline_ns=bound)
         io._call_until(connection, bound, lambda: connection.shutdown(socket.SHUT_WR))
-        if _recv_prefix(connection, deadline_ns=bound) != RESPONSE_MAGIC:
-            raise AuthorityTransportError("current-root receipt magic is invalid")
+        if _recv_prefix(connection, deadline_ns=bound) != response_magic:
+            raise AuthorityTransportError("current-root response magic is invalid")
         length = int.from_bytes(io._recv_exact_until(connection, 8, deadline_ns=bound), "big")
-        if not 2 <= length <= MAX_RECEIPT_BYTES:
-            raise AuthorityTransportError("current-root receipt length exceeds its source bound")
-        receipt = io._recv_exact_until(connection, length, deadline_ns=bound)
+        if not 2 <= length <= response_maximum:
+            raise AuthorityTransportError("current-root response length exceeds its source bound")
+        response = io._recv_exact_until(connection, length, deadline_ns=bound)
         io._require_eof(connection, bound)
     except BaseException:
         # A failed or uncertain exchange grants no retry authority. Keep the
@@ -133,7 +164,20 @@ def _exchange_on_configuration(config, *, action, request_bytes, deadline_ns):
         raise
     connection.close()
     _check_deadline(bound)
-    return receipt
+    return response
+
+
+def _exchange_on_configuration(config, *, action, request_bytes, deadline_ns):
+    # Preserve the original exact reserve/complete surface. Query has its own
+    # fixed entrypoint and cannot be smuggled through a decision action.
+    _action(action)
+    return _socket_exchange(config, purpose=action,
+        original_bytes=request_bytes, deadline_ns=deadline_ns)
+
+
+def _lookup_on_configuration(config, *, query_bytes, deadline_ns):
+    return _socket_exchange(config, purpose="query",
+        original_bytes=query_bytes, deadline_ns=deadline_ns)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -155,3 +199,7 @@ class CurrentRootDecisionClient:
         configured = CurrentRootDecisionClient._snapshot_configuration(self)
         return _exchange_on_configuration(configured,
             action=action, request_bytes=request_bytes, deadline_ns=deadline_ns)
+
+    def lookup(self, *, query_bytes, deadline_ns):
+        configured = CurrentRootDecisionClient._snapshot_configuration(self)
+        return _lookup_on_configuration(configured, query_bytes=query_bytes, deadline_ns=deadline_ns)

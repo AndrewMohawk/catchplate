@@ -14,9 +14,13 @@ No successful replay/observation carrier or transport callback is accepted.
 An uncertain exchange leaves the exact pending record intact. Explicit repeated
 delivery may retrieve the state owner's original historical receipt, including
 after request expiry; it does not renew the control or retry SQL. An expired
-request which was never accepted cannot be replaced/reset here. Resolving that
-case requires separately authorized current-state recovery. There is no loop,
-signer, database access, listener, cancellation record or implicit checkpoint.
+request which was never accepted cannot be replaced/reset here. Reconciliation
+queries the real owner with a fresh nonce and authenticates a signed observation;
+an accepted original acknowledgment is retained without another mutation send.
+A not-recorded result grants no database noncommit, replacement or retry right.
+There is no loop, signer, database access, listener, cancellation record or
+implicit checkpoint. The state owner's independently current cold checkpoint
+remains required: nonce freshness is not host rollback resistance.
 
 Public operations spend the caller's original work/window. Cold replay uses one
 fixed allowance per source-bounded record, like the actual state owner. Physical
@@ -34,6 +38,7 @@ import time
 from serverware import authority_current_root_authorization as authorization
 from serverware import authority_current_root_delivery_records as records
 from serverware import authority_current_root_journal as storage
+from serverware import authority_current_root_lookup as lookup
 from serverware import authority_current_root_transport as transport
 from serverware import authority_webauthn_evidence as evidence
 from serverware import authority_webauthn_evidence_plan_clock as clock
@@ -52,6 +57,23 @@ class CurrentRootDeliveryObservation:
     head_digest: str
     pending_request_digest: str | None
     completed_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentRootDeliveryReconciliation:
+    """Authenticated lookup observations, never replacement/execution authority.
+
+    acknowledged includes a durable original receipt. pendingUnaccepted means
+    notRecorded at the retained pending position, not database noncommit.
+    stateChanged reports another observed position without releasing anything.
+    The state sequence/head describe the fresh lookup, not the local journal.
+    """
+
+    status: str
+    request_digest: str
+    state_sequence: int
+    state_head_digest: str
+    receipt_bytes: bytes | None
 
 
 def _cold_work():
@@ -303,6 +325,98 @@ class CurrentRootCompletionDelivery:
             self._append(encoded, record, work)
             live()
             return record.receipt_bytes
+
+    def reconcile(self, request_digest, *, client, live_window, work, transport_deadline_ns=None):
+        """Query fresh state and recover only the exact retained original ack.
+
+        Always performs a nonce-bound read, including for an already durable
+        acknowledgment. No complete control is sent. Contradictory history or
+        a state behind the retained checkpoint denies; a missing request never
+        clears the pending record. Another in-flight delivery can still commit.
+        A late failure can follow local acknowledgment durability.
+        """
+        evidence.capture._SharedLedger(work)
+        authorization.shape._digest(request_digest)
+        identity = request_digest
+        configured = transport.CurrentRootDecisionClient._snapshot_configuration(client)
+        window, bound = _window(live_window, transport_deadline_ns)
+        self._require_process()
+        with self._lock:
+            self._require_ready()
+            last_epoch = window[0]
+
+            def live(payload=None):
+                nonlocal last_epoch
+                now = clock._check_on_work(window, work=work)
+                monotonic = evidence.production._callback(work, time.monotonic_ns)
+                authorization.shape._integer(monotonic, minimum=1)
+                if now < last_epoch or monotonic >= bound:
+                    raise CurrentRootDeliveryError("delivery lookup original window expired or clock reversed")
+                last_epoch = now
+                if payload is not None:
+                    evidence._fresh(payload, now, self._age, self._skew)
+                return now
+
+            live()
+            retained = self._history.get(identity)
+            if retained is None:
+                raise CurrentRootDeliveryError("completion original is not durably retained")
+            if retained.kind != "ack" and retained is not self._pending:
+                raise CurrentRootDeliveryError("completion original is not the current local pending request")
+            nonce = evidence.production._callback(work, lambda: os.urandom(32))
+            if type(nonce) is not bytes or len(nonce) != 32:
+                raise CurrentRootDeliveryError("delivery lookup nonce is not exactly 32 random bytes")
+            work.charge(input_bytes=32 + 64)
+            query = lookup._encode_query_on_work(enrollment_digest=self._enrollment_digest,
+                request_digest=identity, challenge=nonce.hex(), work=work)
+            live()
+            original = evidence.production._callback(work, lambda: transport._lookup_on_configuration(
+                configured, query_bytes=query, deadline_ns=bound))
+            payload, receipt = lookup._verify_on_work(observation_bytes=original, query_bytes=query,
+                enrollment_bytes=self._enrollment_bytes, root_public_key=self._root_public_key,
+                now_epoch_ns=live(), work=work)
+            live(payload)
+            self._require_ready()
+            if self._history.get(identity) is not retained:
+                raise CurrentRootDeliveryError("retained original changed during state lookup")
+            observed_sequence, observed_head = payload["sequence"], payload["headDigest"]
+            minimum_sequence, minimum_head = retained.pending_sequence, retained.pending_head_digest
+            if retained.kind == "ack":
+                minimum_sequence = retained.receipt_payload["sequence"]
+                minimum_head = retained.receipt_digest
+            if (observed_sequence < minimum_sequence
+                    or observed_sequence == minimum_sequence and observed_head != minimum_head):
+                raise CurrentRootDeliveryError("observed state is behind or conflicts with retained checkpoint")
+            if payload["requestStatus"] == "accepted":
+                if retained.kind == "ack":
+                    work.charge(input_bytes=len(receipt) + len(retained.receipt_bytes))
+                    if receipt != retained.receipt_bytes:
+                        raise CurrentRootDeliveryError("state lookup changed the durable original acknowledgment")
+                    acknowledged = retained.receipt_bytes
+                else:
+                    if retained is not self._pending:
+                        raise CurrentRootDeliveryError("local pending completion changed during state lookup")
+                    encoded, record = records._prepare_ack_on_work(sequence=self._sequence + 1,
+                        previous_record_digest=self._head_digest,
+                        expected_pending_sequence=retained.pending_sequence,
+                        expected_pending_head_digest=retained.pending_head_digest,
+                        request_bytes=retained.request_bytes, receipt_bytes=receipt,
+                        enrollment_bytes=self._enrollment_bytes, root_public_key=self._root_public_key, work=work)
+                    live(payload)
+                    self._append(encoded, record, work)
+                    acknowledged = record.receipt_bytes
+                live(payload)
+                return CurrentRootDeliveryReconciliation("acknowledged", identity,
+                    observed_sequence, observed_head, acknowledged)
+            if retained.kind == "ack":
+                raise CurrentRootDeliveryError("state lookup contradicts a durable original acknowledgment")
+            unchanged = (observed_sequence == retained.pending_sequence
+                and observed_head == retained.pending_head_digest
+                and payload["pendingRequestDigest"] == retained.request_payload["pendingRequestDigest"]
+                and payload["pendingDecisionDigest"] == retained.pending_head_digest)
+            live(payload)
+            return CurrentRootDeliveryReconciliation("pendingUnaccepted" if unchanged else "stateChanged",
+                identity, observed_sequence, observed_head, None)
 
     def inspect(self):
         self._require_process()

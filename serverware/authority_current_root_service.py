@@ -10,8 +10,10 @@ admitted before any prefix, and its purpose-specific peer before any body.
 The complete bounded original and EOF reach the fixed owner's sole work
 allowance. That owner joins the authenticated action before replay/publication
 and returns only a durably published receipt (or an exact historical receipt).
-No parser allowance, signer, SQL, success substitute or automatic retry exists
-here. Failure after publication or send is not evidence of rollback/absence.
+Separate bounded queries are restricted to the completion peer and reach the
+actual owner's lookup/signing path without a service parser or allowance.
+No independent signer, SQL, success substitute or automatic retry exists here.
+Failure after publication or send is not evidence of rollback/absence.
 """
 from __future__ import annotations
 
@@ -103,22 +105,31 @@ class CurrentRootDecisionService:
                 action, required_peer = "reserve", reserve_peer
             elif prefix == transport.COMPLETE_REQUEST_MAGIC:
                 action, required_peer = "complete", complete_peer
+            elif prefix == transport.QUERY_REQUEST_MAGIC:
+                action, required_peer = "query", complete_peer
             else:
                 raise CurrentRootServiceError("current-root socket purpose is not source fixed")
             if peer != required_peer:
                 raise CurrentRootServiceError("current-root socket peer is not admitted for this purpose")
-            received_action, original = transport._recv_request(connection,
-                prefix=prefix, deadline_ns=deadline_ns)
-            if received_action != action:
-                raise CurrentRootServiceError("current-root framing action changed")
-            transport._check_deadline(deadline_ns)
-            # Exact class dispatch excludes instance method overrides. The
-            # original's bounded canonical parsing, signature/action admission,
-            # history replay and durable append share the owner's one allowance.
-            receipt = decisions.CurrentRootDecisionOwner.apply(owner, original,
-                expected_action=action, transport_deadline_ns=deadline_ns)
-            transport._check_deadline(deadline_ns)
-            transport._send_response(connection, receipt, deadline_ns=deadline_ns)
+            # Exact class dispatch excludes instance method overrides. Neither
+            # branch parses signed data or creates a second work allowance.
+            if action == "query":
+                original = transport._recv_lookup(connection, prefix=prefix, deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                observation = decisions.CurrentRootDecisionOwner.lookup(owner, original,
+                    transport_deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                transport._send_observation(connection, observation, deadline_ns=deadline_ns)
+            else:
+                received_action, original = transport._recv_request(connection,
+                    prefix=prefix, deadline_ns=deadline_ns)
+                if received_action != action:
+                    raise CurrentRootServiceError("current-root framing action changed")
+                transport._check_deadline(deadline_ns)
+                receipt = decisions.CurrentRootDecisionOwner.apply(owner, original,
+                    expected_action=action, transport_deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                transport._send_response(connection, receipt, deadline_ns=deadline_ns)
         except BaseException:
             # No error frame masquerades as a receipt. Preserve even cancellation
             # and publication uncertainty if closing also fails.

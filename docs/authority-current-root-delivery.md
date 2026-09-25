@@ -1,7 +1,8 @@
 # Current-root decision transport and completion delivery
 
 Source `.137` adds a fixed private Unix-socket exchange and a durable local
-completion-delivery owner. This is source implementation, not a built, tested,
+completion-delivery owner; `.138` adds signed read-only lookup and explicit
+reconciliation. This is source implementation, not a built, tested,
 provisioned or running service. It does not enable successor SQL execution,
 public finalization, a listener or a production deployment.
 
@@ -18,6 +19,8 @@ the actual request and state-receipt signature checks.
 | Reserve request | `SWCDRS01` | 256 KiB |
 | Complete request | `SWCDCP01` | 256 KiB |
 | State receipt response | `SWCDOK01` | 16 KiB |
+| Read-only lookup query | `SWCDQR01` | 4 KiB |
+| Signed state observation | `SWCDST01` | 32 KiB |
 
 Each magic is followed by one unsigned 64-bit big-endian body length and the
 exact original bytes. Lengths are checked before body allocation. The client
@@ -34,6 +37,34 @@ same-work canonical/signature verification binds the transport action to the
 signed request. A receipt is sent only after that owner returns from its
 durable publication path. The service owns and closes each accepted socket on
 success, failure or cancellation; it does not provision or open the listener.
+
+Lookup is restricted to the configured completion peer, checked before its
+body is read. The service calls the exact owner's `lookup`, without a service
+parser or second work allowance, and sends the resulting signed observation.
+It does not route a query through `apply` or append a state decision.
+
+## Read-only signed lookup
+
+[`CurrentRootDecisionOwner.lookup`](../serverware/authority_current_root_decisions.py)
+accepts the canonical five-field query: schema, source revision, enrollment
+digest, requested request digest and a 32-byte challenge encoded as 64 lowercase
+hex characters. The [dedicated lookup protocol](../serverware/authority_current_root_lookup.py)
+binds the exact query digest and challenge in a separate state-observation
+signature domain, using the already enrolled state key.
+
+Under its existing lock, PID and journal-continuity checks, the owner derives
+the observed sequence/head/vector/fence, pending identities and queried history
+from its actual state. One fresh observation window is bounded by enrolled age
+and the original transport deadline. Lookup does not append, change a fence or
+reset pending state.
+
+`accepted` includes the exact original recorded receipt, which is authenticated
+again under the enrolled state key. It may be expired; the new observation does
+not renew that receipt. `notRecorded` reports only that this serialized history
+did not contain the requested identity when observed. It is not proof of SQL
+noncommit, cancellation, independent latest-head authority or permission to retry.
+Startup still requires an independently current exact checkpoint; a signed
+lookup cannot cure startup from a valid but rolled-back journal prefix.
 
 ## Separate local delivery custody
 
@@ -73,6 +104,8 @@ enqueue(request_bytes, *, expected_pending_sequence, expected_pending_head_diges
     live_window, work, transport_deadline_ns=None) -> original request digest
 deliver(request_digest, *, client, live_window, work,
     transport_deadline_ns=None) -> original state receipt bytes
+reconcile(request_digest, *, client, live_window, work,
+    transport_deadline_ns=None) -> CurrentRootDeliveryReconciliation
 inspect() -> CurrentRootDeliveryObservation
 close()
 ```
@@ -117,12 +150,40 @@ never accepted remains blocked and needs independently authorized recovery;
 neither a new transport window nor local pending state renews its authority.
 Delivery failure is not proof of state noncommit.
 
+## Explicit read-only reconciliation
+
+`reconcile` always makes a fresh nonce-bound lookup, including when the local
+acknowledgment is already durable. It verifies the original signed observation
+against its independently admitted enrollment and exact query. Any accepted
+receipt must also match the retained original completion and pending scope.
+An observed sequence below the retained pending checkpoint (or durable receipt
+sequence), or a conflicting head at that same sequence, is rejected.
+Contradictions deny the operation; they are not converted into an acknowledgment.
+
+The returned ordinary `CurrentRootDeliveryReconciliation` has fields `status`,
+`request_digest`, `state_sequence`, `state_head_digest` and `receipt_bytes`:
+
+The sequence/head describe the fresh state observation, not the local journal.
+
+| Status | Meaning |
+| --- | --- |
+| `acknowledged` | The original acceptance receipt is authenticated and locally durable. A first acknowledgment is appended before return; an existing acknowledgment must have byte-identical originals and causes no extra append. |
+| `pendingUnaccepted` | The queried request is `notRecorded` and the retained expected pending state still matches. This is informational, not database noncommit or retry permission. |
+| `stateChanged` | The request is `notRecorded` and the observed state no longer matches that pending scope. It does not authorize replacement, cancellation or reset. |
+
+The latter two statuses carry no receipt. A locally acknowledged request
+contradicted by the fresh lookup is an error, not `pendingUnaccepted` or
+`stateChanged`. Reconciliation never resends the completion control or executes
+SQL; another already in-flight delivery may still be accepted after a lookup.
+Recovery for an expired, never-accepted completion remains unimplemented;
+a new challenge or observation lifetime does not supply that missing authority.
+
 ## Remaining boundary
 
 This source path does not supply cold enrollment/key custody, authenticated
 configuration delivery, trusted measurement, provisioned socket/peer identities,
 independent current checkpoints, native durability/host antirollback proof or
-an operational recovery procedure. The [completion producer](authority-current-root-completion.md)
+authorized expired-unaccepted recovery. The [completion producer](authority-current-root-completion.md)
 still depends on genuine committed-state reads and the original plan/grant
 joins. Protected execution/capability custody, installed successor SQL and
 triggers, real writer/outer-commit orchestration and public finalization remain

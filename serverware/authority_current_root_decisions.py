@@ -14,19 +14,23 @@ integration remain separate prerequisites. No legacy gate is enabled here.
 
 Reserve publishes a signed pending decision before returning it. One completion
 slot is retained. Expiry never releases pending state; there is no abort/reset,
-generation rollover, automatic execution or fresh-currentness endpoint. Exact
-replay returns the original historical receipt without minting a new fence.
+generation rollover or automatic execution. Exact replay returns the original
+historical receipt without minting a new fence. Challenge-bound lookup signs
+only this serialized owner's observed state; it supplies no independent latest
+checkpoint, hostile-host antirollback or permission to retry execution.
 """
 from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+import hashlib
 import os
 import threading
 import time
 
 from serverware import authority_current_root_authorization as authorization
 from serverware import authority_current_root_journal as storage
+from serverware import authority_current_root_lookup as lookup_wire
 from serverware import authority_current_root_vector as vector
 from serverware import authority_webauthn_evidence as evidence
 from serverware import authority_webauthn_evidence_plan_clock as clock
@@ -321,6 +325,97 @@ class CurrentRootDecisionOwner:
             # A late error retains the durable decision. It is not a rollback
             # or a reason to reset a pending fence; exact readback stays separate.
             live(request)
+            return encoded
+
+    def lookup(self, query_bytes, *, transport_deadline_ns=None):
+        """Sign a fresh observation without changing the journal or decisions.
+
+        An accepted request returns its exact historical receipt, even when that
+        receipt expired. The observation cannot renew its execution authority.
+        notRecorded describes only this locked history, not SQL noncommit or
+        permission to clear pending state, retry or choose an older checkpoint.
+        """
+        if type(self) is not CurrentRootDecisionOwner:
+            raise CurrentRootDecisionError("current-root lookup requires the actual decision owner")
+        if type(query_bytes) is not bytes or not 2 <= len(query_bytes) <= lookup_wire.MAX_QUERY_BYTES:
+            raise CurrentRootDecisionError("current-root lookup query exceeds its original-byte bound")
+        if os.getpid() != self._pid:
+            raise CurrentRootDecisionError("forked process cannot query current-root decisions")
+        original, inherited = query_bytes, transport_deadline_ns
+        work = _work()
+        if inherited is not None:
+            evidence.plan.contract._integer(inherited, minimum=1)
+        with self._lock:
+            CurrentRootDecisionOwner._require_ready(self)
+            material, pending, history = self._material, self._pending, self._history
+            enrollment, root_key, state_key = (
+                self._enrollment_bytes, self._root_public_key, self._state_private_key)
+            policy = material.payload
+            pins = (material.enrollment_digest, policy["databaseId"], policy["generationDigest"],
+                policy["state"]["measurementDigest"], policy["maxControlAgeNs"], policy["maxClockSkewNs"])
+            state = (self._sequence, self._head_digest, self._vector_digest, self._fence)
+            pending_request = None if pending is None else pending[1]
+            pending_decision = None if pending is None else pending[2]
+            # Own the actual immutable state/key/policy scalars before native
+            # clock or signing callbacks. The existing lock serializes apply.
+            now = evidence.production._callback(work, time.time_ns)
+            window = clock._open_on_work(deadline_epoch_ns=now + pins[4],
+                maximum_lifetime_ns=pins[4], maximum_clock_skew_ns=pins[5], work=work)
+            if inherited is not None and inherited < window[4]:
+                # Shorten the original opening bracket, never open another one.
+                expires = window[0] + inherited - window[1]
+                window = clock._validate((window[0], window[1], window[2], expires,
+                    inherited, window[5], window[6]))
+            last_epoch, last_monotonic = window[0], window[2]
+
+            def live():
+                nonlocal last_epoch, last_monotonic
+                instant = clock._check_on_work(window, work=work)
+                monotonic = evidence.production._callback(work, time.monotonic_ns)
+                evidence.plan.contract._integer(monotonic, minimum=1)
+                if (instant < last_epoch or monotonic < last_monotonic
+                        or monotonic >= window[4]):
+                    raise CurrentRootDecisionError("current-root lookup original window expired or clock reversed")
+                last_epoch, last_monotonic = instant, monotonic
+                CurrentRootDecisionOwner._require_ready(self)
+                if (self._material is not material or self._pending is not pending
+                        or self._history is not history or self._enrollment_bytes is not enrollment
+                        or self._root_public_key is not root_key or self._state_private_key is not state_key
+                        or (self._sequence, self._head_digest, self._vector_digest, self._fence) != state):
+                    raise CurrentRootDecisionError("current-root lookup owner state changed during observation")
+                return instant
+
+            live()
+            query = lookup_wire._decode_query_on_work(original, work=work)
+            queried, challenge = query["requestDigest"], query["challenge"]
+            evidence.plan._same(query["enrollmentDigest"], pins[0], work,
+                "current-root lookup query names another enrollment")
+            query_digest = lookup_wire._query_digest_on_work(original, work)
+            prior = history.get(queried)
+            receipt_wire, receipt_count, receipt_digest = None, 0, None
+            if prior is not None:
+                receipt = prior[1]
+                receipt_wire = _encode_raw(receipt, MAX_RECEIPT_BYTES, work)
+                receipt_count = len(receipt)
+                work.charge(hashes=1, input_bytes=receipt_count)
+                receipt_digest = "sha256:" + hashlib.sha256(receipt).hexdigest()
+            payload = {"schema": lookup_wire.PAYLOAD_SCHEMA,
+                "sourceRevision": vector.authority.SOURCE_REVISION,
+                "enrollmentDigest": pins[0], "databaseId": pins[1], "generationDigest": pins[2],
+                "producerMeasurementDigest": pins[3], "queryDigest": query_digest,
+                "challenge": challenge, "requestedRequestDigest": queried,
+                "issuedAtEpochNs": window[0], "expiresAtEpochNs": window[3],
+                "sequence": state[0], "headDigest": state[1], "vectorDigest": state[2], "fence": state[3],
+                "pendingRequestDigest": pending_request, "pendingDecisionDigest": pending_decision,
+                "requestStatus": "notRecorded" if prior is None else "accepted",
+                "receiptBase64Url": receipt_wire, "receiptByteCount": receipt_count,
+                "receiptBytesDigest": receipt_digest}
+            encoded = lookup_wire._sign_on_work(payload=payload, enrollment_bytes=enrollment,
+                root_public_key=root_key, state_private_key=state_key,
+                now_epoch_ns=live(), work=work)
+            live()
+            if history.get(queried) is not prior:
+                raise CurrentRootDecisionError("current-root queried history changed during observation")
             return encoded
 
     def inspect(self):

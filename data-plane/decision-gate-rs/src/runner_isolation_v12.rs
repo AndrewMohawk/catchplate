@@ -463,6 +463,7 @@ mod tests {
             memory_bytes: 4 * 1024 * 1024 * 1024, pids: 128, open_files: 1024,
             shm_bytes: 64 * 1024 * 1024, run_tmpfs_bytes: 64 * 1024 * 1024,
             tmp_tmpfs_bytes: 256 * 1024 * 1024, private_data_bytes: 2 * 1024 * 1024 * 1024,
+            output_bytes: 64 * 1024 * 1024, output_inodes: 1024,
         }
     }
 

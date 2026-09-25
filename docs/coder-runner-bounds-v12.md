@@ -7,6 +7,8 @@ identity and checks the created container before repository execution. It is
 source implementation, not evidence that a controller, image or workload has
 been built, installed or run. The workflow and independent authority
 requirements in [goal.md](../goal.md) remain unchanged.
+These root-controller resource limits are not native/TEE assurance or proof
+against a compromised privileged host.
 
 The change applies to the actual v12 repository runner, not merely to example
 Docker commands or the separate service-container resource contract. It does
@@ -19,18 +21,21 @@ remaining prerequisites.
 
 `RunnerIdentity.executionBounds` is required source-owned plan data. Its
 nonroot user and group, CPU limit, memory limit with no swap, PID limit,
-open-file limit, shared-memory size and private writable-mount limits must be
-present and validated. Missing bounds are rejected; there is no legacy
-unbounded default and no environment-variable override.
+open-file limit, shared-memory size, private writable-mount limits and aggregate
+output byte/inode limits must be present and validated. Missing bounds are
+rejected; there is no legacy unbounded default and no environment-variable override.
 
 The closed `RunnerExecutionBoundsV12` object uses the JSON fields `userUid`,
 `userGid`, `cpuQuotaMicros`, `cpuPeriodMicros`, `memoryBytes`, `pids`,
-`openFiles`, `shmBytes`, `runTmpfsBytes`, `tmpTmpfsBytes` and
-`privateDataBytes`. The CPU period is fixed at 100,000 microseconds. Numeric
-types, finite source limits and checked memory summation are enforced by the
+`openFiles`, `shmBytes`, `runTmpfsBytes`, `tmpTmpfsBytes`,
+`privateDataBytes`, `outputBytes` and `outputInodes`. `outputBytes` must be
+16 MiB–1 GiB in whole-MiB increments; `outputInodes` must be 64–65,536. The
+CPU period is fixed at 100,000 microseconds. Numeric types, finite source
+limits and checked memory summation are enforced by the
 source validator; unknown fields or omitted required fields are not defaults.
 No-swap is a fixed rendering requirement, not a caller-selected opt-out.
-Previously serialized v12 runner identities without these fields are rejected
+Previously serialized v12 runner identities without these fields, including
+identities that predate the aggregate output limits, are rejected
 and must be deliberately reissued; the controller must not fill in bounds on
 behalf of an older signed identity. The source definition is in
 [plan_protocol.rs](../data-plane/decision-gate-rs/src/plan_protocol.rs).
@@ -65,26 +70,35 @@ start. The required mapping is:
 | Runtime scratch | Bounded private `/run` tmpfs |
 | Temporary scratch | Bounded private `/tmp` tmpfs |
 | Private workload data | Bounded private `/var/lib/serverware-runner` tmpfs |
+| Aggregate lane output | Fresh controller-owned tmpfs with exact byte and inode caps, bound into the fixed output destination |
 
 The private tmpfs mounts are writable only within their declared limits and
 use the admitted UID/GID, mode `0700`, and `nosuid,nodev,noexec`. Source and
 artifact mounts and the container root filesystem stay read-only. The
-controller-allocated per-lane output directory is the distinct writable result
-path; a writable output bind is not an implicit database scratch allowance.
-That bind is **not aggregate-byte-quota-limited by this checkpoint**. A runner
-can write more output than the accepted result-file limit; bounded result
-reads and private tmpfs caps do not bound arbitrary writes to this separate
-bind. A controller-enforced output-storage quota remains necessary for a
-fully bounded native profile.
+controller-allocated per-lane output is a distinct fresh tmpfs with the admitted
+aggregate `outputBytes` and `outputInodes` caps, private mount propagation and
+fixed `noswap,nodev,nosuid,noexec`. The writable bind exposes that bounded
+filesystem, not an ordinary unbounded host directory or database scratch allowance. Its
+aggregate capacity is separate from the accepted result-file read bound;
+filling either output capacity fails the workload, not the limit. There is no
+fallback when the host cannot admit the required mount options or caps.
+
+The byte cap limits allocated tmpfs file data, not sparse logical file lengths
+or all kernel metadata. The inode limit also accounts for extended-attribute
+consumption. `noswap` disables this mount's swap use; it does not turn tmpfs
+into durable storage. See the primary [Linux tmpfs documentation](https://docs.kernel.org/filesystems/tmpfs.html).
 
 `/var/lib/serverware-runner` is the fixed private-data mount, not a caller-
 selected host path. The separate source-owned PostgreSQL lifecycle creates its
 fresh `PGDATA` child there. It must not put the database or WAL in the host's root-backed `/tmp`,
 silently enlarge `/run` or `/tmp`, or fall back to an unbounded writable root
-filesystem. The tmpfs ceilings and shared-memory allowance must fit inside
-the declared memory ceiling; that arithmetic is not proof that every admitted
-workload will complete within it. Resource exhaustion fails the workload, not
-the bound.
+filesystem. The private tmpfs ceilings, shared-memory allowance and
+`outputBytes` participate in checked summation and must fit inside
+the declared memory ceiling. This is a conservative configuration check, not
+a bound on total host allocation or a claim that every page is charged to the
+runner: initial mount metadata may charge the controller, and process/kernel
+overhead remains. It is not proof that every admitted workload will complete
+within its limits. Resource exhaustion fails the workload, not the bound.
 
 These limits complement, rather than replace, the existing read-only mounts,
 capability drop, no-new-privileges, private IPC and lane-specific network
@@ -100,13 +114,41 @@ must not be accepted by repairing it after repository execution has begun.
 This avoids both stale result reuse and assuming that a root-owned bind is
 writable by the declared runner user.
 
-The implementation creates an exclusive mode-`0700` `runner-output-<ordinal>`
-directory directly below the privileged mode-`0700` generation parent, then
-sets the child ownership through its open descriptor. The parent is never
-made worker-writable. Each lane has a separate child, including when profiles
-use different users. The controller's original OCI export directory remains
+The implementation creates an exclusive `runner-output-<ordinal>` mountpoint
+directly below the privileged mode-`0700` generation parent, then mounts the
+fresh bounded tmpfs for that lane's exact admitted UID/GID and mode `0700`.
+The parent is never made worker-writable. Each lane has a separate filesystem,
+including when profiles use different users. The controller's original OCI export directory remains
 separate; this does not change the signed output destination inside the
 container or move controller-generated OCI archives into worker ownership.
+Actual mount identity, options and byte/inode capacities are read back at
+creation, both pre-start checks, after execution and after result reading;
+directory creation or Docker's bind declaration alone cannot establish them.
+The retained descriptor and mount observations must still identify the
+controller-created filesystem. The observed state binds the complete output
+mount record's digest, not just the directory pathname.
+
+The [output storage owner](../data-plane/decision-gate-rs/src/runner_output_storage_v12.rs)
+publishes a fixed, root-only mode-`0600` custody sidecar before mounting. That
+record binds the generation, underlying mountpoint, fixed lane, runner IDs
+and byte/inode limits; mounted identity is separately retained and checked.
+Its `create`/`verify` and fixed-generation `teardown` helpers provide no arbitrary
+mount target or recursive-cleanup callback. Interrupted setup can be handled
+only when the exact owned custody remains intact. Invalid, changed, legacy or
+unknown state fails closed without automatic repair; this is not universal
+crash-cleanup proof.
+
+Fixed generation cleanup first stops/removes the owned cgroup, then strictly
+unmounts each owned output filesystem before recursive directory removal.
+An unmount or identity failure is not permission to recurse through a
+remaining mount, detach it as a fallback or
+declare teardown complete; residual generation mounts deny recursion.
+Lazy detach can leave a busy filesystem alive after it disappears from the
+mount table, so it is not equivalent to completed unmount. See
+[`umount(2)`](https://man7.org/linux/man-pages/man2/umount.2.html).
+Output is temporary memory-backed storage, not a durable host-output promise;
+copying accepted artifacts into independently
+admitted retained storage is a separate responsibility.
 
 Creation is not successful admission by itself. Before the start request, the
 controller checks the exact created container identity, owner labels, image,
@@ -169,17 +211,18 @@ A candidate Python native-PG profile is:
 | `/run` | 64 MiB |
 | `/tmp` | 256 MiB |
 | `/var/lib/serverware-runner` | 2 GiB |
+| Aggregate output | 64 MiB, 4,096 inodes |
 
-The listed memory-backed capacities total 2,432 MiB, below the 4,096 MiB
-memory ceiling, leaving capacity for process memory and other charged kernel
-memory. This is a bounded example, not a measured sizing result or a prepared
-PG16 image identity or a complete native resource profile. PostgreSQL `fsync`
+The listed memory-backed capacities total 2,496 MiB, below the 4,096 MiB
+memory ceiling. The numerical difference is not guaranteed host or cgroup
+headroom for process/kernel overhead. This is a bounded example, not a measured
+sizing result, prepared PG16 image identity or complete native resource profile. PostgreSQL `fsync`
 on a tmpfs does not establish survival of host power loss or storage loss.
 
 The separate [native cluster manager](native-postgres-verification.md) and its
 bounded local log capture are now source-implemented but unexecuted. Fixed PG16
-toolchain/image closure, output-storage quota, controller report-consumer
-integration and authenticated cleanup are still required. The fourteen suite deadlines total
+toolchain/image closure, verification of actual output-mount enforcement,
+controller report-consumer integration and authenticated cleanup are still required. The fourteen suite deadlines total
 4,800 seconds before startup and
 cleanup; the existing Unit deadline is 900 seconds. Adding execution bounds
 does not change that deadline, omit suites to fit it, remove their exclusions,

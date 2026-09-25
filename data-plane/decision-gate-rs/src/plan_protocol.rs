@@ -752,6 +752,8 @@ pub struct RunnerExecutionBoundsV12 {
     pub run_tmpfs_bytes: u64,
     pub tmp_tmpfs_bytes: u64,
     pub private_data_bytes: u64,
+    pub output_bytes: u64,
+    pub output_inodes: u64,
 }
 
 impl RunnerExecutionBoundsV12 {
@@ -772,6 +774,10 @@ impl RunnerExecutionBoundsV12 {
                 .contains(&self.tmp_tmpfs_bytes)
             || !(16 * 1024 * 1024..=8 * 1024 * 1024 * 1024)
                 .contains(&self.private_data_bytes)
+            || !(16 * 1024 * 1024..=1024 * 1024 * 1024)
+                .contains(&self.output_bytes)
+            || self.output_bytes % (1024 * 1024) != 0
+            || !(64..=65_536).contains(&self.output_inodes)
         {
             return Err(PlanProtocolError::Invalid(
                 "runner execution bounds are invalid",
@@ -782,6 +788,7 @@ impl RunnerExecutionBoundsV12 {
             .checked_add(self.run_tmpfs_bytes)
             .and_then(|sum| sum.checked_add(self.tmp_tmpfs_bytes))
             .and_then(|sum| sum.checked_add(self.private_data_bytes))
+            .and_then(|sum| sum.checked_add(self.output_bytes))
             .ok_or(PlanProtocolError::Invalid(
                 "runner writable memory bound overflows",
             ))?;
@@ -1793,7 +1800,7 @@ mod runner_execution_bounds_tests {
     use super::*;
 
     const MIB: u64 = 1024 * 1024;
-    const FIELDS: [(&str, u64, u64); 11] = [
+    const FIELDS: [(&str, u64, u64); 13] = [
         ("userUid", 1000, 2_147_483_647),
         ("userGid", 1000, 2_147_483_647),
         ("cpuQuotaMicros", 1000, 6_400_000),
@@ -1805,6 +1812,8 @@ mod runner_execution_bounds_tests {
         ("runTmpfsBytes", MIB, 256 * MIB),
         ("tmpTmpfsBytes", 16 * MIB, 1024 * MIB),
         ("privateDataBytes", 16 * MIB, 8 * 1024 * MIB),
+        ("outputBytes", 16 * MIB, 1024 * MIB),
+        ("outputInodes", 64, 65_536),
     ];
 
     fn bounds() -> RunnerExecutionBoundsV12 {
@@ -1820,6 +1829,8 @@ mod runner_execution_bounds_tests {
             run_tmpfs_bytes: MIB,
             tmp_tmpfs_bytes: 16 * MIB,
             private_data_bytes: 16 * MIB,
+            output_bytes: 16 * MIB,
+            output_inodes: 64,
         }
     }
 
@@ -1928,14 +1939,16 @@ mod runner_execution_bounds_tests {
     fn runner_bounds_charge_all_writable_memory_at_the_exact_limit() {
         let mut value = bounds();
         value.run_tmpfs_bytes = 16 * MIB;
-        value.private_data_bytes = 208 * MIB;
+        value.private_data_bytes = 192 * MIB;
         value.validate().unwrap();
         for field in [
             "shmBytes", "runTmpfsBytes", "tmpTmpfsBytes", "privateDataBytes",
+            "outputBytes",
         ] {
             let mut exceeded = serde_json::to_value(&value).unwrap();
             let previous = exceeded[field].as_u64().unwrap();
-            exceeded[field] = serde_json::json!(previous + 1);
+            let increment = if field == "outputBytes" { MIB } else { 1 };
+            exceeded[field] = serde_json::json!(previous + increment);
             let exceeded: RunnerExecutionBoundsV12 =
                 serde_json::from_value(exceeded).unwrap();
             assert_eq!(
@@ -2044,8 +2057,9 @@ mod runner_execution_bounds_tests {
         prepared.validate().unwrap();
         for (field, lower, _) in FIELDS {
             let mut changed = serde_json::to_value(&prepared).unwrap();
+            let increment = if field == "outputBytes" { MIB } else { 1 };
             changed["runner"]["executionBounds"][field] =
-                serde_json::json!(lower + 1);
+                serde_json::json!(lower + increment);
             let mut changed: PrepareContract =
                 serde_json::from_value(changed).unwrap();
             let next_digest = canonical_sha256_without_digest(

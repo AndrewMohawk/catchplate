@@ -3,6 +3,9 @@
 #[path = "runner_isolation_v12.rs"]
 mod runner_isolation_v12;
 
+#[path = "runner_output_storage_v12.rs"]
+mod runner_output_storage_v12;
+
 #[cfg(test)]
 #[path = "runner_output_tests_v12.rs"]
 mod runner_output_tests_v12;
@@ -10,6 +13,8 @@ mod runner_output_tests_v12;
 use self::runner_isolation_v12::{
     execution_host_config_v12, validate_runner_inspect_v12,
 };
+use self::runner_output_storage_v12::RunnerOutputStorageV12;
+use crate::plan_protocol::RunnerExecutionBoundsV12;
 
 use crate::coder_controller_v11::{
     canonical_json_bytes_v11, constant_time_eq, digest_hex, sha256,
@@ -1739,6 +1744,8 @@ struct PrivateRunnerV12 {
     command_sha256: Digest,
     output_mount: PathBuf,
     output_identity_sha256: Digest,
+    output_storage: RunnerOutputStorageV12,
+    output_storage_identity_sha256: Digest,
     uid: u32,
     gid: u32,
     created_inspect_sha256: Option<Digest>,
@@ -3910,11 +3917,22 @@ impl PrivateDindLifecycleV12 {
         let output_mount = handle.generation_root.join(format!(
             "runner-output-{}", operation.request.lane.ordinal(),
         ));
-        let output_identity_sha256 = create_runner_output_v12(
+        let output_storage = create_runner_output_v12(
             &handle.generation_root, &output_mount,
-            runner.execution_bounds.user_uid,
-            runner.execution_bounds.user_gid,
+            &runner.execution_bounds,
         )?;
+        let output_fd = open_directory_fd_v12(&output_mount)?;
+        runner_output_storage_v12::verify(
+            output_fd.as_raw_fd(), &output_mount, &output_storage,
+        )?;
+        let output_identity_sha256 =
+            directory_fd_identity_sha256_v12(output_fd.as_raw_fd())?;
+        let output_storage_identity_sha256 = sha256(&canonical_json_bytes_v11(
+            &serde_json::to_value(&output_storage).map_err(|error| {
+                ControllerError::InvalidOwned(error.to_string())
+            })?,
+        )?);
+        drop(output_fd);
         let body = runner_create_body_v12(
             operation,
             handle,
@@ -3954,6 +3972,8 @@ impl PrivateDindLifecycleV12 {
                 command_sha256: command.command_sha256,
                 output_mount,
                 output_identity_sha256,
+                output_storage,
+                output_storage_identity_sha256,
                 uid: runner.execution_bounds.user_uid,
                 gid: runner.execution_bounds.user_gid,
                 created_inspect_sha256: None,
@@ -4117,6 +4137,9 @@ impl PrivateDindLifecycleV12 {
             ));
         }
         let output_fd = open_directory_fd_v12(&runner.output_mount)?;
+        runner_output_storage_v12::verify(
+            output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
+        )?;
         if directory_fd_identity_sha256_v12(output_fd.as_raw_fd())?
             != runner.output_identity_sha256
         {
@@ -4142,6 +4165,12 @@ impl PrivateDindLifecycleV12 {
             }
             retained.prestart_inspect_sha256 = Some(inspected);
         }
+        // Inspect and state publication must not hide storage drift before
+        // repository code starts. The mount and kernel caps are independent
+        // of Docker's reported bind configuration.
+        runner_output_storage_v12::verify(
+            output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
+        )?;
         let id = &runner.id;
         let start = self.docker_http_v12(
             operation,
@@ -4169,6 +4198,9 @@ impl PrivateDindLifecycleV12 {
             .ok_or(ControllerError::Invalid(
                 "Docker wait response lacks StatusCode",
             ))?;
+        runner_output_storage_v12::verify(
+            output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
+        )?;
         if directory_fd_identity_sha256_v12(output_fd.as_raw_fd())?
             != runner.output_identity_sha256
         {
@@ -4194,6 +4226,9 @@ impl PrivateDindLifecycleV12 {
             }
             other => Err(other),
         })?;
+        runner_output_storage_v12::verify(
+            output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
+        )?;
         let value: Value =
             serde_json::from_slice(&result).map_err(|_| {
                 ControllerError::Invalid(
@@ -5232,6 +5267,7 @@ impl PrivateDindLifecycleV12 {
                     "createdInspectSha256": runner.created_inspect_sha256,
                     "prestartInspectSha256": runner.prestart_inspect_sha256,
                     "outputDirectoryIdentitySha256": runner.output_identity_sha256,
+                    "outputStorageIdentitySha256": runner.output_storage_identity_sha256,
                 }))
             }).collect::<Result<Vec<Value>>>()?,
             "socketDevice": socket_metadata.dev(),
@@ -7080,6 +7116,16 @@ fn cleanup_private_dind_root_v12(
             }
         }
     }
+    // Stop and remove the generation's process cgroup before releasing any
+    // output filesystem. A busy or substituted output mount is an error, not
+    // permission to detach it lazily or recurse through its contents.
+    let cgroup = config.cgroup_root.join(format!(
+        "serverware-coder-v12-{}",
+        generation.daemon_generation,
+    ));
+    kill_cgroup(&cgroup)?;
+    remove_cgroup(&cgroup, deadline)?;
+    runner_output_storage_v12::teardown(generation_root, deadline)?;
     for mount in [
         generation_root.join("mounts/artifacts"),
         generation_root.join("mounts/source"),
@@ -7101,13 +7147,12 @@ fn cleanup_private_dind_root_v12(
         generation.daemon_generation,
     ));
     remove_socket_if_owned(&socket)?;
-    let cgroup = config.cgroup_root.join(format!(
-        "serverware-coder-v12-{}",
-        generation.daemon_generation,
-    ));
-    kill_cgroup(&cgroup)?;
-    remove_cgroup(&cgroup, deadline)?;
     if generation_root.exists() {
+        if mountinfo_contains_path_v12(generation_root)? {
+            return Err(ControllerError::Rejected(
+                "private DinD cleanup refuses to recurse through retained mounts",
+            ));
+        }
         bounded_remove_tree(
             &config.dind_root,
             generation_root,
@@ -7115,10 +7160,16 @@ fn cleanup_private_dind_root_v12(
         )?;
     }
     if let Some(owner) = generation_root.parent() {
-        if owner != config.dind_root
-            && std::fs::read_dir(owner)?.next().is_none()
-        {
-            std::fs::remove_dir(owner)?;
+        if owner != config.dind_root {
+            match std::fs::read_dir(owner) {
+                Ok(mut entries) => {
+                    if entries.next().is_none() {
+                        std::fs::remove_dir(owner)?;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
         }
     }
     Ok(())
@@ -7342,24 +7393,7 @@ fn observe_terminal_absence_v12(
 }
 
 fn mountinfo_contains_path_v12(path: &Path) -> Result<bool> {
-    let path = path_text_v12(path)?;
-    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo")?;
-    for line in mountinfo.lines() {
-        let mut fields = line.split(' ');
-        let mount_point = fields
-            .nth(4)
-            .ok_or(ControllerError::Invalid(
-                "private DinD mountinfo line is malformed",
-            ))?;
-        if mount_point == path
-            || mount_point
-                .strip_prefix(&path)
-                .is_some_and(|suffix| suffix.starts_with('/'))
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    runner_output_storage_v12::contains_mount_under(path)
 }
 
 fn validate_private_dind_config_v12(
@@ -8214,28 +8248,9 @@ fn publish_exact_private_file(
 }
 
 fn create_runner_output_v12(
-    generation_root: &Path, path: &Path, uid: u32, gid: u32,
-) -> Result<Digest> {
-    let parent = std::fs::symlink_metadata(generation_root)?;
-    if path.parent() != Some(generation_root)
-        || !parent.is_dir() || parent.uid() != 0
-        || parent.mode() & 0o777 != 0o700
-        || uid < 1000 || gid < 1000
-    {
-        return Err(ControllerError::Rejected(
-            "runner output lacks a privileged private generation parent",
-        ));
-    }
-    // Exclusive creation: an earlier attempt or retained output is never
-    // re-owned, widened, reused, or silently removed.
-    std::fs::DirBuilder::new().mode(0o700).create(path)?;
-    let directory = open_directory_fd_v12(path)?;
-    if unsafe { libc::fchown(directory.as_raw_fd(), uid, gid) } != 0
-        || unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0
-    {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    directory_fd_identity_sha256_v12(directory.as_raw_fd())
+    generation_root: &Path, path: &Path, bounds: &RunnerExecutionBoundsV12,
+) -> Result<RunnerOutputStorageV12> {
+    runner_output_storage_v12::create(generation_root, path, bounds)
 }
 
 fn read_runner_result_v12(

@@ -5,7 +5,9 @@
 The source includes a closed inventory and fixture-result contract layer. The
 separate [v12 runner-bounds checkpoint](coder-runner-bounds-v12.md) makes
 nonroot execution and resource/storage bounds part of the admitted runner
-identity, with fresh output ownership and exact pre-start container checks.
+identity, with fresh byte/inode-capped output tmpfs and exact pre-start
+container/mount checks. These aggregate limits are source-implemented, not
+verified kernel enforcement or durable host-output storage.
 The source now also includes a fixed, cooperative PostgreSQL cluster runner,
 described below. It has not been executed, does not install a PG16 test image,
 and is not wired to the controller's native output consumer. None of these
@@ -406,27 +408,33 @@ checks, is not a Unix-socket transport for these fixtures. Do not weaken the
 fixture DSN restrictions or expose a host socket to make it fit.
 
 The fixed cluster lifecycle and bounded local log capture are source-implemented
-but unverified. PG16 image construction, admitted deadlines, output quota,
-controller-bound native result consumption and authenticated controller
-cleanup are still incomplete. `RunnerIdentity.executionBounds` requires
+but unverified. PG16 image construction, admitted deadlines, actual output-mount
+enforcement verification, controller-bound native result consumption and
+authenticated controller cleanup are still incomplete. `RunnerIdentity.executionBounds` requires
 an admitted nonroot user/group, CPU, memory with no swap, PID, open-file,
-shared-memory and private writable-mount bounds. It does not choose or run a
-native-PG profile by itself. The actual Docker create/inspect/start boundary
+shared-memory, private writable-mount and aggregate output byte/inode bounds.
+It does not choose or run a native-PG profile by itself. The actual Docker create/inspect/start boundary
 and fresh per-lane output ownership are described in
 [the runner-bounds contract](coder-runner-bounds-v12.md).
 
 The fixed private workload-data mount is `/var/lib/serverware-runner`; the
 cluster manager places its fresh `PGDATA` child and WAL there. The native
 example assigns it a 2 GiB tmpfs within a 4 GiB no-swap memory limit, alongside
-64 MiB shared memory, 64 MiB `/run` and 256 MiB `/tmp`. Its other bounds are
+64 MiB shared memory, 64 MiB `/run`, 256 MiB `/tmp` and a separate 64 MiB,
+4,096-inode output tmpfs. All byte capacities participate in the checked
+memory sum; that sum is not a total-RSS, all-kernel-metadata or host-allocation
+guarantee. Its other bounds are
 UID/GID `10001:10001`, 2 CPUs, 128 PIDs and `nofile` 1024. This is not a
 measured capacity result, a host-backed database allocation, or a blanket
 user change for other runner profiles; Rust retains its own `65532:65532`
 identity. There is no host `/tmp` or unbounded private-data fallback. The
-separate writable lane-output bind is not aggregate-byte-quota-limited in
-this checkpoint; result-file read limits and tmpfs caps do not constrain
-arbitrary output writes. An independently enforced output-storage quota is
-still required before this can be a fully bounded native profile. Existing
+separate writable lane-output bind now exposes a fresh controller-owned tmpfs
+with mandatory signed byte/inode caps and `noswap,nodev,nosuid,noexec`, not an
+unbounded host directory. Actual mount/cap readback and strict unmount before
+recursive generation cleanup are source requirements, still unexecuted.
+Older signed runner identities must be reissued with these fields; the
+controller cannot silently supply defaults. This does not establish durable
+output, kernel enforcement, terminal destruction or production isolation. Existing
 runtime images are not already admitted: inherited environment, labels,
 ports, healthcheck, shell or volumes can cause the closed inspect guard to
 deny them. Future component tests on tmpfs must not claim physical power-loss

@@ -1,6 +1,7 @@
 //! Small real-FD component tests, not privileged lifecycle or Docker evidence.
 
 use super::{create_runner_output_v12, open_directory_fd_v12, read_runner_result_v12};
+use crate::plan_protocol::RunnerExecutionBoundsV12;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::Write;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -287,10 +288,18 @@ fn runner_output_rejects_standard_and_regular_file_directory_fds() {
 fn runner_output_creation_rejects_unsafe_parent_without_creating_child() {
     let task = SmallTaskDirectory::new();
     let child = task.path_for("must-not-exist");
+    let bounds = RunnerExecutionBoundsV12 {
+        user_uid: 1000, user_gid: 1000,
+        cpu_quota_micros: 1000, cpu_period_micros: 100_000,
+        memory_bytes: 256 * 1024 * 1024, pids: 16, open_files: 64,
+        shm_bytes: 16 * 1024 * 1024, run_tmpfs_bytes: 1024 * 1024,
+        tmp_tmpfs_bytes: 16 * 1024 * 1024, private_data_bytes: 16 * 1024 * 1024,
+        output_bytes: 16 * 1024 * 1024, output_inodes: 64,
+    };
     for mode in [0o755, 0o770, 0o777] {
         fs::set_permissions(&task.path, fs::Permissions::from_mode(mode)).unwrap();
-        assert_eq!(create_runner_output_v12(&task.path, &child, 1000, 1000)
-            .unwrap_err().to_string(),
+        assert_eq!(create_runner_output_v12(&task.path, &child, &bounds)
+            .err().unwrap().to_string(),
             "runner output lacks a privileged private generation parent");
         assert!(matches!(fs::symlink_metadata(&child),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound));

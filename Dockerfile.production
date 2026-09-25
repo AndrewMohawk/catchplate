@@ -112,6 +112,7 @@ ARG SOURCE_DATE_EPOCH="0"
 COPY --from=python-deps /deps /runtime/deps
 COPY --from=verified-production-source /source/serverware/authority_fd_entrypoint.py /runtime/authority-bootstrap/authority_fd_entrypoint.py
 COPY --from=verified-production-source /source/serverware/authority_launcher.py /runtime/authority-bootstrap/authority_launcher.py
+COPY --from=verified-production-source /source/serverware/registration_evidence_signer_launcher.py /runtime/authority-bootstrap/registration_evidence_signer_launcher.py
 COPY --from=verified-production-source /source/serverware /runtime/app/serverware
 COPY --from=verified-production-source /source/scripts /runtime/app/scripts
 COPY --from=verified-production-source /source/schemas /runtime/app/schemas
@@ -121,6 +122,8 @@ COPY --from=verified-production-source /source/ops/policy-custody /runtime/app/o
 COPY --from=verified-production-source /source/ops/production-readiness.env.example /runtime/app/ops/production-readiness.env.example
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody-sockets.target /runtime/app/ops/systemd/serverware-policy-custody-sockets.target
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody.target /runtime/app/ops/systemd/serverware-policy-custody.target
+COPY --from=verified-production-source /source/ops/systemd/serverware-registration-evidence.socket /runtime/app/ops/systemd/serverware-registration-evidence.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-registration-evidence.service.in /runtime/app/ops/systemd/serverware-registration-evidence.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.socket /runtime/app/ops/systemd/serverware-policy-custody@.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.service.in /runtime/app/ops/systemd/serverware-policy-custody@.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /runtime/app/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d
@@ -134,6 +137,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
     && chmod 0555 /runtime/authority-bootstrap \
     && chmod 0444 /runtime/authority-bootstrap/authority_fd_entrypoint.py \
         /runtime/authority-bootstrap/authority_launcher.py \
+        /runtime/authority-bootstrap/registration_evidence_signer_launcher.py \
     && chmod 0755 /runtime/custody-trust \
     && chmod 0750 /runtime/gate-materials \
     && find /runtime/app/ops/policy-custody /runtime/app/ops/systemd -type d -exec chmod 0555 {} + \

@@ -1,9 +1,12 @@
 # Independent registration-evidence exchange
 
-Source `.128`; implementation only, unbuilt and unexecuted. This adds the fixed
-transport, concrete signer/replay owner and genuine caller-side reconstruction.
-It does not establish an independently admitted signer launch, public enrollment,
-evidence custody, registration finalization or production readiness.
+Exchange introduced at source `.128`; implementation only, unbuilt and
+unexecuted. This adds the fixed transport, concrete signer/replay owner and
+genuine caller-side reconstruction. The separate
+[cold signer startup](registration-evidence-signer-startup.md) now implements
+root delivery and actual bootstrap/receipt admission. These source paths do not
+establish a provisioned or running signer, public enrollment, evidence custody,
+registration finalization or production readiness.
 
 ## Original bytes across the service boundary
 
@@ -91,11 +94,14 @@ the full original input bytes must match. Grant, source and evidence lifetimes
 remain distinct and live through verification. The returned typed request is
 for `webauthn.registration.evidence.admit`, not `webauthn.registration.finalize`.
 
-Independent cold signer admission, protected signer key/listener/replay delivery,
-actual signer identity/attestation and prior-publication provenance remain
-external prerequisites. The new service factory is a composition boundary, not
-proof that those prerequisites happened. A caller-supplied dictionary or key
-cannot independently establish them.
+The [cold startup path](registration-evidence-signer-startup.md) supplies fixed
+protected key/listener/replay descriptor delivery and genuine root-signed
+bootstrap/identity-receipt admission before invoking this service factory. Its
+receipt is trusted-host-local, not hardware attestation. Actual root-signed
+material, key provisioning and a stable protected replay directory remain
+deployment prerequisites; prior-publication and current-root provenance are
+not inferred from a returned source row or input codec. Neither the factory nor
+a caller-supplied dictionary or key proves that the cold admission occurred.
 
 The public operator/OIDC handlers still use legacy finalization. Root-admitted
 endpoint selection, source acquisition at that authenticated boundary, full

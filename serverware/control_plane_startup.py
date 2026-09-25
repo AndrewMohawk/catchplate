@@ -84,6 +84,11 @@ def production_release() -> bool:
 
 def validate_control_plane_configuration() -> None:
     """Validate launch-invariant configuration before starting any workers."""
+    from serverware import control_plane_custody_startup
+
+    # Production and explicitly configured development must have completed
+    # cold admission in the runner, never lazily after imports or DB startup.
+    control_plane_custody_startup.require_started()
     production = production_release()
     if PRODUCTION_IMAGE and not production:
         raise RuntimeError(

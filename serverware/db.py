@@ -2347,6 +2347,19 @@ def dispatch_policy_authority_operation(
         raise MetadataStoreError(
             "the authority runtime client cannot run in a privileged process"
         )
+    from serverware import control_plane_custody_startup
+
+    owner = control_plane_custody_startup.require_started()
+    if owner is not None:
+        # Inherited trust is admitted once before DB/event-loop descriptors
+        # exist. Reloading it here would no longer see the inherited inventory.
+        from serverware.control_plane_custody_client import ControlPlaneCustodyClient
+
+        return ControlPlaneCustodyClient._request_authority(owner,
+            operation=operation, input_value=dict(input_value))
+
+    # Preserve the unconfigured development path only. Production or explicit
+    # custody configuration cannot fall back after failed/missing cold startup.
     from serverware.authority_service import AuthorityRuntimeClient
 
     return AuthorityRuntimeClient.from_environment().request(

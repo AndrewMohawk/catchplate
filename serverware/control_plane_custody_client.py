@@ -9,8 +9,11 @@ Append and forward are separate actions. Forwarding burns the journal's durable
 ATTEMPTED marker before one relay exchange and never clears it after failure.
 An unsigned digest/time response is an observation, not a signed durability
 receipt, replay result, execution authority or permission to retry. Explicit
-reconciliation uses a separate read-only path and never clears ATTEMPTED.
-There is no automatic signing, preparation, retry, server startup or HTTP route.
+reconciliation uses a separate read-only path and never clears ATTEMPTED. A
+successful exact readback records a local observation, not execution authority.
+The cold startup owner also reuses this admission for existing legacy dispatch;
+that dispatch does not acquire custody-journal retry or durability guarantees.
+There is no automatic signing, preparation, retry or new HTTP execution route.
 """
 from __future__ import annotations
 
@@ -42,6 +45,7 @@ class _Binding:
     caller_uid: int
     caller_gid: int
     attestation_interval: tuple[int, int]
+    runtime_client: service.AuthorityRuntimeClient
 
 
 def _process(binding):
@@ -135,7 +139,7 @@ class ControlPlaneCustodyClient:
             client = object.__new__(ControlPlaneCustodyClient)
             client._binding = _Binding(owned_journal, pid, relay_path, relay_uid,
                 relay_gid, configuration_digest, maximum_deadline_ns, caller_uid, caller_gid,
-                attestation_interval)
+                attestation_interval, runtime)
             client._closed = False
             _receipt_now(_snapshot(client))
             return client
@@ -155,6 +159,35 @@ class ControlPlaneCustodyClient:
         """Durably prepare opaque raw7 only; do not forward or sign anything."""
         binding = _snapshot(self)
         return journal.CustodyJournal.append_transition(binding.journal, operation, originals)
+
+    def inventory(self):
+        """Read bounded local metadata; do not claim fresh remote authority."""
+        binding = _snapshot(self)
+        return journal.CustodyJournal.inventory(binding.journal)
+
+    def observation(self, localdigest):
+        """Read the first local readback observation, not a live receipt."""
+        binding = _snapshot(self)
+        return journal.CustodyJournal.load_observation(binding.journal, localdigest)
+
+    def _request_authority(self, *, operation, input_value):
+        """Reuse cold admission for existing legacy dispatch, without retries.
+
+        The actual runtime client retains its existing operation allowlist and
+        response verification. No custody write barrier or successor execution
+        authorization is supplied by this compatibility composition.
+        """
+        binding = _snapshot(self)
+        runtime = binding.runtime_client
+        if type(runtime) is not service.AuthorityRuntimeClient:
+            raise CustodyClientError("cold admission did not retain the actual runtime client")
+        _receipt_now(binding)
+        result = service.AuthorityRuntimeClient.request(runtime,
+            operation=operation, input_value=input_value)
+        _process(binding)
+        _receipt_now(binding)
+        journal.CustodyJournal._require_ready(binding.journal)
+        return result
 
     def forward_once(self, localdigest):
         """Claim one durable attempt, then make one fixed relay exchange.
@@ -235,6 +268,19 @@ class ControlPlaneCustodyClient:
         reconciliation._check_deadline(deadline_ns)
         if observation[:-2] != originals[2:-1]:
             raise CustodyClientError("custody reconciliation returned different original plan bytes")
+        previous = journal.CustodyJournal.load_observation(binding.journal, digest)
+        if previous is None:
+            journal.CustodyJournal.record_observation(binding.journal, digest,
+                retained_record_digest=observation[-2], retained_at_epoch_ns=observation[-1],
+                configuration_digest=binding.configuration_digest)
+        elif (previous.retained_record_digest, previous.retained_at_epoch_ns) != observation[-2:]:
+            raise CustodyClientError("fresh custody readback differs from the first durable observation")
+        # An earlier observation keeps its original configuration/source
+        # provenance even after rotation. It never substitutes for the fresh
+        # read above and is never silently rewritten to claim current trust.
+        _process(binding)
+        _receipt_now(binding)
+        reconciliation._check_deadline(deadline_ns)
         return observation
 
     def close(self):

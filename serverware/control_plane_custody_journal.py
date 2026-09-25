@@ -1,4 +1,4 @@
-"""Explicit caller-owned storage of opaque custody originals and one attempt.
+"""Caller-owned originals, one attempt and unsigned readback observations.
 
 This library is not a measured authority role, provisioner, network client or
 receipt verifier. Its caller supplies an independently provisioned private
@@ -6,6 +6,8 @@ directory. Local content identity and an ATTEMPTED marker establish neither a
 remote commit nor permission to send or retry. Published records are never
 removed. Recovery rejects unknown and temporary files rather than guessing
 whether an interrupted publication may safely be discarded.
+An OBSERVED marker records only first successful readback metadata; it is
+neither terminal business state nor authority to bypass fresh verification.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -21,6 +23,7 @@ import os
 import stat
 
 from serverware import control_plane_custody_records as records
+from serverware import control_plane_custody_observations as observations
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -28,6 +31,7 @@ MAX_QUOTA_BYTES = 8 * 1024**3
 MAX_RECORDS = 4096
 _ATTEMPT_MAGIC = b"SWCPA001"
 _ATTEMPT_BYTES = 40
+_OBSERVATION_RESERVE = observations.MAX_OBSERVATION_BYTES
 _HEX = frozenset("0123456789abcdef")
 _READ_CHUNK = 1024 * 1024
 
@@ -46,6 +50,7 @@ class JournalEntry:
     source_revision: str
     prepared_bytes: int
     attempted: bool
+    observed: bool = False
 
 
 def _integer(value, *, minimum, maximum, label):
@@ -74,9 +79,10 @@ class CustodyJournal:
     """One PID-bound, explicitly provisioned, append-only local journal.
 
     Construction completes the only recovery scan before making the owner
-    available. Quota includes forty reserved marker bytes per unattempted
-    prepared record, so a successful prepare cannot consume its own marker
-    capacity. At most twice maximum_records published files are admitted.
+    available. Quota reserves forty attempt bytes and the maximum observation
+    frame for each prepared record still missing those markers. Preparation
+    cannot consume its own marker capacity. At most three times maximum_records
+    published files are admitted; old records are never rewritten or removed.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -187,21 +193,28 @@ class CustodyJournal:
         before = self._stamp()
         prepared = {}
         attempted = set()
+        observed = set()
         count = 0
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
                 count += 1
-                if count > 2 * self._maximum_records:
+                if count > 3 * self._maximum_records:
                     raise CustodyJournalError("journal physical file limit exceeded")
                 name = entry.name
-                kind = "prepared" if name.startswith("prepared-") else "attempted"
+                if name.startswith("prepared-"):
+                    kind = "prepared"
+                elif name.startswith("attempted-"):
+                    kind = "attempted"
+                else:
+                    kind = "observed"
                 prefix = kind + "-"
                 suffix = name[len(prefix):]
                 if (not name.startswith(prefix) or len(suffix) != 64
                         or any(character not in _HEX for character in suffix)):
                     raise CustodyJournalError("journal contains an unknown or temporary file")
                 digest = "sha256:" + suffix
-                maximum = records.MAX_RECORD_BYTES if kind == "prepared" else _ATTEMPT_BYTES
+                maximum = (records.MAX_RECORD_BYTES if kind == "prepared" else
+                    _ATTEMPT_BYTES if kind == "attempted" else observations.MAX_OBSERVATION_BYTES)
                 encoded, identity = self._read_file(name,
                     maximum_bytes=min(maximum, self._quota - self._used_bytes), synchronize=True)
                 self._used_bytes += len(encoded)
@@ -214,16 +227,24 @@ class CustodyJournal:
                         record.source_revision, len(encoded), False)
                     if len(prepared) > self._maximum_records:
                         raise CustodyJournalError("journal prepared record limit exceeded")
-                else:
+                elif kind == "attempted":
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
                     attempted.add(digest)
+                else:
+                    observation = observations.decode_observation(encoded)
+                    if observation.local_digest != digest or digest in observed:
+                        raise CustodyJournalError("journal observation does not match its local record")
+                    observed.add(digest)
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
-        self._reserved_bytes = (len(prepared) - len(attempted)) * _ATTEMPT_BYTES
+        if not observed <= attempted:
+            raise CustodyJournalError("journal observation has no prepared and attempted original")
+        self._reserved_bytes = ((len(prepared) - len(attempted)) * _ATTEMPT_BYTES
+            + (len(prepared) - len(observed)) * _OBSERVATION_RESERVE)
         if self._used_bytes + self._reserved_bytes > self._quota:
-            raise CustodyJournalError("journal has insufficient reserved attempt capacity")
-        self._entries = {digest: replace(entry, attempted=digest in attempted)
+            raise CustodyJournalError("journal has insufficient reserved marker capacity")
+        self._entries = {digest: replace(entry, attempted=digest in attempted, observed=digest in observed)
             for digest, entry in prepared.items()}
         if self._stamp() != before:
             raise CustodyJournalError("journal directory changed during recovery")
@@ -246,7 +267,19 @@ class CustodyJournal:
             if (marker != _ATTEMPT_MAGIC + bytes.fromhex(digest[7:])
                     or marker_identity != self._file_identities[marker_name]):
                 raise CustodyJournalError("attempt marker changed after admitted recovery")
+        if info.observed:
+            if not info.attempted:
+                raise CustodyJournalError("observed local record has no attempt")
+            self._read_observation(digest)
         return record, encoded
+
+    def _read_observation(self, digest):
+        name = _name("observed", digest)
+        encoded, identity = self._read_file(name, maximum_bytes=observations.MAX_OBSERVATION_BYTES)
+        observation = observations.decode_observation(encoded)
+        if identity != self._file_identities[name] or observation.local_digest != digest:
+            raise CustodyJournalError("observation changed after admitted recovery")
+        return observation, encoded
 
     def _publish(self, kind, digest, encoded):
         name = _name(kind, digest)
@@ -270,14 +303,14 @@ class CustodyJournal:
                 self._io.poison()
                 raise
         if (len(self._entries) >= self._maximum_records
-                or len(encoded) + _ATTEMPT_BYTES
+                or len(encoded) + _ATTEMPT_BYTES + _OBSERVATION_RESERVE
                     > self._quota - self._used_bytes - self._reserved_bytes):
             raise CustodyJournalError("journal preparation capacity is exhausted")
         record = records.decode_prepared(encoded)
         try:
             self._publish("prepared", digest, encoded)
             self._used_bytes += len(encoded)
-            self._reserved_bytes += _ATTEMPT_BYTES
+            self._reserved_bytes += _ATTEMPT_BYTES + _OBSERVATION_RESERVE
             self._entries[digest] = JournalEntry(digest, record.family, record.selector,
                 record.source_revision, len(encoded), False)
             self._require_ready()
@@ -331,6 +364,63 @@ class CustodyJournal:
                 self._reserved_bytes -= _ATTEMPT_BYTES
                 self._entries[digest] = replace(entry, attempted=True)
                 self._require_ready()
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def record_observation(self, localdigest, *, retained_record_digest,
+            retained_at_epoch_ns, configuration_digest):
+        """Durably retain one exact successful-read observation, not authority."""
+        # The codec holds all exact immutable scalars, including current source,
+        # before the first filesystem/lease callback in this operation.
+        observation, encoded = observations.encode_observation(localdigest,
+            retained_record_digest=retained_record_digest,
+            retained_at_epoch_ns=retained_at_epoch_ns, configuration_digest=configuration_digest)
+        digest = observation.local_digest
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            entry = self._entries.get(digest)
+            if entry is None or not entry.attempted:
+                raise CustodyJournalError("readback observation requires a prepared and attempted record")
+            try:
+                self._load(digest)
+                if entry.observed:
+                    previous, original = self._read_observation(digest)
+                    if original != encoded:
+                        raise CustodyJournalError("first readback observation cannot change its exact metadata")
+                    self._require_ready()
+                    return previous
+                if (self._reserved_bytes < _OBSERVATION_RESERVE
+                        or len(encoded) > _OBSERVATION_RESERVE):
+                    raise CustodyJournalError("journal observation reservation is inconsistent")
+                self._require_ready()
+                self._publish("observed", digest, encoded)
+                self._used_bytes += len(encoded)
+                self._reserved_bytes -= _OBSERVATION_RESERVE
+                self._entries[digest] = replace(entry, observed=True)
+                self._require_ready()
+                return observation
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_observation(self, localdigest):
+        """Return first local readback metadata, or None, never remote absence."""
+        digest = _digest(localdigest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            entry = self._entries.get(digest)
+            if entry is None:
+                raise CustodyJournalError("local prepared record is absent")
+            try:
+                # This validates prepared content and any attempt/observation
+                # identities. A missing local marker is not a failed lookup.
+                self._load(digest)
+                observation = self._read_observation(digest)[0] if entry.observed else None
+                self._require_ready()
+                return observation
             except BaseException:
                 self._io.poison()
                 raise

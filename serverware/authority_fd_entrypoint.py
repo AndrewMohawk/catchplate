@@ -10,6 +10,12 @@ import sys
 
 
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
+CONTROL_PLANE_CUSTODY_CONFIG_NAME = "SERVERWARE_CONTROL_PLANE_CUSTODY_CONFIG_FD"
+CONTROL_PLANE_CUSTODY_CONFIG_SCHEMA = "serverware.controlPlaneCustodyStartup/v1"
+CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES = 16384
+CONTROL_PLANE_CUSTODY_DIRECTORY = "/var/lib/serverware/control-plane-custody"
+CONTROL_PLANE_CUSTODY_FD_MIN = 32
+CONTROL_PLANE_CUSTODY_FD_MAX = 1023
 TRUSTED_HOST_LOCAL_WITNESS_STATE_PATH = (
     "/var/lib/serverware/authority-witness"
 )
@@ -75,6 +81,10 @@ ROLE_SOURCES = {
         (
             "SERVERWARE_POLICY_AUTHORITY_RUNTIME_TRUST_FD",
             "/run/serverware/authority-trust/runtime-trust.json",
+        ),
+        (
+            CONTROL_PLANE_CUSTODY_CONFIG_NAME,
+            "/run/serverware/authority-trust/control-plane-custody.json",
         ),
     ),
     "runtime": (
@@ -353,7 +363,10 @@ def _open_source(
     path: str,
     *,
     expected_owner_uid: int,
+    maximum_bytes: int = MAX_SOURCE_BYTES,
 ) -> int:
+    if type(maximum_bytes) is not int or not 1 <= maximum_bytes <= MAX_SOURCE_BYTES:
+        raise RuntimeError("authority descriptor source bound is invalid")
     descriptor = os.open(
         path,
         os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -365,6 +378,7 @@ def _open_source(
             or metadata_before.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
             or metadata_before.st_uid != expected_owner_uid
             or metadata_before.st_nlink != 1
+            or not 0 <= metadata_before.st_size <= maximum_bytes
         ):
             raise RuntimeError("authority descriptor source is not trusted")
         value = _read_exact_source(descriptor, metadata_before.st_size)
@@ -391,6 +405,130 @@ def _open_source(
         )
     except Exception:
         os.close(descriptor)
+        raise
+
+
+def _control_plane_custody_configuration(descriptor: int) -> dict:
+    """Read only the closed root-delivered startup document, without app imports."""
+    metadata = os.fstat(descriptor)
+    seals = (fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK
+        | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE)
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0
+            or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or not 2 <= metadata.st_size <= CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES
+            or fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & seals != seals):
+        raise RuntimeError("control-plane custody startup configuration is not root-owned sealed material")
+    original = _read_exact_source(descriptor, metadata.st_size)
+    try:
+        value = json.loads(original)
+        fields = {"schema", "sourceRevision", "configurationDigest", "directoryFd",
+            "device", "inode", "uid", "gid", "quotaBytes", "maximumRecords"}
+        if type(value) is not dict or set(value) != fields:
+            raise RuntimeError("control-plane custody startup configuration is not closed")
+        if value["schema"] != CONTROL_PLANE_CUSTODY_CONFIG_SCHEMA:
+            raise RuntimeError("control-plane custody startup schema is not supported")
+        revision = value["sourceRevision"]
+        allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-"
+        if (type(revision) is not str or not 1 <= len(revision) <= 256
+                or not revision[0].isascii() or not revision[0].isalnum()
+                or any(character not in allowed for character in revision)):
+            raise RuntimeError("control-plane custody source revision is not a bounded ASCII token")
+        digest = value["configurationDigest"]
+        if (type(digest) is not str or len(digest) != 71 or not digest.startswith("sha256:")
+                or any(character not in "0123456789abcdef" for character in digest[7:])):
+            raise RuntimeError("control-plane custody configuration identity is not canonical")
+        uid, gid = ROLE_IDENTITIES["control-plane"]
+        for name, minimum, maximum in (
+            ("directoryFd", CONTROL_PLANE_CUSTODY_FD_MIN, CONTROL_PLANE_CUSTODY_FD_MAX),
+            ("device", 0, 2**64 - 1), ("inode", 1, 2**64 - 1),
+            ("uid", uid, uid), ("gid", gid, gid),
+            ("quotaBytes", 1, 8 * 1024**3), ("maximumRecords", 1, 4096),
+        ):
+            if type(value[name]) is not int or not minimum <= value[name] <= maximum:
+                raise RuntimeError("control-plane custody " + name + " is not an exact bounded scalar")
+        canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
+            separators=(",", ":"), sort_keys=True).encode("ascii")
+        if canonical != original:
+            raise RuntimeError("control-plane custody startup configuration is not original canonical JSON")
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
+        raise RuntimeError("control-plane custody startup configuration is invalid") from exc
+    return value
+
+
+def _open_control_plane_custody(
+    configuration_descriptor: int,
+    *,
+    occupied_descriptors: set[int],
+) -> tuple[int, int]:
+    """Retain the exact preprovisioned directory and sealed startup config.
+
+    This is descriptor delivery only. The cold caller still admits the full
+    runtime-root-signed inherited inventory, current configuration identity
+    and original source before acquiring the journal's real owner/lease.
+    """
+    configuration = _control_plane_custody_configuration(configuration_descriptor)
+    target = configuration["directoryFd"]
+    if target in occupied_descriptors:
+        raise RuntimeError("control-plane custody directory descriptor is already assigned")
+    owned: list[int] = []
+    try:
+        # F_DUPFD_CLOEXEC never overwrites an existing slot. A result above the
+        # requested number proves collision, even with an undeclared open FD.
+        reserved = fcntl.fcntl(configuration_descriptor, fcntl.F_DUPFD_CLOEXEC, target)
+        owned.append(reserved)
+        if reserved != target:
+            raise RuntimeError("control-plane custody directory descriptor is occupied")
+        retained_configuration = fcntl.fcntl(configuration_descriptor,
+            fcntl.F_DUPFD_CLOEXEC, CONTROL_PLANE_CUSTODY_FD_MIN)
+        owned.append(retained_configuration)
+        if retained_configuration > CONTROL_PLANE_CUSTODY_FD_MAX:
+            raise RuntimeError("control-plane custody configuration descriptor exceeds its range")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        parent = os.open("/", flags)
+        owned.append(parent)
+        # Each component is opened relative to its already checked parent.
+        # No symlink traversal or caller-selected path is allowed.
+        for component in (None, "var", "lib", "serverware"):
+            if component is not None:
+                parent = os.open(component, flags, dir_fd=parent)
+                owned.append(parent)
+            metadata = os.fstat(parent)
+            if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0
+                    or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                raise RuntimeError("control-plane custody directory ancestor is not root-owned nonwritable material")
+        directory = os.open(os.path.basename(CONTROL_PLANE_CUSTODY_DIRECTORY),
+            flags, dir_fd=parent)
+        owned.append(directory)
+        metadata = os.fstat(directory)
+        if (not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700
+                or (metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_gid)
+                != (configuration["device"], configuration["inode"],
+                    configuration["uid"], configuration["gid"])):
+            raise RuntimeError("control-plane custody directory differs from its provisioned identity")
+        # Release only our reservation, then duplicate without overwriting.
+        # If another descriptor appeared in that slot, fail and close only
+        # the new duplicate; never clobber the conflicting descriptor.
+        owned.remove(reserved)
+        os.close(reserved)
+        retained_directory = fcntl.fcntl(directory, fcntl.F_DUPFD_CLOEXEC, target)
+        owned.append(retained_directory)
+        if retained_directory != target:
+            raise RuntimeError("control-plane custody reserved directory slot changed")
+        os.set_inheritable(retained_configuration, True)
+        os.set_inheritable(retained_directory, True)
+        result = retained_configuration, retained_directory
+        for descriptor in tuple(reversed(owned)):
+            if descriptor not in result:
+                owned.remove(descriptor)
+                os.close(descriptor)
+        owned.clear()
+        return result
+    except BaseException:
+        for descriptor in reversed(owned):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         raise
 
 
@@ -902,6 +1040,9 @@ def _normal_main(role: str) -> int:
                 descriptor_name.removesuffix("_FD") + "_PATH",
                 None,
             )
+    for name in tuple(environment):
+        if name.startswith("SERVERWARE_CONTROL_PLANE_CUSTODY_"):
+            environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
     environment.pop("LISTEN_PID", None)
@@ -912,10 +1053,13 @@ def _normal_main(role: str) -> int:
     descriptors: list[int] = list(inherited_descriptors)
     descriptor_assignments: list[tuple[str, int]] = []
     launch_manifest_descriptor: int | None = None
+    custody_configuration_descriptor: int | None = None
     try:
         for environment_name, path in ROLE_SOURCES[role]:
             descriptor = (
-                _open_source(path, expected_owner_uid=0)
+                _open_source(path, expected_owner_uid=0,
+                    maximum_bytes=(CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES
+                        if environment_name == CONTROL_PLANE_CUSTODY_CONFIG_NAME else MAX_SOURCE_BYTES))
                 if role == "control-plane"
                 else _open_systemd_credential(
                     os.path.basename(path)
@@ -924,6 +1068,8 @@ def _normal_main(role: str) -> int:
             descriptors.append(descriptor)
             if role == "control-plane":
                 environment[environment_name] = str(descriptor)
+                if environment_name == CONTROL_PLANE_CUSTODY_CONFIG_NAME:
+                    custody_configuration_descriptor = descriptor
             else:
                 descriptor_assignments.append(
                     (environment_name, descriptor)
@@ -944,6 +1090,14 @@ def _normal_main(role: str) -> int:
                 )
             )
         if role == "control-plane":
+            if custody_configuration_descriptor is None:
+                raise RuntimeError("control-plane custody startup configuration is unavailable")
+            custody_configuration, custody_directory = _open_control_plane_custody(
+                custody_configuration_descriptor, occupied_descriptors=set(descriptors))
+            descriptors.extend((custody_configuration, custody_directory))
+            environment[CONTROL_PLANE_CUSTODY_CONFIG_NAME] = str(custody_configuration)
+            descriptors.remove(custody_configuration_descriptor)
+            os.close(custody_configuration_descriptor)
             environment["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
             _drop_identity(role)
             os.execve(

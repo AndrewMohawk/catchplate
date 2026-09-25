@@ -2678,6 +2678,11 @@ class KeyReleaseVerify(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
+    from serverware import control_plane_custody_startup
+
+    # The legacy PID startup marker cannot stand in for a live custody owner.
+    # Direct ASGI startup must not admit descriptors after the event loop opens.
+    control_plane_custody_startup.require_started()
     if RELEASE_CHANNEL.strip().lower() not in {
         "dev",
         "development",

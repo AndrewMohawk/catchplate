@@ -234,6 +234,11 @@ services:
       - ${SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY:?set offline WebAuthn recovery root public key}:/run/serverware/webauthn-recovery/offline-root.pub.pem:ro
       - ${SERVERWARE_AUTHORITY_RUNTIME_SOCKET_DIR:?provision runtime relay socket directory uid 65524 gid 65524}:/run/serverware/authority-runtime
       - ${SERVERWARE_AUTHORITY_RUNTIME_TRUST_DIR:?set signed runtime authority trust directory}:/run/serverware/authority-trust:ro
+      - type: bind
+        source: ${SERVERWARE_CONTROL_PLANE_CUSTODY_DIR:?preprovision private custody journal uid 65532 gid 65532 mode 0700}
+        target: /var/lib/serverware/control-plane-custody
+        bind:
+          create_host_path: false
     devices:
       - /dev/nsm:/dev/nsm
     tmpfs:

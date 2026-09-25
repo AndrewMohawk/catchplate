@@ -4525,6 +4525,47 @@ class AuthorityProcess:
         return preparation._prepare_on_work(self, purpose=purpose, request=request,
             inputs_bytes=inputs_bytes, deadline_epoch_ns=deadline_epoch_ns, work=work)
 
+    def _prepare_webauthn_registration_evidence(self, *, envelope_bytes, client_data_json,
+            attestation_object, credential_id, transports, scope, verification_context,
+            expected_authorization, published_row, oidc_session_row, deadline_epoch_ns, work):
+        """Derive the evidence request from admitted originals, then prepare raw6.
+
+        The envelope signer, ceremony/trust context, enrollment authorization
+        and selected publication/session rows still require upstream admission.
+        This is not a browser API, signing service or successful-proof adapter.
+        """
+        from serverware import authority_webauthn_evidence_invocation as invocation
+
+        request, inputs_bytes = invocation._registration_on_work(
+            envelope_bytes=envelope_bytes, client_data_json=client_data_json,
+            attestation_object=attestation_object, credential_id=credential_id,
+            transports=transports, scope=scope, verification_context=verification_context,
+            expected_authorization=expected_authorization, published_row=published_row,
+            oidc_session_row=oidc_session_row, work=work)
+        return AuthorityProcess._prepare_webauthn_evidence_custody(self,
+            purpose="registration", request=request, inputs_bytes=inputs_bytes,
+            deadline_epoch_ns=deadline_epoch_ns, work=work)
+
+    def _prepare_webauthn_installation_evidence(self, *, installation_envelope_bytes,
+            installed_bundle_bytes, installed_state_bytes, observed_at,
+            expected_committed_stage, publication_row, deadline_epoch_ns, work):
+        """Prepare installation raw6 from actual signed originals and admitted stage.
+
+        Installed bytes alone do not establish physical installation or a
+        committed stage. Those original observations and the publication row
+        remain the independent installer's and upstream owner's responsibility.
+        """
+        from serverware import authority_webauthn_evidence_invocation as invocation
+
+        request, inputs_bytes = invocation._installation_on_work(
+            installation_envelope_bytes=installation_envelope_bytes,
+            installed_bundle_bytes=installed_bundle_bytes, installed_state_bytes=installed_state_bytes,
+            observed_at=observed_at, expected_committed_stage=expected_committed_stage,
+            publication_row=publication_row, work=work)
+        return AuthorityProcess._prepare_webauthn_evidence_custody(self,
+            purpose="installation", request=request, inputs_bytes=inputs_bytes,
+            deadline_epoch_ns=deadline_epoch_ns, work=work)
+
     def _produce_webauthn_evidence_plan_request(self, *, purpose, request, inputs_bytes,
             deadline_epoch_ns, work):
         """Sign a planning request with an actual independent root snapshot.

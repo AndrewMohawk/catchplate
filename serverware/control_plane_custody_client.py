@@ -5,7 +5,12 @@ runtime trust before the journal opens its private directory handle, preserving
 the exact inherited-descriptor check. The supplied directory must already be
 open in that admitted set; this module provisions neither a directory nor trust.
 
-Append and forward are separate actions. Forwarding burns the journal's durable
+Append and forward remain available as separate actions. The explicit
+append-and-forward methods first complete the actual durable append and only
+then invoke the same one-attempt forwarding path. Their result retains the
+local record identity; ordinary post-append failures retain it in a bounded
+typed error. Cancellation still propagates, with durable IDs discoverable in
+the existing journal inventory. Forwarding burns the journal's durable
 ATTEMPTED marker before one relay exchange and never clears it after failure.
 An unsigned digest/time response is an observation, not a signed durability
 receipt, replay result, execution authority or permission to retry. Explicit
@@ -31,6 +36,30 @@ from serverware import control_plane_custody_records as records
 
 class CustodyClientError(RuntimeError):
     pass
+
+
+class CustodyForwardOutcomeError(CustodyClientError):
+    """A prepared local record exists; no forwarding outcome is established.
+
+    This does not assert that an attempt reached the network or committed.
+    Inspect the exact record's existing attempt state; only an attempted record
+    can use explicit read-only reconciliation. No retry is authorized here.
+    """
+
+    __slots__ = ("local_digest",)
+
+    def __init__(self, local_digest):
+        self.local_digest = journal._digest(local_digest)
+        super().__init__("custody forwarding outcome is not established; inspect the retained local record")
+
+
+@dataclass(frozen=True, slots=True)
+class CustodyForwardObservation:
+    """Local prepared identity plus an unsigned peer observation, not a receipt."""
+
+    local_digest: str
+    retained_record_digest: str
+    retained_at_epoch_ns: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +104,26 @@ def _snapshot(client):
     _process(binding)
     journal.CustodyJournal._require_ready(binding.journal)
     return binding
+
+
+def _forward_prepared(client, binding, local_digest):
+    """Continue only after actual append returned its durable content identity."""
+    digest = journal._digest(local_digest)
+    try:
+        if client._binding is not binding or client._closed:
+            raise CustodyClientError("custody caller changed after durable preparation")
+        observation = ControlPlaneCustodyClient.forward_once(client, digest)
+        if client._binding is not binding or client._closed:
+            raise CustodyClientError("custody caller changed during forwarding")
+        if type(observation) is not tuple or len(observation) != 2:
+            raise CustodyClientError("custody forwarding did not return its exact observation pair")
+        retained_digest, retained_at = transport.evidence._response(*observation)
+        return CustodyForwardObservation(digest, retained_digest, retained_at)
+    except Exception:
+        # Neither the original exception's text nor any original byte string
+        # enters this error. Preserve process cancellation rather than turning
+        # KeyboardInterrupt/SystemExit into an ordinary outcome error.
+        raise CustodyForwardOutcomeError(digest) from None
 
 
 class ControlPlaneCustodyClient:
@@ -159,6 +208,27 @@ class ControlPlaneCustodyClient:
         """Durably prepare opaque raw7 only; do not forward or sign anything."""
         binding = _snapshot(self)
         return journal.CustodyJournal.append_transition(binding.journal, operation, originals)
+
+    def append_and_forward_evidence(self, purpose, originals):
+        """Append actual raw6 durably, then attempt its forwarding exactly once.
+
+        Append failure propagates without forwarding. An ordinary later
+        failure exposes only CustodyForwardOutcomeError.local_digest for the
+        retained record. The unsigned result is not custody or business success.
+        """
+        binding = _snapshot(self)
+        digest = ControlPlaneCustodyClient.append_evidence(self, purpose, originals)
+        return _forward_prepared(self, binding, digest)
+
+    def append_and_forward_transition(self, operation, originals):
+        """Append actual raw7 durably, then use the unchanged one-attempt path.
+
+        Neither an existing ATTEMPTED record nor a late failure is reset or
+        retried. Cancellation propagates; local inventory retains durable IDs.
+        """
+        binding = _snapshot(self)
+        digest = ControlPlaneCustodyClient.append_transition(self, operation, originals)
+        return _forward_prepared(self, binding, digest)
 
     def inventory(self):
         """Read bounded local metadata; do not claim fresh remote authority."""

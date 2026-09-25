@@ -1,6 +1,6 @@
 # WebAuthn public admission and private preparation
 
-Current source checkpoint: `.120`. This is a source-only integration map, not
+Current source checkpoint: `.121`. This is a source-only integration map, not
 a tested import, running endpoint or deployment claim. Private preparation is
 described in [WebAuthn preparation](authority-webauthn-preparation.md); the public
 admission continuation below is still missing.
@@ -46,10 +46,16 @@ session identities, enrollment mode and authorization digest are derived from
 those checks, not accepted as browser assertions.
 
 The corresponding `/verify` routes accept `WebAuthnRegistrationFinish`:
-`label` and `response`. [`webauthn.verify_registration`](../serverware/webauthn.py)
-extracts the original client-data and attestation bytes, credential ID and
-transports; joins the unused stored challenge to user, label and authorization;
-and currently proceeds toward the legacy finalizer.
+`label` and `response`. The reusable
+[`webauthn._capture_registration_originals`](../serverware/webauthn.py) now owns
+the selected browser values and expected authorization before decode/database
+callbacks, preserves exact client-data/attestation bytes and credential/transports,
+and joins the unused stored challenge to user, label and server authorization.
+Its frozen raw-data carrier contains the actual ceremony and configured RP/origin,
+not verification success, roots, signer authority or an evaluation time.
+`verify_registration` uses this helper, then performs real cryptography,
+duplicate checking and the existing legacy finalizer; its return contract is
+unchanged. A new continuation must not accept this carrier as a proof token.
 
 A preparation continuation must instead preserve those originals and derive the
 ceremony scope, expected authorization, configured RP/origin, admitted trust-root
@@ -97,3 +103,11 @@ IDs or committed-stage authority are not admissible substitutes.
 Raw-six/raw-seven originals must enter the [caller custody journal](control-plane-custody-journal.md)
 before forwarding. This continuation grants no business mutation, reservation,
 execution, retry or historical provenance. Deployment and runtime verification remain open.
+
+The fixed private evidence-invocation assembler and verifier compositions now
+derive typed requests from original signed evidence and admitted ceremony/rows;
+see [private preparation](authority-webauthn-preparation.md). That removes caller
+request/digest construction but does not supply the missing original evidence
+signer or independent state admission. The new admin
+[custody recovery workspace](control-plane-custody-recovery.md) operates only on
+already retained local records and does not bypass this public admission work.

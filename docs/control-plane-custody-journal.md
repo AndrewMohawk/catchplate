@@ -1,7 +1,7 @@
 # Opaque caller custody journal
 
 Caller storage, private forwarding and explicit read-only reconciliation at
-authority source `.119`; unbuilt and unexecuted. Local storage remains separate
+authority source `.121`; unbuilt and unexecuted. Local storage remains separate
 from signed custody/replay authority.
 
 `control_plane_custody_records.py` encodes exact original bytes without admitting
@@ -83,6 +83,15 @@ the retained original record, refuses an unsupported source, establishes its
 deadline, durably claims ATTEMPTED, and makes one fixed relay request. A failure
 after the claim never clears it, even if no request bytes were sent. The client
 does not create an intent, obtain a relay signature or infer retry permission.
+
+The explicit `append_and_forward_evidence` and `append_and_forward_transition`
+compositions complete the actual durable append before calling this unchanged
+one-attempt path. Success returns the local digest with an unsigned peer
+observation. An ordinary post-append failure retains that exact local digest in
+`CustodyForwardOutcomeError`; cancellation propagates and the existing inventory
+remains the recovery path. Neither repeated calls nor errors clear ATTEMPTED.
+The admin [recovery API and portal workspace](control-plane-custody-recovery.md)
+provide metadata inspection and explicit readback, not forwarding or retry.
 
 ```text
 caller journal -> root-pinned runtime relay -> measured verifier

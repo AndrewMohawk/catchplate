@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.120`, implementation only. All six WebAuthn successor operations
+Status: source `.121`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -59,6 +59,14 @@ The [public admission mapping](authority-webauthn-public-admission.md) records t
 remaining registration, OIDC and trust-publication continuations. The two
 evidence-admit operations are now explicitly internal-only in API classification;
 no public role or legacy execution permission was added.
+
+Source `.121` connects original signed evidence to fixed typed-request assembly
+and the actual verifier preparation methods. Browser registration now shares
+bounded original-input/challenge capture with its existing real verifier; it
+still uses the legacy finalizer. Caller append-and-forward preserves the durable
+local identity on uncertain delivery, and an admin-only recovery API/portal
+workspace allows explicit inspection and readback without resending writes.
+These are connected source paths, not executed or production acceptance evidence.
 
 Deployed caller provisioning, public preparation/invocation and business
 successor execution remain unfinished, as do independent evidence production,

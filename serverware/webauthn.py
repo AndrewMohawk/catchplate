@@ -1269,6 +1269,198 @@ def verify_lost_active_key_revocation(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _RegistrationOriginals:
+    """Owned browser originals and ceremony scope, never verified evidence."""
+
+    client_data_json: bytes
+    attestation_object: bytes
+    credential_id: str
+    transports: tuple[str, ...]
+    scope: attestation_core.CeremonyScope
+    rp_id: str
+    origin: str
+
+
+def _registration_authorization_snapshot(value: Any) -> Any:
+    """Own bounded ordinary JSON before a decoder, database or core callback.
+
+    The existing ceremony's 64 KiB canonical authorization limit applies to
+    expected authorization too. This is ownership, not an authority ledger or
+    evidence admission; no caller object supplies serialization callbacks.
+    """
+    remaining = attestation_core.MAX_AUTHORIZATION_BYTES
+
+    def charge(size: int) -> None:
+        nonlocal remaining
+        if size > remaining:
+            raise WebAuthnError("registration authorization is oversized")
+        remaining -= size
+
+    def visit(item: Any, depth: int, ancestors: frozenset[int]) -> Any:
+        if depth > 128:
+            raise WebAuthnError("registration authorization is too deeply nested")
+        kind = type(item)
+        if item is None or kind is bool:
+            charge(4 if item is None or item is True else 5)
+            return item
+        if kind is int:
+            if item.bit_length() > 16384:
+                raise WebAuthnError("registration authorization integer is oversized")
+            try:
+                size = len(str(item))
+            except ValueError as exc:
+                raise WebAuthnError("registration authorization integer is oversized") from exc
+            charge(size)
+            return item
+        if kind is float:
+            if item != item or item in (float("inf"), float("-inf")):
+                raise WebAuthnError("registration authorization is not finite JSON")
+            charge(len(repr(item)))
+            return item
+        if kind is str:
+            if len(item) > remaining:
+                raise WebAuthnError("registration authorization text is oversized")
+            size = 2
+            for character in item:
+                point = ord(character)
+                size += (2 if character in '\"\\\b\f\n\r\t' else
+                         12 if point > 0xFFFF else
+                         6 if point < 32 or point >= 127 else 1)
+                if size > remaining:
+                    raise WebAuthnError("registration authorization text is oversized")
+            charge(size)
+            return item
+        if kind not in (dict, list) or id(item) in ancestors:
+            raise WebAuthnError("registration authorization is not an ordinary JSON tree")
+        charge(2 + max(0, len(item) - 1) + (len(item) if kind is dict else 0))
+        nested = ancestors | {id(item)}
+        if kind is dict:
+            owned = {}
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise WebAuthnError("registration authorization keys are not text")
+                owned[visit(key, depth + 1, nested)] = visit(child, depth + 1, nested)
+            return owned
+        return [visit(child, depth + 1, nested) for child in item]
+
+    return visit(value, 0, frozenset())
+
+
+def _capture_registration_originals(
+    user_id: str,
+    label: str,
+    response: dict[str, Any],
+    *,
+    require_authorization: bool = False,
+    expected_authorization: dict[str, Any] | None = None,
+) -> _RegistrationOriginals:
+    """Capture original inputs and join the server's live enrollment challenge.
+
+    This neither parses attested credentials nor verifies an attestation, loads
+    roots, samples time, signs or finalizes registration. Consumers must still
+    perform real core verification and the final duplicate/transaction checks.
+    Extra browser fields are ignored, as before; selected values are detached
+    before native decoding or database access. Authorization is retained only
+    as canonical immutable bytes in the actual CeremonyScope.
+    """
+    if (type(response) is not dict or type(user_id) is not str
+            or type(label) is not str or type(require_authorization) is not bool
+            or type(expected_authorization) not in (dict, type(None))):
+        raise WebAuthnError("registration input shape is invalid")
+    credential_id = response.get("id")
+    if type(credential_id) not in (str, type(None)):
+        raise WebAuthnError("registration response missing credential id")
+    if credential_id is None or credential_id == "":
+        credential_id = response.get("rawId")
+    if type(credential_id) is not str:
+        raise WebAuthnError("registration response missing credential id")
+    browser_data = response.get("response")
+    if type(browser_data) is not dict:
+        raise WebAuthnError("registration response data is invalid")
+    attestation_encoded = browser_data.get("attestationObject")
+    client_data_encoded = browser_data.get("clientDataJSON")
+    if type(attestation_encoded) is not str or type(client_data_encoded) is not str:
+        raise WebAuthnError("registration response originals are invalid")
+    transports_value = response.get("transports")
+    if transports_value is None:
+        transports = ()
+    elif (type(transports_value) is list and len(transports_value) <= 16
+            and all(type(item) is str for item in transports_value)):
+        transports = tuple(transports_value)
+    else:
+        raise WebAuthnError("WebAuthn transports are invalid or oversized")
+    expected = _registration_authorization_snapshot(expected_authorization)
+    rp_id, origin = WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN
+    # All remaining caller values are immutable exact scalars or the private
+    # expected-authorization graph. Do not reread response or its descendants.
+    attestation_core._text(user_id, "user_id", 4096)
+    attestation_core._text(label, "label", 4096, empty=True)
+    attestation_core._text(credential_id, "credential ID", 2048)
+    for transport in transports:
+        attestation_core._text(transport, "transport", 2048, empty=True)
+    attestation_raw = b64ud(
+        attestation_encoded,
+        maximum_bytes=MAX_ATTESTATION_OBJECT_BYTES,
+    )
+    client_data_raw = b64ud(client_data_encoded, maximum_bytes=MAX_CLIENT_DATA_JSON_BYTES)
+    client_data = attestation_core.parse_client_data(
+        client_data_raw, "webauthn.create", origin=origin,
+    )
+    challenge_value = client_data.get("challenge")
+    if type(challenge_value) is not str:
+        raise WebAuthnError("registration challenge is invalid")
+    challenge = db.get_unused_webauthn_challenge(
+        challenge_value,
+        challenge_type="registration",
+        user_id=user_id,
+    )
+    if (type(challenge) is not dict or not challenge
+            or challenge.get("approval_request_id") is not None
+            or challenge.get("challenge_type") != "registration"
+            or challenge.get("user_id") != user_id
+            or challenge.get("used_at") is not None):
+        raise WebAuthnError("registration challenge not found or expired")
+    challenge_id, stored_challenge = challenge.get("id"), challenge.get("challenge")
+    challenge_payload = challenge.get("payload")
+    if (type(challenge_payload) is not dict
+        or challenge_payload.get("type") != "registration"
+        or challenge_payload.get("user_id") != user_id
+        or challenge_payload.get("label") != label
+        or type(challenge_id) is not str or type(stored_challenge) is not str
+        or stored_challenge != challenge_value
+    ):
+        raise WebAuthnError("registration challenge scope mismatch")
+    authorization = _registration_authorization_snapshot(challenge_payload.get("authorization"))
+    if require_authorization:
+        if (type(authorization) is not dict
+                or type(authorization.get("mode")) is not str
+                or authorization["mode"] not in {
+            "bootstrap-token",
+            "development-bootstrap",
+            "existing-webauthn",
+            "oidc-session-first-enrollment",
+        }):
+            raise WebAuthnError("registration challenge lacks enrollment authorization")
+        if not isinstance(authorization.get("payload_digest"), str):
+            raise WebAuthnError("registration challenge authorization is not digest-bound")
+    if expected is not None:
+        if type(authorization) is not dict:
+            raise WebAuthnError("registration challenge lacks expected authorization")
+        for field, expected_value in expected.items():
+            if authorization.get(field) != expected_value:
+                raise WebAuthnError(
+                    f"registration challenge authorization {field} mismatch"
+                )
+    scope = attestation_core.CeremonyScope(
+        challenge_id=challenge_id, challenge=stored_challenge,
+        user_id=user_id, label=label,
+        authorization_json=attestation_core._canonical(authorization),
+    )
+    return _RegistrationOriginals(client_data_raw, attestation_raw, credential_id,
+        transports, scope, rp_id, origin)
+
+
 @trust_read_locked
 def verify_registration(
     user_id: str,
@@ -1278,62 +1470,15 @@ def verify_registration(
     require_authorization: bool = False,
     expected_authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    credential_id = response.get("id") or response.get("rawId")
-    if not isinstance(credential_id, str):
-        raise WebAuthnError("registration response missing credential id")
-    attestation_raw = b64ud(
-        response["response"]["attestationObject"],
-        maximum_bytes=MAX_ATTESTATION_OBJECT_BYTES,
-    )
-    client_data, client_data_raw = _parse_client_data(response["response"]["clientDataJSON"], "webauthn.create")
-    challenge_value = client_data.get("challenge")
-    if not isinstance(challenge_value, str):
-        raise WebAuthnError("registration challenge is invalid")
-    challenge = db.get_unused_webauthn_challenge(
-        challenge_value,
-        challenge_type="registration",
-        user_id=user_id,
-    )
-    if not challenge or challenge.get("approval_request_id") is not None:
-        raise WebAuthnError("registration challenge not found or expired")
-    challenge_payload = challenge.get("payload", {})
-    if (
-        challenge_payload.get("type") != "registration"
-        or challenge_payload.get("user_id") != user_id
-        or challenge_payload.get("label") != label
-    ):
-        raise WebAuthnError("registration challenge scope mismatch")
-    authorization = challenge_payload.get("authorization")
-    if require_authorization:
-        if not isinstance(authorization, dict) or authorization.get("mode") not in {
-            "bootstrap-token",
-            "development-bootstrap",
-            "existing-webauthn",
-            "oidc-session-first-enrollment",
-        }:
-            raise WebAuthnError("registration challenge lacks enrollment authorization")
-        if not isinstance(authorization.get("payload_digest"), str):
-            raise WebAuthnError("registration challenge authorization is not digest-bound")
-    if expected_authorization is not None:
-        if not isinstance(authorization, dict):
-            raise WebAuthnError("registration challenge lacks expected authorization")
-        for field, expected_value in expected_authorization.items():
-            if authorization.get(field) != expected_value:
-                raise WebAuthnError(
-                    f"registration challenge authorization {field} mismatch"
-                )
-    transports = response.get("transports") or []
-    if not isinstance(transports, list):
-        raise WebAuthnError("WebAuthn transports are invalid or oversized")
-    scope = attestation_core.CeremonyScope(
-        challenge_id=challenge["id"], challenge=challenge["challenge"],
-        user_id=user_id, label=label,
-        authorization_json=canonical_json(authorization).encode("ascii"),
-    )
+    authorization_required = require_authorization
+    originals = _capture_registration_originals(user_id, label, response,
+        require_authorization=authorization_required,
+        expected_authorization=expected_authorization)
+    scope = originals.scope
     parsed = attestation_core.parse_registration_data(
-        client_data_raw, attestation_raw, credential_id,
-        scope=scope, rp_id=WEBAUTHN_RP_ID, origin=WEBAUTHN_ORIGIN,
-        transports=tuple(transports),
+        originals.client_data_json, originals.attestation_object, originals.credential_id,
+        scope=scope, rp_id=originals.rp_id, origin=originals.origin,
+        transports=originals.transports,
     )
     if db.get_webauthn_credential(
         parsed.credential_id, include_revoked=True
@@ -1348,10 +1493,10 @@ def verify_registration(
     attestation_result = verified.attestation
     try:
         finalized = db.finalize_webauthn_registration(
-            challenge=challenge_value,
+            challenge=scope.challenge,
             credential_id=verified.credential_id,
-            user_id=user_id,
-            label=label,
+            user_id=scope.user_id,
+            label=scope.label,
             public_key_cose=b64u(verified.public_key_cose),
             sign_count=verified.sign_count,
             aaguid=verified.aaguid,
@@ -1372,8 +1517,8 @@ def verify_registration(
         raise WebAuthnError("registration challenge not found or expired")
     stored = finalized["credential"]
     redacted = _redact_credential(stored)
-    if require_authorization:
-        redacted["_registration_authorization"] = authorization
+    if authorization_required:
+        redacted["_registration_authorization"] = json.loads(scope.authorization_json)
     return redacted
 
 

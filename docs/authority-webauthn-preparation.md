@@ -1,6 +1,6 @@
 # Private WebAuthn custody preparation
 
-Source `.120`; implementation only, unbuilt and unexecuted. The actual verifier
+Source `.121`; implementation only, unbuilt and unexecuted. The actual verifier
 now composes live planning, historical-observation admission, retain-intent
 signing and planner-relay preparation. It returns exact originals for the caller
 journal. It does not expose a public endpoint or contact the custody writer.
@@ -29,6 +29,19 @@ historical-archive lifetime govern the complete composition. Upstream request,
 ceremony and invocation provenance are preconditions, not facts inferred from
 these arguments. In particular, a stage capability ID and completion's committed
 stage material remain independently admitted inputs.
+
+The actual verifier also exposes fixed
+`_prepare_webauthn_registration_evidence` and
+`_prepare_webauthn_installation_evidence` compositions. These take original signed
+evidence and its original ceremony/installation inputs, plus admitted publication
+and optional session rows, instead of a caller-built typed request. The
+[invocation assembler](../serverware/authority_webauthn_evidence_invocation.py)
+derives the evidence digest, selected IDs, business intent, request commitment and
+operation ID using the existing source constructors, retains exact original-input
+bytes, and immediately enters the same preparation path on the same work.
+It does not produce an evidence signature or admit the upstream rows, enrollment,
+trust snapshot or committed installation stage. No browser may supply these
+authority inputs merely because their source structures are now connected.
 
 ## Live origin of historical expectations
 
@@ -81,7 +94,10 @@ retry, custody insert, SQL privilege or legacy execution operation is added.
 The returned tuple is ordinary original-byte data, not a durable or signed writer
 receipt. The caller must durably append it using the existing
 [custody journal](control-plane-custody-journal.md), then explicitly invoke
-forwarding. Preparation itself neither appends that journal nor sends a retain
+forwarding. The caller's explicit `append_and_forward_evidence` and
+`append_and_forward_transition` methods now compose those two actions in that
+order, preserving the exact local recovery digest even on ordinary post-append
+failure. Preparation itself neither appends that journal nor sends a retain
 request. Current-root authority, logical reservation, one-use capabilities and
 atomic successor execution remain separate requirements.
 
@@ -91,6 +107,11 @@ contracts are not repurposed for this private preparation. The two evidence
 admission operations are explicitly classified internal-only; this repairs an
 API classification omission without granting them public access. No current
 application-import or startup success has been demonstrated.
+
+An admin-only [recovery API and portal workspace](control-plane-custody-recovery.md)
+expose metadata inspection and explicit readback for already attempted records.
+They cannot create a preparation, forward or repeat a retention write, or clear
+an attempt marker. This does not finish public registration or trust publication.
 
 Actual deployment, independent services, cross-source historical replay and
 consolidated frozen-build/runtime verification remain unfinished.

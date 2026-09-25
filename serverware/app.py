@@ -398,6 +398,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             request_path
             in {
                 "/api/authority/control-plane/execute",
+            "/api/authority/control-plane/custody/reconcile",
             "/api/authority/webauthn/challenges",
             "/api/data-plane/policy-candidate/artifact",
             "/api/policy/authority/candidates/package",
@@ -430,6 +431,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     request_limit = {
         "/api/authority/control-plane/execute":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
+        "/api/authority/control-plane/custody/reconcile": 256,
         "/api/authority/webauthn/challenges":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/data-plane/policy-candidate/artifact":
@@ -502,7 +504,9 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         request._body = bytes(body)
         request._stream_consumed = False
     response = await call_next(request)
-    if strict_json_request or request_path == "/api/policy/canary/status":
+    if (strict_json_request or request_path == "/api/policy/canary/status"
+            or isinstance(request_path, str)
+            and request_path.startswith("/api/authority/control-plane/custody")):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
     return response
@@ -1197,6 +1201,15 @@ class ControlledAuthorityExecuteRequest(BaseModel):
     )
     operation: str = Field(min_length=1, max_length=128)
     arguments: dict[str, Any]
+
+
+class CustodyReconcileRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    local_digest: str = Field(
+        alias="localDigest", min_length=71, max_length=71,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
 
 
 _CONTROLLED_AUTHORITY_OPERATOR_ROLES = {
@@ -6534,6 +6547,61 @@ def execute_policy_authority_operation(
                 "serverware.policyAuthorityControlledWriterInput/v1",
         },
     )
+
+
+def _control_plane_custody_response(action: str, *args: Any) -> JSONResponse:
+    from serverware import control_plane_custody_recovery as recovery
+
+    headers = {"Cache-Control": "no-store", "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff"}
+    try:
+        function = {"inventory": recovery.inventory, "inspect": recovery.inspect_record,
+            "reconcile": recovery.reconcile}[action]
+        return JSONResponse(content=function(*args), headers=headers)
+    except recovery.CustodyRecordNotFound:
+        return JSONResponse(status_code=404, headers=headers,
+            content={"detail": {"error": "local_custody_record_not_found", "remoteState": "unknown"}})
+    except recovery.CustodyRecordNotAttempted:
+        return JSONResponse(status_code=409, headers=headers,
+            content={"detail": {"error": "custody_record_not_attempted", "remoteState": "unknown"}})
+    except recovery.CustodyRecoveryUnavailable:
+        return JSONResponse(status_code=503, headers=headers,
+            content={"detail": {"error": "custody_recovery_unavailable", "remoteState": "unknown"}})
+
+
+@app.get("/api/authority/control-plane/custody")
+def control_plane_custody_inventory(
+    request: Request,
+    _: AdminIdentity = Depends(require_role("admin")),
+) -> JSONResponse:
+    if request.scope.get("query_string", b""):
+        raise HTTPException(status_code=400, detail="custody inventory does not accept a query string")
+    return _control_plane_custody_response("inventory")
+
+
+@app.get("/api/authority/control-plane/custody/{local_digest}")
+def control_plane_custody_record(
+    local_digest: str,
+    request: Request,
+    _: AdminIdentity = Depends(require_role("admin")),
+) -> JSONResponse:
+    if (request.scope.get("query_string", b"")
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", local_digest) is None):
+        raise HTTPException(status_code=400, detail="custody record requires one canonical local digest")
+    return _control_plane_custody_response("inspect", local_digest)
+
+
+@app.post("/api/authority/control-plane/custody/reconcile")
+def control_plane_custody_reconcile(
+    request: Request,
+    payload: CustodyReconcileRequest,
+    _: AdminIdentity = Depends(require_role("admin")),
+) -> JSONResponse:
+    # Readback is separate from authority execution. No caller-supplied plan body,
+    # source, key, configuration, deadline or original record enters this call.
+    if request.scope.get("query_string", b""):
+        raise HTTPException(status_code=400, detail="custody reconciliation does not accept a query string")
+    return _control_plane_custody_response("reconcile", payload.local_digest)
 
 
 @app.post("/api/authority/control-plane/execute")
@@ -19972,6 +20040,10 @@ UI_HTML = r"""
     }
     .workspace-nav a:hover,
     .workspace-nav a:focus-visible { color: var(--text); background: #eef3ef; }
+    .custody-digest { overflow-wrap: anywhere; word-break: break-word; }
+    #custody-record-detail { margin-top: 14px; }
+    #custody-record-detail dt { margin-top: 8px; color: var(--muted); }
+    #custody-record-detail dd { margin-left: 0; overflow-wrap: anywhere; }
     .token-field { width: 220px; }
     main { display: grid; grid-template-columns: 360px minmax(0, 1fr); width: 100%; min-width: 0; min-height: calc(100vh - 64px); }
     aside { grid-column: 1; grid-row: 1 / span 7; min-width: 0; border-right: 1px solid var(--line); background: #fbfcfa; padding: 18px; }
@@ -20277,6 +20349,7 @@ UI_HTML = r"""
     <a href="#policy-workspace">Policies</a>
     <a href="#approval-workspace">Approvals</a>
     <a href="#audit-workspace">Audit</a>
+    <a id="custody-nav" href="#custody-workspace" hidden>Custody recovery</a>
     <a href="#attestation-workspace">Attestation</a>
   </nav>
   <div id="operator-status" class="operator-status" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -20577,6 +20650,25 @@ UI_HTML = r"""
           <tbody id="audit-events"></tbody>
         </table>
       </section>
+      <section id="custody-workspace" aria-labelledby="custody-heading" hidden>
+        <div class="toolbar">
+          <h2 id="custody-heading" style="margin-right:auto">Custody recovery · admin only</h2>
+          <button id="custody-refresh" class="secondary" type="button" onclick="runUiAction('Custody inventory', () => custodyRequest('inventory'))">Refresh inventory</button>
+        </div>
+        <p>Local metadata and explicit readback only. An attempted delivery may have committed remotely even when its response was lost. Never resend, reset or infer remote absence here.</p>
+        <p class="muted">Observations are unsigned first-readback provenance, not business success, execution authority or a durable signed receipt. Inspect does not perform a fresh remote read. No automatic reconciliation.</p>
+        <div id="custody-status" role="status" aria-live="polite">Admin admission is required. Inventory has not been loaded.</div>
+        <table class="mobile-table">
+          <thead><tr><th>Local record</th><th>Operation / source</th><th>Prepared bytes</th><th>Local markers</th><th>Actions</th></tr></thead>
+          <tbody id="custody-records"><tr class="empty-row"><td colspan="5" class="muted">Use Refresh inventory to load metadata.</td></tr></tbody>
+        </table>
+        <div class="toolbar">
+          <button id="custody-previous" class="secondary" type="button" onclick="custodyPage(-1)" disabled>Previous</button>
+          <span id="custody-page" class="muted">No inventory loaded</span>
+          <button id="custody-next" class="secondary" type="button" onclick="custodyPage(1)" disabled>Next</button>
+        </div>
+        <div id="custody-record-detail" aria-live="polite"></div>
+      </section>
       <section id="attestation-workspace" class="attestation-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Attestation</h2>
@@ -20610,6 +20702,199 @@ UI_HTML = r"""
     const pendingMutationKey = 'serverware.pendingMutation';
     let resolvedApprovalDeepLink = null;
     let csrfToken = null;
+    const custodyPageSize = 25;
+    let custodyEpoch = 0;
+    let custodyAuthScope = null;
+    let custodyView = {records: [], loaded: false, page: 0, detail: null, busy: false,
+      message: 'Admin admission is required. Inventory has not been loaded.', error: false};
+
+    function custodyCanRequest() {
+      return Boolean(adminToken() || (state.authStatus?.authenticated === true
+        && Array.isArray(state.authStatus.roles) && state.authStatus.roles.includes('admin')));
+    }
+
+    function custodyCurrentScope() {
+      return JSON.stringify([Boolean(adminToken()), state.authStatus?.authenticated === true,
+        state.authStatus?.userId, state.authStatus?.authMethod, state.authStatus?.sessionState,
+        state.authStatus?.roles]);
+    }
+
+    function clearCustodyView(message = 'Authentication changed. Refresh inventory explicitly; server admin admission is required.') {
+      custodyEpoch += 1;
+      custodyView = {records: [], loaded: false, page: 0, detail: null, busy: false, message, error: false};
+      renderCustody();
+    }
+
+    function syncCustodyAuth() {
+      const scope = custodyCurrentScope();
+      if (scope !== custodyAuthScope) {
+        custodyAuthScope = scope;
+        clearCustodyView(custodyCanRequest()
+          ? 'Refresh inventory explicitly. Entered tokens still require server-side admin admission.'
+          : 'Admin sign-in required. No custody metadata is loaded.');
+      }
+    }
+
+    function custodyClosed(value, fields) {
+      return value !== null && typeof value === 'object' && !Array.isArray(value)
+        && Object.keys(value).length === fields.length
+        && fields.every((field) => Object.prototype.hasOwnProperty.call(value, field));
+    }
+
+    function custodyDigest(value) {
+      return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
+    }
+
+    function custodySource(value) {
+      return typeof value === 'string' && /^[\x21-\x7e]{1,256}$/.test(value);
+    }
+
+    function custodyMetadata(value) {
+      const fields = ['localDigest', 'family', 'selector', 'sourceRevision', 'preparedBytes', 'attempted', 'observed'];
+      const selectors = {evidence: ['registration', 'installation'], transition:
+        ['webauthn.registration.finalize', 'webauthn.trust.stage', 'webauthn.trust.complete']};
+      if (!custodyClosed(value, fields) || !custodyDigest(value.localDigest)
+          || typeof value.family !== 'string' || typeof value.selector !== 'string'
+          || !Object.prototype.hasOwnProperty.call(selectors, value.family)
+          || !selectors[value.family].includes(value.selector) || !custodySource(value.sourceRevision)
+          || !Number.isSafeInteger(value.preparedBytes) || value.preparedBytes < 1
+          || value.preparedBytes > 64 * 1024 * 1024 + 323
+          || typeof value.attempted !== 'boolean' || typeof value.observed !== 'boolean'
+          || (value.observed && !value.attempted)) throw new Error('Custody metadata response is malformed. Remote state remains unknown.');
+      return Object.fromEntries(fields.map((field) => [field, value[field]]));
+    }
+
+    function custodyDetail(value, digest, fresh) {
+      if (!custodyClosed(value, ['schema', 'record', 'observation', 'freshReadback'])
+          || value.schema !== 'serverware.controlPlaneCustodyRecord/v1'
+          || value.freshReadback !== fresh) throw new Error('Custody record response is malformed. Remote state remains unknown.');
+      const record = custodyMetadata(value.record);
+      if (record.localDigest !== digest || record.observed !== (value.observation !== null)
+          || (fresh && !record.observed)) throw new Error('Custody record identity changed. Remote state remains unknown.');
+      let observation = null;
+      if (value.observation !== null) {
+        const item = value.observation;
+        const fields = ['localDigest', 'retainedRecordDigest', 'retainedAtEpochNs', 'configurationDigest', 'sourceRevision'];
+        if (!custodyClosed(item, fields) || item.localDigest !== digest
+            || !custodyDigest(item.retainedRecordDigest) || !custodyDigest(item.configurationDigest)
+            || !custodySource(item.sourceRevision) || typeof item.retainedAtEpochNs !== 'string'
+            || !/^[1-9][0-9]{0,18}$/.test(item.retainedAtEpochNs)
+            || (item.retainedAtEpochNs.length === 19 && item.retainedAtEpochNs > '9223372036854775807')) {
+          throw new Error('Custody observation response is malformed. Remote state remains unknown.');
+        }
+        observation = Object.fromEntries(fields.map((field) => [field, item[field]]));
+      }
+      return {record, observation, freshReadback: fresh};
+    }
+
+    function renderCustody() {
+      const allowed = custodyCanRequest();
+      $('custody-nav').hidden = !allowed;
+      $('custody-workspace').hidden = !allowed;
+      $('custody-refresh').disabled = !allowed || custodyView.busy;
+      $('custody-status').textContent = custodyView.message;
+      $('custody-status').setAttribute('role', custodyView.error ? 'alert' : 'status');
+      const start = custodyView.page * custodyPageSize;
+      const page = custodyView.records.slice(start, start + custodyPageSize);
+      $('custody-records').innerHTML = page.map((item) => `<tr>
+        <td data-label="Local record"><code class="custody-digest">${esc(item.localDigest)}</code></td>
+        <td data-label="Operation / source">${esc(item.family)} / ${esc(item.selector)}<br><span class="muted">${esc(item.sourceRevision)}</span></td>
+        <td data-label="Prepared bytes">${esc(item.preparedBytes)}</td>
+        <td data-label="Local markers">${item.attempted ? 'Attempted — never resend' : 'Prepared — not attempted'}<br>${item.observed ? 'First unsigned observation stored' : 'No local observation; remote state unknown'}</td>
+        <td data-label="Actions"><div class="toolbar">
+          <button class="secondary" type="button" data-custody-action="inspect" data-local-digest="${esc(item.localDigest)}" ${custodyView.busy ? 'disabled' : ''}>Inspect</button>
+          <button class="secondary" type="button" data-custody-action="reconcile" data-local-digest="${esc(item.localDigest)}" ${custodyView.busy || !item.attempted ? 'disabled' : ''}>Reconcile readback</button>
+        </div></td></tr>`).join('') || `<tr class="empty-row"><td colspan="5" class="muted">${custodyView.loaded ? 'No local records. This is not proof of remote absence.' : 'Use Refresh inventory to load metadata.'}</td></tr>`;
+      $('custody-page').textContent = custodyView.loaded
+        ? `${custodyView.records.length ? start + 1 : 0}–${start + page.length} of ${custodyView.records.length} local records (maximum 4096)`
+        : 'No inventory loaded';
+      $('custody-previous').disabled = custodyView.busy || custodyView.page === 0;
+      $('custody-next').disabled = custodyView.busy || start + page.length >= custodyView.records.length;
+      const detail = custodyView.detail;
+      $('custody-record-detail').innerHTML = detail ? `<h3>Local record inspection</h3>
+        <p>${detail.freshReadback ? 'The last explicit readback matched the retained originals. This is not ongoing freshness or business success.' : 'Local inspection only; no fresh remote read was performed.'}</p>
+        <dl>${Object.entries(detail.record).map(([key, value]) => `<dt>${esc(key)}</dt><dd><code>${esc(value)}</code></dd>`).join('')}</dl>
+        <h3>First unsigned observation</h3>${detail.observation
+          ? `<p class="muted">First-observation provenance is preserved across matching fresh reads; its source and configuration are not current authority.</p><dl>${Object.entries(detail.observation).map(([key, value]) => `<dt>${esc(key)}</dt><dd><code>${esc(value)}</code></dd>`).join('')}</dl>`
+          : '<p>No local observation is stored. Remote absence, rollback and resend permission are not established.</p>'}` : '';
+    }
+
+    function custodyPage(direction) {
+      if (custodyView.busy) return;
+      const last = Math.max(0, Math.ceil(custodyView.records.length / custodyPageSize) - 1);
+      custodyView.page = Math.max(0, Math.min(last, custodyView.page + direction));
+      renderCustody();
+    }
+
+    async function custodyRequest(action, digest = null) {
+      syncCustodyAuth();
+      if (custodyView.busy) return {pending: true};
+      if (!custodyCanRequest()) throw new Error('Admin admission is required for custody recovery.');
+      if (!['inventory', 'inspect', 'reconcile'].includes(action)
+          || (action !== 'inventory' && (!custodyDigest(digest)
+            || !custodyView.records.some((item) => item.localDigest === digest
+              && (action !== 'reconcile' || item.attempted))))) throw new Error('Select an eligible local custody record.');
+      const epoch = custodyEpoch, scope = custodyAuthScope, token = adminToken();
+      const stillCurrent = () => epoch === custodyEpoch && scope === custodyCurrentScope() && token === adminToken();
+      custodyView.busy = true;
+      custodyView.detail = null;
+      custodyView.error = false;
+      custodyView.message = action === 'reconcile' ? 'Read-only reconciliation in progress. No retention resend is requested.' : 'Loading local custody metadata…';
+      renderCustody();
+      try {
+        const base = '/api/authority/control-plane/custody';
+        const value = action === 'reconcile'
+          ? await api(`${base}/reconcile`, {method: 'POST', cache: 'no-store', body: JSON.stringify({localDigest: digest})})
+          : await api(action === 'inventory' ? base : `${base}/${encodeURIComponent(digest)}`, {cache: 'no-store'});
+        if (!stillCurrent()) return {blocked: true};
+        if (action === 'inventory') {
+          if (!custodyClosed(value, ['schema', 'records', 'count'])
+              || value.schema !== 'serverware.controlPlaneCustodyInventory/v1'
+              || !Array.isArray(value.records) || value.records.length > 4096
+              || value.count !== value.records.length) throw new Error('Custody inventory response is malformed. Remote state remains unknown.');
+          const records = value.records.map(custodyMetadata);
+          if (new Set(records.map((item) => item.localDigest)).size !== records.length) throw new Error('Custody inventory repeats an identity. Remote state remains unknown.');
+          custodyView.records = records;
+          custodyView.loaded = true;
+          custodyView.page = 0;
+          custodyView.message = 'Local metadata loaded. Inspect is local-only; reconciliation requires an explicit readback action.';
+        } else {
+          const detail = custodyDetail(value, digest, action === 'reconcile');
+          custodyView.detail = detail;
+          custodyView.records = custodyView.records.map((item) => item.localDigest === digest ? detail.record : item);
+          custodyView.message = action === 'reconcile'
+            ? 'Fresh authenticated readback matched the originals. First unsigned observation preserved; no business completion or resend permission.'
+            : 'Local metadata and first observation inspected. This did not establish fresh remote state.';
+        }
+        setStatus(custodyView.message);
+        return {pending: true};
+      } catch (error) {
+        if (!stillCurrent()) {
+          if (error.status === 401 && !hasOperatorAuth()) {
+            setStatus('Custody access denied. Sign in again; remote state remains unknown.', 'error');
+          }
+          return {blocked: true};
+        }
+        if (error.status === 401 || error.status === 403) {
+          custodyView.records = [];
+          custodyView.loaded = false;
+          custodyView.page = 0;
+        }
+        custodyView.error = true;
+        custodyView.message = error.status === 401 || error.status === 403
+          ? 'Custody access denied. Refreshed admin admission is required; remote state remains unknown.'
+          : error.status === 503 ? 'Custody is not configured or is unavailable. Any prior metadata is stale; remote state remains unknown. Never resend.'
+          : error.status === 404 ? 'Local record unavailable. This is not proof of remote absence; never resend.'
+          : error.status === 409 ? 'This record is not eligible for reconciliation. Remote state remains unknown.'
+          : 'Custody request failed or returned invalid metadata. Remote state remains unknown; never resend.';
+        throw new Error(custodyView.message);
+      } finally {
+        if (stillCurrent()) {
+          custodyView.busy = false;
+          renderCustody();
+        }
+      }
+    }
     function approvalIdFromLocation() {
       const match = window.location.pathname.match(/^\/approvals\/([^/]+)$/);
       if (!match) return null;
@@ -20704,9 +20989,11 @@ UI_HTML = r"""
       $('operator-session-verify').hidden = !pendingWebAuthn;
       $('operator-sign-out').hidden = !hasBrowserSession;
       $('admin-token').hidden = authenticated;
+      syncCustodyAuth();
     }
 
     async function signInWithOIDC() {
+      clearCustodyView('Sign-in is changing. Custody metadata cleared.');
       const returnTo = `${window.location.pathname}${window.location.search}`;
       const query = new URLSearchParams({return_to: returnTo});
       const response = await fetch(`/api/auth/oidc/start?${query}`, {credentials: 'same-origin', cache: 'no-store'});
@@ -20865,6 +21152,7 @@ UI_HTML = r"""
     }
 
     async function signOutOperator() {
+      clearCustodyView('Signing out. Custody metadata cleared.');
       await sessionApi('/api/auth/logout');
       csrfToken = null;
       await fetchAuthStatus();
@@ -23662,7 +23950,19 @@ UI_HTML = r"""
       return {copied: true, principalId: packet.principalId};
     }
     $('admin-token').value = '';
+    $('admin-token').addEventListener('input', () => {
+      clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
+      syncCustodyAuth();
+    });
+    $('custody-records').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-custody-action]');
+      if (!button || button.disabled || !$('custody-records').contains(button)) return;
+      const action = button.dataset.custodyAction;
+      runUiAction(action === 'reconcile' ? 'Custody readback' : 'Custody inspection',
+        () => custodyRequest(action, button.dataset.localDigest));
+    });
     $('admin-token').addEventListener('change', async () => {
+      clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
       renderAuthStatus();
       try {
         await refresh();

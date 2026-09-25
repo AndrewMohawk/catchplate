@@ -27,6 +27,17 @@ issuer and fixed request codec on unchanged work and original time. It does not
 authenticate a raw carrier's caller or acquire source observations. Its caller
 must already have completed the actual application admission.
 
+`_EnrollmentOwner.request_registration_evidence` now composes that preparation
+with one real signer exchange and the genuine response verifier. The endpoint
+is held only from the root-signed cold bootstrap. One unchanged dual-clock
+deadline covers preparation, transport and replay, clipped to the supplied
+deadline, admitted endpoint timeout and original runtime-receipt expiry. It
+returns original evidence, a regenerated evidence-admission request and original
+verified input bytes; it acquires no source roots and authorizes no finalization.
+The admitted `0:0` peer is the system manager that created the activated listener,
+not the nonroot signer process. Actual evidence signatures and configured identity
+pins authenticate the signer independently of that socket observation.
+
 The request has exactly eight original byte strings, in this order:
 
 1. Signed source-request control.
@@ -103,7 +114,7 @@ deployment prerequisites; prior-publication and current-root provenance are
 not inferred from a returned source row or input codec. Neither the factory nor
 a caller-supplied dictionary or key proves that the cold admission occurred.
 
-The public operator/OIDC handlers still use legacy finalization. Root-admitted
-endpoint selection, source acquisition at that authenticated boundary, full
+The public operator/OIDC handlers still use legacy finalization. Public use of
+the root-admitted endpoint, source acquisition at that authenticated boundary, full
 custody/current-root successor execution, replay rollback/capacity management,
 production provisioning and exact frozen verification remain unfinished.

@@ -32,14 +32,19 @@ from serverware import authority_webauthn_enrollment_policy as enrollment_policy
 
 capability = configuration.capability
 capture, wire, plan, production = capability.capture, capability.wire, capability.plan, configuration.production
-SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v1"
-PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v1"
+# v2 adds mandatory root-admitted endpoint authority. Do not silently accept
+# a v1 payload under this exact shape, even with a current source revision.
+SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v2"
+PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v2"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_NODES = capture.MAX_TOTAL_JSON_NODES
 MAX_DEPTH = capture.MAX_JSON_DEPTH
+SIGNER_SOCKET_PATH = "/run/serverware/registration-evidence/signer.sock"
+SIGNER_LISTENER_UID = SIGNER_LISTENER_GID = 0
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "configurationDigest",
-    "configurationPayload", "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd"})
+    "configurationPayload", "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"})
+_ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _GENERATION_FIELDS = frozenset(configuration._GENERATION_FIELDS)
 _NUMBER_BYTES = frozenset(b"0123456789.eE+-")
 
@@ -59,6 +64,7 @@ class _EnrollmentMaterial:
     issuer_private_key_fd: int | None
     issuer_policy: dict | None
     issuer_public_key: object | None
+    signer_endpoint: tuple | None
 
 
 def _preflight(raw, work):
@@ -168,22 +174,43 @@ def _canonical(raw, value, work):
     return encoded
 
 
+def _signer_endpoint(value):
+    """Fixed activation-peer binding, never child signer identity admission."""
+    shape = capability.shape
+    shape._object(value, _ENDPOINT_FIELDS, "enrollment signer endpoint")
+    path, timeout = value["socketPath"], value["requestTimeoutSeconds"]
+    uid, gid = value["listenerUid"], value["listenerGid"]
+    shape._literal(path, SIGNER_SOCKET_PATH)
+    for observed, expected in ((uid, SIGNER_LISTENER_UID), (gid, SIGNER_LISTENER_GID)):
+        shape._integer(observed, 2**32 - 2)
+        if observed != expected:
+            raise EnrollmentBootstrapError("signer activated-listener peer differs from its fixed root identity")
+    if (type(timeout) not in (int, float) or not math.isfinite(timeout)
+            or not 0.05 <= timeout <= 30):
+        raise EnrollmentBootstrapError("signer endpoint request timeout exceeds its service bound")
+    # SO_PEERCRED binds the system manager's listen() identity, not the later
+    # accepting process. The evidence signature/policy binds the actual signer.
+    return path, timeout, uid, gid
+
+
 def _material(payload, expected_digest, work):
     """Consistency only; the calling entrypoint supplies root provenance."""
     configured, generation = payload["configurationPayload"], payload["generation"]
     runtime, digest, descriptor = (payload["runtimeRoleIdentities"],
         payload["configurationDigest"], payload["issuerPrivateKeyFd"])
+    endpoint = payload["signerEndpoint"]
     plan._same(digest, expected_digest, work, "bootstrap configuration differs from admitted runtime trust")
     if configured.get(enrollment_policy.FIELD) is None:
-        if descriptor is not None:
-            raise EnrollmentBootstrapError("disabled enrollment requires an absent issuer private-key descriptor")
+        if descriptor is not None or endpoint is not None:
+            raise EnrollmentBootstrapError("disabled enrollment requires absent issuer key and signer endpoint")
         owned, launch = configuration._capture_configuration_on_work(payload=configured,
             configuration_digest=digest, generation=generation, work=work)
         identities = configuration._capture_runtime_role_identities_on_work(
             runtime_role_identities=runtime, owned_payload=owned,
             configuration_digest=digest, launch=launch, work=work)
-        return _EnrollmentMaterial(owned, launch, identities, digest, None, None, None)
+        return _EnrollmentMaterial(owned, launch, identities, digest, None, None, None, None)
     capability.shape._integer(descriptor, 1023, minimum=32)
+    held_endpoint = _signer_endpoint(endpoint)
     settings = enrollment_policy._capture_on_work(payload=configured,
         configuration_digest=digest, generation=generation,
         runtime_role_identities=runtime, work=work)
@@ -191,7 +218,7 @@ def _material(payload, expected_digest, work):
     # allowlist/manifest, dedicated issuer/audience and genuine raw32/SPKI keys.
     # These original owned graphs are retained, not an overlay of role pins.
     return _EnrollmentMaterial(configured, generation, runtime, digest, descriptor,
-        settings.policy, settings.issuer_public_key)
+        settings.policy, settings.issuer_public_key, held_endpoint)
 
 
 def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
@@ -239,7 +266,7 @@ def _encode(value):
 
 
 def _produce_on_work(*, configuration_payload, generation, runtime_role_identities,
-        configuration_digest, issuer_private_key_fd, runtime_root_private_key,
+        configuration_digest, issuer_private_key_fd, signer_endpoint, runtime_root_private_key,
         runtime_root_public_key, work):
     """Produce a dedicated root statement for an independent provisioner."""
     try:
@@ -255,7 +282,8 @@ def _produce_on_work(*, configuration_payload, generation, runtime_role_identiti
             "schema": PAYLOAD_SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
             "configurationDigest": digest, "configurationPayload": configuration_payload,
             "generation": {name: generation[name] for name in configuration._GENERATION_FIELDS},
-            "runtimeRoleIdentities": runtime_role_identities, "issuerPrivateKeyFd": descriptor})
+            "runtimeRoleIdentities": runtime_role_identities, "issuerPrivateKeyFd": descriptor,
+            "signerEndpoint": signer_endpoint})
         _payload_shape(payload)
         envelope = {"schema": SCHEMA, "payload": payload, "signatureBase64Url": "A" * 86}
         _shape(envelope)

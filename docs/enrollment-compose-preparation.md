@@ -1,6 +1,6 @@
 # Preparing enrollment's single deployment artifact
 
-Source `.128`; the preparer is implemented but has not been executed. No
+Source `.130`; the preparer is implemented but has not been executed. No
 deployment artifact, rendered Compose model or production acceptance is claimed.
 
 ## Decision
@@ -30,10 +30,28 @@ The command requires:
 - `--output`: a new output file beside the fixed production Compose base.
 
 The source base is always `docker-compose.production.yml`; the only permitted
-overlay is `docker-compose.enrollment.yml`. Enabled enrollment adds exactly its
-fixed read-only private-key bind, with host-path creation disabled. Disabled
-enrollment leaves the base model unchanged and requires no dummy secret.
+overlay is `docker-compose.enrollment.yml`. Enabled enrollment adds exactly two
+fixed read-only binds, both with `create_host_path: false`:
+
+- `SERVERWARE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE` to
+  `/run/secrets/serverware-control-plane-enrollment-signing-key`.
+- `SERVERWARE_REGISTRATION_EVIDENCE_SOCKET_DIR` to
+  `/run/serverware/registration-evidence`.
+
+Both host-source interpolation variables are required and nonempty; they select
+preprovisioned mount sources, never a process/browser endpoint or a private-key
+value. The root-signed bootstrap v2 separately admits the fixed socket endpoint.
+The preparer rejects base volume targets equal to, containing, or beneath either
+fixed target, and accepts only the exact two-mount overlay. Disabled enrollment
+leaves the base model unchanged, reads no overlay and requires neither mount.
 This is a narrow merge, not a generic caller-controlled YAML overlay facility.
+
+The signer socket remains mode 0660, owner/group `65517:65532`; the control-plane
+process is `65532:65532`. On Linux, a read-only directory bind still permits
+connecting to this existing Unix socket when directory-search and socket-write
+permissions allow it. It does not permit creating or replacing the socket or
+provision the directory/listener. Actual peer checks and evidence verification
+remain mandatory; mount visibility alone grants no signing authority.
 
 The output is deterministic standalone Compose JSON with interpolation tokens
 preserved, plus `<output>.provenance.json`. The sidecar records preparation

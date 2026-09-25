@@ -124,7 +124,9 @@ def _produce_response_on_configuration(*, payload, configuration_digest, generat
 
 
 def _request_on_configuration(*, payload, configuration_digest, generation,
-        runtime_role_identities, control_bytes, context_bytes, work):
+        runtime_role_identities, control_bytes, context_bytes, work, transport_deadline_ns=None):
+    if transport_deadline_ns is not None:
+        transport._check_deadline(transport_deadline_ns)
     originals = transport._validate_request(control_bytes=control_bytes, context_bytes=context_bytes)
     configured = configuration._capture_on_work(purpose="registration", payload=payload,
         configuration_digest=configuration_digest, generation=generation,
@@ -138,8 +140,9 @@ def _request_on_configuration(*, payload, configuration_digest, generation,
     timing = {"issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     endpoint = configured.planner_endpoint
     _fresh(timing, window, configured, work)
+    io_deadline = window[4] if transport_deadline_ns is None else min(window[4], transport_deadline_ns)
     received = evidence.production._callback(work, lambda: transport._socket_request(endpoint,
-        control_bytes=originals[0], context_bytes=originals[1]))
+        control_bytes=originals[0], context_bytes=originals[1], deadline_ns=io_deadline))
     if type(received) is not tuple or len(received) != 2:
         raise WebAuthnRegistrationSourceActionError("registration source response is not its exact raw pair")
     response = transport._validate_response(*received)

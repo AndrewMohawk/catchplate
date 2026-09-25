@@ -60,6 +60,7 @@ from serverware import authority_webauthn_evidence_custody_transport as evidence
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
 from serverware import authority_webauthn_registration_source_transport as registration_source_transport
+from serverware import authority_webauthn_registration_source_caller as registration_source_caller
 from serverware import authority_webauthn_transition_transport as transition_plan_transport
 from serverware import authority_webauthn_transition_custody_transport as transition_custody_transport
 from serverware import authority_webauthn_transition_custody_read_transport as transition_custody_read_transport
@@ -3082,7 +3083,12 @@ class AuthorityRuntimeRelay:
                 )
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
             reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
-            detached = reconciling or prefix in custody_caller_transport.REQUEST_MAGICS
+            detached = (reconciling or prefix in custody_caller_transport.REQUEST_MAGICS
+                or prefix == registration_source_caller.REQUEST_MAGIC)
+            if prefix == registration_source_caller.REQUEST_MAGIC:
+                registration_source_caller._serve_relay(
+                    trust, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             if detached:
                 from serverware import authority_custody_caller_service
 
@@ -4455,7 +4461,8 @@ class AuthorityProcess:
             "registration source response generation changed")
         return result
 
-    def _request_webauthn_registration_source(self, *, control_bytes, context_bytes, work):
+    def _request_webauthn_registration_source(self, *, control_bytes, context_bytes, work,
+            transport_deadline_ns=None):
         """Authenticate the exact response before decoding and replaying its proofs.
 
         The supplied request must be the verifier's genuinely admitted live
@@ -4467,11 +4474,14 @@ class AuthorityProcess:
 
         originals = registration_source_transport._validate_request(
             control_bytes=control_bytes, context_bytes=context_bytes)
+        if transport_deadline_ns is not None:
+            registration_source_transport._check_deadline(transport_deadline_ns)
         payload, digest, generation, _dsn, _signer, runtime = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, work=work)
         result = actions._request_on_configuration(payload=payload,
             configuration_digest=digest, generation=generation, runtime_role_identities=runtime,
-            control_bytes=originals[0], context_bytes=originals[1], work=work)
+            control_bytes=originals[0], context_bytes=originals[1], work=work,
+            transport_deadline_ns=transport_deadline_ns)
         configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
         final_generation = configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
@@ -4482,7 +4492,8 @@ class AuthorityProcess:
         return result
 
     def _acquire_webauthn_registration_source(self, *, registration_challenge_id,
-            published_publication_id, oidc_session_id, deadline_epoch_ns, work):
+            published_publication_id, oidc_session_id, deadline_epoch_ns, work,
+            transport_deadline_ns=None):
         """Preserve raw4 from actual root observation through authenticated replay.
 
         No browser route or independent evidence signer is activated here.
@@ -4490,12 +4501,36 @@ class AuthorityProcess:
         must be retained for any later independent authentication and replay;
         this tuple is not a substitute for that work or for current roots.
         """
+        from serverware import authority_query_reads as reads
+        from serverware import authority_revocation_configuration as configuration
+
+        initial_configuration = self.configuration
+        owned = reads._CopyBudget(work).copy({"challenge": registration_challenge_id,
+            "publication": published_publication_id, "session": oidc_session_id,
+            "deadline": deadline_epoch_ns, "transportDeadline": transport_deadline_ns})
+        if owned["transportDeadline"] is not None:
+            registration_source_transport._check_deadline(owned["transportDeadline"])
+        initial_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        initial_generation = reads._CopyBudget(work).copy(
+            {name: initial_generation[name] for name in configuration._GENERATION_FIELDS})
         request = AuthorityProcess._produce_webauthn_registration_source_request(self,
-            registration_challenge_id=registration_challenge_id,
-            published_publication_id=published_publication_id, oidc_session_id=oidc_session_id,
-            deadline_epoch_ns=deadline_epoch_ns, work=work)
+            registration_challenge_id=owned["challenge"],
+            published_publication_id=owned["publication"], oidc_session_id=owned["session"],
+            deadline_epoch_ns=owned["deadline"], work=work)
         response = AuthorityProcess._request_webauthn_registration_source(self,
-            control_bytes=request.control_bytes, context_bytes=request.context_bytes, work=work)
+            control_bytes=request.control_bytes, context_bytes=request.context_bytes, work=work,
+            transport_deadline_ns=owned["transportDeadline"])
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        configuration.capability.plan._same(
+            tuple(initial_generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "registration source acquisition launch generation changed")
+        if self.configuration is not initial_configuration:
+            raise AuthorityServiceError("registration source acquisition configuration changed")
+        if owned["transportDeadline"] is not None:
+            registration_source_transport._check_deadline(owned["transportDeadline"])
         return request.control_bytes, request.context_bytes, response[0], response[1]
 
     def _webauthn_evidence_plan_producer(self, *, purpose, work):
@@ -9594,6 +9629,7 @@ class AuthorityServer:
                 evidence_plan_transport.REGISTRATION_REQUEST_MAGIC,
                 evidence_plan_transport.INSTALLATION_REQUEST_MAGIC,
                 registration_source_transport.REQUEST_MAGIC,
+                registration_source_caller.REQUEST_MAGIC,
                 *transition_plan_transport.REQUEST_MAGICS,
                 *transition_custody_transport.REQUEST_MAGICS,
                 *transition_custody_transport.RELAY_REQUEST_MAGICS,
@@ -9601,6 +9637,10 @@ class AuthorityServer:
                 *transition_custody_read_transport.REQUEST_MAGICS,
                 *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
             reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
+            if prefix == registration_source_caller.REQUEST_MAGIC:
+                registration_source_caller._serve_verifier(
+                    self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             if reconciling or prefix in custody_caller_transport.REQUEST_MAGICS:
                 from serverware import authority_custody_caller_service
 

@@ -50,6 +50,9 @@ MAX_PROVENANCE_BYTES = 16 * 1024
 TARGET = "/run/secrets/serverware-control-plane-enrollment-signing-key"
 SOURCE = ("${SERVERWARE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE:"
     "?set preprovisioned root-owned mode 0400 enrollment signing key file}")
+SOCKET_TARGET = "/run/serverware/registration-evidence"
+SOCKET_SOURCE = ("${SERVERWARE_REGISTRATION_EVIDENCE_SOCKET_DIR:"
+    "?set preprovisioned registration evidence signer socket directory}")
 PROVENANCE_SCHEMA = "serverware.enrollmentComposePreparation/v1"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _INTEGER = re.compile(r"-?(?:0|[1-9][0-9]*)\Z")
@@ -225,9 +228,10 @@ def _server_volumes(base):
         if target in targets:
             raise PreparationError("base serverware volumes have duplicate targets")
         targets.add(target)
-        if (target == TARGET or TARGET.startswith(target.rstrip("/") + "/")
-                or target.startswith(TARGET + "/")):
-            raise PreparationError("base volume collides with the enrollment key target")
+        for fixed_target in (TARGET, SOCKET_TARGET):
+            if (target == fixed_target or fixed_target.startswith(target.rstrip("/") + "/")
+                    or target.startswith(fixed_target + "/")):
+                raise PreparationError("base volume collides with a fixed enrollment key or signer socket target")
     return volumes
 
 
@@ -272,8 +276,9 @@ def prepare(*, bootstrap_file: Path, runtime_root_public_key_file: Path,
         runtime_root_public_key=root, expected_configuration_digest=expected_configuration_digest,
         work=work)
     enabled = admitted.issuer_policy is not None
-    if enabled != (admitted.issuer_private_key_fd is not None):
-        raise PreparationError("admitted enrollment policy and key slot disagree")
+    if (enabled != (admitted.issuer_private_key_fd is not None)
+            or enabled != (admitted.signer_endpoint is not None)):
+        raise PreparationError("admitted enrollment policy, key slot and signer endpoint disagree")
     yaml = _parser()
     base = _load_yaml(base_bytes, yaml)
     volumes = _server_volumes(base)
@@ -283,11 +288,13 @@ def prepare(*, bootstrap_file: Path, runtime_root_public_key_file: Path,
         overlay = _load_yaml(overlay_bytes, yaml)
         expected = {"services": {"serverware": {"volumes": [{"type": "bind",
             "source": SOURCE, "target": TARGET, "read_only": True,
+            "bind": {"create_host_path": False}}, {"type": "bind",
+            "source": SOCKET_SOURCE, "target": SOCKET_TARGET, "read_only": True,
             "bind": {"create_host_path": False}}]}}}
         # Canonical comparison also distinguishes bools from integers.
         if _canonical(overlay, MAX_OVERLAY_BYTES) != _canonical(expected, MAX_OVERLAY_BYTES):
-            raise PreparationError("enrollment overlay differs from its one fixed read-only bind")
-        volumes.append(overlay["services"]["serverware"]["volumes"][0])
+            raise PreparationError("enrollment overlay differs from its two fixed read-only binds")
+        volumes.extend(overlay["services"]["serverware"]["volumes"])
     compose_bytes = _canonical(base, MAX_OUTPUT_BYTES)
     provenance = {"schema": PROVENANCE_SCHEMA,
         "sourceRevision": bootstrap.authority.SOURCE_REVISION,

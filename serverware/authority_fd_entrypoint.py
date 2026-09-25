@@ -17,8 +17,8 @@ CONTROL_PLANE_CUSTODY_DIRECTORY = "/var/lib/serverware/control-plane-custody"
 CONTROL_PLANE_CUSTODY_FD_MIN = 32
 CONTROL_PLANE_CUSTODY_FD_MAX = 1023
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME = "SERVERWARE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD"
-CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v1"
-CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v1"
+CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v2"
+CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v2"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
 CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES = 4096
 CONTROL_PLANE_ENROLLMENT_KEY_NAME = "serverware-control-plane-enrollment-signing-key"
@@ -460,7 +460,7 @@ def _control_plane_enrollment_key_slot(descriptor: int) -> int | None:
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != {"schema", "sourceRevision",
                 "configurationDigest", "configurationPayload", "generation",
-                "runtimeRoleIdentities", "issuerPrivateKeyFd"}
+                "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
                 or payload["schema"] != CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA):
             raise RuntimeError("control-plane enrollment bootstrap payload is not closed")
         signature = value["signatureBase64Url"]

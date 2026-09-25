@@ -179,6 +179,98 @@ class _EnrollmentOwner:
         _live(self)
         return self._private_key is not None
 
+    def request_registration_evidence(self, originals, *, source_originals,
+            verified_at, deadline_epoch_ns, work, deadline_ns=None):
+        """Issue once, exchange once, and return genuinely replayed raw evidence.
+
+        Enrollment and source-acquisition authority remain caller prerequisites.
+        The endpoint and configuration come only from this cold root-admitted
+        owner; no browser/caller field can select them. This neither retries a
+        grant/exchange nor performs custody or registration finalization.
+        """
+        _require_pid()
+        with _LOCK:
+            from serverware import webauthn
+            from serverware import authority_webauthn_enrollment_issuer as issuer
+            from serverware import authority_webauthn_registration_signer_client as client
+
+            material, binding = self._material, self._binding
+            if self._private_key is None or material is None or material.signer_endpoint is None:
+                raise EnrollmentStartupError("registration evidence requests are disabled or closed")
+            endpoint, digest = material.signer_endpoint, material.configuration_digest
+            skew = material.issuer_policy["maximumClockSkewNs"]
+            receipt_expiry = binding.attestation_interval[1]
+            instant, deadline, original_deadline = verified_at, deadline_epoch_ns, deadline_ns
+            if type(instant) is not datetime or instant.tzinfo is not timezone.utc:
+                raise EnrollmentStartupError("evidence request requires the unchanged original UTC time")
+            issuer.evidence.plan.contract._integer(deadline, minimum=1)
+            if original_deadline is not None:
+                issuer.evidence.plan.contract._integer(original_deadline, minimum=1)
+            if type(source_originals) is not tuple or len(source_originals) != 4:
+                raise EnrollmentStartupError("evidence request requires exact original source four")
+            source = (client.wire.source_request._raw2(source_originals[0], source_originals[1])
+                + client.wire.source_response._raw2(source_originals[2], source_originals[3]))
+            if type(originals) is not webauthn._RegistrationOriginals:
+                raise EnrollmentStartupError("evidence request requires the real original-input carrier")
+            scope = originals.scope
+            if type(scope) is not issuer.production.attestation.CeremonyScope:
+                raise EnrollmentStartupError("evidence request requires the original ceremony scope")
+            raw_client, raw_attestation, transports = issuer.authorization._originals(
+                originals.client_data_json, originals.attestation_object, originals.transports)
+            authorization_bytes = scope.authorization_json
+            if (type(authorization_bytes) is not bytes
+                    or not 2 <= len(authorization_bytes) <= issuer.authorization.MAX_BYTES
+                    or sum(len(raw) for raw in source) + len(raw_client) + len(raw_attestation)
+                        + client.wire.REQUEST_MINIMUMS[4] + client.wire.REQUEST_MINIMUMS[7]
+                        > client.wire.MAX_BYTES):
+                raise EnrollmentStartupError("evidence request originals exceed their fixed bounds")
+            ledger = issuer.evidence.capture._SharedLedger(work)
+            work.prepare_copy(transports)
+            held = issuer.authorization._capture({"credentialId": originals.credential_id,
+                "transports": list(transports), "challengeId": scope.challenge_id,
+                "challenge": scope.challenge, "userId": scope.user_id, "label": scope.label,
+                "rpId": originals.rp_id, "origin": originals.origin}, work)
+            payload = issuer.configuration._ConfigurationCapture(ledger,
+                maximum_bytes=issuer.authority.MAX_REQUEST_BYTES).visit(material.configuration_payload)
+            generation = issuer.evidence.capture._JSONCapture(ledger).visit(material.generation)
+            runtime = issuer.evidence.capture._JSONCapture(ledger,
+                maximum_bytes=8192).visit(material.runtime_role_identities)
+            held_endpoint = client.transport._endpoint(endpoint)
+            work.prepare_copy(held["transports"])
+            held_transports = tuple(held["transports"])
+            # All original browser/source/configuration/cohort values and the
+            # admitted endpoint are held before the first actual clock/native
+            # callback. This single opening also charges preparation time.
+            window = issuer.authorization.clock._open_on_work(
+                deadline_epoch_ns=min(deadline, receipt_expiry),
+                maximum_lifetime_ns=int(held_endpoint[1] * 1_000_000_000),
+                maximum_clock_skew_ns=skew, work=work)
+            clipped_deadline, monotonic_deadline = window[3], window[4]
+            if original_deadline is not None:
+                monotonic_deadline = min(monotonic_deadline, original_deadline)
+            callback = issuer.evidence.production._callback
+            callback(work, lambda: client.transport._check_deadline(monotonic_deadline))
+            _live(self, work=work)
+            issuer.authorization.clock._check_on_work(window, work=work)
+            held_scope = issuer.production.attestation.CeremonyScope(
+                held["challengeId"], held["challenge"], held["userId"], held["label"],
+                authorization_bytes, _work=work)
+            captured = webauthn._RegistrationOriginals(raw_client, raw_attestation,
+                held["credentialId"], held_transports, held_scope, held["rpId"], held["origin"])
+            request = _EnrollmentOwner.prepare_registration_signer_request(self, captured,
+                source_originals=source, verified_at=instant,
+                deadline_epoch_ns=clipped_deadline, work=work)
+            issuer.authorization.clock._check_on_work(window, work=work)
+            callback(work, lambda: client.transport._check_deadline(monotonic_deadline))
+            result = client._request_on_configuration(payload=payload,
+                configuration_digest=digest, generation=generation,
+                runtime_role_identities=runtime, endpoint=held_endpoint,
+                request_originals=request, deadline_ns=monotonic_deadline, work=work)
+            _live(self, work=work)
+            issuer.authorization.clock._check_on_work(window, work=work)
+            callback(work, lambda: client.transport._check_deadline(monotonic_deadline))
+            return result
+
     def prepare_registration_signer_request(self, originals, *, source_originals,
             verified_at, deadline_epoch_ns, work):
         """Issue the real grant and frame raw eight, without sending anything.

@@ -53,6 +53,13 @@ names (`SERVERWARE_REGISTRATION_SIGNER_ROOT_PUBLIC_KEY_FD=198` and
 `webauthn-registration-evidence-signer`, and fixed interpreter environment.
 There is no ambient key, DSN, root-path or generic authority-role fallback.
 
+In the other direction, the control plane pins the activated listener's
+`SO_PEERCRED` identity to `0:0`, not the later signer process's `65517:65517`.
+Linux records that peer identity at `listen()`; changing the socket pathname's
+owner does not change it. This is a system-manager transport binding, not proof
+of signer identity. Genuine evidence-signature and configured signer-identity
+verification remain mandatory. See the primary [Linux Unix-socket documentation](https://www.man7.org/linux/man-pages/man7/unix.7.html).
+
 The fixed isolated launcher is
 `/runtime/authority-bootstrap/registration_evidence_signer_launcher.py`.
 Its only modes are `--root-delivery` and `--run`; it supplies only the fixed

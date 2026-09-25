@@ -1,7 +1,7 @@
 # WebAuthn public admission and private preparation
 
-Current source checkpoint: `.128`. This is a source-only integration map, not
-a tested import, running endpoint or deployment claim. Private preparation is
+Current source checkpoint: `.130`. This is a source-only integration map, not a
+tested import, running endpoint or deployment claim. Private preparation is
 described in [WebAuthn preparation](authority-webauthn-preparation.md); the public
 admission continuation below is still missing.
 
@@ -109,8 +109,72 @@ marker before evidence signing. Protected key delivery and the fixed cold issuer
 owner now exist in [enrollment startup](control-plane-enrollment-startup.md);
 the private [signer exchange](registration-evidence-signer-exchange.md) adds
 original-byte transport, real signing/replay ownership and caller verification.
-Independent signer launch and public orchestration are still missing. Neither source-role signatures nor the generic response key
-supplies enrollment authority. Public routes remain on their legacy continuation.
+The dedicated [.129 signer cold-start path](registration-evidence-signer-startup.md)
+now supplies protected five-FD delivery, genuine bootstrap/receipt admission,
+the fixed nonroot accept owner and uninstalled service templates. Its original
+receipt expiry and existing replay domain are not renewed by a restart. Actual
+independent provisioning, deployment and public orchestration remain unfinished.
+Neither source-role signatures nor the generic response key supplies enrollment
+authority. Public routes remain on their legacy continuation.
+
+## Private caller-to-verifier source bridge
+
+The fixed [registration source caller bridge](../serverware/authority_webauthn_registration_source_caller.py)
+uses the existing control-plane → runtime relay → verifier topology. Both
+listeners admit their actual configured Unix peer before the request prefix;
+the verifier does not acquire a new direct control-plane peer. The canonical
+request is closed to `schema`, `sourceRevision`, `registrationChallengeId`,
+`publishedPublicationId`, `oidcSessionId` and `deadlineEpochNs`, with a separate
+configuration-digest transport binding. It carries no caller roots, signer,
+DSN, generation or replacement work allowance.
+
+The actual `ControlPlaneCustodyClient.request_registration_source` accepts only
+the three selectors, original epoch deadline, shared work and optional inherited
+absolute transport deadline; its endpoint comes from the admitted binding.
+The relay forwards the bounded original request without treating selectors as
+enrollment authority. After exact request EOF, the verifier uses one original
+work allowance to call its actual `_acquire_webauthn_registration_source`:
+independent verifier roots, authenticated planner read, and genuine source-proof
+replay. The result is four original byte strings (request control/context,
+response control/source bytes), not a transferable successful-proof token.
+Configuration/generation continuity and original receipt/deadline bounds remain
+mandatory; the dedicated signer independently authenticates and replays that
+same exchange before signing.
+
+This bridge does not connect the browser `/verify` routes. Their authenticated
+capture derives the live challenge ID and the actual pending-OIDC session ID
+(or no session). The new fixed
+[`db.observe_published_webauthn_trust_publication_id`](../serverware/db.py)
+uses one bounded read to join the global published row to the
+`webauthn-metadata` high-water tuple (rollback epoch, publication sequence/digest
+and metadata-blob digest), rejects pending, absent or ambiguous state, and returns
+only its bounded ID. It performs no lock, repair or write. That observed selector
+is still only a lookup input: the source exchange must verify the selected rows
+and their proofs, and neither lookup nor root observation reserves current state.
+
+Server-owned enrollment authorization, publication selection, complete
+finalization populations, signed evidence preparation and journal-before-forward
+custody still need a complete authenticated public continuation. The bridge
+neither consumes a grant nor writes custody, finalizes a credential or enables
+successor execution.
+
+The private [`prepare_registration_evidence(originals)`](../serverware/control_plane_registration_preparation.py)
+now composes the existing cold owners, candidate publication lookup and that
+source bridge with real enrollment issuance and signer-response verification:
+
+```text
+already authenticated ceremony originals
+  -> server publication selector -> verifier roots + planner source proofs
+  -> original UTC verification instant -> dedicated enrollment grant
+  -> independent signer -> genuine caller-side evidence/input replay
+  -> evidence-admission inputs (not a registered credential)
+```
+
+It derives any OIDC session selector from original canonical authorization and
+accepts no time, endpoint, key, root, configuration or work-budget override. One
+original request window reaches both private transports without renewal. It
+does not authenticate a raw-input carrier or call either public handler, and
+does not durably retain the resulting originals or forward a custody request.
 
 ## Trust stage and completion have different prerequisites
 

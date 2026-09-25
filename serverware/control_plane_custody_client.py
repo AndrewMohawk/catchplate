@@ -211,6 +211,44 @@ class ControlPlaneCustodyClient:
                 pass
             raise
 
+    def request_registration_source(self, *, registration_challenge_id,
+            published_publication_id, oidc_session_id, deadline_epoch_ns, work,
+            deadline_ns=None):
+        """Acquire raw four over the admitted relay, without signing or custody.
+
+        Authentication and selector derivation belong to the real application;
+        a publication lookup is an observation, not independent provenance.
+        The returned bytes require genuine signature and membership replay by
+        the next configured consumer. No caller endpoint or new allowance.
+        """
+        from serverware import authority_webauthn_registration_source_caller as source
+
+        binding = _snapshot(self)
+        original = source._produce_request_on_work(
+            registration_challenge_id=registration_challenge_id,
+            published_publication_id=published_publication_id, oidc_session_id=oidc_session_id,
+            deadline_epoch_ns=deadline_epoch_ns, work=work)
+        callback = source.request.evidence.production._callback
+        before = callback(work, time.monotonic_ns)
+        now = callback(work, lambda: _receipt_now(binding))
+        source.request.evidence.plan.contract._integer(deadline_epoch_ns, minimum=1)
+        bound = min(before + binding.maximum_deadline_ns,
+            before + min(deadline_epoch_ns, binding.attestation_interval[1]) - now)
+        if deadline_ns is not None:
+            source._check_deadline(deadline_ns)
+            bound = min(bound, deadline_ns)
+        source._check_deadline(bound)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("registration source caller changed before exchange")
+        originals = callback(work, lambda: source._socket_request(binding.relay_path,
+            configuration_digest=binding.configuration_digest, request_bytes=original,
+            deadline_ns=bound, expected_peer_uid=binding.relay_uid, expected_peer_gid=binding.relay_gid))
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("registration source caller changed during exchange")
+        callback(work, lambda: _receipt_now(binding))
+        source._check_deadline(bound)
+        return source._originals(originals)
+
     def append_evidence(self, purpose, originals):
         """Durably prepare opaque raw6 only; do not forward or sign anything."""
         binding = _snapshot(self)

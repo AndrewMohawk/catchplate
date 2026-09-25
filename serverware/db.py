@@ -80858,6 +80858,47 @@ def get_pending_webauthn_trust_publication() -> dict[str, Any] | None:
     return _row_to_webauthn_trust_publication(row) if row else None
 
 
+def observe_published_webauthn_trust_publication_id() -> str:
+    """Observe one server-side selector, not authenticated or reserved state.
+
+    This read performs no publication repair, locking or write. A subsequent
+    signed source exchange must still authenticate the selected publication
+    and high-water rows and their exact join; the ID alone grants no authority.
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT publication.id
+            FROM webauthn_trust_publication_high_water AS high_water
+            JOIN webauthn_trust_publications AS publication
+              ON publication.rollback_epoch = high_water.rollback_epoch
+             AND publication.sequence = high_water.publication_sequence
+             AND publication.bundle_digest = high_water.publication_digest
+             AND publication.payload_digest = high_water.metadata_blob_digest
+            WHERE high_water.authority_scope = 'webauthn-metadata'
+              AND publication.scope = 'global'
+              AND publication.status = 'published'
+              AND NOT EXISTS (
+                  SELECT 1 FROM webauthn_trust_publications
+                  WHERE status = 'pending'
+              )
+            LIMIT 2
+            """
+        ).fetchall()
+    if len(rows) != 1:
+        raise MetadataStoreError("WebAuthn published trust selector is unavailable or ambiguous")
+    publication_id = rows[0]["id"]
+    if (type(publication_id) is not str or not 1 <= len(publication_id) <= 4096
+            or "\x00" in publication_id):
+        raise MetadataStoreError("WebAuthn published trust selector is not bounded exact text")
+    try:
+        if len(publication_id.encode("utf-8")) > 4096:
+            raise MetadataStoreError("WebAuthn published trust selector exceeds its byte bound")
+    except UnicodeError as exc:
+        raise MetadataStoreError("WebAuthn published trust selector is not Unicode") from exc
+    return publication_id
+
+
 def record_webauthn_trust_publication_error(
     publication_id: str, error: str
 ) -> None:

@@ -1,6 +1,8 @@
 # Optional production overlay: select only for enabled enrollment authorization.
 # Preprovision the original signing key as a root-owned, single-link regular
 # file with mode 0400. The root entrypoint seals it into the signed FD slot.
+# Preprovision the activated signer socket directory separately; the read-only
+# directory bind permits connecting to its group-writable Unix socket.
 # The signed bootstrap remains in the existing authority-trust directory mount.
 # This mount neither generates credentials nor establishes production readiness.
 services:
@@ -9,6 +11,12 @@ services:
       - type: bind
         source: ${SERVERWARE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE:?set preprovisioned root-owned mode 0400 enrollment signing key file}
         target: /run/secrets/serverware-control-plane-enrollment-signing-key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SERVERWARE_REGISTRATION_EVIDENCE_SOCKET_DIR:?set preprovisioned registration evidence signer socket directory}
+        target: /run/serverware/registration-evidence
         read_only: true
         bind:
           create_host_path: false

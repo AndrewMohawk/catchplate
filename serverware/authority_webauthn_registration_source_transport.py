@@ -82,7 +82,7 @@ def _send_response(connection, originals, *, deadline_ns):
     _check_deadline(deadline_ns)
 
 
-def _socket_request(endpoint, *, control_bytes, context_bytes):
+def _socket_request(endpoint, *, control_bytes, context_bytes, deadline_ns=None):
     """Return the original response pair from one configured peer.
 
     The endpoint is exactly (path, timeout_seconds, expected_peer_uid,
@@ -104,7 +104,11 @@ def _socket_request(endpoint, *, control_bytes, context_bytes):
     if any(type(value) is not int or not 0 <= value <= 0xFFFFFFFF
             for value in (expected_peer_uid, expected_peer_gid)):
         raise AuthorityTransportError("registration source peer identity is invalid")
-    deadline_ns = _deadline_ns(timeout_seconds)
+    bounded_deadline = _deadline_ns(timeout_seconds)
+    if deadline_ns is not None:
+        _check_deadline(deadline_ns)
+        bounded_deadline = min(bounded_deadline, deadline_ns)
+    deadline_ns = bounded_deadline
     header = REQUEST_MAGIC + b"".join(len(raw).to_bytes(8, "big") for raw in originals)
     _check_deadline(deadline_ns)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.103`, implementation only. All six WebAuthn successor operations
+Status: source `.104`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -13,10 +13,63 @@ inputs and full evaluation context and genuinely replay them before signing and
 after signature verification. All source remains unbuilt and unexecuted.
 An optional signed policy now maps these three operations to their real read,
 signed-production and configured raw-four verification owners through private
-service factories. Authenticated invocation/transport, custody and
-successor-execution integration remain unfinished; independent authority and
-release gates remain. The three transition operations now also have genuine
-configured verifier root observation, not continuing root-currentness authority.
+service factories. The three transitions now have an authenticated private
+planning exchange backed by genuine independent verifier root observations.
+Public invocation, durable custody and successor execution remain unfinished;
+independent authority and release gates remain. Root observations do not hold
+roots current for later execution.
+
+## Authenticated private transition planning
+
+Source `.104` joins the existing signed plans and independent root reader into
+an actual private verifier-to-planner exchange. This is source implementation,
+not a tested serving claim. The preparation method owns the typed request,
+original evaluation time/deadline and separately admitted invocation history
+before measured callbacks. It reads and projects genuine primary and full
+potential counted roots, then signs the original request context and input bytes.
+Registration has an empty invocation object; stage binds its capability ID;
+completion binds its independently committed stage. No request invents a
+database cutoff or supplies a successful proof result.
+
+```text
+verifier: admitted originals + independent primary/count root read
+    -> signed request control + original request context + original inputs
+planner: authenticate -> configured read/acquire -> proof replay -> sign
+    -> signed response control + original envelope/proof/inputs/plan context
+verifier: authenticate all byte bindings -> request/policy joins -> full replay
+```
+
+Dedicated request and response schemas separate this exchange from evidence
+admission and legacy protocols. The response binds the original request control
+and all four returned originals; its expiry is exactly the request expiry.
+The planner authenticates the complete request before constructing its actual
+producer. A fixed original-input bridge dispatches only the three real family
+methods. A separate live deadline clips the signed plan window without rewriting
+the original evaluation instant, invocation deadline, candidate verification
+time or configured plan-age policy.
+
+The client authenticates the response control before decoding returned plan
+context. It joins the request, complete roots/count heads, original input bytes,
+invocation history, original times and measured policy, bounds the planner's
+cutoff observation, and invokes genuine raw-four signature/proof/semantic
+replay. A returned cutoff remains a planner observation, not independent
+historical authority. Neither an ordinary result record nor signed context
+replaces this work.
+
+Three dedicated eight-byte request prefixes select only these operations at
+the real planner socket, ahead of legacy JSON routing. Raw-three requests and
+raw-five responses retain the existing aggregate bound, pinned Unix peers,
+absolute transport deadlines and exact EOF requirements. One source allowance
+covers server authentication, acquisition, replay and signing. Measured service
+generation is rechecked after root acquisition, request signing, production and
+response verification. There is no automatic retry or custody forwarding.
+
+No database privileges or public business-execution gates are widened. Durable
+raw-four custody, independent historical resolution, current-root admission,
+reservation/capability/atomic execution and recovery remain separate unfinished
+work. Independent infrastructure and consolidated frozen-build verification
+remain required; all current source is unbuilt and unexecuted. The older
+revision-specific sections below preserve their original evidence boundaries.
 
 ## Genuine successor program selection
 

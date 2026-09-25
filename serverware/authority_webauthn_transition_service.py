@@ -8,7 +8,9 @@ no request chooses keys,
 policy, descriptor names, callbacks or a replacement work allowance.
 
 The factories do not open SQL or enable public operations. The explicit root
-read performs only its separately admitted read-only acquisition. Historical
+read performs only its separately admitted read-only acquisition. Dedicated
+live exchange methods authenticate and replay original planning bytes, with no
+custody, reservation, business execution or automatic retry. Historical
 handoff expectations are owned before all launch/key callbacks and must be
 independently admitted upstream, never adopted from received context bytes.
 """
@@ -30,16 +32,21 @@ def _operation(value):
     return value
 
 
-def _context_on_work(process, *, operation, kind, work):
-    """Own one actual measured configuration before real admission callbacks."""
+def _measured_context_on_work(process, *, role, signing, read_descriptor, work):
+    """Hold measured inputs for one fixed local role before any callbacks."""
     # The service imports these private boundaries lazily after its genuine
     # classes exist; this fixed reverse import does not create a startup cycle.
     from serverware import authority_service as service
 
-    operation = _operation(operation)
-    if type(kind) is not str or kind not in ("reader", "producer", "verifier", "roots"):
-        raise service.AuthorityServiceError("transition service factory is not source fixed")
-    role = "verifier" if kind in ("verifier", "roots") else "planner"
+    planner_dsn = "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"
+    verifier_dsn = "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"
+    if (type(role) is not str or type(signing) is not bool
+            or type(read_descriptor) not in (str, type(None))
+            or (role, signing, read_descriptor) not in (
+                ("planner", False, planner_dsn), ("planner", True, planner_dsn),
+                ("verifier", False, None), ("verifier", False, verifier_dsn),
+                ("verifier", True, verifier_dsn))):
+        raise service.AuthorityServiceError("transition service context is not source fixed")
     if (type(process) is not service.AuthorityProcess or process.role_name != role
             or process.process_mode != "policy-authority-" + role):
         raise service.AuthorityServiceError("transition service process is not configured")
@@ -47,15 +54,9 @@ def _context_on_work(process, *, operation, kind, work):
     if type(measured) is not service.MeasuredConfiguration:
         raise service.AuthorityServiceError("transition measured configuration is unavailable")
     payload, digest = measured.payload, measured.digest
-    private = process.signing_key if kind == "producer" else None
-    if kind == "producer" and not isinstance(private, service.Ed25519PrivateKey):
-        raise service.AuthorityServiceError("transition planner signer is unavailable")
-    mapper = {
-        "reader": mapping._planner_from_configuration_on_work,
-        "producer": mapping._producer_from_configuration_on_work,
-        "verifier": mapping._verifier_from_configuration_on_work,
-        "roots": root_mapping._reader_from_configuration_on_work,
-    }[kind]
+    private = process.signing_key if signing else None
+    if signing and not isinstance(private, service.Ed25519PrivateKey):
+        raise service.AuthorityServiceError("transition service signer is unavailable")
     ledger = configuration.capability.capture._SharedLedger(work)
     configuration.capability.shape._digest(digest)
     if type(payload) is not dict:
@@ -63,18 +64,38 @@ def _context_on_work(process, *, operation, kind, work):
     owned = configuration._ConfigurationCapture(
         ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
     configuration.production._callback(work, lambda: service.authority_launch_guard.require_active(role))
-    arguments = {"operation": operation, "payload": owned, "configuration_digest": digest, "work": work}
-    if kind != "verifier":
-        descriptor = ("SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN" if kind == "roots"
-            else "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN")
-        arguments["read_dsn"] = configuration.production._callback(work,
-            lambda: service._read_dsn_descriptor(descriptor))
-    if kind == "producer":
-        arguments["planner_private_key"] = private
+    dsn = (None if read_descriptor is None else configuration.production._callback(work,
+        lambda: service._read_dsn_descriptor(read_descriptor)))
     # No process/configuration/descriptor lookup follows this final snapshot.
     # The fixed selected mapper immediately owns and checks its seven bindings.
-    arguments["generation"] = configuration.production._callback(
+    generation = configuration.production._callback(
         work, lambda: dict(service.authority_launch_guard.generation()))
+    return owned, digest, generation, dsn, private
+
+
+def _context_on_work(process, *, operation, kind, work):
+    """Own one actual measured configuration before real admission callbacks."""
+    operation = _operation(operation)
+    if type(kind) is not str or kind not in ("reader", "producer", "verifier", "roots"):
+        raise ValueError("transition service factory is not source fixed")
+    role = "verifier" if kind in ("verifier", "roots") else "planner"
+    descriptor = (None if kind == "verifier" else
+        "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN" if kind == "roots"
+        else "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN")
+    mapper = {
+        "reader": mapping._planner_from_configuration_on_work,
+        "producer": mapping._producer_from_configuration_on_work,
+        "verifier": mapping._verifier_from_configuration_on_work,
+        "roots": root_mapping._reader_from_configuration_on_work,
+    }[kind]
+    owned, digest, generation, dsn, private = _measured_context_on_work(process,
+        role=role, signing=kind == "producer", read_descriptor=descriptor, work=work)
+    arguments = {"operation": operation, "payload": owned, "configuration_digest": digest,
+        "generation": generation, "work": work}
+    if kind != "verifier":
+        arguments["read_dsn"] = dsn
+    if kind == "producer":
+        arguments["planner_private_key"] = private
     return mapper, arguments
 
 
@@ -104,6 +125,98 @@ def _generation_on_work(value, work):
     configuration.capability.shape._bounded_object(value, 20, "transition root launch context")
     return configuration.capability.capture._JSONCapture(ledger).visit(
         {name: value[name] for name in configuration._GENERATION_FIELDS})
+
+
+def _require_generation_on_work(role, generation, work):
+    from serverware import authority_service as service
+
+    configuration.production._callback(work, lambda: service.authority_launch_guard.require_active(role))
+    final = configuration.production._callback(work, lambda: dict(service.authority_launch_guard.generation()))
+    configuration.capability.plan._same(generation, _generation_on_work(final, work), work,
+        "transition planning generation changed")
+
+
+def _produce_request_on_work(process, *, operation, request, inputs_bytes,
+        now_epoch_ns, deadline_epoch_ns, invocation, work):
+    """Sign admitted original inputs and genuine independent root observations.
+
+    This private preparation does not send anything. Upstream must admit the
+    request, original evaluation instant, capability or committed-stage history;
+    possession of a JSON object cannot supply that provenance.
+    """
+    from serverware import authority_webauthn_transition_actions as actions
+
+    operation = _operation(operation)
+    original_inputs = inputs_bytes
+    plan.proof.wire._raw(original_inputs, 2, plan.proof.wire.MAX_BYTES)
+    owned = configuration.capability.capture._JSONCapture(
+        configuration.capability.capture._SharedLedger(work),
+        maximum_bytes=plan.contract.MAX_BYTES).visit({"request": request,
+            "nowEpochNs": now_epoch_ns, "deadlineEpochNs": deadline_epoch_ns,
+            "invocation": invocation})
+    request_owned = root_contract._capture_request_on_work(
+        request=owned["request"], operation=operation, work=work)
+    for name in ("nowEpochNs", "deadlineEpochNs"):
+        configuration.capability.shape._integer(owned[name], minimum=1)
+    if owned["nowEpochNs"] >= owned["deadlineEpochNs"]:
+        raise ValueError("transition planning invocation has no positive lifetime")
+    payload, digest, generation, dsn, private = _measured_context_on_work(process,
+        role="verifier", signing=True,
+        read_descriptor="SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN", work=work)
+    held_generation = _generation_on_work(generation, work)
+    reader = root_mapping._reader_from_configuration_on_work(operation=operation,
+        payload=payload, configuration_digest=digest, generation=held_generation, read_dsn=dsn, work=work)
+    inventory = root_reader.TransitionRootReader.read(reader, request=request_owned, work=work)
+    business, authorization, heads = root_contract._project_on_work(
+        inventory, operation=operation, request=request_owned, work=work)
+    _require_generation_on_work("verifier", held_generation, work)
+    result = actions._produce_request_on_configuration(operation=operation,
+        payload=payload, configuration_digest=digest, generation=held_generation,
+        request=request_owned, business_before_roots=business,
+        authorization_before_roots=authorization, counted_before_heads=heads,
+        inputs_bytes=original_inputs, now_epoch_ns=owned["nowEpochNs"],
+        deadline_epoch_ns=owned["deadlineEpochNs"], invocation=owned["invocation"],
+        verifier_private_key=private, work=work)
+    _require_generation_on_work("verifier", held_generation, work)
+    return result
+
+
+def _request_plan_on_work(process, *, operation, control_bytes, context_bytes, inputs_bytes, work):
+    """Send original request bytes and replay the authenticated raw-four reply."""
+    from serverware import authority_webauthn_transition_actions as actions
+    from serverware import authority_webauthn_transition_transport as transport
+
+    operation = _operation(operation)
+    originals = transport._validate_request(control_bytes=control_bytes,
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes)
+    payload, digest, generation, _dsn, _private = _measured_context_on_work(process,
+        role="verifier", signing=False, read_descriptor=None, work=work)
+    held_generation = _generation_on_work(generation, work)
+    result = actions._request_plan_on_configuration(operation=operation,
+        payload=payload, configuration_digest=digest, generation=held_generation,
+        control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2], work=work)
+    _require_generation_on_work("verifier", held_generation, work)
+    return result
+
+
+def _produce_plan_on_work(process, *, operation, control_bytes, context_bytes, inputs_bytes, work):
+    """Authenticate a request before actual configured read, replay and signing."""
+    from serverware import authority_webauthn_transition_actions as actions
+    from serverware import authority_webauthn_transition_transport as transport
+
+    operation = _operation(operation)
+    originals = transport._validate_request(control_bytes=control_bytes,
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes)
+    payload, digest, generation, dsn, private = _measured_context_on_work(process,
+        role="planner", signing=True,
+        read_descriptor="SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN", work=work)
+    held_generation = _generation_on_work(generation, work)
+    result = actions._produce_plan_on_configuration(operation=operation,
+        payload=payload, configuration_digest=digest, generation=held_generation,
+        control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2],
+        read_dsn=dsn, planner_private_key=private, work=work)
+    _require_generation_on_work("planner", held_generation, work)
+    return result
 
 
 def _read_roots_on_work(process, *, operation, request, work):

@@ -88,9 +88,19 @@ def _evidence_expiry(raw, purpose, work):
     return value["expiresAtEpochNs"]
 
 
-def _open(configured, owned, expires, work):
+def _live_cap(value):
+    if value is not None:
+        evidence.plan.contract._integer(value, minimum=1)
+    return value
+
+
+def _open(configured, owned, expires, work, live_deadline_epoch_ns=None):
     evidence.plan.contract._integer(expires, minimum=1)
-    window = clock._open_on_work(deadline_epoch_ns=min(owned["deadlineEpochNs"], expires),
+    cap = _live_cap(live_deadline_epoch_ns)
+    deadline = min(owned["deadlineEpochNs"], expires)
+    if cap is not None:
+        deadline = min(deadline, cap)
+    window = clock._open_on_work(deadline_epoch_ns=deadline,
         maximum_lifetime_ns=configured[8], maximum_clock_skew_ns=configured[2][-1], work=work)
     if abs(owned["nowEpochNs"] - window[0]) > configured[2][-1]:
         raise WebAuthnTransitionPlanOwnerError("original evaluation time differs from the live opening sample")
@@ -180,8 +190,10 @@ class TransitionPlanOwner:
         return configured
 
     def produce_registration(self, *, request, business_before_roots, authorization_before_roots,
-            expected_counted_heads, now_epoch_ns, deadline_epoch_ns, work):
+            expected_counted_heads, now_epoch_ns, deadline_epoch_ns, work,
+            live_deadline_epoch_ns=None):
         configured = self._snapshot(planning.registration.OPERATION)
+        live_cap = _live_cap(live_deadline_epoch_ns)
         owned = planning._capture(configured[0], request=request,
             business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
             expected_counted_heads=expected_counted_heads, now_epoch_ns=now_epoch_ns,
@@ -190,7 +202,7 @@ class TransitionPlanOwner:
             owned["request"]["arguments"]["attestation_envelope_base64url"], evidence.MAX_EVIDENCE_BYTES, work)
         expiry = _evidence_expiry(original, "registration-attestation", work)
         reader = _read_owner(configured)
-        window = _open(configured, owned, expiry, work)
+        window = _open(configured, owned, expiry, work, live_cap)
         inputs_bytes = planning.registration_replay._encode_inputs_on_work(work=work)
         inputs_digest = planning.originals._digest_on_work(inputs_bytes, work)
         clock._check_on_work(window, work=work)
@@ -203,8 +215,10 @@ class TransitionPlanOwner:
 
     def produce_stage(self, *, request, business_before_roots, authorization_before_roots,
             expected_counted_heads, assertion_evidence, capability_id, candidate_bundle_bytes,
-            candidate_verification_context, now_epoch_ns, deadline_epoch_ns, work):
+            candidate_verification_context, now_epoch_ns, deadline_epoch_ns, work,
+            live_deadline_epoch_ns=None):
         configured = self._snapshot(planning.stage.OPERATION)
+        live_cap = _live_cap(live_deadline_epoch_ns)
         original = planning._raw(candidate_bundle_bytes, 1, planning.candidate.bundle_core.MAX_INPUT_BYTES)
         context_fields = planning._hold_candidate(candidate_verification_context)
         owned = planning._capture(configured[0], request=request,
@@ -218,7 +232,7 @@ class TransitionPlanOwner:
         if planning.registration._now(context_fields[2]) != owned["nowEpochNs"]:
             raise WebAuthnTransitionPlanOwnerError("original candidate time differs from the evaluation instant")
         reader = _read_owner(configured)
-        window = _open(configured, owned, owned["inputs"]["assertion"]["expiresAtEpochNs"], work)
+        window = _open(configured, owned, owned["inputs"]["assertion"]["expiresAtEpochNs"], work, live_cap)
         held_context = planning.candidate.bundle_core.TrustVerificationContext(*context_fields, _work=work)
         inputs_bytes = planning.stage_replay._encode_inputs_on_work(
             assertion_evidence=owned["inputs"]["assertion"], candidate_bundle_bytes=original,
@@ -236,8 +250,10 @@ class TransitionPlanOwner:
 
     def produce_completion(self, *, request, business_before_roots, authorization_before_roots,
             expected_counted_heads, installation_envelope_bytes, installed_bundle_bytes, installed_state_bytes,
-            expected_committed_stage, now_epoch_ns, deadline_epoch_ns, work):
+            expected_committed_stage, now_epoch_ns, deadline_epoch_ns, work,
+            live_deadline_epoch_ns=None):
         configured = self._snapshot(planning.completion.OPERATION)
+        live_cap = _live_cap(live_deadline_epoch_ns)
         raw = (planning._raw(installation_envelope_bytes, 2, evidence.MAX_EVIDENCE_BYTES),
             planning._raw(installed_bundle_bytes, 2, planning.completion.bundle_core.MAX_INSTALLATION_BYTES),
             planning._raw(installed_state_bytes, 2, planning.completion.bundle_core.MAX_STATE_BYTES))
@@ -249,7 +265,7 @@ class TransitionPlanOwner:
             "independently committed stage")
         expiry = _evidence_expiry(raw[0], "trust-installation", work)
         reader = _read_owner(configured)
-        window = _open(configured, owned, expiry, work)
+        window = _open(configured, owned, expiry, work, live_cap)
         inputs_bytes = planning.completion_replay._encode_inputs_on_work(installation_envelope_bytes=raw[0],
             installed_bundle_bytes=raw[1], installed_state_bytes=raw[2], work=work)
         inputs_digest = planning.originals._digest_on_work(inputs_bytes, work)
@@ -262,3 +278,71 @@ class TransitionPlanOwner:
             expected_committed_stage=owned["inputs"]["committedStage"], now_epoch_ns=owned["nowEpochNs"],
             deadline_epoch_ns=owned["deadlineEpochNs"], work=work)
         return _finish(configured, owned, acquired, inputs_bytes, inputs_digest, window, work)
+
+    def produce_originals(self, *, request, business_before_roots, authorization_before_roots,
+            expected_counted_heads, inputs_bytes, now_epoch_ns, deadline_epoch_ns,
+            invocation, work, live_deadline_epoch_ns=None):
+        """Decode actual family originals, then invoke its genuine fixed producer.
+
+        The enclosing signed-request receiver supplies authenticated invocation
+        data. Neither this byte codec nor a prior-success carrier replaces the
+        real acquisition and proof replay performed by the family producer.
+        """
+        if type(self) is not TransitionPlanOwner:
+            raise WebAuthnTransitionPlanOwnerError("transition plan owner type changed")
+        configured = _configuration(self._configured)
+        cap = _live_cap(live_deadline_epoch_ns)
+        original = planning._raw(inputs_bytes, 2, planning.originals.wire.MAX_BYTES)
+        owned = planning._capture(configured[0], request=request,
+            business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+            expected_counted_heads=expected_counted_heads, now_epoch_ns=now_epoch_ns,
+            deadline_epoch_ns=deadline_epoch_ns, inputs=invocation, work=work)
+        operation = configured[0]
+        fields = (frozenset() if operation == planning.registration.OPERATION else
+            frozenset({"capabilityId"}) if operation == planning.stage.OPERATION else
+            frozenset({"committedStage"}))
+        evidence.plan.contract._object(owned["inputs"], fields, "authenticated transition invocation")
+        # Reconstruct from held configuration before any decoder/native call;
+        # subsequent mutation of the original owner's slots cannot retarget it.
+        private_owner = TransitionPlanOwner(read_planner=_read_owner(configured),
+            planner_private_key=configured[3], planner_public_key=configured[4],
+            expected_planner_identity=dict(zip(_IDENTITY_FIELDS, configured[5])),
+            expected_planner_spki_digest=configured[6], configuration_digest=configured[7],
+            maximum_plan_age_ns=configured[8])
+        digest = planning.originals._digest_on_work(original, work)
+        common = {"request": owned["request"], "business_before_roots": owned["businessBeforeRoots"],
+            "authorization_before_roots": owned["authorizationBeforeRoots"],
+            "expected_counted_heads": owned["expectedCountedHeads"], "now_epoch_ns": owned["nowEpochNs"],
+            "deadline_epoch_ns": owned["deadlineEpochNs"], "live_deadline_epoch_ns": cap, "work": work}
+        if operation == planning.registration.OPERATION:
+            decoded = planning.originals._decode_on_work(operation, original, digest, work)
+            evidence.plan.contract._object(decoded, frozenset(), "registration original inputs")
+            result = TransitionPlanOwner.produce_registration(private_owner, **common)
+        elif operation == planning.stage.OPERATION:
+            decoded = planning.originals._decode_on_work(operation, original, digest, work)
+            instant = planning.stage_replay._inputs_shape(decoded, work)
+            context = decoded["candidateVerificationContext"]
+            core, wire = planning.candidate.bundle_core, planning.originals.wire
+            bundle = wire._unpack_raw(decoded["candidateBundle"], minimum=1,
+                maximum=core.MAX_INPUT_BYTES, work=work)
+            public_der = wire._unpack_raw(context["publicKeyDer"], minimum=1,
+                maximum=core.MAX_PUBLIC_KEY_BYTES, work=work)
+            schema = wire._unpack_raw(context["schema"], minimum=1,
+                maximum=core.MAX_SCHEMA_BYTES, work=work)
+            if planning.registration._now(instant) != owned["nowEpochNs"]:
+                raise WebAuthnTransitionPlanOwnerError("original candidate time differs from the evaluation instant")
+            evidence.plan._same(core.sha256_prefixed(public_der, _work=work), configured[2][5], work,
+                "original candidate DER differs from the configured signing key")
+            held_context = core.TrustVerificationContext(public_der, schema, instant, _work=work)
+            result = TransitionPlanOwner.produce_stage(private_owner, **common,
+                assertion_evidence=decoded["assertionEvidence"], capability_id=owned["inputs"]["capabilityId"],
+                candidate_bundle_bytes=bundle, candidate_verification_context=held_context)
+        else:
+            raw = planning.completion_replay._decode_inputs_on_work(original, digest, work)
+            result = TransitionPlanOwner.produce_completion(private_owner, **common,
+                installation_envelope_bytes=raw[0], installed_bundle_bytes=raw[1], installed_state_bytes=raw[2],
+                expected_committed_stage=owned["inputs"]["committedStage"])
+        work.charge(input_bytes=len(original) + len(result.inputs_bytes))
+        if original != result.inputs_bytes:
+            raise WebAuthnTransitionPlanOwnerError("transition production changed the original input bytes")
+        return result

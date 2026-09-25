@@ -57,6 +57,7 @@ from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_webauthn_evidence_custody_transport as evidence_custody_transport
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
+from serverware import authority_webauthn_transition_transport as transition_plan_transport
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_transition_policy as transition_policy
 from serverware import authority_webauthn_trust
@@ -4004,6 +4005,31 @@ class AuthorityProcess:
         from serverware import authority_webauthn_transition_service as transitions
 
         return transitions._read_roots_on_work(self, operation=operation, request=request, work=work)
+
+    def _produce_webauthn_transition_plan_request(self, *, operation, request, inputs_bytes,
+            now_epoch_ns, deadline_epoch_ns, invocation, work):
+        """Prepare signed originals using independently read primary/count roots."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._produce_request_on_work(self, operation=operation, request=request,
+            inputs_bytes=inputs_bytes, now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns,
+            invocation=invocation, work=work)
+
+    def _request_webauthn_transition_plan(self, *, operation, control_bytes,
+            context_bytes, inputs_bytes, work):
+        """Exchange an original request and replay its signed raw-four response."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._request_plan_on_work(self, operation=operation,
+            control_bytes=control_bytes, context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
+
+    def _produce_webauthn_transition_plan(self, *, operation, control_bytes,
+            context_bytes, inputs_bytes, work):
+        """Authenticate original request bytes before read-only plan production."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._produce_plan_on_work(self, operation=operation,
+            control_bytes=control_bytes, context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
 
     def _webauthn_evidence_planner(self, *, purpose, work):
         """Construct one private purpose-pinned read owner, without opening SQL.
@@ -8826,6 +8852,27 @@ class AuthorityServer:
         evidence_plan_transport._check_deadline(deadline_ns)
         evidence_plan_transport._send_response(connection, response, deadline_ns=deadline_ns)
 
+    def _serve_webauthn_transition_plan(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Serve a peer-checked successor request without legacy JSON routing."""
+        process = self.process
+        if (type(process) is not AuthorityProcess or process.role_name != "planner"
+                or process.process_mode != "policy-authority-planner"):
+            raise AuthorityServiceError("transition planning request has the wrong service role")
+        operation, originals = transition_plan_transport._recv_request(
+            connection, prefix=prefix, deadline_ns=deadline_ns)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        # Fixed bounded framing and EOF precede this one source allowance.
+        # Configuration, authentication, read, proof and signing share it.
+        work = _ValidationWork(QueryReadValidationLimits())
+        transition_plan_transport._check_deadline(deadline_ns)
+        response = AuthorityProcess._produce_webauthn_transition_plan(process,
+            operation=operation, control_bytes=originals[0], context_bytes=originals[1],
+            inputs_bytes=originals[2], work=work)
+        transition_plan_transport._check_deadline(deadline_ns)
+        transition_plan_transport._send_response(connection, response, deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -8850,7 +8897,8 @@ class AuthorityServer:
                 evidence_custody_read_transport.REGISTRATION_FORWARD_MAGIC,
                 evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC,
                 evidence_plan_transport.REGISTRATION_REQUEST_MAGIC,
-                evidence_plan_transport.INSTALLATION_REQUEST_MAGIC)
+                evidence_plan_transport.INSTALLATION_REQUEST_MAGIC,
+                *transition_plan_transport.REQUEST_MAGICS)
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
@@ -8880,6 +8928,9 @@ class AuthorityServer:
             if prefix in (evidence_plan_transport.REGISTRATION_REQUEST_MAGIC,
                     evidence_plan_transport.INSTALLATION_REQUEST_MAGIC):
                 self._serve_webauthn_evidence_plan(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix in transition_plan_transport.REQUEST_MAGICS:
+                self._serve_webauthn_transition_plan(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

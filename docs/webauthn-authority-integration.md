@@ -1,10 +1,10 @@
 # Completing the WebAuthn authority transitions
 
-Status: source `.103`, implementation only, not an enabled public protocol or
+Status: source `.104`, implementation only, not an enabled public protocol or
 migration. All six WebAuthn successor operations now have genuine configured
 programs in the separate `typed-successor-planning` registry. Legacy `KERNELS` and
-`PLANNING_PROGRAMS`, service routing, SQL execution and witness admission exclude
-them. This closes the source program inventory; import/runtime startup has not
+`PLANNING_PROGRAMS`, legacy service routing, SQL execution and witness admission
+exclude them. This closes the source program inventory; import/runtime startup has not
 been tested. Database admission and external authority requirements remain.
 
 Revocation and the two evidence-admission programs select actual configured
@@ -16,6 +16,33 @@ They share the existing guarded transaction scope and work allowance.
 None of these registrations supplies public invocation, successor
 reservation/capability/atomic execution, physical readback or production
 readiness. All source is unbuilt and unexecuted.
+
+Source `.104` connects these three transitions through authenticated private
+planning. The verifier preparation owns the request, raw inputs, original
+evaluation time/deadline and invocation history before measured callbacks,
+acquires genuine independent primary/full-count roots, and signs the original
+request context and input commitment. Stage binds a capability ID; completion
+binds the independently committed stage. The context has no fabricated cutoff.
+
+The planner authenticates that signed raw-three request before constructing the
+actual configured producer and dispatching the genuine family computation. A
+separate live-window deadline caps signed-plan expiry without retiming original
+inputs or changing historical invocation policy. The signed response binds the
+original request control and all four plan/proof/inputs/context originals, with
+exact original request expiry. The client authenticates these byte bindings
+before decoding returned context, joins all request/root/head/input/history and
+configuration pins, bounds planner cutoff observations, and performs the actual
+raw-four signature/proof/semantic replay.
+
+Dedicated fixed framing is wired into the measured planner socket before
+legacy JSON routing, with pinned peers, aggregate limits, absolute deadlines,
+exact EOF and one shared source allowance. Service generation is checked after
+root reads and every completed exchange action. This is read-only planning:
+no automatic custody, business mutation, reservation, capability issuance or
+retry follows. Public invocation, durable custody, independent historical
+resolution, current-root/reservation/capability/atomic execution and recovery
+remain unfinished, along with infrastructure and frozen-build verification.
+The revision-specific records below describe their original checkpoints.
 
 Source `.103` supplies the independent root-observation prerequisite for these
 three transitions. The actual verifier reader owns the typed request and checks

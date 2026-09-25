@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.101`, implementation only. All six WebAuthn successor operations
+Status: source `.102`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -11,8 +11,10 @@ signed-plan owners and fixed registry `plan_factory` entries. Their base factori
 remain read-acquisition owners. The new plans commit canonical original proofs,
 inputs and full evaluation context and genuinely replay them before signing and
 after signature verification. All source remains unbuilt and unexecuted.
-Service-configuration, invocation, custody and successor-execution integration
-for these three signed plans remains unfinished; independent authority and
+An optional signed policy now maps these three operations to their real read,
+signed-production and configured raw-four verification owners through private
+service factories. Authenticated invocation/transport, custody and
+successor-execution integration remain unfinished; independent authority and
 release gates remain.
 
 ## Genuine successor program selection
@@ -42,6 +44,47 @@ Their separate fixed `plan_factory` entries construct the actual
 public invocation, successor reservation, one-use capability, authorized atomic
 execution, recovery or independent production infrastructure. Earlier revision
 sections below describe their respective source checkpoints, not later closure.
+
+## Signed transition policy and configured handoff
+
+Source `.102` adds optional `webauthnTransitions`, schema
+`serverware.policyAuthorityWebAuthnTransitionPolicy/v1`, with exactly the
+`registration`, `stage` and `completion` slots. Absence grants no transition
+authority; null disables that fixed operation. Each enabled slot pins its actual
+operation, explicit canonical Ed25519 raw key/SPKI and bounded evidence/assertion
+age, clock skew and plan age. Registration pins signer identity and RP/origin
+equal to the configured WebAuthn values; completion pins installer identity and
+target. Stage pins the candidate signing-key ID and exact development/approval
+flags. It deliberately has no `signerIdentity` field: the mapper joins its
+explicit assertion key/SPKI to the actual verifier role, then derives session
+identity from the held configuration digest and role measurement/attestation
+pins. Storing that derived identity inside the configuration would be circular.
+
+The signed service loader validates this extension after actual root-signature,
+generation and role-topology checks. The artifact generator retains its separate
+canonical/schema/signature-shape boundary; it does not gain root-signature
+authority. Both accept exactly the old payload plus either or both independent
+evidence/transition policy blocks, with no unknown fields or fallback policy.
+The measured mapper captures the full configuration and launch binding, checks
+the actual configuration digest, source query manifest, selected planner
+allowlist and role pins, and holds database/policy scalars before key callbacks.
+It selects real registry base and `plan_factory` implementations, or constructs
+the actual public-key-only `TransitionPlanVerifier`, on the same work allowance.
+
+Private service factories hold measured configuration and any existing signer,
+check active launch, read only the protected planner descriptor when needed,
+and snapshot generation last. The raw-four handoff owns independently supplied
+history before launch/key callbacks; configured admission joins every policy
+and key pin before actual signed-plan/proof/semantic replay. Neither received
+context nor current configuration enrolls historical request, root, cutoff,
+capability or committed-stage authority. Verification samples no replacement
+clock and renews no plan lifetime.
+
+These additions do not expose a public/network route, retain these plans or
+execute business mutations. Authenticated invocation/transport, durable custody,
+current-root/reservation/capability/atomic execution and recovery remain pending,
+alongside unprovisioned independent infrastructure and deferred frozen-build
+verification. All source remains unbuilt and unexecuted.
 
 ## Signed transition plans and held production owners
 
@@ -1080,8 +1123,9 @@ and existing input/resource ceilings are unchanged.
 Admission has configured read-only and live plan-production owners with
 purpose-scoped measured configuration, but no authorized durable evidence INSERT
 executor. Final registration, trust staging and completion now have genuine
-configured acquisition and separate signed-plan owners; service configuration,
-authenticated invocation, custody and successor execution remain pending.
+configured acquisition, signed-plan and verification owners with private
+service-configuration mapping; authenticated invocation, custody and successor
+execution remain pending.
 Current roots, signer pins, request permission, assertion/capability authority
 and committed-stage/physical-readback provenance are still independent
 prerequisites, not values authenticated by copying.

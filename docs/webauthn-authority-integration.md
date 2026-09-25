@@ -1,6 +1,6 @@
 # Completing the WebAuthn authority transitions
 
-Status: source `.101`, implementation only, not an enabled public protocol or
+Status: source `.102`, implementation only, not an enabled public protocol or
 migration. All six WebAuthn successor operations now have genuine configured
 programs in the separate `typed-successor-planning` registry. Legacy `KERNELS` and
 `PLANNING_PROGRAMS`, service routing, SQL execution and witness admission exclude
@@ -16,6 +16,28 @@ They share the existing guarded transaction scope and work allowance.
 None of these registrations supplies public invocation, successor
 reservation/capability/atomic execution, physical readback or production
 readiness. All source is unbuilt and unexecuted.
+
+Source `.102` connects optional signed `webauthnTransitions` policy to the three
+real read/plan registry factories and a configured raw-four verifier. Its closed
+registration/stage/completion slots require explicit operation keys/SPKIs,
+bounded age/skew/plan age and operation-specific policy; absence or null grants
+no authority. Registration/completion retain explicit signer identities.
+Stage instead joins its explicit assertion key to the actual verifier role and
+derives identity from the held configuration digest and role measurement/
+attestation pins, avoiding a self-referential signed field. The real signed
+loader and the artifact generator's separate shape-validation boundary accept
+either or both optional evidence/transition blocks without defaults.
+
+The mapper owns full configuration/launch inputs, checks configuration digest,
+source query manifest, selected operation allowlist and role bindings, then uses
+genuine key/SPKI construction on the original allowance. Private service
+factories hold configuration/signer and protected descriptor inputs with
+generation captured last. Their handoff owns independent history before callbacks
+and invokes actual configured signature/proof/semantic replay. Current policy
+can constrain that history, not establish its provenance or renew plan time.
+Authenticated invocation/transport, durable custody, current-root/reservation/
+capability/atomic execution/recovery, independent infrastructure and consolidated
+frozen-build verification remain unfinished. No public business path is enabled.
 
 Source `.101` returns canonical original envelope/proof/inputs/context bytes for
 these three signed plans. The closed payload commits the full detached originals

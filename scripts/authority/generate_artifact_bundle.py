@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_contract
 from serverware import authority_transition_registry
 from serverware import authority_webauthn_evidence_policy as evidence_policy
+from serverware import authority_webauthn_transition_policy as transition_policy
 from serverware.authority_artifact_spec import (
     ARTIFACT_BUNDLE_SCHEMA,
     AUTHORITY_SCHEMA_VERSION,
@@ -686,9 +687,10 @@ def _validate_configuration_document(
         expected_envelope_schema = SERVICE_CONFIGURATION_SCHEMA
         expected_payload_schema = SERVICE_CONFIGURATION_PAYLOAD_SCHEMA
         expected_fields = SERVICE_CONFIGURATION_FIELDS
-        if (isinstance(envelope["payload"], Mapping)
-                and evidence_policy.FIELD in envelope["payload"]):
-            expected_fields = expected_fields | {evidence_policy.FIELD}
+        if isinstance(envelope["payload"], Mapping):
+            for optional_field in (evidence_policy.FIELD, transition_policy.FIELD):
+                if optional_field in envelope["payload"]:
+                    expected_fields = expected_fields | {optional_field}
     payload = _closed(
         envelope["payload"],
         name=f"{role} configuration payload",
@@ -867,6 +869,15 @@ def _validate_configuration_document(
             except ValueError as exc:
                 raise GeneratorError(
                     "authority WebAuthn evidence admission policy is invalid"
+                ) from exc
+        if transition_policy.FIELD in payload:
+            try:
+                transition_policy.validate_policy(
+                    payload[transition_policy.FIELD], webauthn=payload["webauthn"]
+                )
+            except ValueError as exc:
+                raise GeneratorError(
+                    "authority WebAuthn transition policy is invalid"
                 ) from exc
 
 

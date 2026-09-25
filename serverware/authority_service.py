@@ -58,6 +58,7 @@ from serverware import authority_webauthn_evidence_custody_transport as evidence
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
 from serverware import authority_webauthn_evidence_policy as evidence_policy
+from serverware import authority_webauthn_transition_policy as transition_policy
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
     verifier_read_privilege_check,
@@ -1125,6 +1126,8 @@ class MeasuredConfiguration:
             set(payload) not in (
                 required_payload_fields,
                 required_payload_fields | {evidence_policy.FIELD},
+                required_payload_fields | {transition_policy.FIELD},
+                required_payload_fields | {evidence_policy.FIELD, transition_policy.FIELD},
             )
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1190,6 +1193,15 @@ class MeasuredConfiguration:
             except ValueError as exc:
                 raise AuthorityServiceError(
                     "authority WebAuthn evidence admission policy is invalid"
+                ) from exc
+        if transition_policy.FIELD in payload:
+            try:
+                transition_policy.validate_policy(
+                    payload[transition_policy.FIELD], webauthn=payload["webauthn"]
+                )
+            except ValueError as exc:
+                raise AuthorityServiceError(
+                    "authority WebAuthn transition policy is invalid"
                 ) from exc
         configuration._verify_runtime_closure()
         configuration._verify_attestation(role=role)
@@ -3953,6 +3965,33 @@ class AuthorityProcess:
         return verifier.verify_handoff(envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes, expected_request=owned_request,
             context=owned_context, root_inventory=inventory, work=work)
+
+    def _webauthn_transition_planner(self, *, operation, work):
+        """Construct a fixed configured successor reader without opening SQL."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._planner_on_work(self, operation=operation, work=work)
+
+    def _webauthn_transition_plan_producer(self, *, operation, work):
+        """Bind a fixed successor producer to measured policy and real signer."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._producer_on_work(self, operation=operation, work=work)
+
+    def _webauthn_transition_plan_verifier(self, *, operation, work):
+        """Construct a public-key-only configured successor verifier."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._verifier_on_work(self, operation=operation, work=work)
+
+    def _verify_webauthn_transition_plan_handoff(self, *, operation, envelope_bytes,
+            proof_bytes, inputs_bytes, context_bytes, expectations, work):
+        """Own independent history before measured callbacks and raw replay."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._verify_handoff_on_work(self, operation=operation,
+            envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
+            context_bytes=context_bytes, expectations=expectations, work=work)
 
     def _webauthn_evidence_planner(self, *, purpose, work):
         """Construct one private purpose-pinned read owner, without opening SQL.

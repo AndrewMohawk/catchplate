@@ -25,10 +25,10 @@ except ImportError:  # The contract fails closed when crypto is unavailable.
     Ed25519PublicKey = None
 
 
-ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v2"
-GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v2"
-SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v2"
-UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v2"
+ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v3"
+GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v3"
+SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v3"
+UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v3"
 KEY_AUTHORIZATION_SCHEMA = "serverware.authorityKeyAuthorizations/v1"
 KEY_REVOCATION_SCHEMA = "serverware.authorityKeyRevocations/v1"
 TRUST_STATE_SCHEMA = "serverware.authorityArtifactTrustState/v1"
@@ -2080,7 +2080,7 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
             or receipt_payload["sourceRevision"]
                 != value["sourceRevision"]
             or receipt_payload["operationContractDigest"]
-                != value["operationManifest"]["sha256"]
+                != value["operationManifest"]["contractDigest"]
             or receipt_payload["terminal"] is not True
             or receipt_payload["status"] != "completed"
         ):
@@ -2799,12 +2799,24 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
     operation_manifest = _validate_digest_file_reference(
         value["operationManifest"],
         name="operation manifest",
-        extra_keys={"manifestSchema"},
+        extra_keys={"manifestSchema", "contractDigest"},
     )
     _require_identifier(
         operation_manifest["manifestSchema"],
         name="operation manifest schema",
     )
+    _require_digest(
+        operation_manifest["contractDigest"],
+        name="operation manifest contract digest",
+    )
+    if (
+        operation_manifest["manifestSchema"] != authority_contract.CONTRACT_SCHEMA
+        or operation_manifest["contractDigest"]
+            != authority_contract.OPERATION_MANIFEST_DIGEST
+    ):
+        raise ArtifactContractError(
+            "operation manifest does not match the source contract"
+        )
 
     referenced = [
         *schemas,
@@ -3466,7 +3478,7 @@ def _validate_generation_bundle_bindings(
     )
     if (
         generation["operationManifestDigest"]
-        != bundle["operationManifest"]["sha256"]
+        != bundle["operationManifest"]["contractDigest"]
         or generation["stageZeroDigest"] != bundle["stageZero"]["sha256"]
         or generation["migrationReceiptDigests"]
         != sorted(
@@ -4011,7 +4023,10 @@ OPERATION_MANIFEST_REFERENCE_JSON_SCHEMA = _closed_object_schema(
     {
         "path": RELATIVE_PATH_JSON_SCHEMA,
         "sha256": SHA256_JSON_SCHEMA,
-        "manifestSchema": TEXT_JSON_SCHEMA,
+        "manifestSchema": {"const": authority_contract.CONTRACT_SCHEMA},
+        "contractDigest": {
+            "const": authority_contract.OPERATION_MANIFEST_DIGEST
+        },
     }
 )
 ARTIFACT_BUNDLE_JSON_SCHEMA = _closed_object_schema(

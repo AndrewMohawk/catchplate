@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from . import authority_contract
 from .authority_artifact_spec import (
     ALLOWED_MUTABLE_STATE_PROTOCOLS,
     ArtifactContractError,
@@ -1100,7 +1101,7 @@ def validate_stage_zero_request(
     operation_manifest = _mapping(
         value["operationManifest"],
         name="operation manifest binding",
-        keys={"path", "sha256", "manifestSchema"},
+        keys={"path", "sha256", "manifestSchema", "contractDigest"},
     )
     _ascii(
         operation_manifest["path"],
@@ -1108,12 +1109,25 @@ def validate_stage_zero_request(
     )
     _digest(
         operation_manifest["sha256"],
-        name="operation manifest digest",
+        name="operation manifest file digest",
+    )
+    _digest(
+        operation_manifest["contractDigest"],
+        name="operation manifest contract digest",
     )
     _identifier(
         operation_manifest["manifestSchema"],
         name="operation manifest schema",
     )
+    if (
+        operation_manifest["contractDigest"]
+        != authority_contract.OPERATION_MANIFEST_DIGEST
+        or operation_manifest["contractDigest"]
+        != generation["operationManifestDigest"]
+    ):
+        raise StageZeroContractError(
+            "operation manifest contract differs from source or generation"
+        )
     if dict(operation_manifest) != dict(
         verified_package.package["bundle"]["operationManifest"]
     ):
@@ -2905,6 +2919,7 @@ OPERATION_MANIFEST_BINDING_JSON_SCHEMA = _closed_schema(
         "path": STRING_JSON_SCHEMA,
         "sha256": SHA256_JSON_SCHEMA,
         "manifestSchema": STRING_JSON_SCHEMA,
+        "contractDigest": SHA256_JSON_SCHEMA,
     }
 )
 HOST_EVIDENCE_JSON_SCHEMA = _closed_schema(

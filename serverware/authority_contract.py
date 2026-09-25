@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.107"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.108"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -2745,9 +2745,16 @@ def operation_manifest() -> dict[str, Any]:
     }
 
 
-OPERATION_MANIFEST_DIGEST = _digest(
-    CONTRACT_SCHEMA,
-    {
+def operation_contract_document() -> dict[str, Any]:
+    """Return the complete source contract, distinct from its file checksum.
+
+    A canonical JSON artifact carries this exact document. Its ordinary file
+    SHA256 measures those bytes, while the semantic operation commitment also
+    frames CONTRACT_SCHEMA. Never compare those different digest identities or
+    substitute the smaller operation-only dispatch map for this full document.
+    The document comes from the full source tables, not a caller-selected subset.
+    """
+    return {
         "schema": CONTRACT_SCHEMA,
         "schemaVersion": SCHEMA_VERSION,
         "sourceRevision": SOURCE_REVISION,
@@ -2826,8 +2833,10 @@ OPERATION_MANIFEST_DIGEST = _digest(
             )
         },
         "operations": operation_manifest(),
-    },
-)
+    }
+
+
+OPERATION_MANIFEST_DIGEST = _digest(CONTRACT_SCHEMA, operation_contract_document())
 
 
 def operation_spec(operation: str) -> Mapping[str, Any]:

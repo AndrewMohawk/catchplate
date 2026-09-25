@@ -481,6 +481,8 @@ def _read_exact_bundle_file(
     descriptor = _open_beneath(root_fd, path)
     try:
         before = os.fstat(descriptor)
+        if before.st_size != file_entry["size"] or before.st_size > maximum:
+            raise GeneratorError(f"{path} size changed before its bounded document read")
         data = bytearray()
         while len(data) < before.st_size:
             chunk = os.read(
@@ -1103,13 +1105,27 @@ def _build_bundle(
             keys={"manifestSchema"},
             files=file_by_path,
         )
+        operation_bytes, _operation_document = _canonical_json_document(
+            root_fd,
+            operation_manifest["path"],
+            file_by_path[operation_manifest["path"]],
+            name="operation contract document",
+        )
         if (
-            operation_manifest["sha256"]
-            != authority_contract.OPERATION_MANIFEST_DIGEST
+            operation_manifest["manifestSchema"] != authority_contract.CONTRACT_SCHEMA
+            or operation_bytes
+            != canonical_json_bytes(authority_contract.operation_contract_document())
         ):
             raise GeneratorError(
-                "operation manifest differs from the operation registry"
+                "operation manifest is not the complete canonical source contract"
             )
+        # Keep the measured raw-file SHA256 in sha256. The separate semantic
+        # commitment frames these actual canonical bytes with CONTRACT_SCHEMA;
+        # neither input metadata nor the smaller operation-only map supplies it.
+        contract_digest = domain_digest(authority_contract.CONTRACT_SCHEMA, operation_bytes)
+        if contract_digest != authority_contract.OPERATION_MANIFEST_DIGEST:
+            raise GeneratorError("operation manifest semantic digest differs from the source contract")
+        operation_manifest["contractDigest"] = contract_digest
 
         migrations = []
         migration_inputs = _bounded_list(
@@ -1191,7 +1207,7 @@ def _build_bundle(
                 or receipt_payload["sourceRevision"]
                 != spec["sourceRevision"]
                 or receipt_payload["operationContractDigest"]
-                != operation_manifest["sha256"]
+                != operation_manifest["contractDigest"]
                 or receipt_payload["terminal"] is not True
                 or receipt_payload["status"] != "completed"
                 or receipt["algorithm"] != "Ed25519"
@@ -1631,7 +1647,7 @@ def _build_package(
             "validFrom": generation_input["validFrom"],
             "validUntil": generation_input["validUntil"],
             "artifactBundleDigest": artifact_bundle_digest(bundle),
-            "operationManifestDigest": bundle["operationManifest"]["sha256"],
+            "operationManifestDigest": bundle["operationManifest"]["contractDigest"],
             "stageZeroDigest": bundle["stageZero"]["sha256"],
             "stageZeroContract": bundle["stageZero"]["interfaceSchema"],
             "roleSetDigest": domain_digest(

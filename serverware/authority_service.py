@@ -58,6 +58,7 @@ from serverware import authority_webauthn_evidence_custody_transport as evidence
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
 from serverware import authority_webauthn_transition_transport as transition_plan_transport
+from serverware import authority_webauthn_transition_custody_transport as transition_custody_transport
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_transition_policy as transition_policy
 from serverware import authority_webauthn_trust
@@ -4052,6 +4053,63 @@ class AuthorityProcess:
 
         return transitions._produce_plan_on_work(self, operation=operation,
             control_bytes=control_bytes, context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
+
+    def _produce_webauthn_transition_custody_intent(self, *, operation, envelope_bytes,
+            proof_bytes, inputs_bytes, context_bytes, expectations, work):
+        """Prepare retain-only intent from independently admitted historical expectations."""
+        from serverware import authority_webauthn_transition_custody_service as custody
+
+        return custody._produce_intent_on_work(self, operation=operation,
+            envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
+            context_bytes=context_bytes, expectations=expectations, work=work)
+
+    def _produce_webauthn_transition_custody_relay(self, *, operation, intent_bytes,
+            envelope_bytes, proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work):
+        """Prepare a genuine planner relay without contacting the writer."""
+        from serverware import authority_webauthn_transition_custody_service as custody
+
+        return custody._produce_relay_on_work(self, operation=operation, intent_bytes=intent_bytes,
+            envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
+            context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _request_webauthn_transition_custody_relay(self, *, operation, intent_bytes,
+            envelope_bytes, proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work):
+        """Request authenticated relay preparation, not persistence or forwarding."""
+        from serverware import authority_webauthn_transition_custody_service as custody
+
+        return custody._request_relay_on_work(self, operation=operation, intent_bytes=intent_bytes,
+            envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
+            context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _forward_webauthn_transition_custody(self, *, operation, intent_bytes, relay_bytes,
+            envelope_bytes, proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work):
+        """Explicit verifier-to-planner forwarding of previously retained originals."""
+        from serverware import authority_webauthn_transition_custody_service as custody
+
+        return custody._forward_on_work(self, operation=operation, intent_bytes=intent_bytes,
+            relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, proof_bytes=proof_bytes,
+            inputs_bytes=inputs_bytes, context_bytes=context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _send_webauthn_transition_custody(self, *, operation, intent_bytes, relay_bytes,
+            envelope_bytes, proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work):
+        """Send genuine original custody controls from planner to fixed writer."""
+        from serverware import authority_webauthn_transition_custody_service as custody
+
+        return custody._send_on_work(self, operation=operation, intent_bytes=intent_bytes,
+            relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, proof_bytes=proof_bytes,
+            inputs_bytes=inputs_bytes, context_bytes=context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _persist_webauthn_transition_custody(self, *, operation, intent_bytes, relay_bytes,
+            envelope_bytes, proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work):
+        """Authenticate complete custody controls before the actual writer transaction."""
+        from serverware import authority_webauthn_transition_custody_service as custody
+
+        return custody._persist_on_work(self, operation=operation, intent_bytes=intent_bytes,
+            relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, proof_bytes=proof_bytes,
+            inputs_bytes=inputs_bytes, context_bytes=context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
 
     def _webauthn_evidence_planner(self, *, purpose, work):
         """Construct one private purpose-pinned read owner, without opening SQL.
@@ -8895,6 +8953,58 @@ class AuthorityServer:
         transition_plan_transport._check_deadline(deadline_ns)
         transition_plan_transport._send_response(connection, response, deadline_ns=deadline_ns)
 
+    def _serve_webauthn_transition_custody(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Keep relay preparation separate from explicit possibly committing delivery.
+
+        Peer admission precedes this method. Complete bounded framing and EOF
+        precede the one fixed work allowance, and writer results follow normal
+        outer transaction exit and connection close. A missing response does
+        not prove rollback; returned digest/time bytes are unsigned observations.
+        """
+        process = self.process
+        preparing = prefix in transition_custody_transport.RELAY_REQUEST_MAGICS
+        forwarding = prefix in transition_custody_transport.FORWARD_REQUEST_MAGICS
+        retaining = prefix in transition_custody_transport.REQUEST_MAGICS
+        if not (preparing or forwarding or retaining):
+            raise AuthorityServiceError("transition custody transfer purpose is invalid")
+        role = "planner-writer" if retaining else "planner"
+        if (type(process) is not AuthorityProcess or process.role_name != role
+                or process.process_mode != "policy-authority-" + role):
+            raise AuthorityServiceError("transition custody transfer has the wrong service role")
+        if preparing:
+            operation, originals = transition_custody_transport._recv_relay_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        elif forwarding:
+            operation, originals = transition_custody_transport._recv_forward_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        else:
+            operation, originals = transition_custody_transport._recv_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        transition_custody_transport._check_deadline(deadline_ns)
+        if preparing:
+            relay_bytes = AuthorityProcess._produce_webauthn_transition_custody_relay(process,
+                operation=operation, intent_bytes=originals[0], envelope_bytes=originals[1],
+                proof_bytes=originals[2], inputs_bytes=originals[3], context_bytes=originals[4],
+                historical_expectations_bytes=originals[5], work=work)
+            transition_custody_transport._check_deadline(deadline_ns)
+            transition_custody_transport._send_relay(connection, relay_bytes, deadline_ns=deadline_ns)
+            return
+        arguments = {"operation": operation, "intent_bytes": originals[0], "relay_bytes": originals[1],
+            "envelope_bytes": originals[2], "proof_bytes": originals[3], "inputs_bytes": originals[4],
+            "context_bytes": originals[5], "historical_expectations_bytes": originals[6]}
+        if forwarding:
+            record_digest, retained_at = AuthorityProcess._send_webauthn_transition_custody(
+                process, **arguments, work=work)
+        else:
+            result = AuthorityProcess._persist_webauthn_transition_custody(process, **arguments, work=work)
+            record_digest, retained_at = result["retained_record_digest"], result["retained_at_epoch_ns"]
+        transition_custody_transport._check_deadline(deadline_ns)
+        transition_custody_transport._send_response(connection, record_digest, retained_at, deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -8920,7 +9030,10 @@ class AuthorityServer:
                 evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC,
                 evidence_plan_transport.REGISTRATION_REQUEST_MAGIC,
                 evidence_plan_transport.INSTALLATION_REQUEST_MAGIC,
-                *transition_plan_transport.REQUEST_MAGICS)
+                *transition_plan_transport.REQUEST_MAGICS,
+                *transition_custody_transport.REQUEST_MAGICS,
+                *transition_custody_transport.RELAY_REQUEST_MAGICS,
+                *transition_custody_transport.FORWARD_REQUEST_MAGICS)
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
@@ -8953,6 +9066,11 @@ class AuthorityServer:
                 return
             if prefix in transition_plan_transport.REQUEST_MAGICS:
                 self._serve_webauthn_transition_plan(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix in (*transition_custody_transport.REQUEST_MAGICS,
+                    *transition_custody_transport.RELAY_REQUEST_MAGICS,
+                    *transition_custody_transport.FORWARD_REQUEST_MAGICS):
+                self._serve_webauthn_transition_custody(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

@@ -51,7 +51,9 @@ def _measured_context_on_work(process, *, role, signing, read_descriptor, work):
             or type(read_descriptor) not in (str, type(None))
             or (role, signing, read_descriptor) not in (
                 ("planner", False, planner_dsn), ("planner", True, planner_dsn),
+                ("planner", False, None), ("planner", True, None),
                 ("verifier", False, None), ("verifier", False, verifier_dsn),
+                ("verifier", True, None),
                 ("verifier", True, verifier_dsn), ("planner-writer", False, writer_dsn))):
         raise service.AuthorityServiceError("transition service context is not source fixed")
     if (type(process) is not service.AuthorityProcess or process.role_name != role

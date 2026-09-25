@@ -1975,6 +1975,8 @@ def validate_role_reference(reference: object) -> None:
         _require_ascii(environment_name, name="role environment name", maximum=256)
     if list(environment_allowlist) != sorted(set(environment_allowlist)):
         raise ArtifactContractError("role environment allowlist is not sorted and unique")
+    if "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD" not in environment_allowlist:
+        raise ArtifactContractError("role environment omits the launch bootstrap control")
     mutable_state = _require_list(
         role["mutableStateDescriptors"], name="role mutable-state descriptors", maximum=16,
     )
@@ -2004,6 +2006,10 @@ def validate_role_reference(reference: object) -> None:
     )
     for credential_name in credential_names:
         _require_identifier(credential_name, name="role credential name")
+        if credential_name == "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD":
+            raise ArtifactContractError(
+                "the launch manifest is a bootstrap control, not a role credential"
+            )
     if list(credential_names) != sorted(set(credential_names)):
         raise ArtifactContractError("role credential names are not sorted and unique")
 
@@ -4071,11 +4077,24 @@ ROLE_MANIFEST_REFERENCE_JSON_SCHEMA = _closed_object_schema(
         "processMode": TEXT_JSON_SCHEMA,
         "entrypointPath": TEXT_JSON_SCHEMA,
         "listenerName": TEXT_JSON_SCHEMA,
-        "credentialNames": STRING_ARRAY_JSON_SCHEMA,
+        "credentialNames": {
+            **STRING_ARRAY_JSON_SCHEMA,
+            "items": {
+                **TEXT_JSON_SCHEMA,
+                "not": {
+                    "const": "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
+                },
+            },
+        },
         "cwd": TEXT_JSON_SCHEMA,
         "pathEntries": STRING_ARRAY_JSON_SCHEMA,
         "argv": STRING_ARRAY_JSON_SCHEMA,
-        "environmentAllowlist": STRING_ARRAY_JSON_SCHEMA,
+        "environmentAllowlist": {
+            **STRING_ARRAY_JSON_SCHEMA,
+            "contains": {
+                "const": "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
+            },
+        },
         "mutableStateDescriptors": {
             "type": "array",
             "maxItems": 16,

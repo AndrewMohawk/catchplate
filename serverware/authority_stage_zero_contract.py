@@ -19,22 +19,25 @@ from .authority_artifact_spec import (
 )
 
 
-STAGE_ZERO_REQUEST_SCHEMA = "serverware.authorityNativeStageZeroRequest/v2"
+STAGE_ZERO_REQUEST_SCHEMA = "serverware.authorityNativeStageZeroRequest/v3"
 LAUNCH_IDENTITY_PAYLOAD_SCHEMA = (
-    "serverware.authorityLaunchIdentityCertificatePayload/v2"
+    "serverware.authorityLaunchIdentityCertificatePayload/v3"
 )
 SIGNED_LAUNCH_IDENTITY_SCHEMA = (
-    "serverware.signedAuthorityLaunchIdentityCertificate/v2"
+    "serverware.signedAuthorityLaunchIdentityCertificate/v3"
 )
-STAGE_ZERO_HANDOFF_SCHEMA = "serverware.authorityNativeStageZeroHandoff/v2"
-STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityNativeStageZeroInterface/v2"
+STAGE_ZERO_HANDOFF_SCHEMA = "serverware.authorityNativeStageZeroHandoff/v3"
+STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityNativeStageZeroInterface/v3"
 STAGE_ZERO_REQUEST_DIGEST_DOMAIN = (
-    "serverware.authorityNativeStageZeroRequestDigest/v2"
+    "serverware.authorityNativeStageZeroRequestDigest/v3"
 )
-LAUNCH_ID_DOMAIN = "serverware.authorityLaunchIdentity/v2"
+LAUNCH_ID_DOMAIN = "serverware.authorityLaunchIdentity/v3"
 LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN = (
-    "serverware.authorityLaunchIdentityCertificateSignature/v2"
+    "serverware.authorityLaunchIdentityCertificateSignature/v3"
 )
+BOOTSTRAP_CONTROL_NAME = "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
+BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA = "serverware.signedPolicyAuthorityLaunchManifest/v5"
+MAX_BOOTSTRAP_CONTROL_BYTES = 64 * 1024 * 1024
 LISTENER_IDENTITY_DOMAIN = "serverware.authorityListenerIdentity/v1"
 CREDENTIAL_SET_DOMAIN = "serverware.authorityCredentialSet/v1"
 ENVIRONMENT_DOMAIN = "serverware.authorityLaunchEnvironment/v1"
@@ -105,6 +108,7 @@ ALLOWED_ENVIRONMENT_KEYS = frozenset(
         "SERVERWARE_AUTHORITY_LAUNCH_PRIVATE_KEY_FD",
         "SERVERWARE_AUTHORITY_ROLE",
         "SERVERWARE_OPERATION_MANIFEST_DIGEST",
+        BOOTSTRAP_CONTROL_NAME,
         "TZ",
     }
 )
@@ -142,13 +146,17 @@ NATIVE_STAGE_ZERO_REQUIREMENTS = (
     "starting Python or any authority role code.",
     "All directories and files are opened without symlink traversal and "
     "retained by descriptor through verification and execveat.",
-    "Every retained descriptor is revalidated by device, inode, generation, "
+    "Every content-committed retained descriptor is revalidated by device, inode, generation, "
     "ownership, mode, size, and digest immediately before handoff.",
     "The inherited listener is supplied by the service manager and validated "
     "for LISTEN_PID, LISTEN_FDS, LISTEN_FDNAMES, AF_UNIX, SOCK_STREAM, "
     "SO_ACCEPTCONN, path, ownership, mode, and stable identity.",
     "Credential descriptors are allowlisted, sealed where representable, "
     "never pathname reopened, and delivered only to the assigned role.",
+    "The launch manifest is a separate mandatory bootstrap control slot, not "
+    "a content-committed credential. Its original bounded bytes, seals, and "
+    "root signature must be admitted by the launcher; this request alone "
+    "does not authenticate that control document.",
     "The witness mutable-state directory is retained by FD, mount-bound, "
     "lease-exclusive, quota-enforced, local-only, and limited to the signed "
     "atomic append-record protocol; no other role receives mutable state.",
@@ -525,6 +533,8 @@ def _validate_credential(value: object) -> None:
         },
     )
     _identifier(credential["name"], name="credential name")
+    if credential["name"] == BOOTSTRAP_CONTROL_NAME:
+        raise StageZeroContractError("launch manifest is a bootstrap control, not a credential")
     _integer(
         credential["fd"],
         name="credential fd",
@@ -565,6 +575,27 @@ def _validate_credential(value: object) -> None:
         raise StageZeroContractError("credential memfd is not fully sealed")
     if credential["delivery"] != "retained-sealed-memfd":
         raise StageZeroContractError("credential delivery mode changed")
+
+
+def _validate_bootstrap_control(value: object) -> Mapping[str, Any]:
+    control = _mapping(
+        value,
+        name="bootstrap control",
+        keys={"name", "fd", "envelopeSchema", "maximumBytes"},
+    )
+    if (
+        control["name"] != BOOTSTRAP_CONTROL_NAME
+        or control["envelopeSchema"] != BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA
+    ):
+        raise StageZeroContractError("bootstrap control name or schema changed")
+    _integer(control["fd"], name="bootstrap control fd", minimum=3, maximum=2**31 - 1)
+    maximum = _integer(
+        control["maximumBytes"], name="bootstrap control byte limit",
+        minimum=1, maximum=MAX_BOOTSTRAP_CONTROL_BYTES,
+    )
+    if maximum != MAX_BOOTSTRAP_CONTROL_BYTES:
+        raise StageZeroContractError("bootstrap control byte limit changed")
+    return control
 
 
 def _validate_mutable_state_descriptor(value: object) -> None:
@@ -753,6 +784,7 @@ def validate_stage_zero_request(
             "retainedDirectories",
             "retainedFiles",
             "listener",
+            "bootstrapControl",
             "credentials",
             "mutableStateDescriptors",
             "process",
@@ -767,6 +799,7 @@ def validate_stage_zero_request(
         raise StageZeroContractError("stage-zero request schema changed")
     if value["trustMode"] not in TRUST_MODES:
         raise StageZeroContractError("trust mode is not recognized")
+    bootstrap_control = _validate_bootstrap_control(value["bootstrapControl"])
 
     generation = _mapping(
         value["generation"],
@@ -971,6 +1004,8 @@ def validate_stage_zero_request(
         raise StageZeroContractError(
             "role credential names are not sorted and unique"
         )
+    if BOOTSTRAP_CONTROL_NAME in role["credentialNames"]:
+        raise StageZeroContractError("role credentials include the bootstrap control")
     if role["environmentAllowlist"] != sorted(
         set(role["environmentAllowlist"])
     ):
@@ -1371,6 +1406,8 @@ def validate_stage_zero_request(
             maximum=4096,
             allow_empty=True,
         )
+    if values.get(BOOTSTRAP_CONTROL_NAME) != str(bootstrap_control["fd"]):
+        raise StageZeroContractError("bootstrap control environment descriptor changed")
     if values.get("SERVERWARE_AUTHORITY_GENERATION_DIGEST") != generation[
         "digest"
     ]:
@@ -1530,6 +1567,7 @@ def validate_stage_zero_request(
     independent_descriptors = [
         stage_zero["fd"],
         value["listener"]["fd"],
+        bootstrap_control["fd"],
         *(entry["fd"] for entry in directories),
         *(entry["fd"] for entry in files),
         *(entry["fd"] for entry in credentials),
@@ -1606,6 +1644,7 @@ def validate_stage_zero_request(
         )
     expected_preserved = {
         value["listener"]["fd"],
+        bootstrap_control["fd"],
         *(entry["fd"] for entry in directories if entry["surviveExec"]),
         *(entry["fd"] for entry in files if entry["surviveExec"]),
         *(entry["fd"] for entry in credentials),
@@ -2545,6 +2584,14 @@ SHA256_JSON_SCHEMA = {
     "type": "string",
     "pattern": "^sha256:[0-9a-f]{64}$",
 }
+BOOTSTRAP_CONTROL_JSON_SCHEMA = _closed_schema(
+    {
+        "name": {"const": BOOTSTRAP_CONTROL_NAME},
+        "fd": {"type": "integer", "minimum": 3, "maximum": 2**31 - 1},
+        "envelopeSchema": {"const": BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA},
+        "maximumBytes": {"const": MAX_BOOTSTRAP_CONTROL_BYTES},
+    }
+)
 STAGE_ZERO_REQUEST_JSON_SCHEMA = _closed_schema(
     {
         "schema": {"const": STAGE_ZERO_REQUEST_SCHEMA},
@@ -2604,6 +2651,7 @@ STAGE_ZERO_REQUEST_JSON_SCHEMA = _closed_schema(
             "type": "array",
             "maxItems": MAX_CREDENTIALS,
         },
+        "bootstrapControl": BOOTSTRAP_CONTROL_JSON_SCHEMA,
         "hostEvidence": _closed_shape(
             [
                 "bootIdDigest",
@@ -2785,7 +2833,7 @@ LISTENER_JSON_SCHEMA = _closed_schema(
 )
 CREDENTIAL_JSON_SCHEMA = _closed_schema(
     {
-        "name": STRING_JSON_SCHEMA,
+        "name": {"type": "string", "not": {"const": BOOTSTRAP_CONTROL_NAME}},
         "fd": INTEGER_JSON_SCHEMA,
         "purpose": {"enum": sorted(ALLOWED_CREDENTIAL_PURPOSES)},
         "ownerRole": STRING_JSON_SCHEMA,
@@ -2808,7 +2856,10 @@ ROLE_BINDING_JSON_SCHEMA = _closed_schema(
         "supplementaryGids": INTEGER_ARRAY_JSON_SCHEMA,
         "entrypointPath": STRING_JSON_SCHEMA,
         "listenerName": STRING_JSON_SCHEMA,
-        "credentialNames": STRING_ARRAY_JSON_SCHEMA,
+        "credentialNames": {
+            "type": "array", "maxItems": MAX_CREDENTIALS,
+            "items": {"type": "string", "not": {"const": BOOTSTRAP_CONTROL_NAME}},
+        },
         "cwd": STRING_JSON_SCHEMA,
         "pathEntries": STRING_ARRAY_JSON_SCHEMA,
         "argv": STRING_ARRAY_JSON_SCHEMA,
@@ -2995,6 +3046,7 @@ STAGE_ZERO_REQUEST_JSON_SCHEMA = _closed_schema(
             "items": RETAINED_FILE_JSON_SCHEMA,
         },
         "listener": LISTENER_JSON_SCHEMA,
+        "bootstrapControl": BOOTSTRAP_CONTROL_JSON_SCHEMA,
         "credentials": {
             "type": "array",
             "maxItems": MAX_CREDENTIALS,
@@ -3123,9 +3175,13 @@ __all__ = [
     "SIGNED_LAUNCH_IDENTITY_SCHEMA",
     "STAGE_ZERO_HANDOFF_SCHEMA",
     "STAGE_ZERO_INTERFACE_SCHEMA",
+    "BOOTSTRAP_CONTROL_NAME",
+    "BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA",
+    "MAX_BOOTSTRAP_CONTROL_BYTES",
     "NATIVE_STAGE_ZERO_REQUIREMENTS",
     "StageZeroContractError",
     "STAGE_ZERO_REQUEST_JSON_SCHEMA",
+    "BOOTSTRAP_CONTROL_JSON_SCHEMA",
     "LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA",
     "SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA",
     "STAGE_ZERO_HANDOFF_JSON_SCHEMA",

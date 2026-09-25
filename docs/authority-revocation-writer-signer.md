@@ -66,8 +66,11 @@ credential named by
 trusted-host-local path opens the corresponding systemd credential name.
 This is not a general service `_PATH` fallback.
 
-Older six-descriptor writer manifests no longer satisfy the exact launch
-closure. Deployment requires provisioning the dedicated key and regenerating
+Source `.112` distinguishes six ordinary writer credentials from the separately
+root-verified launch-manifest bootstrap control. The delivery inventory still
+contains all seven descriptors, including the dedicated writer signing key.
+Older manifests do not satisfy that phase-separated launch closure. Deployment
+requires provisioning the dedicated key and regenerating
 and reapproving the credential-set, launch, configuration and generation
 bindings together. There is no generated fallback key or compatibility bypass.
 No live provisioning or deployment has been performed for this source.

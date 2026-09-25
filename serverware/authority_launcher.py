@@ -21,13 +21,14 @@ from typing import Any, Callable, Mapping
 
 
 LAUNCH_MANIFEST_SCHEMA = (
-    "serverware.signedPolicyAuthorityLaunchManifest/v4"
+    "serverware.signedPolicyAuthorityLaunchManifest/v5"
 )
-LAUNCH_PAYLOAD_SCHEMA = "serverware.policyAuthorityLaunchManifest/v4"
+LAUNCH_PAYLOAD_SCHEMA = "serverware.policyAuthorityLaunchManifest/v5"
 GENERATION_CONTEXT_SCHEMA = (
     "serverware.authorityGenerationLaunchContext/v4"
 )
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
+BOOTSTRAP_CONTROL_NAME = "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
 MAX_STAGE_ZERO_HANDOFF_BYTES = 1024 * 1024
 MAX_LAUNCH_IDENTITY_CERTIFICATE_BYTES = 1024 * 1024
 MAX_CLOSURE_FILES = 32768
@@ -93,7 +94,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
     "runtime": frozenset(
         {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
             "SERVERWARE_POLICY_AUTHORITY_RUNTIME_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_RUNTIME_TRUST_FD",
         }
@@ -101,7 +101,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
     "verifier": frozenset(
         {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
             "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
@@ -112,7 +111,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
     "planner": frozenset(
         {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
             "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
@@ -123,7 +121,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
     "planner-writer": frozenset(
         {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
             "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
@@ -134,7 +131,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
     "issuer": frozenset(
         {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
             "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
@@ -144,7 +140,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
     "executor": frozenset(
         {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
             "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
@@ -154,7 +149,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
     "witness": frozenset(
         {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
             "SERVERWARE_POLICY_AUTHORITY_WITNESS_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_WITNESS_CONFIG_FD",
             "SERVERWARE_POLICY_AUTHORITY_WITNESS_SIGNING_KEY_FD",
@@ -1027,17 +1021,58 @@ def _listener_identity(
     return descriptor
 
 
-def _load_manifest(role: str) -> tuple[dict[str, Any], str]:
+def _bootstrap_control_stamp(descriptor: int) -> tuple[int, ...]:
+    if type(descriptor) is not int or not 3 <= descriptor <= 2**31 - 1:
+        raise LaunchError("bootstrap control descriptor is invalid")
+    if (
+        os.environ.get(BOOTSTRAP_CONTROL_NAME) != str(descriptor)
+        or os.environ.get("SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_PATH")
+    ):
+        raise LaunchError("bootstrap control environment binding changed")
+    _require_sealed_descriptor(descriptor, "launch manifest bootstrap control")
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 0
+        or metadata.st_uid != 0
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or not 2 <= metadata.st_size <= MAX_MANIFEST_BYTES
+    ):
+        raise LaunchError("bootstrap control is not bounded immutable root-owned bytes")
+    return (
+        descriptor, metadata.st_dev, metadata.st_ino, metadata.st_mode,
+        metadata.st_uid, metadata.st_gid, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+
+
+def _require_bootstrap_control_identity(identity: tuple) -> None:
+    if (
+        type(identity) is not tuple or len(identity) != 10
+        or any(type(value) is not int or value < 0 for value in identity[:9])
+        or not _is_digest(identity[9])
+        or _bootstrap_control_stamp(identity[0]) != identity[:9]
+    ):
+        raise LaunchError("verified bootstrap control identity changed")
+
+
+def _load_manifest(
+    role: str, *, manifest_descriptor: int,
+) -> tuple[dict[str, Any], str, tuple]:
+    before = _bootstrap_control_stamp(manifest_descriptor)
     root_key = _read_descriptor(
         "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY",
         32,
     )
     if len(root_key) != 32:
         raise LaunchError("launch root key must be raw Ed25519")
-    manifest_value = _read_descriptor(
-        "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST",
-        MAX_MANIFEST_BYTES,
+    manifest_value = _require_sealed_descriptor_number(
+        manifest_descriptor,
+        label="launch manifest bootstrap control",
+        maximum=MAX_MANIFEST_BYTES,
     )
+    if _bootstrap_control_stamp(manifest_descriptor) != before:
+        raise LaunchError("bootstrap control changed while read")
     try:
         envelope = json.loads(manifest_value)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1114,10 +1149,26 @@ def _load_manifest(role: str) -> tuple[dict[str, Any], str]:
         )
     ):
         raise LaunchError("launch manifest role binding changed")
+    control = payload["stageZeroRequest"].get("bootstrapControl")
+    if (
+        type(control) is not dict
+        or set(control) != {"name", "fd", "envelopeSchema", "maximumBytes"}
+        or control["name"] != BOOTSTRAP_CONTROL_NAME
+        or type(control["fd"]) is not int or control["fd"] != manifest_descriptor
+        or control["envelopeSchema"] != LAUNCH_MANIFEST_SCHEMA
+        or type(control["maximumBytes"]) is not int
+        or control["maximumBytes"] != MAX_MANIFEST_BYTES
+    ):
+        raise LaunchError("signed bootstrap control differs from its actual descriptor")
+    # This raw identity is observed only after signature and scope validation.
+    # It is never a field of the manifest or its stage-zero request.
+    identity = (*before, "sha256:" + hashlib.sha256(manifest_value).hexdigest())
+    _require_bootstrap_control_identity(identity)
+    os.set_inheritable(manifest_descriptor, False)
     return payload, _domain_digest(
         LAUNCH_PAYLOAD_SCHEMA,
         payload_bytes,
-    )
+    ), identity
 
 
 def _validate_canonical_launch_evidence(
@@ -1655,6 +1706,7 @@ def _enter(
     role: str,
     *,
     bootstrap_descriptor: int,
+    manifest_descriptor: int,
     handoff_descriptor: int | None,
     trusted_host_local: bool,
 ) -> int:
@@ -1689,7 +1741,9 @@ def _enter(
         raise LaunchError(
             "process mode must be derived after measured launch validation"
         )
-    payload, manifest_digest = _load_manifest(role)
+    payload, manifest_digest, bootstrap_control_identity = _load_manifest(
+        role, manifest_descriptor=manifest_descriptor,
+    )
     entries = payload.get("closure")
     package_versions = payload.get("packageVersions")
     native_mappings = payload.get("nativeExecutableMappings")
@@ -1718,6 +1772,7 @@ def _enter(
             or not isinstance(binding.get("descriptor"), int)
             or isinstance(binding.get("descriptor"), bool)
             or binding["descriptor"] < 3
+            or binding["descriptor"] == manifest_descriptor
             or not isinstance(binding.get("kind"), str)
             or not binding["kind"]
             or not isinstance(binding.get("ownerUid"), int)
@@ -1770,10 +1825,11 @@ def _enter(
         3,
         private_descriptor,
         certificate_descriptor,
+        manifest_descriptor,
     }
     if handoff_descriptor is not None:
         retained.add(handoff_descriptor)
-    if len(retained) != (4 if handoff_descriptor is not None else 3):
+    if len(retained) != (5 if handoff_descriptor is not None else 4):
         raise LaunchError("stage-zero descriptor identities overlap")
     request = payload["stageZeroRequest"]
     retained_file_values = request.get("retainedFiles")
@@ -1828,6 +1884,42 @@ def _enter(
     }
     if len(retained_files) != len(retained_file_values):
         raise LaunchError("stage-zero retained file paths are duplicated")
+    other_request_descriptors = {
+        3,
+        private_descriptor,
+        certificate_descriptor,
+        *(binding["descriptor"] for binding in credential_descriptors),
+        stage_zero_value["fd"],
+        *(entry["fd"] for entry in retained_file_values),
+        *(entry["fd"] for entry in retained_directory_values),
+        *(entry["fd"] for entry in mutable_state_values),
+        request["listener"]["fd"],
+        request["process"]["pidfd"]["fd"],
+        request["launch"]["privateKeyTargetFd"],
+        request["launch"]["certificateTargetFd"],
+        *(entry["fd"] for entry in request["credentials"]),
+    }
+    if handoff_descriptor is not None:
+        other_request_descriptors.add(handoff_descriptor)
+    if manifest_descriptor in other_request_descriptors:
+        raise LaunchError("bootstrap control aliases another stage-zero descriptor")
+    # Numeric declarations remain disjoint even when stage zero intentionally
+    # closes their descriptors at exec. Only inherited descriptors can be
+    # checked for a physical alias in this process.
+    inherited_descriptors = {
+        *request["execution"]["preserveFds"],
+        3,
+        private_descriptor,
+        certificate_descriptor,
+        *(binding["descriptor"] for binding in credential_descriptors),
+    }
+    if handoff_descriptor is not None:
+        inherited_descriptors.add(handoff_descriptor)
+    inherited_descriptors.discard(manifest_descriptor)
+    for descriptor in inherited_descriptors:
+        metadata = os.fstat(descriptor)
+        if (metadata.st_dev, metadata.st_ino) == bootstrap_control_identity[1:3]:
+            raise LaunchError("bootstrap control inode aliases another descriptor")
     retained.update(
         {
             stage_zero_value["fd"],
@@ -1978,6 +2070,7 @@ def _enter(
             binding["environmentName"],
         )
         retained.add(descriptor)
+    _require_bootstrap_control_identity(bootstrap_control_identity)
     required_contract_modules = {
         "serverware.authority_artifact_spec",
         "serverware.authority_stage_zero_contract",
@@ -2087,10 +2180,12 @@ def _enter(
     _drop_role_identity(role)
     from serverware import authority_launch_guard
 
+    _require_bootstrap_control_identity(bootstrap_control_identity)
     authority_launch_guard.activate(
         role=role,
         manifest_digest=manifest_digest,
         retained_descriptors=frozenset(retained),
+        bootstrap_control_identity=bootstrap_control_identity,
         package_versions={
             str(name): str(version)
             for name, version in package_versions.items()
@@ -2166,6 +2261,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("role", choices=sorted(PROCESS_MODES))
     args = parser.parse_args(argv)
+    required_assignments = (
+        ROLE_CREDENTIAL_DESCRIPTOR_NAMES[args.role] | {BOOTSTRAP_CONTROL_NAME}
+    )
     assignments: dict[str, int] = {}
     for assignment in args.descriptor:
         name, separator, descriptor_text = assignment.partition("=")
@@ -2177,7 +2275,7 @@ def main(argv: list[str] | None = None) -> int:
             ) from exc
         if (
             separator != "="
-            or name not in ROLE_CREDENTIAL_DESCRIPTOR_NAMES[args.role]
+            or name not in required_assignments
             or name in assignments
             or descriptor < 3
             or os.environ.get(name)
@@ -2206,7 +2304,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if (
         set(assignments)
-        != ROLE_CREDENTIAL_DESCRIPTOR_NAMES[args.role]
+        != required_assignments
         or len(set(assignments.values())) != len(assignments)
         or args.bootstrap_fd < 3
         or (
@@ -2223,6 +2321,7 @@ def main(argv: list[str] | None = None) -> int:
     return _enter(
         args.role,
         bootstrap_descriptor=args.bootstrap_fd,
+        manifest_descriptor=assignments[BOOTSTRAP_CONTROL_NAME],
         handoff_descriptor=args.stage_zero_handoff_fd,
         trusted_host_local=args.trusted_host_local,
     )

@@ -1,9 +1,11 @@
 # Authority artifact identities
 
-Source revisions `.108` through `.111` separate file, policy, generation and role
-identities. Direct final-generation and final-launch configuration pins are
-replaced by static commitments; attestation-linked cycles remain. This is an
-implementation checkpoint, not a successful build, launch or production release.
+Source revisions `.108` through `.112` separate file, policy, generation, role
+and bootstrap-control identities. Direct final-generation and final-launch
+configuration pins are replaced by static commitments. The launch manifest no
+longer contains a credential hash of itself; attestation and configuration-to-
+credential-set cycles remain. This is an implementation checkpoint, not a
+successful build, launch or production release.
 
 ## Operation contract
 
@@ -162,7 +164,53 @@ launch digest and admitted package versions. The static closure never replaces
 those runtime values. Root launch signature, complete artifact/package and
 credential admission, generation high-water, and active role checks remain.
 
-## Remaining attestation dependencies
+## Root-verified bootstrap control
+
+Signed launch manifest and payload v5 separate the manifest's delivery from
+ordinary credentials. Stage-zero request v3 requires an exact `bootstrapControl`:
+
+| Field | Required meaning |
+| --- | --- |
+| `name` | `SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD` |
+| `fd` | The planned, separately preserved descriptor, at least 3 |
+| `envelopeSchema` | `serverware.signedPolicyAuthorityLaunchManifest/v5` |
+| `maximumBytes` | 67108864, the unchanged manifest byte ceiling |
+
+The slot contains no manifest hash. It identifies a document to admit, not an
+assertion that its contents were verified. Its descriptor must be unique across
+the full stage-zero descriptor inventory and both future launch-identity outputs.
+The exact environment binding and handoff-preservation set include it.
+
+Every artifact role includes the control name in `environmentAllowlist` and
+excludes it from `credentialNames`. Stage-zero rejects it as an ordinary
+credential, and the launcher rejects it in `retainedCredentialDescriptors`.
+All other credential name, owner, mode, seal, size and raw-hash checks remain.
+The entrypoint still delivers the real root-owned manifest through its sealed
+descriptor and existing `--descriptor` transport; it does not invent a manifest
+or declare successful admission.
+
+```text
+stage-zero request: planned bootstrap slot, ordinary credential hashes
+                         |
+                         v
+signed final launch manifest: request plus complete launch evidence
+                         |
+                         v
+launcher: original canonical bytes + independent root signature
+                         |
+                         v
+retained bootstrap identity: observed only after admission
+```
+
+The launcher preserves the separately verified original descriptor and checks
+its sealed, root-owned file identity through launch activation. The guard holds
+that immutable observation separately and rechecks descriptor continuity when
+requiring an active launch. An observed raw checksum is not inserted into the
+manifest or request, nor does it substitute for the signature. Stage-zero
+interface, handoff, launch-identity schemas and their changed signature/digest
+domains advance together to v3. Old documents are not silently adopted.
+
+## Remaining attestation and credential dependencies
 
 Direct generation and role-launch pins no longer force the static configuration
 to contain those final identities. The receipt back-reference remains enforced:
@@ -175,12 +223,20 @@ configuration --> attestation receipt --> configuration payload digest
 The trusted-host path compares a configured `attestationReceiptDigest` with a
 receipt that binds the configuration payload itself and final runtime identities.
 The role split does not make that receipt constructible or remove its verification.
+Attestation is still an ordinary hashed credential: its receipt binds final
+launch identity, while the launch commits that receipt's original bytes.
+Static `credentialSetDigest` also includes the configuration bytes whose payload
+contains that same credential-set commitment. Both dependencies still require
+explicit phase separation; no digest check is bypassed by the bootstrap change.
 
 The next implementation must version and integrate an acyclic binding across
 static policy production, artifact verification, launch and runtime attestation.
 Static policy commitments must precede final generation/launch identities;
 runtime evidence must retain genuine independent signature, role, measurement,
 nonce, generation and rollback admission without embedding its own final hash.
+Current and peer-role runtime receipts must be separately admitted before their
+identities reach operation mappers; inserting derived values into the signed
+configuration payload would change its identity and is not a valid handoff.
 Skipping membership checks, treating a caller-supplied digest as authority, or
 enrolling historical configuration from retained data is not a remedy. Durable
 caller recovery and historical resolution remain pending that admission work.

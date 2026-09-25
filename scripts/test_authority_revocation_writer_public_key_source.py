@@ -138,7 +138,6 @@ class RevocationWriterPublicKeySourceTests(unittest.TestCase):
                    if key.value == "planner-writer"]
         self.shape(writer, '''frozenset({
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
             "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",

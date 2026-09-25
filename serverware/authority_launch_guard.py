@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import fcntl
+import os
+import stat
 from copy import deepcopy
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -8,6 +11,7 @@ from typing import Any, Mapping
 _active_role: str | None = None
 _manifest_digest: str | None = None
 _retained_descriptors: frozenset[int] = frozenset()
+_bootstrap_control_identity: tuple = ()
 _package_versions: Mapping[str, str] = MappingProxyType({})
 _generation: Mapping[str, Any] = MappingProxyType({})
 _native_stage_zero_handoff: Mapping[str, Any] = MappingProxyType({})
@@ -23,11 +27,50 @@ _artifact_trust_state: Mapping[str, Any] = MappingProxyType({})
 _launch_assurance: Mapping[str, Any] = MappingProxyType({})
 
 
+def _require_bootstrap_control_identity(identity: tuple) -> None:
+    """Recheck immutable custody of already root-verified original control bytes."""
+    if (
+        type(identity) is not tuple or len(identity) != 10
+        or any(type(value) is not int or value < 0 for value in identity[:9])
+        or not 3 <= identity[0] <= 2**31 - 1
+        or type(identity[9]) is not str or len(identity[9]) != 71
+        or not identity[9].startswith("sha256:")
+        or any(character not in "0123456789abcdef" for character in identity[9][7:])
+    ):
+        raise RuntimeError("authority bootstrap control observation is invalid")
+    descriptor = identity[0]
+    if (
+        os.environ.get("SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD") != str(descriptor)
+        or os.environ.get("SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_PATH")
+    ):
+        raise RuntimeError("authority bootstrap control environment changed")
+    try:
+        metadata = os.fstat(descriptor)
+        seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+    except OSError as exc:
+        raise RuntimeError("authority bootstrap control descriptor is unavailable") from exc
+    required_seals = 0x0001 | 0x0002 | 0x0004 | 0x0008
+    actual = (
+        descriptor, metadata.st_dev, metadata.st_ino, metadata.st_mode,
+        metadata.st_uid, metadata.st_gid, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+    if (
+        actual != identity[:9] or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 0 or metadata.st_uid != 0
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or not 2 <= metadata.st_size <= 64 * 1024 * 1024
+        or seals & required_seals != required_seals
+    ):
+        raise RuntimeError("authority bootstrap control custody changed")
+
+
 def activate(
     *,
     role: str,
     manifest_digest: str,
     retained_descriptors: frozenset[int],
+    bootstrap_control_identity: tuple,
     package_versions: Mapping[str, str],
     generation: Mapping[str, Any],
     native_stage_zero_handoff: Mapping[str, Any],
@@ -43,6 +86,7 @@ def activate(
     global _active_role
     global _manifest_digest
     global _retained_descriptors
+    global _bootstrap_control_identity
     global _package_versions
     global _generation
     global _native_stage_zero_handoff
@@ -120,9 +164,51 @@ def activate(
         )
     ):
         raise RuntimeError("authority measured launch activation is invalid")
+    _require_bootstrap_control_identity(bootstrap_control_identity)
+    control = stage_zero_request.get("bootstrapControl")
+    if (
+        not isinstance(control, Mapping)
+        or set(control) != {"name", "fd", "envelopeSchema", "maximumBytes"}
+        or control["name"] != "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
+        or type(control["fd"]) is not int
+        or control["fd"] != bootstrap_control_identity[0]
+        or control["envelopeSchema"] != "serverware.signedPolicyAuthorityLaunchManifest/v5"
+        or type(control["maximumBytes"]) is not int
+        or control["maximumBytes"] != 64 * 1024 * 1024
+        or control["fd"] not in retained_descriptors
+    ):
+        raise RuntimeError("authority bootstrap control is not the admitted request descriptor")
+    other_descriptors = {
+        listener_descriptor,
+        *launch_identity_descriptors.values(),
+        *(value["fd"] for value in mutable_state_descriptors.values()),
+        stage_zero_request["stageZero"]["fd"],
+        stage_zero_request["process"]["pidfd"]["fd"],
+        *(value["fd"] for value in stage_zero_request["retainedFiles"]),
+        *(value["fd"] for value in stage_zero_request["retainedDirectories"]),
+        *(value["fd"] for value in stage_zero_request["credentials"]),
+    }
+    if control["fd"] in other_descriptors:
+        raise RuntimeError("authority bootstrap control aliases another descriptor")
+    # Non-preserved stage-zero declarations still participate in numeric
+    # collision rejection, but may already be closed in this process.
+    inherited_descriptors = {
+        *stage_zero_request["execution"]["preserveFds"],
+        listener_descriptor,
+        *launch_identity_descriptors.values(),
+        *(value["fd"] for value in stage_zero_request["credentials"]),
+    }
+    inherited_descriptors.discard(control["fd"])
+    for descriptor in inherited_descriptors:
+        metadata = os.fstat(descriptor)
+        if (metadata.st_dev, metadata.st_ino) == bootstrap_control_identity[1:3]:
+            raise RuntimeError("authority bootstrap control inode aliases another descriptor")
     _active_role = role
     _manifest_digest = manifest_digest
     _retained_descriptors = retained_descriptors
+    # The raw SHA is an observation after root verification, not a declaration
+    # accepted from the signed request. Seals and the exact stamp protect it.
+    _bootstrap_control_identity = bootstrap_control_identity
     _package_versions = MappingProxyType(dict(package_versions))
     _generation = MappingProxyType(deepcopy(dict(generation)))
     _native_stage_zero_handoff = MappingProxyType(
@@ -158,6 +244,7 @@ def require_active(role: str) -> str:
         raise RuntimeError(
             "authority service was not entered by the measured launcher"
         )
+    _require_bootstrap_control_identity(_bootstrap_control_identity)
     return _manifest_digest
 
 

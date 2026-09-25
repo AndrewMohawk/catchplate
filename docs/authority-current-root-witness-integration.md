@@ -3,10 +3,13 @@
 Status: source-only integration, not a provisioned or running current-root
 authority. Source `.132` supplies complete-vector computation; `.133` adds
 delta compatibility, dedicated signed enrollment/controls and a durable local
-one-pending decision owner. These do not supply an independently admitted cold
-startup, latest-head service, listener or successor SQL execution. Existing
-replay-witness purposes remain unchanged. Source components and authored
-fixtures are unbuilt and unexecuted.
+one-pending decision owner. Source `.134` adds genuine six-operation plan replay,
+computation reserve production, full SQL observation/configured read ownership
+and protected marker schema ([details](authority-current-root-computation.md)).
+These do not supply an
+independently admitted cold startup, latest-head service, listener or successor
+SQL execution. Existing replay-witness purposes remain unchanged. Source
+components and authored fixtures are unbuilt and unexecuted.
 
 The purpose is to make a future Snapshot/v4 bind independently admitted primary
 and counted roots, without treating a restored database, signed historical
@@ -151,6 +154,12 @@ or an assured SQL completion producer:
 | Completion | Exact pending identity/fence, retained original writer receipt bytes/digest, snapshot, before/after vectors, result and purpose-bound postcommit assurance from an enrolled producer. |
 | Durable record | Exact canonical request/response bytes and signatures, enrollment/generation, predecessor and sequence, vector/pending state and consumed transition identities. |
 
+The `.134` reserve producer now genuinely replays original successor plans and
+binds a dedicated computationSnapshot/v1. That identity is not revocation
+Snapshot/v4 or proof of capability admission; Snapshot/v4 execution integration
+in the requirements above remains separate. Source computation exists, while
+its independently trusted measured/cold owner and postcommit producer do not.
+
 All inventories, canonical envelopes, retained records, proof work and historical
 lookups need source-fixed limits and rejection of duplicate/unknown fields and
 identities. Reserve completion/recovery capacity before admission. The existing
@@ -228,20 +237,21 @@ The source already has a deliberate framework custody boundary:
   [`metadata_schema_source.py`](../serverware/authority_store/metadata_schema_source.py)
   contains the existing consumed-envelope/writer/external-witness receipt DDL.
 
-Use a new purpose-specific immutable consumption/commit marker in that protected
-untracked framework inventory, or explicitly version an existing receipt seam.
-Do not silently reinterpret an existing purpose or declare an ordinary
-application table to be framework custody. The new marker must bind enrollment,
-generation, pending decision, predecessor checkpoint/fence, operation/request,
-capability, snapshot and actual after-vector commitments, with exact one-use
-identity/uniqueness constraints. Its admitted executor-only operation inserts
-it after actual after-root checks, within the same SQL transaction. It has no
-primary or counted maintenance trigger.
+Source `.134` adds the purpose-specific immutable
+`policy_authority_current_root_commit_markers` schema to that protected,
+untracked inventory. Its exact 18 scalar fields bind enrollment/generation,
+pending decision/request, predecessor checkpoint/fence, operation/request,
+capability, snapshot, before/after vectors and result, with fixed uniqueness
+constraints. No writer-receipt field introduces the cycle above; it has no
+primary or counted maintenance trigger. The executor has SELECT only and no
+insert function exists. The future admitted executor operation must insert the
+marker after actual after-root checks, within the same SQL transaction.
 
-This requires coordinated exact DDL, canonical/scratch catalog contracts,
-owner/ACL/function admission, framework classifications, source manifests and
-receipt validation. The marker is protected transaction evidence, not proof
-that the database has not been rolled back. Its absence confers no authority.
+The schema, canonical catalog/ACL and framework/source-inventory boundaries now
+exist; actual executor/function admission, writes and receipt validation remain
+unimplemented. A genuinely written marker would be protected transaction
+evidence, not proof that the database has not been rolled back. Its absence
+confers no authority.
 The final signed root receipt belongs in a separately defined protected
 framework log after independent completion, not inside the root it signs.
 
@@ -271,12 +281,15 @@ unknown-outcome handling. Its fixed one-use role is not a general current-root
 service, and a separately located PostgreSQL database alone does not prove
 rollback resistance. Do not repurpose its schema, signing purposes or enrollment.
 
-Complete-vector computation, necessary delta checks, purpose-specific signature
-admission and a durable local one-pending owner are implemented as separate
-source components. Required integration remains: independently admitted cold
-enrollment and exact latest-head provisioning; a serving owner and transport;
-assured computation/completion producers and generation/recovery lifecycle;
-protected SQL markers and postcommit assurance; and coordinated Snapshot/v4,
+Complete-vector computation, necessary delta checks, genuine plan replay and
+reserve production, same-transaction full observation with a configured read
+owner, protected marker schema, purpose-specific signature admission and a
+durable local one-pending owner are implemented as separate source components. Required integration
+remains: independently admitted cold enrollment and exact latest-head
+provisioning; a serving owner and transport;
+trusted measurement/key ownership for the real computation producer, an assured
+completion producer and generation/recovery lifecycle; protected SQL marker
+insertion and postcommit assurance; and coordinated Snapshot/v4,
 planner, executor, receipt, schema/ACL and source-manifest integration. Every
 application writer, including legacy/direct DML and authorization-source updates,
 must participate or be fenced. Installing counted maintenance triggers alone

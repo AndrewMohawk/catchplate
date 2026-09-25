@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.133"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.134"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -488,6 +488,44 @@ WEBAUTHN_TRANSITION_RETENTION_CONTRACT = MappingProxyType({
         "logical-attempt-reservation", "capability", "outer-commit", "execution", "witness"),
 })
 
+# Protected transaction evidence, deliberately not an authenticated business
+# row. The postcommit receipt commits this marker; the marker must not depend
+# on that later receipt or on the external current-root completion receipt.
+CURRENT_ROOT_COMMIT_MARKER_TABLE = "policy_authority_current_root_commit_markers"
+CURRENT_ROOT_COMMIT_MARKER_COLUMNS = (
+    "pending_decision_digest", "source_revision", "database_id", "enrollment_digest",
+    "generation_digest", "pending_request_digest", "pending_sequence",
+    "predecessor_sequence", "predecessor_head_digest", "fence", "operation",
+    "request_digest", "operation_id", "capability_digest", "snapshot_digest",
+    "before_vector_digest", "after_vector_digest", "result_digest",
+)
+CURRENT_ROOT_COMMIT_MARKER_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityCurrentRootCommitMarkerStorage/v1",
+    "table": CURRENT_ROOT_COMMIT_MARKER_TABLE,
+    "columns": CURRENT_ROOT_COMMIT_MARKER_COLUMNS,
+    "primaryKey": ("pending_decision_digest",),
+    "uniqueKeys": (("pending_request_digest",), ("enrollment_digest", "fence"),
+        ("enrollment_digest", "operation_id"), ("enrollment_digest", "capability_digest")),
+    "operations": ("webauthn.credential.revoke", "webauthn.registration.evidence.admit",
+        "webauthn.registration.finalize", "webauthn.trust.complete",
+        "webauthn.trust.installation.admit", "webauthn.trust.stage"),
+    "sequenceBinding": "pending=predecessor+1",
+    "snapshotIdentity": "source-controlled-canonical-digest-not-snapshot-v4-coercion",
+    "postgresOnly": True, "sqliteAdmission": False,
+    "runtimePrivileges": (), "verifierPrivileges": (), "plannerPrivileges": (),
+    "issuerPrivileges": (), "executorPrivileges": ("SELECT",),
+    "insertAuthority": "future-fixed-owner-executor-function-after-actual-root-checks",
+    "installedInsertFunction": None, "publicExecutionEnabled": False,
+    "transactionOwnership": "same-transaction-as-business-writes-and-actual-after-vector",
+    "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
+    "frameworkCustodyExcludedFromBusinessRoots": True,
+    "primaryMaintenance": False, "countedMaintenance": False,
+    "postcommitBinding": "postcommit-receipt-commits-marker-not-marker-commits-receipt",
+    "existingStoreMigration": "separately-reviewed-no-adoption-synthesis-or-cascade",
+    "authorityExclusions": ("capability-admission", "currentness", "rollback-resistance",
+        "missing-row-proof", "execution", "external-completion", "retry"),
+})
+
 REVOCATION_RETAINED_CAPABILITY_TABLE = "policy_authority_revocation_retained_capabilities"
 REVOCATION_RETAINED_CAPABILITY_COLUMNS = (
     "capability_id", "capability_protocol", "capability_record_digest", "planner_transaction_id",
@@ -618,6 +656,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         REVOCATION_RETAINED_CAPABILITY_TABLE,
         WEBAUTHN_EVIDENCE_RETAINED_TABLE,
         WEBAUTHN_TRANSITION_RETAINED_TABLE,
+        CURRENT_ROOT_COMMIT_MARKER_TABLE,
         "policy_authority_query_dependency_manifests",
         "policy_authority_schema_contracts",
         "policy_authority_verifier_capabilities",
@@ -2774,6 +2813,7 @@ def operation_contract_document() -> dict[str, Any]:
         "revocationRetention": dict(REVOCATION_RETENTION_CONTRACT),
         "webauthnEvidenceRetention": dict(WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
         "webauthnTransitionRetention": dict(WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
+        "currentRootCommitMarker": dict(CURRENT_ROOT_COMMIT_MARKER_CONTRACT),
         "revocationWriterRequestCustody": dict(REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT),
         "revocationWriterAckCustody": dict(REVOCATION_WRITER_ACK_CUSTODY_CONTRACT),
         "revocationCapabilityCustody": dict(REVOCATION_CAPABILITY_CUSTODY_CONTRACT),

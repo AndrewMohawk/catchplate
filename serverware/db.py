@@ -1524,6 +1524,7 @@ _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES = (
     "policy_authority_webauthn_assertion_evidence",
     "policy_authority_webauthn_evidence_retained_plans",
     "policy_authority_webauthn_transition_retained_plans",
+    "policy_authority_current_root_commit_markers",
     "policy_authority_authorization_projections",
     "policy_authority_revocation_retained_plans",
     "policy_authority_revocation_writer_requests",
@@ -1825,6 +1826,7 @@ _POLICY_AUTHORITY_FRAMEWORK_CUSTODY_TABLES = frozenset(
             ],
         )
     } | set(authority_contract.POSTGRES_COUNTED_STORE_TABLES)
+    | {authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE}
 )
 _POLICY_AUTHORITY_OPERATION_READ_TABLES = MappingProxyType(
     {
@@ -3998,8 +4000,14 @@ def _seal_postgres_schema_acl(
         )
         for table in sorted(runtime_read_only_tables):
             table_name = _policy_candidate_authority_identifier(table)
+            # The current-root marker is executor-readable framework custody,
+            # not a runtime-readable business row. No runtime role gets DML.
             cur.execute(
-                "REVOKE INSERT, UPDATE, DELETE ON "
+                (
+                    "REVOKE ALL ON "
+                    if table == authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE
+                    else "REVOKE INSERT, UPDATE, DELETE ON "
+                )
                 + schema_name
                 + "."
                 + table_name
@@ -4637,7 +4645,11 @@ def _seal_postgres_schema_acl(
             kind = str(relation["relkind"])
             expected = (
                 set()
-                if kind == "S"
+                if kind == "S" or (
+                    kind in {"r", "p"}
+                    and name == authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE
+                    and name in runtime_read_only_tables
+                )
                 else {"SELECT"}
                 if kind in {"r", "p"}
                 and name in runtime_read_only_tables
@@ -6536,6 +6548,10 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "retained WebAuthn transition storage requires a separately reviewed migration"
                 )
+            if _metadata_table_exists(conn, authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "current-root commit marker storage requires a separately reviewed migration"
+                )
             for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
                 if _metadata_table_exists(conn, table):
                     conn.execute(
@@ -6906,6 +6922,10 @@ def _prepare_policy_candidate_authority_schema(
     if _metadata_table_exists(conn, authority_contract.WEBAUTHN_TRANSITION_RETAINED_TABLE):
         raise PolicyCandidateAuthorityError(
             "retained WebAuthn transition storage requires a separately reviewed migration"
+        )
+    if _metadata_table_exists(conn, authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "current-root commit marker storage requires a separately reviewed migration"
         )
     for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
         if _metadata_table_exists(conn, table):

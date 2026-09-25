@@ -1,8 +1,9 @@
 # Current-root decisions and trust boundaries
 
-These are the `.133` current-root decisions, separate from the existing replay
-witness protocol. This is source-only work, not an executed or provisioned
-authority, production approval or successor-execution permission. See the
+These are the `.133` current-root decisions with `.134` computation/storage
+prerequisites, separate from the existing replay-witness protocol. This is
+source-only work, not an executed or provisioned authority, production approval
+or successor-execution permission. See the
 [integration boundary](authority-current-root-witness-integration.md) for the
 remaining database and executor work.
 
@@ -21,6 +22,13 @@ durable decision receipt. These roles are distinct, not substitutions for
 generic response keys. A signature proves the enrolled producer's assertion,
 not native/TEE measurement or SQL commit by itself. Real mutation/projection
 proofs and purpose-bound postcommit assurance remain separate prerequisites.
+
+Source `.134` now supplies [actual six-operation plan replay and reserve
+production](authority-current-root-computation.md), not merely a computation
+signature helper. It produces a distinct computationSnapshot/v1 commitment;
+it does not reinterpret revocation Snapshot/v4 or admit an original capability.
+Its explicit `capabilityDigest` is scope only. Trusted measurement and cold
+signer/serving ownership remain unimplemented.
 
 The complete-vector codec and [delta compatibility check](../serverware/authority_current_root_delta.py)
 bind all source tables/profiles and preserve nonwritable descriptors. Primary
@@ -106,9 +114,14 @@ is supplied by this source slice. The existing replay-witness purposes and
 legacy operation gates are not widened.
 
 Successor SQL execution still needs the exact fenced decision/capability
-admission, protected same-transaction markers, maintained complete roots and
-purpose-bound postcommit/recovery integration. Every application writer must
-participate or be excluded. Registration evidence custody and signed planning
-remain distinct from inserting the business evidence row or finalizing a
+admission, protected same-transaction marker insertion, maintained complete
+roots and purpose-bound postcommit/recovery integration. The `.134` marker
+schema is immutable framework storage with executor SELECT only and no insert
+function; the raw complete-vector observer supplies no enrollment/currentness.
+Its configured read owner now supplies the real admitted PostgreSQL read-only
+connection lifecycle, not cold configuration-signature or latest-head admission.
+Every application writer must participate or be excluded. Registration evidence
+custody and signed planning remain distinct from inserting the business evidence
+row or finalizing a
 credential. This source-only work has not been built, tested, imported or run;
 no startup or SQL execution is claimed.

@@ -194,6 +194,7 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "revocationRetention": dict(authority_contract.REVOCATION_RETENTION_CONTRACT),
             "webauthnEvidenceRetention": dict(authority_contract.WEBAUTHN_EVIDENCE_RETENTION_CONTRACT),
             "webauthnTransitionRetention": dict(authority_contract.WEBAUTHN_TRANSITION_RETENTION_CONTRACT),
+            "currentRootCommitMarker": dict(authority_contract.CURRENT_ROOT_COMMIT_MARKER_CONTRACT),
             "revocationWriterRequestCustody": dict(authority_contract.REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT),
             "revocationWriterAckCustody": dict(authority_contract.REVOCATION_WRITER_ACK_CUSTODY_CONTRACT),
             "revocationCapabilityCustody": dict(authority_contract.REVOCATION_CAPABILITY_CUSTODY_CONTRACT),
@@ -1277,6 +1278,7 @@ def _policy_candidate_authority_required_guard_names(
                               "serverware_writer_ack_sqlite_insert_guard",
                               "serverware_webauthn_evidence_retained_sqlite_insert_guard",
                               "serverware_webauthn_transition_retained_sqlite_insert_guard",
+                              "serverware_current_root_marker_sqlite_insert_guard",
                               "serverware_capability_retention_insert_guard",
                               "serverware_capability_sidecar_sqlite_insert_guard"})
     for table in (
@@ -1550,6 +1552,15 @@ def _validate_policy_candidate_authority_structure(
                 raise PolicyCandidateAuthorityError(
                     "counted custody columns are not source exact: " + table
                 )
+    marker_columns = table_manifests[
+        authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE
+    ]["columns"]
+    if (tuple(column["name"] for column in marker_columns)
+            != authority_contract.CURRENT_ROOT_COMMIT_MARKER_COLUMNS
+            or any(column["nullable"] for column in marker_columns)):
+        raise PolicyCandidateAuthorityError(
+            "current-root commit marker columns are not source exact"
+        )
     for table in (
         _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
         + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES

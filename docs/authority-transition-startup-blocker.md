@@ -1,9 +1,25 @@
 # Authority transition startup blocker
 
-Status: unresolved implementation gap; control-plane startup remains blocked.
+Status: source `.98` closes the six-program source inventory through a separate
+genuine `typed-successor-planning` registry. Fixed lazy factories now select
+actual configured owners; no placeholder legacy kernel or disabled closure
+check replaces them. Legacy kernel/planning inventories and legacy service,
+SQL execution and witness gates explicitly exclude these successors.
+
+Revocation and the two evidence-admission owners produce signed originals.
+Registration finalization, trust staging and completion now have actual
+read-acquisition owners, but not signed-plan producers. This source closure
+does not demonstrate successful import or runtime startup: the current source
+is unbuilt and unexecuted. Public invocation, successor reservation/capability/
+atomic execution and independent production infrastructure remain unfinished.
+See [current successor status](webauthn-successor-transitions.md) for those
+boundaries. The historical failure below is not a new `.98` execution result.
+
+## Historical startup diagnosis
+
 The frozen `f16da11` source-root run of `scripts/test_control_plane_startup.py`
 failed while importing `authority_transition_registry`, before service startup.
-The diagnostic-only change described here does not make that runtime healthy.
+The diagnostic-only change at that checkpoint did not make the runtime healthy.
 
 At source `.83`, `authority_contract.OPERATION_REGISTRY` declares six transitions
 that have no kernels in the policy, quota, or release registries:
@@ -18,8 +34,8 @@ that have no kernels in the policy, quota, or release registries:
 The original four have reserved legacy argument/evidence sets in
 `serverware/authority_transition_policy.py`; successor adapters and the two
 admission operations have their own closed sets described in
-[successor transitions](webauthn-successor-transitions.md). No complete configured
-implementations are registered. The two new admission operations also need
+[successor transitions](webauthn-successor-transitions.md). At `.83`, no complete configured
+implementations were registered. The two new admission operations also needed
 genuine callable database handlers before the controlled-writer dispatcher can
 install their boundaries; no placeholder handlers have been added.
 An unregistered explicit self-revocation candidate now exists in
@@ -35,14 +51,15 @@ legacy mutation code. Changing the database backend cannot repair this
 unconditional import-time failure.
 
 The four-kernel diagnostic from `f16da11` is historical runtime evidence. The
-current six-kernel gap follows from source inspection, not a new executed
-startup check. The revision notes below retain their historical gap counts.
+six-kernel gap at `.83` followed from source inspection, not a new executed
+startup check. The revision notes below retain their historical gap counts;
+the `.98` status above supersedes them for current source inventory closure.
 
 The coordinated implementation direction is documented in
 [WebAuthn authority integration](webauthn-authority-integration.md), including
 aggregate staging, authenticated predicate/capacity proofs, independent roots
-and time, and non-circular evidence production. It does not change the current
-contract or waive any startup gate.
+and time, and non-circular evidence production. The design does not itself
+waive any admission or startup gate.
 
 Source `.74` adds [successor business-transition helpers](webauthn-successor-transitions.md)
 for registration, aggregate trust staging and installation-bound completion,

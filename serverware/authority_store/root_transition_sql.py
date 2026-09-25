@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import textwrap
 
-from serverware import authority_contract
+from serverware import authority_contract, authority_transition_registry
 from serverware.authority_radix_proof import empty_digest
 from serverware.authority_root_transition import (
     ROOT_FIELDS as _ROOT_FIELDS,
@@ -94,7 +94,7 @@ canonicalizer. Only the closed ASCII root transition is canonicalized here.
     metric_bounds_json = _literal(json.dumps(bounds, sort_keys=True))
     handler_digests = _literal(json.dumps({
         operation: authority_contract.handler_contract_digest(operation)
-        for operation in authority_contract.OPERATIONS
+        for operation in sorted(authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS)
     }, sort_keys=True))
     row_joins = {
         "plannerTransactionId": "planner_transaction_id", "operation": "operation",
@@ -116,6 +116,7 @@ canonicalizer. Only the closed ASCII root transition is canonicalized here.
     return textwrap.dedent(f"""
         IF planner.plan_protocol IS DISTINCT FROM 'v3'
             OR planner.retained_record_digest IS NOT NULL
+            OR ({handler_digests}::pg_catalog.jsonb ? planner.operation) IS NOT TRUE
         THEN RAISE EXCEPTION 'authority root transition requires legacy v3 protocol'; END IF;
         IF planner.exact_plan_base64url IS NULL
             OR planner.exact_plan_base64url !~ '^[A-Za-z0-9_-]+$'

@@ -219,7 +219,7 @@ def execute_authority_controlled_writer(
         != _db_value("_POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE")
         or operation not in authority_contract.OPERATIONS
         or operation
-            not in authority_transition_registry.PLANNABLE_OPERATIONS
+            not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         or not isinstance(arguments, Mapping)
         or not isinstance(deadline_monotonic_ns, int)
         or time.monotonic_ns() >= deadline_monotonic_ns
@@ -331,16 +331,16 @@ def _install_authority_controlled_writer_boundaries() -> None:
             __signature: inspect.Signature = signature,
             **kwargs: Any,
         ) -> Any:
-            if _db_value("_policy_authority_writer_context").get() is not None:
-                return __handler(*args, **kwargs)
             if (
                 __operation
-                not in authority_transition_registry.PLANNABLE_OPERATIONS
+                not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             ):
                 raise _db_value("MetadataStoreError")(
                     "authority writer operation has no exact typed "
                     "transition program"
                 )
+            if _db_value("_policy_authority_writer_context").get() is not None:
+                return __handler(*args, **kwargs)
             if kwargs.get("_connection") is not None:
                 raise _db_value("MetadataStoreError")(
                     "authority writer connection injection is forbidden"

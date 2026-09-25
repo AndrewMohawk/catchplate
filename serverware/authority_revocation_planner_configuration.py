@@ -110,7 +110,12 @@ def _planner_from_configuration_on_work(*, payload, configuration_digest, genera
         verifier_session = configuration._frame_text(configuration._VERIFIER_SESSION,
             (configuration_digest, verifier["measurementDigest"], verifier["attestationReceiptDigest"]), work)
         _bind_signer(planner_private_key, planner_key, work)
-        return planning.RevocationObservedPlanner(read_dsn=read_dsn, connect_timeout_seconds=timeout,
+        # Resolve the actual successor only after owning and binding the same
+        # configured inputs. Registry construction itself imports no planner.
+        from serverware import authority_transition_registry as registry
+
+        program = registry.successor_program("webauthn.credential.revoke")
+        return program.factory(read_dsn=read_dsn, connect_timeout_seconds=timeout,
             database_identity=database_identity, planner_private_key=planner_private_key,
             planner_public_key=planner_key, verifier_public_key=verifier_key,
             expected_verifier_identity={"sessionIdentityDigest": verifier_session,

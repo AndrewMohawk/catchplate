@@ -240,7 +240,7 @@ def decode_base64url(
 def typed_request_digest(request: Mapping[str, Any]) -> str:
     # Computing a source-declared digest is not permission to plan it. Keep
     # the public registration gate here, before the shared computation body.
-    if request.get("operation") not in authority_transition_registry.PLANNABLE_OPERATIONS:
+    if request.get("operation") not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS:
         raise AuthorityPlannerError("typed planner request is not closed")
     return _typed_request_digest(request, work=None)
 
@@ -717,7 +717,8 @@ class TypedTransitionPlanningProgram:
         verified_webauthn_evidence: Mapping[str, Any] | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
         if (
-            self.kernel.operation != self.operation
+            self.operation not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
+            or self.kernel.operation != self.operation
             or self.kernel.handler != self.handler
             or self.kernel.program_id
                 != authority_contract.transition_program_id(self.operation)
@@ -1286,7 +1287,8 @@ class TypedTransitionPlanningProgram:
         if state.complete_query_evidence is not None:
             raise AuthorityPlannerError("complete planning requires the successor retained-evidence protocol")
         if (
-            operation != self.operation
+            operation not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
+            or operation != self.operation
             or handler != self.handler
             or self.kernel.operation != operation
             or self.kernel.handler != handler
@@ -1798,6 +1800,9 @@ PLANNING_PROGRAMS: Mapping[str, PlanningProgram] = MappingProxyType(
         in sorted(authority_transition_registry.KERNELS.items())
     }
 )
+
+if set(PLANNING_PROGRAMS) != set(authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS):
+    raise RuntimeError("legacy measured planner program inventory is not source exact")
 
 
 def _validate_database_identity(
@@ -2775,11 +2780,13 @@ def _read_bounded_transition_rows(
                 f"target.{item.column} " + ("DESC" if item.descending else "ASC")
                 for item in resolved_query.order_by)
             if (operation == authority_transition_webauthn_completion.OPERATION and trace._counted_writes
+                    or operation in (authority_transition_webauthn_registration.OPERATION,
+                        authority_transition_webauthn_trust_stage.OPERATION) and trace._complete_queries
                     or operation in _EVIDENCE_ADMISSION_READ_OPERATIONS):
-                # These exact-PK successors have no complete collector. Keep
-                # separately bounded ordinary SQL callbacks from changing the
-                # original proof/kernel allowance, on success or failure. The
-                # admission operations retain ordinary trace permissions only.
+                # Keep the successors' separately bounded ordinary SQL calls
+                # from changing the original proof/kernel allowance on either
+                # success or failure. Complete-range reads still use their
+                # real collector; no trace permission is widened here.
                 _completion_read_callback_on_work(query_work,
                     lambda: trace.read(query.table, _query_trace_key(operation, query)))
                 result = _completion_read_callback_on_work(query_work, lambda: cursor.execute(
@@ -2883,8 +2890,17 @@ def _read_bounded_transition_rows(
     if complete_acquisition is not None:
         complete_acquisition.finish_reads()
         pending = query_sources.unproved_rows(selected_rows)
-        proofs = _derive_multiproofs(cursor, selected_rows=pending,
-            roots=complete_acquisition.roots_for_proofs(), trace=trace)
+        proof_roots = complete_acquisition.roots_for_proofs()
+        if operation in (authority_transition_webauthn_registration.OPERATION,
+                authority_transition_webauthn_trust_stage.OPERATION):
+            # Root ownership above legitimately charges this work. The actual
+            # separately bounded proof callback must leave it unchanged.
+            proofs = _completion_read_callback_on_work(query_work,
+                lambda: _derive_multiproofs(cursor, selected_rows=pending,
+                    roots=proof_roots, trace=trace))
+        else:
+            proofs = _derive_multiproofs(cursor, selected_rows=pending,
+                roots=proof_roots, trace=trace)
         proofs = query_sources.merge_proofs(selected_rows=selected_rows, remaining_proofs=proofs)
         verified = complete_acquisition.verify(selected_rows=selected_rows, before_proofs=proofs)
         selected_rows = verified.selected_rows
@@ -3240,6 +3256,8 @@ def _read_planning_inputs(
     query_work: _ValidationWork | None = None,
     verified_webauthn_evidence: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
+    if operation not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS:
+        raise AuthorityPlannerError("successor planning cannot enter the legacy read dispatcher")
     if operation in WEBAUTHN_CHALLENGE_OPERATIONS:
         return _read_webauthn_challenge_planning_inputs(
             cursor,
@@ -3494,7 +3512,7 @@ def validate_planner_request(request: Mapping[str, Any]) -> None:
         or not isinstance(typed_request, dict)
         or not isinstance(verifier_identity, dict)
         or request.get("operation")
-            not in authority_transition_registry.PLANNABLE_OPERATIONS
+            not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         or typed_request.get("operation") != request.get("operation")
         or typed_request_digest(typed_request)
             != request.get("requestDigest")
@@ -3661,7 +3679,7 @@ def validate_measured_plan_payload(
             "measured-plan payload is not closed"
         )
     operation = measured_plan["operation"]
-    if operation not in authority_transition_registry.PLANNABLE_OPERATIONS:
+    if operation not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS:
         raise AuthorityPlannerError(
             "measured-plan operation has no exact transition program"
         )
@@ -3963,10 +3981,10 @@ class MeasuredPlanner:
             or connect_timeout_seconds < 1
             or tuple(sorted(set(enabled_operations))) != enabled_operations
             or set(enabled_operations)
-                - set(authority_transition_registry.PLANNABLE_OPERATIONS)
+                - set(authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS)
             or set(enabled_operations) - set(programs)
             or set(programs)
-                - set(authority_transition_registry.PLANNABLE_OPERATIONS)
+                - set(authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS)
         ):
             raise AuthorityPlannerError(
                 "read-only planner configuration is invalid"
@@ -4576,7 +4594,7 @@ class ExecutionEnvelopePersistence:
         if (
             set(request) != required
             or request.get("operation")
-                not in authority_contract.OPERATION_REGISTRY
+                not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             or request.get("parentEnvelopeId")
                 != request.get("plannerTransactionId")
             or any(

@@ -1664,11 +1664,10 @@ class WitnessStateStore:
                         "reconcile",
                         "webauthn-trust-publish",
                     }
-                and not is_historical_generation
                 and request.get("operation")
                     not in (
                         authority_transition_registry
-                        .PLANNABLE_OPERATIONS
+                        .LEGACY_PLANNABLE_OPERATIONS
                     )
             )
             or request.get("envelopeId")

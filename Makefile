@@ -992,6 +992,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/webauthn_trust_sql.py \
 	serverware/authority_store/wire_json_sql.py \
 	serverware/authority_transition_core.py \
+	serverware/authority_successor_programs.py \
+	serverware/authority_webauthn_transition_planning.py \
 	serverware/authority_transition_policy.py \
 	serverware/authority_transition_webauthn.py \
 	serverware/authority_transition_webauthn_registration.py \
@@ -2788,6 +2790,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_trust.py \
 				serverware/authority_request_commitment.py \
 				serverware/authority_planner.py \
+				serverware/authority_successor_programs.py \
+				serverware/authority_webauthn_transition_planning.py \
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_evidence_acquisition.py \

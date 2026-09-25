@@ -2850,7 +2850,7 @@ class AuthorityRuntimeClient:
     ) -> Any:
         if (
             operation
-            not in authority_transition_registry.PLANNABLE_OPERATIONS
+            not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         ):
             raise AuthorityServiceError(
                 "runtime authority operation has no exact transition program"
@@ -5274,7 +5274,7 @@ class AuthorityProcess:
         )
         if (
             operation
-                not in authority_transition_registry.PLANNABLE_OPERATIONS
+                not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             or operation
                 not in self.configuration.role("planner")[
                     "enabledOperations"
@@ -6283,7 +6283,7 @@ class AuthorityProcess:
         if (
             not isinstance(target_operation, str)
             or target_operation
-                not in authority_transition_registry.PLANNABLE_OPERATIONS
+                not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             or target_operation
                 not in self.configuration.role("planner")[
                     "enabledOperations"
@@ -6452,7 +6452,7 @@ class AuthorityProcess:
                 "webauthn-trust-publish",
             }
             or operation
-                not in authority_transition_registry.PLANNABLE_OPERATIONS
+                not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             or (
                 phase not in {"abort", "reconcile"}
                 and time.monotonic_ns() >= deadline_monotonic_ns
@@ -7313,7 +7313,7 @@ class AuthorityProcess:
     ) -> dict[str, Any]:
         if (
             operation
-                not in authority_transition_registry.PLANNABLE_OPERATIONS
+                not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             or operation
                 not in self.configuration.role("planner")[
                     "enabledOperations"
@@ -7877,7 +7877,8 @@ class AuthorityProcess:
                 self.role_config["databaseConnectTimeoutSeconds"]
             ),
             enabled_operations=tuple(
-                self.role_config["enabledOperations"]
+                operation for operation in self.role_config["enabledOperations"]
+                if operation in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             ),
             verifier_public_key=Ed25519PublicKey.from_public_bytes(
                 _b64url_decode(verifier_config["signingPublicKeyBase64Url"], size=32)
@@ -8196,7 +8197,7 @@ class AuthorityProcess:
             or capability.get("schema")
                 != authority_contract.CAPABILITY_SCHEMA
             or capability.get("operation")
-                not in authority_transition_registry.PLANNABLE_OPERATIONS
+                not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             or capability.get("operation")
                 not in self.configuration.role("planner")[
                     "enabledOperations"

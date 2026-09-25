@@ -33,7 +33,10 @@ _CONFIGURED_CONTEXT = frozenset({"expectedPlannerIdentity", "expectedVerifierIde
     "maximumAssertionAgeNs", "maximumPlanAgeNs", "maximumClockSkewNs"})
 _CALL_CONTEXT = retention.production._CONTEXT_FIELDS - _CONFIGURED_CONTEXT - {"expectedBefore"}
 _READ_OPERATIONS = frozenset({"webauthn.credential.revoke",
+    "webauthn.registration.finalize", "webauthn.trust.stage", "webauthn.trust.complete",
     "webauthn.registration.evidence.admit", "webauthn.trust.installation.admit"})
+_COMPLETE_READ_OPERATIONS = frozenset({"webauthn.credential.revoke",
+    "webauthn.registration.finalize", "webauthn.trust.stage"})
 
 
 class RevocationPlanningError(ValueError):
@@ -198,7 +201,7 @@ class _ProducedObservedPlanBytes:
 
 @contextmanager
 def _read_scope(read_configuration, *, operation, work):
-    """Own the genuine read transaction for three fixed source operations.
+    """Own the genuine read transaction for six fixed successor operations.
 
     The exact configuration triple has no signing key. Callers must own their
     invocation graphs before entering; the yielded cursor, manifest and trace
@@ -218,7 +221,8 @@ def _read_scope(read_configuration, *, operation, work):
 
     database_identity = planner.PlannerIdentity(*identity)
     trace = planner.PlannerTrace(operation=operation,
-        _complete_queries=operation == planner.authority_transition_webauthn.OPERATION)
+        _complete_queries=operation in _COMPLETE_READ_OPERATIONS,
+        _counted_writes=operation == "webauthn.trust.complete")
     connection = reader._connect(work, lambda: psycopg.connect(read_dsn,
         row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))
     try:

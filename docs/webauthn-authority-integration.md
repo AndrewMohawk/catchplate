@@ -1,15 +1,22 @@
 # Completing the WebAuthn authority transitions
 
-Status: original implementation design, not an enabled protocol or migration.
-The current [startup inventory](authority-transition-startup-blocker.md) has
-six missing registered kernels, including the two new evidence-admission
-operations. The revision-specific successor status below is authoritative for
-current manifests and source work. Registry closure, database admission and
-external authority requirements remain enforced. This document does not
-authorize registering partial kernels or relabeling local verification as
-signed external evidence.
+Status: source `.98`, implementation only, not an enabled public protocol or
+migration. All six WebAuthn successor operations now have genuine configured
+programs in the separate `typed-successor-planning` registry. Legacy `KERNELS` and
+`PLANNING_PROGRAMS`, service routing, SQL execution and witness admission exclude
+them. This closes the source program inventory; import/runtime startup has not
+been tested. Database admission and external authority requirements remain.
 
-This design records the original gaps. The current
+Revocation and the two evidence-admission programs select actual configured
+signed-original producers. Evidence acquisition and retained replay select the
+same configured kernel factory. Registration finalization, trust staging and
+completion now select genuine read-acquisition owners, sharing the existing
+guarded transaction scope and work allowance; they do not yet produce signed
+plans. None of these registrations supplies public invocation, successor
+reservation/capability/atomic execution, physical readback or production
+readiness. All source is unbuilt and unexecuted.
+
+The remainder records the original design and revision-specific gaps. The current
 [successor implementation status](webauthn-successor-transitions.md) tracks the
 source-only work now implementing its aggregate manifest, queries, signatures,
 row effects and private acquisitions. Those additions do not activate the
@@ -55,9 +62,10 @@ authority. A durable signed retention/replay protocol, independent admission of
 those historical expectations and terminal integration remain missing. This is
 unexecuted source, with no v3 expansion, revocation-v4 relabeling or activation.
 
-The [startup blocker](authority-transition-startup-blocker.md) and
-[unactivated revocation candidate](webauthn-revocation-candidate.md) identify the
-current seams. Completing them requires the following coordinated producer,
+The [startup status and historical diagnosis](authority-transition-startup-blocker.md)
+distinguish `.98` source closure from untested runtime startup. The
+[revocation candidate](webauthn-revocation-candidate.md) retains its earlier
+activation boundaries. Completing the remaining design requires coordinated producer,
 admission, query-proof, transaction and recovery changes. A new measured
 contract must name their exact schemas, domains, limits and migration before
 activation; `vNext` below is a design label, not an accepted version string.
@@ -302,8 +310,9 @@ Completion's four business rows/mutations remain allocated to publication,
 high-water, audit and external evidence. Source `.25` explicitly grants one
 additional selected aggregate row and counter mutation, its UPDATE/proof
 permission and actual framework work allowance: total 5 / 5 / 130. This does
-not activate completion or provide the initializer or evidence authority; the
-successor's private kernel and acquisition remain unregistered source work.
+not activate completion or provide the initializer or evidence authority. The
+`.98` successor registry selects its actual configured acquisition owner, but
+signed-plan and execution admission remain separate unfinished work.
 
 Keep the digest meanings distinct: `bundleDigest` commits the unsigned bundle;
 `payloadDigest` commits the approved control-plane mutation payload, not just

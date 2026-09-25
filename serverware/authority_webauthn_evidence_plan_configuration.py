@@ -62,7 +62,12 @@ def _producer_from_configuration_on_work(*, purpose, payload, configuration_dige
             purpose=purpose, owned_payload=owned, read_dsn=read_dsn, work=work)
         planner_public_key = configuration._key(encoded_key, work, expected_spki=planner_spki)
         evidence.keys._pair_on_work(planner_private_key, planner_public_key, work)
-        return owner.EvidenceAdmissionPlanOwner(read_planner=read_planner,
+        from serverware import authority_transition_registry as registry
+
+        operation = (read_configuration.planning.registration.OPERATION if purpose == "registration"
+            else read_configuration.planning.installation.OPERATION)
+        program = registry.successor_program(operation)
+        return program.factory(read_planner=read_planner,
             planner_private_key=planner_private_key, planner_public_key=planner_public_key,
             expected_planner_identity=identity, expected_planner_spki_digest=planner_spki,
             configuration_digest=configuration_digest)

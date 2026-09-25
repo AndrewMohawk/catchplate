@@ -1,24 +1,41 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.97`, implementation only. A signed verifier-to-planner production
-request now follows an independent verifier root snapshot. The planner returns
-a signed response control plus the original plan, inputs and evaluation context;
-the client verifies that binding and genuinely replays the plan before return.
-Relay preparation remains separate from explicit custody forwarding through the
-planner to the writer. Custody digest/time responses remain unsigned peer
-observations, not execution permission or signed durability receipts.
-A separate verifier-signed lookup now retrieves retained originals through the
-same peer chain for genuine historical replay. This recovery-material path
-does not establish historical provenance, key rollover or execution recovery.
-The two evidence-admission database APIs dispatch typed semantic requests
-through the real authority boundary.
-Live planning and retained replay use the same configured, metered original-input
-kernel computation. Writer and verifier owners remain separate: the verifier
-now owns a reduced-privilege root-metadata snapshot, while retained-original
-custody remains with the writer. Verified plans still do not authorize execution.
-These helpers do not register missing kernels or repair service startup. They
-are unbuilt and unexecuted.
-The existing registry, query-proof, configuration and release gates remain.
+Status: source `.98`, implementation only. All six WebAuthn successor operations
+now have genuine configured programs in a separate `typed-successor-planning`
+registry. This closes the source program inventory, not verified import/runtime
+startup or public operation admission. Legacy kernel/planning inventories and
+legacy service, SQL execution and witness gates exclude these successors.
+Revocation and the two evidence-admission programs produce signed originals;
+registration finalization, trust staging and completion have actual read-proof
+acquisition owners, not signed-plan producers. All source remains unbuilt and
+unexecuted. Independent authority, successor execution and release gates remain.
+
+## Genuine successor program selection
+
+`authority_successor_programs.py` declares fixed lazy factories, selected through
+the actual registry rather than placeholder legacy kernels. Revocation and
+evidence-plan configuration mappers select their real configured producer
+factories. Evidence acquisition and retained replay also select the same
+purpose-fixed `EvidenceAdmissionKernel` factory before invoking its genuine
+original-input computation on the caller's work.
+
+`authority_webauthn_transition_planning.py` supplies
+`RegistrationTransitionPlanner`, `TrustStageTransitionPlanner` and
+`TrustCompletionTransitionPlanner`. Their actual `acquire` methods call the
+existing private proof/effect workers within the shared guarded read scope;
+results return only after normal cursor, transaction and connection exits.
+Revocation, registration and stage use complete-query traces; completion uses
+counted-write tracing; the two evidence-admission operations use ordinary
+exact-key traces. No replacement allowance or caller-supplied proof result is
+introduced.
+
+These three new owners return acquisition observations only. Configuration,
+request/current-root/time authority, assertion/capability bindings and committed
+stage or physical-readback provenance remain independently admitted inputs.
+They still need signed-plan integration. Registry selection does not supply
+public invocation, successor reservation, one-use capability, authorized atomic
+execution, recovery or independent production infrastructure. Earlier revision
+sections below describe their respective source checkpoints, not later closure.
 
 ## Evidence without circular dependencies
 
@@ -962,24 +979,23 @@ and existing input/resource ceilings are unchanged.
 ## Admission and execution still required
 
 Admission has configured read-only and live plan-production owners with
-purpose-scoped measured configuration, but no durable evidence INSERT owner. Final registration
-still needs its configured acquisition owner. Caller-supplied current roots, signer
-pins and request authority remain independent prerequisites, not values
-authenticated by copying.
-Trust staging still needs its independently configured request/candidate-key
-owner and signed-plan/execution integration. Completion needs its independently
-admitted committed-stage/physical-installation owner and actual readback wired
-to the evidence producer.
-Registry and public operation admission, authorized atomic execution, terminal
-witnessing and recovery remain pending. The generic evidence signer and ordinary
-row/acquisition results cannot fill those gaps or repair service startup.
+purpose-scoped measured configuration, but no authorized durable evidence INSERT
+executor. Final registration, trust staging and completion now have genuine
+configured acquisition owners; their signed-plan integration remains pending.
+Current roots, signer pins, request permission, assertion/capability authority
+and committed-stage/physical-readback provenance are still independent
+prerequisites, not values authenticated by copying.
+Source registry closure is implemented, but import/runtime startup is untested.
+Public operation admission, authorized atomic execution, terminal witnessing
+and recovery remain pending. Ordinary row/acquisition results do not fill those
+gaps.
 
 The evidence-storage integration must connect the private authenticated
 acquisitions and three-original plan custody to configured transaction ownership
-and an authorized business commit through authenticated root maintenance. The identical
-unused verified-row no-op requires an explicit empty-mutation policy when its
-configured kernel is eventually registered. No placeholder handler, keyless
-kernel, new ACL or disabled closure check supplies this remaining integration.
+and an authorized business commit through authenticated root maintenance. The
+configured evidence kernel explicitly permits the identical unused verified-row
+no-op; successor execution still must admit that policy. No placeholder handler,
+keyless kernel, new ACL or disabled closure check supplies this remaining integration.
 
 The current v9 SQL execution loader accepts its existing v3 plan protocol.
 Successor acquisition outputs cannot enter it by being relabelled as v3.

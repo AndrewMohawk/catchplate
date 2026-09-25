@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.97"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.98"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -287,6 +287,16 @@ _TYPED_WEBAUTHN_CHALLENGE_OPERATIONS = frozenset(
         "webauthn.challenge.create",
         "webauthn.challenge.claim",
         "webauthn.challenge.consume",
+    }
+)
+_TYPED_SUCCESSOR_PLANNING_OPERATIONS = frozenset(
+    {
+        "webauthn.credential.revoke",
+        "webauthn.registration.evidence.admit",
+        "webauthn.registration.finalize",
+        "webauthn.trust.complete",
+        "webauthn.trust.installation.admit",
+        "webauthn.trust.stage",
     }
 )
 _VERIFIED_ASSERTION_POLICIES = frozenset(
@@ -778,6 +788,8 @@ class AuthorityOperation:
                     else "typed-webauthn-challenge"
                     if operation
                         in _TYPED_WEBAUTHN_CHALLENGE_OPERATIONS
+                    else "typed-successor-planning"
+                    if operation in _TYPED_SUCCESSOR_PLANNING_OPERATIONS
                     else "typed-pure-transition"
                 ),
                 "businessReads": self.business_reads,

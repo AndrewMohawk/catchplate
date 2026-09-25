@@ -151,7 +151,7 @@ def install_authority_v9_executor(
             operation: spec["handler"]
             for operation, spec in authority_contract.OPERATIONS.items()
             if operation
-                in authority_transition_registry.PLANNABLE_OPERATIONS
+                in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         }
     ).replace("'", "''")
     assertion_requirements = _canonical(
@@ -159,7 +159,7 @@ def install_authority_v9_executor(
             operation: bool(spec["assertionRequired"])
             for operation, spec in authority_contract.OPERATIONS.items()
             if operation
-                in authority_transition_registry.PLANNABLE_OPERATIONS
+                in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         }
     ).replace("'", "''")
     operation_manifest_counts = _canonical(
@@ -169,7 +169,7 @@ def install_authority_v9_executor(
             )
             for operation, spec in authority_contract.OPERATIONS.items()
             if operation
-                in authority_transition_registry.PLANNABLE_OPERATIONS
+                in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         }
     ).replace("'", "''")
     operation_limits = _canonical(
@@ -181,7 +181,7 @@ def install_authority_v9_executor(
             }
             for operation, spec in authority_contract.OPERATIONS.items()
             if operation
-                in authority_transition_registry.PLANNABLE_OPERATIONS
+                in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         }
     ).replace("'", "''")
     authorization_manifest_counts = _canonical(
@@ -189,7 +189,7 @@ def install_authority_v9_executor(
             operation: len(spec["authorizationReads"])
             for operation, spec in authority_contract.OPERATIONS.items()
             if operation
-                in authority_transition_registry.PLANNABLE_OPERATIONS
+                in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         }
     ).replace("'", "''")
     authorization_read_sets = _canonical(
@@ -197,7 +197,7 @@ def install_authority_v9_executor(
             operation: list(spec["authorizationReads"])
             for operation, spec in authority_contract.OPERATIONS.items()
             if operation
-                in authority_transition_registry.PLANNABLE_OPERATIONS
+                in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         }
     ).replace("'", "''")
     capability_issuer_role = str(
@@ -220,7 +220,7 @@ def install_authority_v9_executor(
             );
             """
             if operation
-                in authority_transition_registry.PLANNABLE_OPERATIONS
+                in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
             else
             """
             RAISE EXCEPTION
@@ -296,6 +296,10 @@ def install_authority_v9_executor(
                     'writer capability v3 issuer identity is not exact';
             END IF;
             capability_value := capability_json::pg_catalog.jsonb;
+            IF ('{operation_handlers}'::pg_catalog.jsonb
+                    ? (capability_value->>'operation')) IS NOT TRUE THEN
+                RAISE EXCEPTION 'legacy writer issuer requires a legacy planning operation';
+            END IF;
             canonical_capability := {namespace}.
                 serverware_policy_authority_wire_json(
                     capability_value
@@ -452,6 +456,8 @@ def install_authority_v9_executor(
                 IF existing_capability.capability_protocol
                         IS DISTINCT FROM 'v3'
                     OR existing_capability.capability_record_digest IS NOT NULL
+                    OR ('{operation_handlers}'::pg_catalog.jsonb
+                        ? existing_capability.operation) IS NOT TRUE
                 THEN
                     RAISE EXCEPTION
                         'legacy writer issuer requires v3 capability protocol';
@@ -610,6 +616,8 @@ def install_authority_v9_executor(
                     canonical_receipt
                 );
             IF canonical_receipt IS DISTINCT FROM witness_receipt_json
+                OR ('{operation_handlers}'::pg_catalog.jsonb
+                    ? (receipt_value->>'operation')) IS NOT TRUE
                 OR supplied_witness_receipt_digest IS DISTINCT FROM
                     computed_receipt_digest
                 OR pg_catalog.jsonb_typeof(receipt_value) <> 'object'
@@ -667,6 +675,8 @@ def install_authority_v9_executor(
                       AND (
                           capability_protocol IS DISTINCT FROM 'v3'
                           OR capability_record_digest IS NOT NULL
+                          OR ('{operation_handlers}'::pg_catalog.jsonb
+                              ? operation) IS NOT TRUE
                       )
                 ) THEN
                     RAISE EXCEPTION
@@ -684,6 +694,8 @@ def install_authority_v9_executor(
             END IF;
             IF capability.capability_protocol IS DISTINCT FROM 'v3'
                 OR capability.capability_record_digest IS NOT NULL
+                OR ('{operation_handlers}'::pg_catalog.jsonb
+                    ? capability.operation) IS NOT TRUE
             THEN
                 RAISE EXCEPTION
                     'legacy witness recorder requires v3 capability protocol';
@@ -843,7 +855,8 @@ def install_authority_v9_executor(
                 'serverware.policy_authority_expected_operation',
                 true
             );
-            IF expected_operation IS NULL OR expected_operation = '' THEN
+            IF expected_operation IS NULL OR expected_operation = ''
+                OR (operation_handlers ? expected_operation) IS NOT TRUE THEN
                 RAISE EXCEPTION
                     'authority v9 central executor is owner-private';
             END IF;
@@ -875,6 +888,7 @@ def install_authority_v9_executor(
             FOR UPDATE;
             IF capability.capability_protocol IS DISTINCT FROM 'v3'
                 OR capability.capability_record_digest IS NOT NULL
+                OR (operation_handlers ? capability.operation) IS NOT TRUE
             THEN
                 RAISE EXCEPTION
                     'legacy authority executor requires v3 capability protocol';
@@ -2198,9 +2212,11 @@ def _require_executor(connection: Any) -> Any:
 
 def _require_v3_planner_row(row: Mapping[str, Any] | None) -> None:
     if (row is None or row.get("plan_protocol") != "v3"
-            or row.get("retained_record_digest") is not None):
+            or row.get("retained_record_digest") is not None
+            or type(row.get("operation")) is not str
+            or row["operation"] not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS):
         raise _db_value("MetadataStoreError")(
-            "authority legacy planner API requires v3 protocol"
+            "authority legacy planner API requires v3 protocol and a legacy operation"
         )
 
 
@@ -2270,7 +2286,7 @@ def derive_authority_v9_plan_contract(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Derive the closed plan contract without acquiring a writer session."""
-    if operation not in authority_transition_registry.PLANNABLE_OPERATIONS:
+    if operation not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS:
         raise ValueError(
             "authority v9 operation has no exact typed transition program"
         )
@@ -2315,7 +2331,7 @@ def reserve_authority_execution_envelope(
     reserved_at_epoch_ns: int,
     connection: Any,
 ) -> dict[str, Any]:
-    if operation not in authority_transition_registry.PLANNABLE_OPERATIONS:
+    if operation not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS:
         raise ValueError(
             "authority v9 operation has no exact typed transition program"
         )
@@ -2537,11 +2553,12 @@ def read_authority_execution_response(
         row = cursor.execute(
             "SELECT envelope.status, envelope.exact_response_base64url, "
             "envelope.exact_response_bytes_digest, envelope.exact_response_byte_count, "
-            "planner.plan_protocol, planner.retained_record_digest "
+            "planner.plan_protocol, planner.retained_record_digest, planner.operation "
             "FROM serverware_metadata."
             "policy_authority_execution_envelopes AS envelope "
             "LEFT JOIN serverware_metadata.policy_authority_planner_transactions AS planner "
             "ON planner.planner_transaction_id = envelope.planner_transaction_id "
+            "AND planner.operation = envelope.operation "
             "AND planner.operation_id = envelope.operation_id "
             "AND planner.request_digest = envelope.request_digest "
             "AND planner.capability_id = envelope.capability_id "
@@ -2591,7 +2608,7 @@ def reserve_authority_planner_transaction(
     reserved_at_epoch_ns: int,
     connection: Any,
 ) -> dict[str, Any]:
-    if operation not in authority_transition_registry.PLANNABLE_OPERATIONS:
+    if operation not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS:
         raise ValueError(
             "authority v9 operation has no exact typed transition program"
         )
@@ -3312,7 +3329,7 @@ def complete_authority_planner_transaction(
         or plan["schema"]
             != "serverware.policyAuthorityMeasuredPlan/v3"
         or plan.get("operation")
-            not in authority_transition_registry.PLANNABLE_OPERATIONS
+            not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
         or plan.get("sourceRevision")
             != authority_contract.SOURCE_REVISION
         or plan.get("authoritySchemaVersion")
@@ -3543,7 +3560,7 @@ def read_authority_planner_payload(
     raw = _require_planner_writer(connection)
     with raw.cursor() as cursor:
         row = cursor.execute(
-            "SELECT planner_transaction_id, operation_id, request_digest, "
+            "SELECT planner_transaction_id, operation, operation_id, request_digest, "
             "capability_id, status, exact_plan_base64url, "
             "exact_plan_bytes_digest, exact_plan_byte_count, "
             "plan_protocol, retained_record_digest "
@@ -3660,7 +3677,9 @@ def fail_authority_v9_transaction(
                 "authority v9 failure binding is absent"
             )
         if (capability.get("capability_protocol") != "v3"
-                or capability.get("capability_record_digest") is not None):
+                or capability.get("capability_record_digest") is not None
+                or type(capability.get("operation")) is not str
+                or capability["operation"] not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS):
             raise _db_value("MetadataStoreError")(
                 "legacy authority failure worker requires v3 capability protocol"
             )
@@ -3826,7 +3845,7 @@ def execute_authority_v9(
         or _canonical(exact_request) != exact_request_json
         or _canonical(exact_result) != exact_result_json
         or exact_request.get("operation")
-            not in authority_transition_registry.PLANNABLE_OPERATIONS
+            not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
     ):
         raise ValueError("authority v9 exact request or result is not exact")
     operation = str(exact_request["operation"])

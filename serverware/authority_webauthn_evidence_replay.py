@@ -79,8 +79,10 @@ def _replay_on_work(*, operation, request, selected_rows, database_now, inputs_b
     # successful verification. The fixed configured method always invokes the
     # same original-input computation used by live acquisition on this work.
     from serverware import authority_webauthn_evidence_kernel as configured_kernel
+    from serverware import authority_transition_registry as registry
 
-    kernel = configured_kernel.EvidenceAdmissionKernel(operation=operation, public_key=public_key,
+    program = registry.successor_program(operation)
+    kernel = program.kernel_factory(public_key=public_key,
         expected_identity=owned["identity"], expected_spki_digest=owned["spkiDigest"],
         maximum_age_ns=owned["maximumAgeNs"], maximum_clock_skew_ns=owned["maximumClockSkewNs"],
         rp_id=owned["rpId"], origin=owned["origin"], installation_target_digest=owned["installationTargetDigest"])

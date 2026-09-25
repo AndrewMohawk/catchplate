@@ -161,7 +161,10 @@ def _acquire_owned(cursor, *, operation, owned, raw, ceremony, public_key, query
         # Hold the purpose policy before SQL. Both live acquisition and retained
         # replay use this same configured, metered original-input computation;
         # no post-read caller key or successful evidence carrier is accepted.
-        kernel_owner = configured_kernel.EvidenceAdmissionKernel(operation=operation,
+        from serverware import authority_transition_registry as registry
+
+        program = registry.successor_program(operation)
+        kernel_owner = program.kernel_factory(
             public_key=public_key, expected_identity=inputs["identity"],
             expected_spki_digest=inputs["signerSpkiDigest"], maximum_age_ns=owned["maximumAgeNs"],
             maximum_clock_skew_ns=owned["maximumClockSkewNs"],

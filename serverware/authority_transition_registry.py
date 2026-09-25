@@ -4,6 +4,7 @@ from types import MappingProxyType
 from typing import Final, Mapping
 
 from serverware import authority_contract
+from serverware import authority_successor_programs
 from serverware import authority_transition_core
 from serverware import authority_transition_policy
 from serverware import authority_transition_quota
@@ -66,15 +67,30 @@ INTENTIONALLY_DISABLED_MANIFEST: Final[
         )
     }
 )
-PLANNABLE_OPERATIONS: Final[frozenset[str]] = frozenset(
+LEGACY_PLANNABLE_OPERATIONS: Final[frozenset[str]] = frozenset(
     set(KERNELS) | set(WEBAUTHN_CHALLENGE_OPERATIONS)
+)
+SUCCESSOR_PROGRAMS: Final[
+    Mapping[str, authority_successor_programs.SuccessorPlanningProgram]
+] = authority_successor_programs.PROGRAMS
+SUCCESSOR_PLANNABLE_OPERATIONS: Final[frozenset[str]] = frozenset(SUCCESSOR_PROGRAMS)
+# Generic source coverage only. Legacy v3 consumers must use the narrower set;
+# a configured successor owner is never an interchangeable v3 kernel.
+PLANNABLE_OPERATIONS: Final[frozenset[str]] = (
+    LEGACY_PLANNABLE_OPERATIONS | SUCCESSOR_PLANNABLE_OPERATIONS
 )
 
 
+_EXPECTED_SUCCESSOR_OPERATIONS = {
+    operation for operation in authority_contract.OPERATION_REGISTRY
+    if authority_contract.operation_spec(operation)["planningMode"]
+        == "typed-successor-planning"
+}
 _EXPECTED_TRANSITION_OPERATIONS = (
     set(authority_contract.OPERATION_REGISTRY)
     - set(WEBAUTHN_CHALLENGE_OPERATIONS)
     - set(INTENTIONALLY_DISABLED_OPERATIONS)
+    - _EXPECTED_SUCCESSOR_OPERATIONS
 )
 
 
@@ -88,6 +104,23 @@ def _registry_closure_errors() -> tuple[str, ...]:
         (
             "unexpected transition kernels",
             set(KERNELS) - _EXPECTED_TRANSITION_OPERATIONS,
+        ),
+        (
+            "missing successor programs",
+            _EXPECTED_SUCCESSOR_OPERATIONS - set(SUCCESSOR_PROGRAMS),
+        ),
+        (
+            "unexpected successor programs",
+            set(SUCCESSOR_PROGRAMS) - _EXPECTED_SUCCESSOR_OPERATIONS,
+        ),
+        (
+            "legacy and successor planning overlap",
+            LEGACY_PLANNABLE_OPERATIONS & SUCCESSOR_PLANNABLE_OPERATIONS,
+        ),
+        (
+            "uncovered operation contracts",
+            set(authority_contract.OPERATION_REGISTRY)
+            - set(PLANNABLE_OPERATIONS) - set(INTENTIONALLY_DISABLED_OPERATIONS),
         ),
         (
             "disabled operations are plannable",
@@ -128,6 +161,36 @@ def _registry_closure_errors() -> tuple[str, ...]:
                 f"=[{', '.join(invalid_fields)}]"
             )
 
+    for operation, program in sorted(SUCCESSOR_PROGRAMS.items()):
+        if operation not in authority_contract.OPERATION_REGISTRY:
+            continue
+        if type(program) is not authority_successor_programs.SuccessorPlanningProgram:
+            errors.append(f"invalid successor program type=[{operation}]")
+            continue
+        evidence_operation = operation in {
+            "webauthn.registration.evidence.admit", "webauthn.trust.installation.admit"
+        }
+        expected_result = (
+            "signed-originals" if evidence_operation or operation == "webauthn.credential.revoke"
+            else "read-acquisition"
+        )
+        spec = authority_contract.operation_spec(operation)
+        invalid_fields = tuple(
+            label for label, valid in (
+                ("operation", program.operation == operation),
+                ("handler", program.handler == spec["handler"]),
+                ("program-id", program.program_id == authority_contract.transition_program_id(operation)),
+                ("planning-mode", program.planning_mode == spec["planningMode"]
+                    == "typed-successor-planning"),
+                ("result-kind", program.result_kind == expected_result),
+                ("factory", callable(program.factory)),
+                ("kernel-factory", callable(program.kernel_factory) if evidence_operation
+                    else program.kernel_factory is None),
+            ) if not valid
+        )
+        if invalid_fields:
+            errors.append(f"invalid successor program {operation}=[{', '.join(invalid_fields)}]")
+
     for operations, expected_mode in (
         (WEBAUTHN_CHALLENGE_OPERATIONS, "typed-webauthn-challenge"),
         (INTENTIONALLY_DISABLED_OPERATIONS, "intentionally-disabled"),
@@ -141,6 +204,13 @@ def _registry_closure_errors() -> tuple[str, ...]:
             ):
                 errors.append(f"invalid planning mode=[{operation}]")
     return tuple(errors)
+
+
+def successor_program(operation: str) -> authority_successor_programs.SuccessorPlanningProgram:
+    """Select a fixed configured owner; never fall back to legacy planning."""
+    if type(operation) is not str or operation not in SUCCESSOR_PROGRAMS:
+        raise ValueError("operation has no source-registered successor planning program")
+    return SUCCESSOR_PROGRAMS[operation]
 
 
 _CLOSURE_ERRORS = _registry_closure_errors()

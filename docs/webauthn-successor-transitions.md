@@ -1,7 +1,10 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.93`, implementation only. Separate verifier intents and planner
-relays now authenticate retain-only requests for original evidence plans.
+Status: source `.94`, implementation only. Configured verifier-to-planner relay
+preparation is now separate from explicit forwarding of original controls and
+evidence plans through the planner to the writer. Fixed detached socket branches
+connect genuine replay to the actual writer transaction; responses are unsigned
+peer observations, not execution permission or signed durability receipts.
 The two evidence-admission database APIs dispatch typed semantic requests
 through the real authority boundary.
 Live planning and retained replay use the same configured, metered original-input
@@ -582,12 +585,58 @@ then again after normal outer exit and connection close. The store's genuine
 replay and nested savepoint remain intact. Post-commit expiry or delivery
 uncertainty cannot be reported as rollback or automatic retry authority.
 
-This retain-only protocol adds no network route, signed custody-read protocol,
-registry enablement, execution capability, terminal witness or durable signed
-acknowledgment. Content-addressed idempotency is not exactly-once signing,
-delivery or execution, and no automatic retry is supplied. Implementation
-remains source-only and unexecuted, with consolidated verification and existing
-startup, infrastructure and release gates still required.
+These controls confer no registry enablement, execution capability, terminal
+witness or durable signed acknowledgment. Content-addressed idempotency is not
+exactly-once signing, delivery or execution. The configured serving integration
+below preserves those limits and supplies no automatic retry.
+
+## Configured two-hop custody serving
+
+Source `.94` connects the fixed configuration mapper, actions and detached
+transport to private `AuthorityProcess` methods and role-restricted socket
+branches. The verifier requests a planner relay over the original intent,
+plan, inputs, evaluation context and independent history. It genuinely verifies
+the returned original relay. A separate explicit call forwards those same five
+originals plus the relay to the planner, which authenticates and replays them
+before sending them to the writer. Relay preparation never falls through into
+forwarding or regenerates controls for a retry.
+
+Service admission requires the exact role/mode and measured configuration. It
+owns the full payload/digest and any real signing handle before active-launch,
+descriptor or key callbacks. Only the writer reads the protected writer DSN;
+generation is captured last. The mapper rechecks configuration/launch bindings,
+the fixed operation allowlist, purpose policy, distinct pinned role keys and
+verifier-to-planner-to-writer peer topology. Each invocation uses one existing
+source work allowance through its captures, signatures and repeated replay.
+
+Distinct fixed message types select preparation, forwarding or retention and
+one of the two purposes. All five or six lengths are admitted together before
+body allocation: each control is at most 4 MiB, each detached body at most
+64 MiB, and their aggregate at most 64 MiB. Exact peer checks precede incoming
+prefixes or outgoing bodies. The complete request and EOF precede the server's
+single work allocation. Each connection has its own absolute total deadline,
+bounded writes, request half-close and mandatory response EOF; there is no
+pipelining, fallback or automatic next hop from preparation.
+
+Configured callers genuinely authenticate controls and replay originals before
+each request send; the writer does so before database admission. Original
+control windows remain in force across I/O and response verification, rather
+than being renewed by later replay. The actual writer outer transaction commits
+and the connection closes before its response is sent; a nested savepoint alone
+cannot release a response. The fixed response contains only the canonical
+retained-record digest and positive retention timestamp. Callers join the
+digest to their genuine replay and reject timestamps beyond the allowed clock
+skew, but an identical retry may report an older immutable first-retained time.
+This unsigned peer response is not a durable signed acknowledgment or an
+execution result. A late timeout, expiry or lost response leaves an uncertain
+outcome, not rollback or automatic retry authority.
+
+All six missing registry entries remain unactivated. These custody branches do
+not supply public business invocation, independent request/root provenance,
+one-use capabilities, reservations, authorized atomic execution or historically
+admitted read/recovery for evidence plans. External signing/witness/runtime
+infrastructure and release admission remain required. This implementation is
+source-only, unbuilt and unexecuted; no runtime proof is claimed.
 
 ## Retained evidence and consumption
 

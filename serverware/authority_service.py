@@ -54,6 +54,7 @@ from serverware import authority_revocation_planner_custody_transport as custody
 from serverware import authority_revocation_custody_read_transport as custody_read_transport
 from serverware import authority_revocation_planning_transport as planning_transport
 from serverware import authority_revocation_writer_transport as writer_transport
+from serverware import authority_webauthn_evidence_custody_transport as evidence_custody_transport
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
@@ -337,6 +338,54 @@ def _revocation_custody_context(process, *, role_name, work):
     configuration.production._callback(work, lambda: authority_launch_guard.require_active(role_name))
     generation = configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))
     return owned, digest, generation
+
+
+def _webauthn_evidence_custody_purpose(purpose):
+    if type(purpose) is not str or purpose not in ("registration", "installation"):
+        raise AuthorityServiceError("WebAuthn evidence custody purpose is not supported")
+    return ("webauthn.registration.evidence.admit" if purpose == "registration"
+        else "webauthn.trust.installation.admit")
+
+
+def _webauthn_evidence_custody_context(process, *, role_name, signing, work):
+    """Hold measured settings and any real signer before native callbacks.
+
+    Invocation originals/history must already be owned. The fixed callers
+    choose the role and signing requirement; no request selects a callback,
+    public key, descriptor or generation. Returned values are ordinary held
+    inputs, not proof of admission. The configured action checks their actual
+    commitment and launch bindings again on the same work.
+    """
+    if (type(process) is not AuthorityProcess
+            or role_name not in ("verifier", "planner", "planner-writer")
+            or process.role_name != role_name
+            or process.process_mode != "policy-authority-" + role_name
+            or type(signing) is not bool or signing and role_name == "planner-writer"):
+        raise AuthorityServiceError("WebAuthn evidence custody process is not configured")
+    measured = process.configuration
+    if type(measured) is not MeasuredConfiguration:
+        raise AuthorityServiceError("WebAuthn evidence custody measured configuration is unavailable")
+    payload, digest = measured.payload, measured.digest
+    private_key = process.signing_key if signing else None
+    if signing and not isinstance(private_key, Ed25519PrivateKey):
+        raise AuthorityServiceError("WebAuthn evidence custody signing key is unavailable")
+    from serverware import authority_revocation_configuration as configuration
+
+    ledger = configuration.capability.capture._SharedLedger(work)
+    configuration.capability.shape._digest(digest)
+    if type(payload) is not dict:
+        raise AuthorityServiceError("WebAuthn evidence custody configuration is not closed data")
+    owned = configuration._ConfigurationCapture(
+        ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+    configuration.production._callback(work, lambda: authority_launch_guard.require_active(role_name))
+    writer_dsn = None
+    if role_name == "planner-writer":
+        writer_dsn = configuration.production._callback(work,
+            lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))
+    # Capture the actual generation last; no later process/descriptor/signer
+    # lookup can interpose before the fixed configured action owns it.
+    generation = configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))
+    return owned, digest, generation, writer_dsn, private_key
 
 
 def _revocation_writer_from_owned_configuration(*, owned_payload, configuration_digest, work):
@@ -4101,6 +4150,127 @@ class AuthorityProcess:
         verifier = AuthorityProcess._webauthn_evidence_plan_verifier(self, purpose=purpose, work=work)
         return verifying.EvidencePlanVerifier.verify(verifier, envelope_bytes=originals[0],
             inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned, work=work)
+
+    def _produce_webauthn_evidence_custody_intent(self, *, purpose, envelope_bytes,
+            inputs_bytes, evaluation_context_bytes, expectations, work):
+        """Sign only after genuine replay of independently admitted history.
+
+        The independent request/roots/input/time provenance remains upstream;
+        copied stored context cannot establish it. Preparation never sends,
+        persists or automatically retries the resulting original controls.
+        """
+        operation = _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_actions as actions
+        from serverware import authority_webauthn_evidence_custody_intent as intent
+
+        originals = intent._raw3(envelope_bytes, inputs_bytes, evaluation_context_bytes)
+        ledger = intent.evidence.capture._SharedLedger(work)
+        intent.evidence.plan.contract._object(expectations,
+            intent.retention.plan._EXPECTATION_FIELDS, "independent evidence custody expectations")
+        owned = intent.evidence.capture._JSONCapture(
+            ledger, maximum_bytes=intent.retention.plan.contract.MAX_BYTES).visit(expectations)
+        intent.retention.plan._validate_expectations(owned, operation)
+        payload, digest, generation, _dsn, signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=True, work=work)
+        return actions._produce_intent_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, envelope_bytes=originals[0],
+            inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned,
+            verifier_private_key=signer, work=work)
+
+    def _produce_webauthn_evidence_custody_relay(self, *, purpose, intent_bytes,
+            envelope_bytes, inputs_bytes, evaluation_context_bytes,
+            historical_expectations_bytes, work):
+        """Authenticate originals before planner signing; never send implicitly."""
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_actions as actions
+
+        originals = evidence_custody_transport._validate_relay_originals(intent_bytes=intent_bytes,
+            envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
+            evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        payload, digest, generation, _dsn, signer = _webauthn_evidence_custody_context(
+            self, role_name="planner", signing=True, work=work)
+        return actions._produce_relay_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            envelope_bytes=originals[1], inputs_bytes=originals[2], evaluation_context_bytes=originals[3],
+            historical_expectations_bytes=originals[4], planner_private_key=signer, work=work)
+
+    def _request_webauthn_evidence_custody_relay(self, *, purpose, intent_bytes,
+            envelope_bytes, inputs_bytes, evaluation_context_bytes,
+            historical_expectations_bytes, work):
+        """Ask only for a relay, then genuinely verify its original response."""
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_actions as actions
+
+        originals = evidence_custody_transport._validate_relay_originals(intent_bytes=intent_bytes,
+            envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
+            evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=False, work=work)
+        return actions._request_relay_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            envelope_bytes=originals[1], inputs_bytes=originals[2], evaluation_context_bytes=originals[3],
+            historical_expectations_bytes=originals[4], work=work)
+
+    def _forward_webauthn_evidence_custody(self, *, purpose, intent_bytes, relay_bytes,
+            envelope_bytes, inputs_bytes, evaluation_context_bytes,
+            historical_expectations_bytes, work):
+        """Explicit verifier-to-planner forwarding of already-held originals."""
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_actions as actions
+
+        originals = evidence_custody_transport._validate_originals(intent_bytes=intent_bytes,
+            relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
+            evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=False, work=work)
+        return actions._forward_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            relay_bytes=originals[1], envelope_bytes=originals[2], inputs_bytes=originals[3],
+            evaluation_context_bytes=originals[4], historical_expectations_bytes=originals[5], work=work)
+
+    def _send_webauthn_evidence_custody(self, *, purpose, intent_bytes, relay_bytes,
+            envelope_bytes, inputs_bytes, evaluation_context_bytes,
+            historical_expectations_bytes, work):
+        """Only the admitted planner can send original controls to the writer."""
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_actions as actions
+
+        originals = evidence_custody_transport._validate_originals(intent_bytes=intent_bytes,
+            relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
+            evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="planner", signing=False, work=work)
+        return actions._send_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            relay_bytes=originals[1], envelope_bytes=originals[2], inputs_bytes=originals[3],
+            evaluation_context_bytes=originals[4], historical_expectations_bytes=originals[5], work=work)
+
+    def _persist_webauthn_evidence_custody(self, *, purpose, intent_bytes, relay_bytes,
+            envelope_bytes, inputs_bytes, evaluation_context_bytes,
+            historical_expectations_bytes, work):
+        """Authenticate original controls before the actual writer transaction.
+
+        Normal return follows outer commit/close. A late failure can still
+        follow commit; it is not rollback evidence or retry permission.
+        """
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_actions as actions
+
+        originals = evidence_custody_transport._validate_originals(intent_bytes=intent_bytes,
+            relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
+            evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        payload, digest, generation, writer_dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="planner-writer", signing=False, work=work)
+        return actions._persist_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            relay_bytes=originals[1], envelope_bytes=originals[2], inputs_bytes=originals[3],
+            evaluation_context_bytes=originals[4], historical_expectations_bytes=originals[5],
+            writer_dsn=writer_dsn, work=work)
 
     def _produce_revocation_observed_plan(self, *, request, evidence, context,
             root_inventory, work):
@@ -8250,6 +8420,63 @@ class AuthorityServer:
         custody_read_transport._check_deadline(deadline_ns)
         custody_read_transport._send_originals(connection, originals, deadline_ns=deadline_ns)
 
+    def _serve_webauthn_evidence_custody(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Fixed peer-checked preparation, forwarding or writer retention.
+
+        The complete bounded originals and EOF precede work allocation. Relay
+        preparation cannot fall through into forwarding; only the planner
+        contacts the writer. Each invocation retains one original allowance.
+        Writer response bytes are sent only after actual outer exit/close.
+        The response is informational peer metadata, not a signed receipt or
+        execution capability. Post-commit timeout/response loss is uncertain.
+        """
+        process = self.process
+        preparing = prefix in (evidence_custody_transport.REGISTRATION_RELAY_MAGIC,
+            evidence_custody_transport.INSTALLATION_RELAY_MAGIC)
+        forwarding = prefix in (evidence_custody_transport.REGISTRATION_FORWARD_MAGIC,
+            evidence_custody_transport.INSTALLATION_FORWARD_MAGIC)
+        retaining = prefix in (evidence_custody_transport.REGISTRATION_REQUEST_MAGIC,
+            evidence_custody_transport.INSTALLATION_REQUEST_MAGIC)
+        if not (preparing or forwarding or retaining):
+            raise AuthorityServiceError("evidence custody transfer purpose is invalid")
+        role = "planner-writer" if retaining else "planner"
+        if (type(process) is not AuthorityProcess or process.role_name != role
+                or process.process_mode != "policy-authority-" + role):
+            raise AuthorityServiceError("evidence custody transfer has the wrong service role")
+        if preparing:
+            purpose, originals = evidence_custody_transport._recv_relay_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        elif forwarding:
+            purpose, originals = evidence_custody_transport._recv_forward_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        else:
+            purpose, originals = evidence_custody_transport._recv_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        evidence_custody_transport._check_deadline(deadline_ns)
+        if preparing:
+            relay_bytes = AuthorityProcess._produce_webauthn_evidence_custody_relay(process,
+                purpose=purpose, intent_bytes=originals[0], envelope_bytes=originals[1],
+                inputs_bytes=originals[2], evaluation_context_bytes=originals[3],
+                historical_expectations_bytes=originals[4], work=work)
+            evidence_custody_transport._check_deadline(deadline_ns)
+            evidence_custody_transport._send_relay(connection, relay_bytes, deadline_ns=deadline_ns)
+            return
+        arguments = {"purpose": purpose, "intent_bytes": originals[0], "relay_bytes": originals[1],
+            "envelope_bytes": originals[2], "inputs_bytes": originals[3],
+            "evaluation_context_bytes": originals[4], "historical_expectations_bytes": originals[5]}
+        if forwarding:
+            record_digest, retained_at = AuthorityProcess._send_webauthn_evidence_custody(
+                process, **arguments, work=work)
+        else:
+            result = AuthorityProcess._persist_webauthn_evidence_custody(process, **arguments, work=work)
+            record_digest, retained_at = result["retained_record_digest"], result["retained_at_epoch_ns"]
+        evidence_custody_transport._check_deadline(deadline_ns)
+        evidence_custody_transport._send_response(connection, record_digest, retained_at, deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -8262,7 +8489,13 @@ class AuthorityServer:
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
             detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
                 custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC,
-                custody_read_transport.REQUEST_MAGIC)
+                custody_read_transport.REQUEST_MAGIC,
+                evidence_custody_transport.REGISTRATION_REQUEST_MAGIC,
+                evidence_custody_transport.INSTALLATION_REQUEST_MAGIC,
+                evidence_custody_transport.REGISTRATION_RELAY_MAGIC,
+                evidence_custody_transport.INSTALLATION_RELAY_MAGIC,
+                evidence_custody_transport.REGISTRATION_FORWARD_MAGIC,
+                evidence_custody_transport.INSTALLATION_FORWARD_MAGIC)
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
@@ -8274,6 +8507,14 @@ class AuthorityServer:
                 return
             if prefix == custody_read_transport.REQUEST_MAGIC:
                 self._serve_revocation_custody_read(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix in (evidence_custody_transport.REGISTRATION_REQUEST_MAGIC,
+                    evidence_custody_transport.INSTALLATION_REQUEST_MAGIC,
+                    evidence_custody_transport.REGISTRATION_RELAY_MAGIC,
+                    evidence_custody_transport.INSTALLATION_RELAY_MAGIC,
+                    evidence_custody_transport.REGISTRATION_FORWARD_MAGIC,
+                    evidence_custody_transport.INSTALLATION_FORWARD_MAGIC):
+                self._serve_webauthn_evidence_custody(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

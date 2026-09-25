@@ -30,17 +30,20 @@ class WebAuthnEvidencePlanWriterConfigurationError(ValueError):
     pass
 
 
-def _persistence_from_configuration_on_work(*, purpose, payload, configuration_digest,
-        generation, writer_dsn, work):
+def _database_from_owned_configuration_on_work(*, owned_payload, writer_dsn, work):
+    """Hold database scalars and planner aliases before any key callback.
+
+    The caller must already own the genuinely captured full configuration.
+    This continuation neither recaptures it nor reconstructs public keys.
+    """
     try:
-        if type(purpose) is not str or purpose not in ("registration", "installation"):
-            raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody purpose is not source fixed")
-        owned, _launch = configuration._capture_configuration_on_work(payload=payload,
-            configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration.capability.capture._SharedLedger(work)
+        if type(owned_payload) is not dict:
+            raise WebAuthnEvidencePlanWriterConfigurationError("owned evidence custody configuration is not exact")
         writer.reader._bounded_text(writer_dsn, 65536)
         if "\n" in writer_dsn or "\r" in writer_dsn:
             raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody DSN is not one descriptor value")
-        roles = owned["roles"]
+        roles = owned_payload["roles"]
         if type(roles) is not dict:
             raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody roles are not exact")
         planner, writer_role = roles["planner"], roles["planner-writer"]
@@ -76,6 +79,22 @@ def _persistence_from_configuration_on_work(*, purpose, payload, configuration_d
         database_identity = (writer_role["databaseRole"], writer_role["tlsClientDn"],
             writer_role["tlsClientSerial"], writer_role["tlsIssuerDn"])
         writer._validate_database_identity(database_identity)
+        return writer_dsn, timeout, database_identity
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
+        if isinstance(exc, WebAuthnEvidencePlanWriterConfigurationError):
+            raise
+        raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody database configuration failed") from exc
+
+
+def _persistence_from_configuration_on_work(*, purpose, payload, configuration_digest,
+        generation, writer_dsn, work):
+    try:
+        if type(purpose) is not str or purpose not in ("registration", "installation"):
+            raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody purpose is not source fixed")
+        owned, _launch = configuration._capture_configuration_on_work(payload=payload,
+            configuration_digest=configuration_digest, generation=generation, work=work)
+        writer_dsn, timeout, database_identity = _database_from_owned_configuration_on_work(
+            owned_payload=owned, writer_dsn=writer_dsn, work=work)
         # Alias joins and all writer connection scalars are held before the
         # shared helper's real key callbacks. It reuses this exact owned full
         # graph without another configuration capture or planner key decode.

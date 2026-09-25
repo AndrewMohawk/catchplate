@@ -255,12 +255,16 @@ def _produce_request_on_work(process, *, operation, request, inputs_bytes,
     return result
 
 
-def _request_plan_on_work(process, *, operation, control_bytes, context_bytes, inputs_bytes, work):
+def _request_plan_on_work(process, *, operation, control_bytes, context_bytes, inputs_bytes, work,
+        transport_deadline_ns=None):
     """Send original request bytes and replay the authenticated raw-four reply."""
     from serverware import authority_webauthn_transition_actions as actions
     from serverware import authority_webauthn_transition_transport as transport
 
     operation = _operation(operation)
+    inherited_deadline = transport_deadline_ns
+    if inherited_deadline is not None:
+        plan.contract.shape._integer(inherited_deadline, minimum=1)
     originals = transport._validate_request(control_bytes=control_bytes,
         context_bytes=context_bytes, inputs_bytes=inputs_bytes)
     payload, digest, generation, _dsn, _private, runtime_role_identities = _measured_context_on_work(process,
@@ -269,8 +273,11 @@ def _request_plan_on_work(process, *, operation, control_bytes, context_bytes, i
     result = actions._request_plan_on_configuration(operation=operation,
         payload=payload, configuration_digest=digest, generation=held_generation,
         runtime_role_identities=runtime_role_identities,
-        control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2], work=work)
+        control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2], work=work,
+        transport_deadline_ns=inherited_deadline)
     _require_generation_on_work("verifier", held_generation, work)
+    if inherited_deadline is not None:
+        actions.evidence.production._callback(work, lambda: transport._check_deadline(inherited_deadline))
     return result
 
 

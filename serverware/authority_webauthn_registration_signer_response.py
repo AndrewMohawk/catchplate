@@ -11,13 +11,17 @@ Only original evidence-envelope and input-codec bytes cross the response
 boundary. The evidence-admission request and complete input codec are genuinely
 regenerated here and compared to the response. The ordinary returned pair is
 not evidence admission, custody, finalization, execution or enrollment proof.
-Sibling hints are fixed empty solely for this evidence-only continuation; OIDC
-credential-history/sibling completeness belongs to later business authority.
+Sibling hints stay fixed empty for the evidence-only continuation. The separate
+fixed finalization continuation derives a typed request from the same genuine
+replay and bounded hints, not unsigned response metadata. Complete OIDC history
+and siblings, an actual unconsumed v2 evidence receipt and current-root/business
+authority still belong to the downstream transition planner and kernel.
 No private key, signing, grant consumption, store, socket or new work is used.
 """
 from __future__ import annotations
 
 from serverware import authority_revocation_configuration as configuration
+from serverware import authority_request_commitment as commitment
 from serverware import authority_webauthn_enrollment_authorization as enrollment
 from serverware import authority_webauthn_enrollment_policy as enrollment_policy
 from serverware import authority_webauthn_evidence_policy as evidence_policy
@@ -25,11 +29,13 @@ from serverware import authority_webauthn_evidence_custody_wire as control
 from serverware import authority_webauthn_evidence_invocation as invocation
 from serverware import authority_webauthn_registration_ceremony as ceremony
 from serverware import authority_webauthn_registration_production as production
+from serverware import authority_webauthn_registration_replay as registration_replay
 from serverware import authority_webauthn_registration_signer_wire as wire
 from serverware import authority_webauthn_registration_source_admission as admission
 from serverware import authority_webauthn_registration_source_proofs as source
 from serverware import authority_webauthn_registration_source_request as source_request
 from serverware import authority_webauthn_registration_trust as trust
+from serverware import authority_webauthn_transition_proof_contract as transition_contract
 
 
 authority, evidence = production.authority, production.evidence
@@ -53,10 +59,55 @@ def _fresh(*, grant_context, grant_timing, grant_window, grant_age, grant_skew,
     return now
 
 
-def _verify_on_configuration(*, payload, configuration_digest, generation,
-        runtime_role_identities, request_originals, response_originals, work):
-    """Return (regenerated evidence-admit request, original input bytes) only."""
+def _finalization_request_on_work(arguments, envelope_bytes, work):
+    """Derive commitments from this invocation's actual claims replay only."""
+    registration = production.registration
+    operation = registration.OPERATION
+    arguments["attestation_envelope_base64url"] = registration.invocation._encode(envelope_bytes, work)
+    arguments["attestation_evidence_digest"] = evidence._evidence_digest_on_work(envelope_bytes, work)
+    arguments["businessIntent"] = authority._synthesize_business_intent(operation, arguments, work=work)
+    registration._arguments(arguments, work)
+    request = {"schema": transition_contract.shape.TYPED_REQUEST_SCHEMA,
+        "operation": operation, "operationId": None, "requestDigest": None,
+        "handler": authority.operation_spec(operation)["handler"],
+        "operationManifestDigest": authority.OPERATION_MANIFEST_DIGEST,
+        "arguments": arguments}
+    # These two excluded output fields are filled with the genuine shared
+    # commitment computation before anything is exposed to another component.
+    digest = commitment._typed_request_digest(request, work=work)
+    work.prepare_utf8(operation)
+    work.prepare_utf8(digest)
+    work.charge(hashes=1)
+    request["requestDigest"] = digest
+    request["operationId"] = commitment.operation_id(operation, digest)
+    owned = evidence.capture._JSONCapture(evidence.capture._SharedLedger(work),
+        maximum_bytes=authority.MAX_REQUEST_BYTES).visit(request)
+    transition_contract._request(owned, operation)
+    return owned
+
+
+def _verify_on_configuration_core(*, finalization, sibling_challenge_ids,
+        payload, configuration_digest, generation, runtime_role_identities,
+        request_originals, response_originals, work):
+    """One genuine replay; only the fixed output derivation differs."""
     ledger = evidence.capture._SharedLedger(work)
+    if (type(finalization) is not bool or type(sibling_challenge_ids) is not list
+            or len(sibling_challenge_ids) > production.registration.MAX_SIBLINGS
+            or not finalization and sibling_challenge_ids
+            or any(type(value) is not str or not 1 <= len(value) <= 4096
+                for value in sibling_challenge_ids)):
+        raise WebAuthnRegistrationSignerResponseError("registration sibling hints are not source bounded")
+    siblings = evidence.capture._JSONCapture(ledger,
+        maximum_bytes=authority.MAX_REQUEST_BYTES).visit(sibling_challenge_ids)
+    work.prepare_scan(siblings)
+    previous = None
+    for value in siblings:
+        production.registration._text(value, "sibling challenge ID", 4096, work)
+        if previous is not None:
+            work.prepare_comparison(previous, value)
+            if previous >= value:
+                raise WebAuthnRegistrationSignerResponseError("registration sibling hints are not sorted unique")
+        previous = value
     request_raw = wire._request_originals(request_originals)
     response_raw = wire._response_originals(response_originals)
     digest = configuration_digest
@@ -156,13 +207,13 @@ def _verify_on_configuration(*, payload, configuration_digest, generation,
         rp_id=rp_id, origin=origin, work=work)
     verification_context = trust._context_on_work(published_row=published_row,
         high_water_row=high_water, rp_id=rp_id, origin=origin, verified_at=instant, work=work)
-    claims, _arguments, expected_identity, evidence_issued, evidence_expires = production._claims_on_work(
+    claims, finalization_arguments, expected_identity, evidence_issued, evidence_expires = production._claims_on_work(
         client_data_json=derived.client_data_json, attestation_object=derived.attestation_object,
         credential_id=derived.credential_id, transports=derived.transports,
         scope=derived.scope, verification_context=verification_context,
         challenge_row=challenge_row, expected_authorization=grant_context["expectedAuthorization"],
         high_water_row=high_water, published_row=published_row, oidc_session_row=session_row,
-        sibling_challenge_ids=[], signer_identity=identity, maximum_age_ns=evidence_age, work=work)
+        sibling_challenge_ids=siblings, signer_identity=identity, maximum_age_ns=evidence_age, work=work)
     now = _fresh(**freshness)
     evidence._verify_on_work(envelope_bytes=response_raw[0], purpose="registration-attestation",
         expected_claims=claims, public_key=public_key, expected_signer_identity=expected_identity,
@@ -185,6 +236,13 @@ def _verify_on_configuration(*, payload, configuration_digest, generation,
     work.charge(input_bytes=len(regenerated_inputs) + len(response_raw[1]))
     if regenerated_inputs != response_raw[1]:
         raise WebAuthnRegistrationSignerResponseError("returned input originals differ from actual authenticated replay")
+    returned_inputs = response_raw[1]
+    if finalization:
+        # Sibling hints do not enter signed attestation claims and are never
+        # treated as population proof here. The actual complete-query engine
+        # and kernel must prove their exact live population at its own cutoff.
+        request = _finalization_request_on_work(finalization_arguments, response_raw[0], work)
+        returned_inputs = registration_replay._encode_inputs_on_work(work=work)
     request_bytes = evidence.capability._wire(request, ledger,
         authority.MAX_REQUEST_BYTES, source_request.MAX_CONTEXT_NODES)
     now = _fresh(**freshness)
@@ -195,4 +253,27 @@ def _verify_on_configuration(*, payload, configuration_digest, generation,
         source_request.MAX_CONTEXT_BYTES, source_request.MAX_CONTEXT_NODES)
     evidence.capability._canonical(request_bytes, request, ledger,
         authority.MAX_REQUEST_BYTES, source_request.MAX_CONTEXT_NODES)
-    return request, response_raw[1]
+    return request, returned_inputs
+
+
+def _verify_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, request_originals, response_originals, work):
+    """Return (regenerated evidence-admit request, original input bytes) only."""
+    return _verify_on_configuration_core(finalization=False, sibling_challenge_ids=[],
+        payload=payload, configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, request_originals=request_originals,
+        response_originals=response_originals, work=work)
+
+
+def _verify_finalization_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, request_originals, response_originals, sibling_challenge_ids, work):
+    """Return a finalization invocation, not population or execution authority.
+
+    Original grant/source/attestation/evidence and returned input bytes are
+    genuinely replayed here. The downstream real transition acquisition must
+    still establish full history/siblings and consume the v2 business receipt.
+    """
+    return _verify_on_configuration_core(finalization=True, sibling_challenge_ids=sibling_challenge_ids,
+        payload=payload, configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, request_originals=request_originals,
+        response_originals=response_originals, work=work)

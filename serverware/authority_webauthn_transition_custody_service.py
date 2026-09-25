@@ -44,11 +44,15 @@ def _produce_intent_on_work(process, *, operation, envelope_bytes, proof_bytes,
 
 
 def _relay_on_work(process, *, operation, intent_bytes, envelope_bytes, proof_bytes,
-        inputs_bytes, context_bytes, historical_expectations_bytes, producing, work):
+        inputs_bytes, context_bytes, historical_expectations_bytes, producing, work,
+        transport_deadline_ns=None):
     """Fixed local signing or remote preparation; neither path contacts a writer."""
     if type(producing) is not bool:
         raise ValueError("transition custody relay action is not source fixed")
     operation = service._operation(operation)
+    inherited_deadline = transport_deadline_ns
+    if inherited_deadline is not None:
+        service.plan.contract.shape._integer(inherited_deadline, minimum=1)
     originals = transport._validate_relay_originals(intent_bytes=intent_bytes,
         envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
         context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes)
@@ -64,8 +68,11 @@ def _relay_on_work(process, *, operation, intent_bytes, envelope_bytes, proof_by
     if producing:
         result = actions._produce_relay_on_configuration(**arguments, planner_private_key=private)
     else:
-        result = actions._request_relay_on_configuration(**arguments)
+        result = actions._request_relay_on_configuration(**arguments,
+            transport_deadline_ns=inherited_deadline)
     service._require_generation_on_work(role, generation, work)
+    if inherited_deadline is not None:
+        actions.evidence.production._callback(work, lambda: transport._check_deadline(inherited_deadline))
     return result
 
 
@@ -78,11 +85,12 @@ def _produce_relay_on_work(process, *, operation, intent_bytes, envelope_bytes,
 
 
 def _request_relay_on_work(process, *, operation, intent_bytes, envelope_bytes,
-        proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work):
+        proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work,
+        transport_deadline_ns=None):
     return _relay_on_work(process, operation=operation, intent_bytes=intent_bytes,
         envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
         context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes,
-        producing=False, work=work)
+        producing=False, work=work, transport_deadline_ns=transport_deadline_ns)
 
 
 def _delivery_on_work(process, *, operation, intent_bytes, relay_bytes, envelope_bytes,

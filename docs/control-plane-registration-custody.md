@@ -1,10 +1,37 @@
-# Private registration evidence custody
+# Registration evidence custody and public preparation
 
-Source `.131`; implementation only, unbuilt and unexecuted. This private
-continuation connects already authenticated registration originals to genuine
-evidence preparation and local durable custody. It is not a public registration
-route, a registered credential, or a deployment/provisioning claim. The current
-browser `/verify` handlers still use legacy finalization.
+Source `.132`; implementation only, unbuilt and unexecuted. The private custody
+continuation introduced in `.131` now has separate authenticated HTTP `/prepare`
+callers. They connect registration originals to genuine evidence preparation and
+local durable custody, not a registered credential or remote business execution.
+This is not a deployment/provisioning claim. The current browser `/verify`
+handlers still use legacy finalization.
+
+## HTTP preparation boundary
+
+The actual [`app.py`](../serverware/app.py) routes are:
+
+- `POST /api/webauthn/register/prepare`: authenticated admin/approver admission.
+- `POST /api/auth/session/webauthn/register/prepare`: actual pending-OIDC session
+  lookup and current authoritative RBAC admission, without session activation.
+
+Normal cookie CSRF checks remain. Both routes capture the original ceremony under
+the existing shared trust lock and call only `prepare_registration_custody`.
+Options-time MFA/approval is neither rerun nor consumed by preparation.
+
+The request is strict JSON, at most 512 KiB, with exactly the required outer
+fields `label` and `response`; no default label or extra outer fields are accepted.
+It requires one exact `Content-Length` and `Content-Type: application/json`,
+matching actual body length, no query string and no transfer/content encoding.
+Bounded depth/node/string limits and strict JSON parsing apply before model use.
+
+Success is a no-store **202**, schema
+`serverware.webAuthnRegistrationCustodyPreparation/v1`, with `status: prepared`,
+`localDigest`, and `registrationCompleted: false`. It reports local PREPARED
+originals only. These endpoints do not forward, retry, finalize a credential or
+activate an OIDC session. A failure can follow grant consumption or a local
+write; bounded error responses preserve `remoteState: unknown` and authorize
+neither resend nor fallback to `/verify`.
 
 ## Fixed source path
 
@@ -83,8 +110,30 @@ append may finish after the deadline so acquired originals are not discarded,
 but expiry forbids forwarding. A prepared-only record is not evidence that the
 remote store lacks it, and an observation is not new execution authority.
 
-Public handler orchestration, complete OIDC sibling/history populations,
-current-root reservation and issuer/executor/atomic business execution remain
-unfinished. Independent service/key/storage provisioning and consolidated
-frozen verification are still required. No source path here renews an original
-grant, source window or receipt, or supplies cross-source historical authority.
+## Finalization remains a separate prerequisite
+
+The fixed
+[`signer_response._verify_finalization_on_configuration`](../serverware/authority_webauthn_registration_signer_response.py)
+now genuinely replays the original grant/source/attestation/evidence and exact
+returned input bytes, then derives a typed `webauthn.registration.finalize`
+request and the actual empty transition-input encoding. Its bounded sorted
+sibling IDs are hints, not population proof; no unsigned derived response
+metadata or successful-verification carrier supplies finalization arguments.
+The existing evidence-only verifier remains unchanged.
+
+The actual measured verifier's private
+`AuthorityProcess._prepare_webauthn_registration_finalization` now composes that
+original-byte verifier with genuine transition custody preparation. It returns
+prepared transition raw7 under the original receipt/window and inherited
+transport deadline, not a custody write or business result. It has no HTTP
+caller; server-observed sibling hints remain required, and those hints still
+must pass the downstream complete-population proof. Its returned originals
+would require durable journaling before separately authorized forwarding.
+
+Complete OIDC sibling/history proofs, genuine business evidence admission and
+consumption of the unconsumed v2 receipt, current-root reservation and
+issuer/executor/atomic business execution remain required. HTTP preparation does
+none of those things. Independent service/key/storage provisioning and
+consolidated frozen verification are still required. No source path here renews
+an original grant, source window or receipt, or supplies cross-source historical
+authority.

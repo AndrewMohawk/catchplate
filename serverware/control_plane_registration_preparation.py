@@ -148,8 +148,10 @@ def _prepare_registration_custody_on_work(originals, work):
     exchange, custody, window = _prepare_registration_exchange_on_work(originals, work)
     # No replay-success carrier crosses the next service boundary. The actual
     # verifier receives every original and reconstructs the invocation itself.
-    work.prepare_copy(exchange[0])
-    work.prepare_copy(exchange[1])
+    # These are byte strings, not a JSON graph. The JSON-copy meter rejects
+    # bytes; charge their existing raw spans before the bounded tuple join.
+    work.charge(input_bytes=sum(len(raw) for raw in exchange[0])
+        + sum(len(raw) for raw in exchange[1]))
     raw_ten = exchange[0] + exchange[1]
     clock = issuer.authorization.clock
     clock._check_on_work(window, work=work)

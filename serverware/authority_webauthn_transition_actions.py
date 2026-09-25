@@ -40,10 +40,13 @@ def _operation(operation):
     return operation
 
 
-def _fresh(timing, window, configured, work):
-    return wire._fresh_on_work(timing, window=window,
+def _fresh(timing, window, configured, work, transport_deadline_ns=None):
+    now = wire._fresh_on_work(timing, window=window,
         maximum_age_ns=configured.maximum_control_age_ns,
         maximum_clock_skew_ns=configured.pins[6][1], work=work)
+    if transport_deadline_ns is not None:
+        evidence.production._callback(work, lambda: transport._check_deadline(transport_deadline_ns))
+    return now
 
 
 def _verify_request(originals, configured, work):
@@ -147,38 +150,45 @@ def _produce_plan_on_configuration(*, operation, payload, configuration_digest, 
 
 def _request_plan_on_configuration(*, operation, payload, configuration_digest, generation,
         runtime_role_identities,
-        control_bytes, context_bytes, inputs_bytes, work):
+        control_bytes, context_bytes, inputs_bytes, work, transport_deadline_ns=None):
     returned, _history = _request_plan_and_admit_history_on_configuration(operation=operation,
         payload=payload, configuration_digest=configuration_digest, generation=generation,
         runtime_role_identities=runtime_role_identities, control_bytes=control_bytes,
-        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work,
+        transport_deadline_ns=transport_deadline_ns)
     return returned
 
 
 def _request_plan_and_admit_history_on_configuration(*, operation, payload, configuration_digest,
-        generation, runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work):
+        generation, runtime_role_identities, control_bytes, context_bytes, inputs_bytes, work,
+        transport_deadline_ns=None):
     """Exchange real originals and admit only the reconstructed live history.
 
     This path performs the request/response signature checks itself; neither a
     successful DTO nor a caller-provided response or history bypasses replay.
     """
     operation = _operation(operation)
+    inherited_deadline = transport_deadline_ns
+    if inherited_deadline is not None:
+        evidence.plan.contract._integer(inherited_deadline, minimum=1)
     originals = transport._validate_request(control_bytes, context_bytes, inputs_bytes)
     configured = configuration._capture_on_work(operation=operation, payload=payload,
         configuration_digest=configuration_digest, generation=generation,
         runtime_role_identities=runtime_role_identities, work=work)
     verified = _verify_request(originals, configured, work)
     context, window = verified.context, verified.window
+    effective_deadline = None if inherited_deadline is None else min(inherited_deadline, window[4])
     issued, expires = verified.issued_at_epoch_ns, verified.expires_at_epoch_ns
     timing = {"issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     endpoint = configured.planner_endpoint
-    _fresh(timing, window, configured, work)
+    _fresh(timing, window, configured, work, effective_deadline)
     received = evidence.production._callback(work, lambda: transport._socket_request(endpoint,
-        operation=operation, control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2]))
+        operation=operation, control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2],
+        deadline_ns=effective_deadline))
     if type(received) is not tuple or len(received) != 5:
         raise WebAuthnTransitionActionError("transition plan response is not an exact five-tuple")
     returned = transport._validate_response(*received)
-    _fresh(timing, window, configured, work)
+    _fresh(timing, window, configured, work, effective_deadline)
     # Authenticate every returned original, including the context, before it
     # is decoded even as a claimed planner observation for bounded live replay.
     response_wire._verify_on_work(control_bytes=returned[0], request_control_bytes=originals[0],
@@ -194,7 +204,7 @@ def _request_plan_and_admit_history_on_configuration(*, operation, payload, conf
         inputs_bytes=returned[3], context_bytes=returned[4], request_context=context,
         request_issued_at_epoch_ns=issued, request_expires_at_epoch_ns=expires, request_window=window,
         pins=configured.pins, maximum_control_age_ns=configured.maximum_control_age_ns, work=work)
-    _fresh(timing, window, configured, work)
+    _fresh(timing, window, configured, work, effective_deadline)
     # The original response and ordinary derived history remain separate.
     # Neither is a successful execution or custody carrier.
     return returned, admitted

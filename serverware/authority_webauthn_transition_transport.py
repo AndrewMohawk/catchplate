@@ -91,8 +91,11 @@ def _send_response(connection, response, *, deadline_ns):
     _check_deadline(deadline_ns)
 
 
-def _socket_request(endpoint, *, operation, control_bytes, context_bytes, inputs_bytes):
+def _socket_request(endpoint, *, operation, control_bytes, context_bytes, inputs_bytes, deadline_ns=None):
     """Exchange originals once with the exact configured (path,timeout,uid,gid)."""
+    inherited_deadline = deadline_ns
+    if inherited_deadline is not None and (type(inherited_deadline) is not int or inherited_deadline <= 0):
+        raise AuthorityTransportError("transition planning inherited deadline is invalid")
     if type(endpoint) is not tuple or len(endpoint) != 4:
         raise AuthorityTransportError("transition planning endpoint is not an exact four-tuple")
     path, timeout_seconds, expected_peer_uid, expected_peer_gid = endpoint
@@ -113,6 +116,8 @@ def _socket_request(endpoint, *, operation, control_bytes, context_bytes, inputs
             for value in (expected_peer_uid, expected_peer_gid)):
         raise AuthorityTransportError("transition planning peer identity is invalid")
     deadline_ns = _deadline_ns(timeout_seconds)
+    if inherited_deadline is not None:
+        deadline_ns = min(deadline_ns, inherited_deadline)
     header = magic + b"".join(len(raw).to_bytes(8, "big") for raw in originals)
     _check_deadline(deadline_ns)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

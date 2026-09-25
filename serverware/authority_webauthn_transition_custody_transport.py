@@ -150,7 +150,10 @@ def _send_relay(connection, relay_bytes, *, deadline_ns):
 
 
 def _socket_exchange(path, *, kind, operation, originals, timeout_seconds,
-        expected_peer_uid, expected_peer_gid):
+        expected_peer_uid, expected_peer_gid, deadline_ns=None):
+    inherited_deadline = deadline_ns
+    if inherited_deadline is not None and (type(inherited_deadline) is not int or inherited_deadline <= 0):
+        raise AuthorityTransportError("transition custody inherited deadline is invalid")
     magics, limits = _PROFILES[kind]
     if type(operation) is not str or operation not in OPERATIONS:
         raise AuthorityTransportError("transition custody operation is not source fixed")
@@ -169,6 +172,8 @@ def _socket_exchange(path, *, kind, operation, originals, timeout_seconds,
             for value in (expected_peer_uid, expected_peer_gid)):
         raise AuthorityTransportError("transition custody peer identity is invalid")
     deadline_ns = _deadline_ns(timeout_seconds)
+    if inherited_deadline is not None:
+        deadline_ns = min(deadline_ns, inherited_deadline)
     header = magic + b"".join(len(raw).to_bytes(8, "big") for raw in originals)
     _check_deadline(deadline_ns)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -227,13 +232,13 @@ def _socket_request(path, *, operation, intent_bytes, relay_bytes, envelope_byte
 
 def _socket_relay_request(path, *, operation, intent_bytes, envelope_bytes, proof_bytes,
         inputs_bytes, context_bytes, historical_expectations_bytes, timeout_seconds,
-        expected_peer_uid, expected_peer_gid):
+        expected_peer_uid, expected_peer_gid, deadline_ns=None):
     originals = _validate_relay_originals(intent_bytes=intent_bytes, envelope_bytes=envelope_bytes,
         proof_bytes=proof_bytes, inputs_bytes=inputs_bytes, context_bytes=context_bytes,
         historical_expectations_bytes=historical_expectations_bytes)
     return _socket_exchange(path, kind="relay", operation=operation, originals=originals,
         timeout_seconds=timeout_seconds, expected_peer_uid=expected_peer_uid,
-        expected_peer_gid=expected_peer_gid)
+        expected_peer_gid=expected_peer_gid, deadline_ns=deadline_ns)
 
 
 def _socket_forward_request(path, *, operation, intent_bytes, relay_bytes, envelope_bytes,

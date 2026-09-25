@@ -1,8 +1,9 @@
 # Independent current-root witness integration
 
 Status: source-backed integration design, not an implemented or provisioned
-current-root authority. This document assigns no new wire schema, role, key,
-endpoint, enrollment or permission. Existing replay-witness purposes remain
+current-root authority. Source `.132` implements only the complete-vector
+computation described below, not a current-root request/receipt protocol, role,
+key, endpoint, enrollment or permission. Existing replay-witness purposes remain
 unchanged. Source components and authored fixtures are unbuilt and unexecuted.
 
 The purpose is to make a future Snapshot/v4 bind independently admitted primary
@@ -78,6 +79,39 @@ currentness or independent enrollment. The separate
 the full operation-local read/write union and raw evidence, but supplies no
 independent currentness or complete enrolled database vector. Its secret-bearing
 raw contents remain inside the semantic boundary, not in a witness request.
+
+## Implemented complete-vector computation (.132)
+
+[`authority_current_root_vector.py`](../serverware/authority_current_root_vector.py)
+defines canonical `serverware.policyAuthorityCompleteRootVector/v1`. Its exact
+ten fields are `schema`, `schemaVersion`, `sourceRevision`,
+`operationManifestDigest`, `queryManifestDigest`, `authorizationManifestDigest`,
+`primaryInventoryDigest`, `projectionManifestDigest`, `primaryRoots` and
+`countedRoots`.
+
+Primary roots are globally sorted exact four-field records: `table`,
+`rootRevision`, `rootDigest`, `leafCount`. Their inventory is the complete source
+operation read/write/authorization union, checked against the actual primary-key
+contract; its digest also binds key columns, tree geometry and primary
+root/proof profiles. Counted roots contain all eleven source profiles, sorted by
+`indexId`, with exact fields `indexId`, `table`, `countedProfile`,
+`projectionDigest`, `projectionManifestDigest`, `indexRevision`, `rootDigest`
+and `leafCount`. Missing, unknown, duplicate, reordered or operation-local
+inventories cannot substitute. Actual descriptor helpers check canonical empty
+roots, revisions and necessary primary/count relationships; no absent head is
+defaulted to genesis.
+
+`_source_bindings_on_work` derives the eight source header fields.
+`_capture_on_work`, `_encode_on_work` and `_decode_on_work` own and validate the
+complete document; `_digest_on_work` first validates original canonical bytes,
+then computes their framed `CompleteRootVectorIdentity/v1` digest. All use the
+caller's existing work, with a 64-KiB vector limit, 4,096 JSON nodes and depth 4.
+Returned dictionaries, bytes and digests are ordinary data. A matching digest
+establishes no population, same-snapshot provenance, enrollment or currentness.
+
+This closes a computation prerequisite only. There is still no enrolled
+current-root backend, pending-decision owner, current-root signature protocol
+or successor SQL execution supplied by this module.
 
 ## Minimum requests, durable state and receipts
 
@@ -210,8 +244,9 @@ unknown-outcome handling. Its fixed one-use role is not a general current-root
 service, and a separately located PostgreSQL database alone does not prove
 rollback resistance. Do not repurpose its schema, signing purposes or enrollment.
 
-Required implementation remains: the bounded purpose-specific contracts and
-signature admission; an independently provisioned latest-head/pending backend
+With closed complete-vector computation implemented, required authority
+implementation remains: the bounded purpose-specific contracts and signature
+admission; an independently provisioned latest-head/pending backend
 and service; authenticated enrollment/generation/recovery; protected SQL markers
 and postcommit assurance; and coordinated Snapshot/v4, planner, executor,
 receipt, schema/ACL and source-manifest integration. Every application writer,

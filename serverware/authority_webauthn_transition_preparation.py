@@ -47,7 +47,10 @@ def _interval(value, snapshots):
     return issued, expires
 
 
-def _current_on_work(process, measured, archive, snapshots, generation, window, controls, work):
+def _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
+        transport_deadline_ns=None):
+    if transport_deadline_ns is not None:
+        evidence.production._callback(work, lambda: transport._check_deadline(transport_deadline_ns))
     _same_owner(process, measured, archive)
     transition._require_generation_on_work("verifier", generation, work)
     _same_owner(process, measured, archive)
@@ -58,11 +61,13 @@ def _current_on_work(process, measured, archive, snapshots, generation, window, 
         if issued > now + window[6] or now >= expires:
             raise WebAuthnTransitionPreparationError("transition preparation original control is no longer live")
     _same_owner(process, measured, archive)
+    if transport_deadline_ns is not None:
+        evidence.production._callback(work, lambda: transport._check_deadline(transport_deadline_ns))
     return now
 
 
 def _prepare_on_work(process, *, operation, request, inputs_bytes,
-        now_epoch_ns, deadline_epoch_ns, invocation, work):
+        now_epoch_ns, deadline_epoch_ns, invocation, work, transport_deadline_ns=None):
     """Return raw7 only after real request/response, plan, intent and relay work.
 
     Registration invocation is empty; stage capabilityId and completion
@@ -81,7 +86,9 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
     archive = measured.history_archive
     operation = transition._operation(operation)
     plan.proof.wire._raw(inputs_bytes, 2, plan.proof.wire.MAX_BYTES)
-    original_inputs = inputs_bytes
+    original_inputs, inherited_deadline = inputs_bytes, transport_deadline_ns
+    if inherited_deadline is not None:
+        plan.contract.shape._integer(inherited_deadline, minimum=1)
     owned = evidence.capture._JSONCapture(ledger, maximum_bytes=plan.contract.MAX_BYTES).visit(
         {"request": request, "nowEpochNs": now_epoch_ns,
             "deadlineEpochNs": deadline_epoch_ns, "invocation": invocation})
@@ -123,8 +130,12 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
     end = min(window[3], start + configured.maximum_control_age_ns)
     window = clock._validate((start, before, after, end, before + end - start,
         configured.maximum_control_age_ns, configured.pins[6][1]))
+    # An inherited absolute transport bound can only narrow this same original
+    # opening. It never rewrites signed control times or starts a new window.
+    effective_deadline = None if inherited_deadline is None else min(inherited_deadline, window[4])
     controls = ()
-    _current_on_work(process, measured, archive, snapshots, generation, window, controls, work)
+    _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
+        effective_deadline)
 
     requested = service.AuthorityProcess._produce_webauthn_transition_plan_request(process,
         operation=operation, request=owned_request, inputs_bytes=original_inputs,
@@ -134,12 +145,15 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
         requested.control_bytes, requested.context_bytes, requested.inputs_bytes)
     value, _signature, _unsigned = actions.request_wire._read_control(originals[0], work)
     controls = (_interval(value, snapshots),)
-    _current_on_work(process, measured, archive, snapshots, generation, window, controls, work)
+    _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
+        effective_deadline)
     response, expected = actions._request_plan_and_admit_history_on_configuration(
         operation=operation, payload=payload, configuration_digest=digest, generation=generation,
         runtime_role_identities=runtime, control_bytes=originals[0],
-        context_bytes=originals[1], inputs_bytes=originals[2], work=work)
-    now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work)
+        context_bytes=originals[1], inputs_bytes=originals[2], work=work,
+        transport_deadline_ns=effective_deadline)
+    now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
+        effective_deadline)
     response = actions.transport._validate_response(*response)
     raw4 = response[1:]
     # Actual exchange/replay has authenticated raw4 before this timing-only
@@ -158,7 +172,8 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
             raise WebAuthnTransitionPreparationError("admitted live transition history exceeds the archive interval")
     plan._fresh(plan_payload, expected, now)
     historical = plan.context._encode_on_work(expectations=expected, work=work)
-    now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work)
+    now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
+        effective_deadline)
     plan._fresh(plan_payload, expected, now)
 
     produced = service.AuthorityProcess._produce_webauthn_transition_custody_intent(process,
@@ -171,17 +186,20 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
         raise WebAuthnTransitionPreparationError("custody intent changed the source-admitted live history")
     value, _signature, _unsigned = wire._read_control(intent_bytes, relay=False, work=work)
     controls += (_interval(value, snapshots),)
-    now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work)
+    now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
+        effective_deadline)
     plan._fresh(plan_payload, expected, now)
     relay_bytes = service.AuthorityProcess._request_webauthn_transition_custody_relay(process,
         operation=operation, intent_bytes=intent_bytes, envelope_bytes=raw4[0],
         proof_bytes=raw4[1], inputs_bytes=raw4[2], context_bytes=raw4[3],
-        historical_expectations_bytes=history_bytes, work=work)
+        historical_expectations_bytes=history_bytes, work=work,
+        transport_deadline_ns=effective_deadline)
     value, _signature, _unsigned = wire._read_control(relay_bytes, relay=True, work=work)
     controls += (_interval(value, snapshots),)
     result = transport._validate_originals(intent_bytes=intent_bytes, relay_bytes=relay_bytes,
         envelope_bytes=raw4[0], proof_bytes=raw4[1], inputs_bytes=raw4[2],
         context_bytes=raw4[3], historical_expectations_bytes=history_bytes)
-    now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work)
+    now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
+        effective_deadline)
     plan._fresh(plan_payload, expected, now)
     return result

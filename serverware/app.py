@@ -286,6 +286,20 @@ _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES = 4 * 1024 * 1024
 _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _SIGNED_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _CONTROL_PLANE_REQUEST_MAX_BYTES = 2 * 1024 * 1024
+_REGISTRATION_PREPARATION_PATHS = frozenset({
+    "/api/webauthn/register/prepare",
+    "/api/auth/session/webauthn/register/prepare",
+})
+_REGISTRATION_PREPARATION_MAX_BYTES = 512 * 1024
+_REGISTRATION_PREPARATION_JSON_LIMITS = JsonLimits(
+    max_bytes=_REGISTRATION_PREPARATION_MAX_BYTES,
+    max_depth=16,
+    max_object_keys=64,
+    max_total_keys=512,
+    max_array_items=128,
+    max_total_nodes=4096,
+    max_string_bytes=_REGISTRATION_PREPARATION_MAX_BYTES,
+)
 _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES = 16 * 1024 * 1024
 _POLICY_AUTHORITY_HANDOFF_REQUEST_MAX_BYTES = 12 * 1024 * 1024
 _POLICY_CANARY_EVIDENCE_REQUEST_MAX_BYTES = 8 * 1024 * 1024
@@ -386,6 +400,24 @@ async def csrf_middleware(request: Request, call_next):
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
     request_path = request.scope.get("path")
+    registration_preparation_request = (
+        request.method == "POST" and request_path in _REGISTRATION_PREPARATION_PATHS
+    )
+    if registration_preparation_request:
+        # This new route family has one exact framing path. Do not change the
+        # existing browser /verify parser, defaults or finalization behavior.
+        lengths = request.headers.getlist("content-length")
+        if not lengths:
+            return _registration_preparation_error(411, "registration_preparation_length_required")
+        if (len(lengths) != 1 or re.fullmatch(r"[1-9][0-9]{0,5}", lengths[0]) is None
+                or request.headers.getlist("transfer-encoding")
+                or request.headers.getlist("content-encoding")
+                or request.scope.get("query_string", b"") != b""):
+            return _registration_preparation_error(400, "registration_preparation_framing_invalid")
+        if request.headers.getlist("content-type") != ["application/json"]:
+            return _registration_preparation_error(415, "registration_preparation_json_required")
+        if int(lengths[0]) > _REGISTRATION_PREPARATION_MAX_BYTES:
+            return _registration_preparation_error(413, "registration_preparation_body_too_large")
     setup_canary_request = (
         request.method == "POST"
         and isinstance(request_path, str)
@@ -408,6 +440,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             "/api/data-plane/policy-canary/evidence",
             }
             or setup_canary_request
+            or registration_preparation_request
         )
     )
     public_evidence_request = (
@@ -434,6 +467,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         "/api/authority/control-plane/execute":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/authority/control-plane/custody/reconcile": 256,
+        "/api/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
+        "/api/auth/session/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/authority/webauthn/challenges":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/data-plane/policy-candidate/artifact":
@@ -497,6 +532,9 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         body = bytearray()
         async for chunk in request.stream():
+            if (registration_preparation_request
+                    and len(chunk) > content_length - len(body)):
+                return _registration_preparation_error(400, "registration_preparation_framing_invalid")
             body.extend(chunk)
             if len(body) > request_limit:
                 return JSONResponse(
@@ -505,6 +543,17 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
                 )
         request._body = bytes(body)
         request._stream_consumed = False
+        if registration_preparation_request:
+            if len(body) != content_length:
+                return _registration_preparation_error(400, "registration_preparation_framing_invalid")
+            try:
+                document = parse_strict_json_object(request._body,
+                    limits=_REGISTRATION_PREPARATION_JSON_LIMITS)
+                request.state.registration_preparation_payload = (
+                    WebAuthnRegistrationPrepare.model_validate(_plain_setup_json(document))
+                )
+            except (ReceiptVerificationError, ValidationError, ValueError, RecursionError):
+                return _registration_preparation_error(400, "registration_preparation_json_invalid")
     response = await call_next(request)
     if (strict_json_request or request_path == "/api/policy/canary/status"
             or isinstance(request_path, str)
@@ -1568,6 +1617,13 @@ class WebAuthnRegistrationFinish(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str = "YubiKey"
+    response: dict[str, Any]
+
+
+class WebAuthnRegistrationPrepare(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    label: str = Field(max_length=4096)
     response: dict[str, Any]
 
 
@@ -3088,6 +3144,61 @@ def _oidc_registration_originals(
     expected = _oidc_first_enrollment_authorization(held_session, payload_digest)
     return _capture_registration_originals(str(user_id), held_label, held_response,
         require_authorization=True, expected_authorization=expected)
+
+
+def _registration_preparation_error(status_code: int, error: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff"},
+        content={"detail": {"error": error, "registrationCompleted": False,
+            "remoteState": "unknown"}})
+
+
+def _registration_preparation_payload(request: Request) -> WebAuthnRegistrationPrepare:
+    payload = getattr(request.state, "registration_preparation_payload", None)
+    if type(payload) is not WebAuthnRegistrationPrepare:
+        raise HTTPException(status_code=400, detail="registration preparation framing is required",
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+    return payload
+
+
+def _registration_custody_prepared_response(originals: _RegistrationOriginals) -> JSONResponse:
+    """Append locally through the fixed continuation; never forward or finalize."""
+    try:
+        from serverware import control_plane_registration_preparation as preparation
+
+        local_digest = preparation.prepare_registration_custody(originals)
+        if type(local_digest) is not str or re.fullmatch(r"sha256:[0-9a-f]{64}", local_digest) is None:
+            raise ValueError("registration preparation did not return its local identity")
+    except Exception:
+        # A spent grant or local durable write can precede a failure. No error
+        # body exposes originals/internal text or asserts remote absence/retry.
+        return _registration_preparation_error(503, "registration_preparation_unavailable")
+    return JSONResponse(status_code=202,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff"},
+        content={"schema": "serverware.webAuthnRegistrationCustodyPreparation/v1",
+            "status": "prepared", "localDigest": local_digest,
+            "registrationCompleted": False})
+
+
+@app.post("/api/auth/session/webauthn/register/prepare", status_code=202)
+def operator_session_webauthn_register_prepare(
+    request: Request,
+    payload: WebAuthnRegistrationPrepare = Depends(_registration_preparation_payload),
+) -> JSONResponse:
+    # Actual pending-session lookup includes current authoritative OIDC RBAC;
+    # normal cookie CSRF middleware still applies. No session is activated here.
+    _, session = _pending_oidc_session_for_request(request)
+    label, response = payload.label, payload.response
+    try:
+        with trust_bundle_lock(exclusive=False):
+            originals = _oidc_registration_originals(label=label, response=response, session=session)
+            return _registration_custody_prepared_response(originals)
+    except WebAuthnError:
+        return _registration_preparation_error(400, "registration_preparation_originals_invalid")
+    except Exception:
+        return _registration_preparation_error(503, "registration_preparation_unavailable")
 
 
 @app.post("/api/auth/session/webauthn/register/options")
@@ -15329,6 +15440,23 @@ def webauthn_register_options(
     return registration_options(
         identity.user_id, payload.label, authorization=authorization
     )
+
+
+@app.post("/api/webauthn/register/prepare", status_code=202)
+def webauthn_register_prepare(
+    payload: WebAuthnRegistrationPrepare = Depends(_registration_preparation_payload),
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> JSONResponse:
+    held_identity, label, response = identity, payload.label, payload.response
+    try:
+        with trust_bundle_lock(exclusive=False):
+            originals = _operator_registration_originals(
+                label=label, response=response, identity=held_identity)
+            return _registration_custody_prepared_response(originals)
+    except WebAuthnError:
+        return _registration_preparation_error(400, "registration_preparation_originals_invalid")
+    except Exception:
+        return _registration_preparation_error(503, "registration_preparation_unavailable")
 
 
 @app.post("/api/webauthn/register/verify")

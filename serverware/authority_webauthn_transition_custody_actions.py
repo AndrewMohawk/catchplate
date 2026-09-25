@@ -110,9 +110,12 @@ def _persist_on_configuration(*, operation, payload, configuration_digest, gener
 def _request_relay_on_configuration(*, operation, payload, configuration_digest, generation,
         runtime_role_identities,
         intent_bytes, envelope_bytes, proof_bytes, inputs_bytes, context_bytes,
-        historical_expectations_bytes, work):
+        historical_expectations_bytes, work, transport_deadline_ns=None):
     evidence.capture._SharedLedger(work)
     operation = _operation(operation)
+    inherited_deadline = transport_deadline_ns
+    if inherited_deadline is not None:
+        evidence.plan.contract._integer(inherited_deadline, minimum=1)
     originals = transport._validate_relay_originals(intent_bytes=intent_bytes,
         envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
         context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes)
@@ -128,13 +131,16 @@ def _request_relay_on_configuration(*, operation, payload, configuration_digest,
         historical_expectations_bytes=originals[5], pins=pins, generation_sequence=sequence,
         generation_digest=digest, verifier_public_key=public, maximum_control_age_ns=age, work=work)
     window = verified.window
+    effective_deadline = None if inherited_deadline is None else min(inherited_deadline, window[4])
     timing = {"issuedAtEpochNs": verified.issued_at_epoch_ns, "expiresAtEpochNs": verified.expires_at_epoch_ns}
     wire._fresh_on_work(timing, window=window, maximum_age_ns=age, maximum_clock_skew_ns=skew, work=work)
+    if effective_deadline is not None:
+        evidence.production._callback(work, lambda: transport._check_deadline(effective_deadline))
     original_relay = evidence.production._callback(work, lambda: transport._socket_relay_request(
         path, operation=operation, intent_bytes=originals[0], envelope_bytes=originals[1],
         proof_bytes=originals[2], inputs_bytes=originals[3], context_bytes=originals[4],
         historical_expectations_bytes=originals[5], timeout_seconds=timeout,
-        expected_peer_uid=peer_uid, expected_peer_gid=peer_gid))
+        expected_peer_uid=peer_uid, expected_peer_gid=peer_gid, deadline_ns=effective_deadline))
     wire._fresh_on_work(timing, window=window, maximum_age_ns=age, maximum_clock_skew_ns=skew, work=work)
     relay._verify_on_work(intent_bytes=originals[0], relay_bytes=original_relay, envelope_bytes=originals[1],
         proof_bytes=originals[2], inputs_bytes=originals[3], context_bytes=originals[4],
@@ -143,6 +149,8 @@ def _request_relay_on_configuration(*, operation, payload, configuration_digest,
     # Keep the first intent window too; response authentication cannot renew
     # the elapsed lifetime spent on this actual transport and genuine replay.
     wire._fresh_on_work(timing, window=window, maximum_age_ns=age, maximum_clock_skew_ns=skew, work=work)
+    if effective_deadline is not None:
+        evidence.production._callback(work, lambda: transport._check_deadline(effective_deadline))
     return original_relay
 
 

@@ -4185,8 +4185,24 @@ class AuthorityProcess:
 
         return transitions._read_roots_on_work(self, operation=operation, request=request, work=work)
 
+    def _prepare_webauthn_registration_finalization(self, *, request_originals,
+            response_originals, sibling_challenge_ids, deadline_epoch_ns, work,
+            transport_deadline_ns=None):
+        """Genuinely replay signer originals before actual transition preparation.
+
+        This returns raw7 only. Complete population proofs and the actual v2
+        business evidence row remain planner/kernel prerequisites, not facts
+        inferred from a custody digest or the supplied sibling lookup hints.
+        """
+        from serverware import authority_webauthn_registration_finalization_preparation as preparation
+
+        return preparation._prepare_on_work(self, request_originals=request_originals,
+            response_originals=response_originals, sibling_challenge_ids=sibling_challenge_ids,
+            deadline_epoch_ns=deadline_epoch_ns, work=work,
+            transport_deadline_ns=transport_deadline_ns)
+
     def _prepare_webauthn_transition_custody(self, *, operation, request, inputs_bytes,
-            now_epoch_ns, deadline_epoch_ns, invocation, work):
+            now_epoch_ns, deadline_epoch_ns, invocation, work, transport_deadline_ns=None):
         """Prepare exact custody originals from an independently admitted invocation.
 
         The genuine verifier admits the bounded live planning observations as
@@ -4199,7 +4215,8 @@ class AuthorityProcess:
 
         return preparation._prepare_on_work(self, operation=operation, request=request,
             inputs_bytes=inputs_bytes, now_epoch_ns=now_epoch_ns,
-            deadline_epoch_ns=deadline_epoch_ns, invocation=invocation, work=work)
+            deadline_epoch_ns=deadline_epoch_ns, invocation=invocation, work=work,
+            transport_deadline_ns=transport_deadline_ns)
 
     def _produce_webauthn_transition_plan_request(self, *, operation, request, inputs_bytes,
             now_epoch_ns, deadline_epoch_ns, invocation, work):
@@ -4211,12 +4228,13 @@ class AuthorityProcess:
             invocation=invocation, work=work)
 
     def _request_webauthn_transition_plan(self, *, operation, control_bytes,
-            context_bytes, inputs_bytes, work):
+            context_bytes, inputs_bytes, work, transport_deadline_ns=None):
         """Exchange an original request and replay its signed raw-four response."""
         from serverware import authority_webauthn_transition_service as transitions
 
         return transitions._request_plan_on_work(self, operation=operation,
-            control_bytes=control_bytes, context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work)
+            control_bytes=control_bytes, context_bytes=context_bytes, inputs_bytes=inputs_bytes, work=work,
+            transport_deadline_ns=transport_deadline_ns)
 
     def _produce_webauthn_transition_plan(self, *, operation, control_bytes,
             context_bytes, inputs_bytes, work):
@@ -4245,13 +4263,15 @@ class AuthorityProcess:
             context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes, work=work)
 
     def _request_webauthn_transition_custody_relay(self, *, operation, intent_bytes,
-            envelope_bytes, proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work):
+            envelope_bytes, proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work,
+            transport_deadline_ns=None):
         """Request authenticated relay preparation, not persistence or forwarding."""
         from serverware import authority_webauthn_transition_custody_service as custody
 
         return custody._request_relay_on_work(self, operation=operation, intent_bytes=intent_bytes,
             envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
-            context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes, work=work)
+            context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes, work=work,
+            transport_deadline_ns=transport_deadline_ns)
 
     def _forward_webauthn_transition_custody(self, *, operation, intent_bytes, relay_bytes,
             envelope_bytes, proof_bytes, inputs_bytes, context_bytes, historical_expectations_bytes, work):

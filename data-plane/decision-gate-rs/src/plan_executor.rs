@@ -36,9 +36,10 @@ use crate::readiness::{
 };
 use crate::runtime_evidence::{
     verify_static_executable_fd, ExecutableRole,
-    RunnerRuntimeEvidenceV12, StaticExecutableEvidenceV12,
+    StaticExecutableEvidenceV12,
     TRUSTED_HOST_CLAIM,
 };
+use crate::runtime_evidence::body_result_v12::BodyExecutionResultV12;
 use crate::source_cas::{
     AuthenticatedDirectoryInput, AuthorizedManifestKey,
     ManifestTrustPolicy, PublishedSourceCas, SourceCasStore,
@@ -212,26 +213,6 @@ struct ArtifactExportResultV12 {
     artifact_manifest: ArtifactManifestV12,
     attached_directory_fd_sha256: Digest,
     export_transcript_sha256: Digest,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct BodyExecutionResultV12 {
-    version: String,
-    plan_id: Digest,
-    lane: LogicalLane,
-    body_sha256: Digest,
-    command_sha256: Digest,
-    exit_status: i32,
-    stdout_sha256: Digest,
-    stderr_sha256: Digest,
-    output_manifest_sha256: Digest,
-    runner_static_evidence: StaticExecutableEvidenceV12,
-    courier_static_evidence: StaticExecutableEvidenceV12,
-    runner_evidence: RunnerRuntimeEvidenceV12,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    native_postgres_output_sha256: Option<Digest>,
-    terminal_sha256: Digest,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2084,9 +2065,8 @@ fn pinned_readiness_trust(
 
 fn verify_authoritative_runtime_evidence(
     evidence: &runtime_evidence::RunnerRuntimeEvidenceV12,
-    expected_runner_identity_sha256: &Digest,
+    expected_runner: &RunnerIdentity,
     expected_command_sha256: &Digest,
-    expected_namespaces: &runtime_evidence::RuntimeNamespaceIdentityV12,
 ) -> Result<(), String> {
     let policy = pinned_executor_policy()?
         .runtime_observer_policy
@@ -2096,10 +2076,9 @@ fn verify_authoritative_runtime_evidence(
     let proxy_digest = &pinned_executor_policy()?.inherited_proxy_executable_sha256;
     evidence
         .validate_authoritative_join(
-            expected_runner_identity_sha256,
+            expected_runner,
             proxy_digest,
             expected_command_sha256,
-            expected_namespaces,
             &policy,
         )
         .map_err(|error| error.to_string())
@@ -2637,8 +2616,7 @@ fn run_body<T: LaneProxyTransport>(
             "repository body returned unexpected authority FDs",
         ));
     }
-    let result: BodyExecutionResultV12 =
-        serde_json::from_slice(&reply.bytes)?;
+    let result = BodyExecutionResultV12::parse_original(&reply.bytes)?;
     validate_body_result(plan, lane, artifact, &result)?;
     if result.exit_status != 0 {
         return Err(PlanProtocolError::InvalidOwned(format!(
@@ -2719,20 +2697,11 @@ fn validate_body_result(
     )?;
     verify_authoritative_runtime_evidence(
         &result.runner_evidence,
-        &canonical_sha256(&lane.prepare.runner)?,
+        &lane.prepare.runner,
         &lane.body.command.command_sha256,
-        &result.runner_evidence.namespaces,
     )
     .map_err(PlanProtocolError::InvalidOwned)?;
-    let mut copy = result.clone();
-    copy.terminal_sha256 = [0; 32];
-    if sha256_bytes(&canonical_bytes(&copy)?)
-        != result.terminal_sha256
-    {
-        return Err(PlanProtocolError::Invalid(
-            "repository body terminal digest is not canonical",
-        ));
-    }
+    result.validate_terminal()?;
     Ok(())
 }
 

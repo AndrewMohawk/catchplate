@@ -187,7 +187,12 @@ multiple links, empty or oversized files, and metadata/content-length changes
 during the bounded read are rejected. `O_NONBLOCK` prevents a supplied FIFO
 from blocking before the regular-file check. The expected result file is
 owned by the admitted runner user, not by the privileged controller. Its
-canonical plan/lane/body/observed-exit bindings are still checked afterward.
+canonical plan/lane/body/command/observed-exit and retained runner-image/runtime/
+rootfs bindings are checked afterward. Both controller layers now consume the
+same closed, bounded 4 MiB original result contract and validate its terminal
+and signed-claims commitments; the executor independently verifies the observer
+signature. See [body evidence](controller-body-evidence.md) for the v13 observer
+binding, integer-capable v12 lifecycle codec and remaining producer prerequisites.
 
 Inspect equality establishes only the source-level admission rule and, when
 actually exercised, the daemon's reported configuration. It is not independent

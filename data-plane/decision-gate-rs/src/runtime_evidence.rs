@@ -1,9 +1,12 @@
 #![cfg(target_os = "linux")]
 
+#[path = "body_result_v12.rs"]
+pub(crate) mod body_result_v12;
+
 use crate::plan_protocol::{
     canonical_bytes, sha256_bytes, ArtifactCasReference, Digest,
     DigestValidation,
-    OciObjectReference, PlanProtocolError, PlanResult,
+    OciObjectReference, PlanProtocolError, PlanResult, RunnerIdentity,
     RuntimeTrustProfile, SourceCasReference,
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -33,6 +36,10 @@ const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const DT_NULL: i64 = 0;
 const DT_NEEDED: i64 = 1;
+const MAX_EXECUTABLE_MAPPINGS: usize = 4096;
+const MAX_MAPPING_PATH_BYTES: usize = 4096;
+const OBSERVER_SIGNATURE_DOMAIN: &[u8] =
+    b"serverware/runtime-observer-evidence/v13\0";
 type EvidenceError = PlanProtocolError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -89,7 +96,9 @@ impl ExecutableMappingEvidenceV12 {
         if self.anonymous
             || self.path.as_ref().is_none_or(|path| {
                 path.is_empty()
+                    || path.len() > MAX_MAPPING_PATH_BYTES
                     || !path.starts_with('/')
+                    || path.as_bytes().contains(&0)
                     || path.contains(" (deleted)")
             })
             || self.content_sha256 == [0; 32]
@@ -149,11 +158,12 @@ impl RuntimeMappingObservationV12 {
                 "runtime mapping interval is empty or changes length".into(),
             ));
         }
-        if self.permissions.len() != 4
-            || !self
-                .permissions
-                .bytes()
-                .all(|byte| matches!(byte, b'r' | b'w' | b'x' | b'p' | b's' | b'-'))
+        let permissions = self.permissions.as_bytes();
+        if permissions.len() != 4
+            || !matches!(permissions[0], b'r' | b'-')
+            || !matches!(permissions[1], b'w' | b'-')
+            || !matches!(permissions[2], b'x' | b'-')
+            || !matches!(permissions[3], b'p' | b's')
         {
             return Err(EvidenceError::Invariant(
                 "runtime mapping permissions are not canonical".into(),
@@ -178,13 +188,15 @@ pub struct AuthoritativeObserverEvidenceV12 {
     pub terminal_event_sha256: Digest,
     pub mappings: Vec<RuntimeMappingObservationV12>,
     pub mapping_log_root_sha256: Digest,
+    pub runtime_claims_sha256: Digest,
+    pub body_claims_sha256: Digest,
     pub canonical_evidence_sha256: Digest,
     pub observer_key_id: String,
     pub observer_signature_b64: String,
 }
 
 impl AuthoritativeObserverEvidenceV12 {
-    pub const VERSION: &'static str = "serverware/runtime-observer-evidence/v12";
+    pub const VERSION: &'static str = "serverware/runtime-observer-evidence/v13";
 
     fn validate_structure(&self) -> Result<(), EvidenceError> {
         if self.version != Self::VERSION
@@ -193,7 +205,10 @@ impl AuthoritativeObserverEvidenceV12 {
             || self.pidfd_inode == 0
             || self.launch_sequence >= self.terminal_sequence
             || self.observer_key_id.is_empty()
-            || self.observer_signature_b64.is_empty()
+            || self.observer_key_id.len() > 128
+            || self.observer_signature_b64.len() != 88
+            || self.mappings.is_empty()
+            || self.mappings.len() > MAX_EXECUTABLE_MAPPINGS
         {
             return Err(EvidenceError::Invariant(
                 "runtime observer evidence header is invalid".into(),
@@ -206,6 +221,9 @@ impl AuthoritativeObserverEvidenceV12 {
             .validate("observer terminal event")?;
         self.mapping_log_root_sha256
             .validate("observer mapping log root")?;
+        self.runtime_claims_sha256.validate("observer runtime claims")?;
+        self.body_claims_sha256.validate("observer body claims")?;
+        self.canonical_evidence_sha256.validate("observer canonical evidence")?;
 
         let mut previous_host_end = None;
         let mut previous_runner_end = None;
@@ -328,7 +346,6 @@ impl RuntimeObserverPolicy {
             })?;
         verify_observer_signature(
             key,
-            b"serverware/runtime-observer-evidence/v12\0",
             &evidence.canonical_evidence_sha256,
             &evidence.observer_signature_b64,
         )
@@ -357,53 +374,72 @@ pub struct RunnerRuntimeEvidenceV12 {
     pub runtime_report_sha256: Digest,
 }
 
+// Keep every ordinary runtime field explicit and in its existing typed wire
+// order. The signed observer and final report digest are excluded to avoid a
+// self-reference. Adding a runtime field requires an explicit projection edit.
+#[derive(Serialize)]
+struct RuntimeClaimsV13<'a> {
+    runner: &'a OciObjectReference,
+    runtime_executable_sha256: &'a Digest,
+    rootfs_sha256: &'a Digest,
+    source: &'a SourceCasReference,
+    artifacts: &'a Option<ArtifactCasReference>,
+    proxy_peer_identity_sha256: &'a Digest,
+    pid_namespace_inode: u64,
+    mount_namespace_inode: u64,
+    network_namespace_inode: u64,
+    cgroup_identity_sha256: &'a Digest,
+    executable_mappings: &'a [ExecutableMappingEvidenceV12],
+    runner_identity_sha256: &'a Digest,
+    inherited_proxy_executable_sha256: &'a Digest,
+    command_sha256: &'a Digest,
+    namespaces: &'a RuntimeNamespaceIdentityV12,
+}
+
 fn verify_observer_signature(
     key: &ed25519_dalek::VerifyingKey,
-    domain: &[u8],
     digest: &Digest,
     encoded_signature: &str,
 ) -> Result<(), EvidenceError> {
     use base64::Engine as _;
 
-    let digest_value = serde_json::to_value(digest).map_err(|error| {
-        EvidenceError::Invariant(format!("serialize runtime observer digest: {error}"))
-    })?;
-    let digest_text = digest_value.as_str().ok_or_else(|| {
-        EvidenceError::Invariant("runtime observer digest is not encoded as a string".into())
-    })?;
+    if encoded_signature.len() != 88 {
+        return Err(EvidenceError::Invariant(
+            "runtime observer signature is not exact padded base64".into(),
+        ));
+    }
     let signature_bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded_signature.as_bytes())
         .map_err(|_| {
             EvidenceError::Invariant("runtime observer signature is not valid base64".into())
         })?;
+    if signature_bytes.len() != 64
+        || base64::engine::general_purpose::STANDARD.encode(&signature_bytes)
+            != encoded_signature
+    {
+        return Err(EvidenceError::Invariant(
+            "runtime observer signature base64 is not canonical".into(),
+        ));
+    }
     let signature = ed25519_dalek::Signature::from_slice(&signature_bytes).map_err(|_| {
         EvidenceError::Invariant("runtime observer signature is not valid Ed25519".into())
     })?;
-    let mut message = Vec::with_capacity(domain.len() + digest_text.len());
-    message.extend_from_slice(domain);
-    message.extend_from_slice(digest_text.as_bytes());
+    let mut message = Vec::with_capacity(OBSERVER_SIGNATURE_DOMAIN.len() + digest.len());
+    message.extend_from_slice(OBSERVER_SIGNATURE_DOMAIN);
+    message.extend_from_slice(digest);
     key.verify_strict(&message, &signature).map_err(|_| {
         EvidenceError::Invariant("runtime observer signature verification failed".into())
     })
 }
 
 impl RunnerRuntimeEvidenceV12 {
-    pub fn validate(
-        &self,
-        expected_source: &SourceCasReference,
-        expected_artifacts: Option<&ArtifactCasReference>,
-        expected_runner: &OciObjectReference,
-        allowed_executable_digests: &BTreeSet<Digest>,
-    ) -> PlanResult<()> {
+    fn validate_runtime_claims(&self) -> PlanResult<()> {
         self.runner.validate()?;
         self.source.validate()?;
         if let Some(artifacts) = &self.artifacts {
             artifacts.validate()?;
         }
-        if &self.source != expected_source
-            || self.artifacts.as_ref() != expected_artifacts
-            || &self.runner != expected_runner
-            || self.runtime_executable_sha256 == [0; 32]
+        if self.runtime_executable_sha256 == [0; 32]
             || self.rootfs_sha256 == [0; 32]
             || self.proxy_peer_identity_sha256 == [0; 32]
             || self.cgroup_identity_sha256 == [0; 32]
@@ -411,7 +447,7 @@ impl RunnerRuntimeEvidenceV12 {
             || self.mount_namespace_inode == 0
             || self.network_namespace_inode == 0
             || self.executable_mappings.is_empty()
-            || self.observer.target_pid == 0
+            || self.executable_mappings.len() > MAX_EXECUTABLE_MAPPINGS
             || self.runner_identity_sha256.validate("runner identity").is_err()
             || self
                 .inherited_proxy_executable_sha256
@@ -419,19 +455,99 @@ impl RunnerRuntimeEvidenceV12 {
                 .is_err()
             || self.command_sha256.validate("runner command").is_err()
             || self.namespaces.validate().is_err()
-            || self.observer.validate_structure().is_err()
             || self.pid_namespace_inode != self.namespaces.pid_namespace_inode
             || self.mount_namespace_inode
                 != self.namespaces.mount_namespace_inode
             || self.network_namespace_inode
                 != self.namespaces.network_namespace_inode
+            || self.cgroup_identity_sha256 != self.namespaces.cgroup_v2_path_sha256
         {
             return Err(PlanProtocolError::Invalid(
                 "runner runtime evidence lost execution binding",
             ));
         }
+        let mut previous_end = None;
         for mapping in &self.executable_mappings {
             mapping.validate()?;
+            if previous_end.is_some_and(|end| mapping.start < end) {
+                return Err(PlanProtocolError::Invalid(
+                    "runner executable mappings are not sorted or overlap",
+                ));
+            }
+            previous_end = Some(mapping.end);
+        }
+        Ok(())
+    }
+
+    /// Canonical data commitment only, not acquisition or signature authority.
+    pub fn claims_sha256(&self) -> PlanResult<Digest> {
+        self.validate_runtime_claims()?;
+        canonical_digest(&RuntimeClaimsV13 {
+            runner: &self.runner,
+            runtime_executable_sha256: &self.runtime_executable_sha256,
+            rootfs_sha256: &self.rootfs_sha256,
+            source: &self.source,
+            artifacts: &self.artifacts,
+            proxy_peer_identity_sha256: &self.proxy_peer_identity_sha256,
+            pid_namespace_inode: self.pid_namespace_inode,
+            mount_namespace_inode: self.mount_namespace_inode,
+            network_namespace_inode: self.network_namespace_inode,
+            cgroup_identity_sha256: &self.cgroup_identity_sha256,
+            executable_mappings: &self.executable_mappings,
+            runner_identity_sha256: &self.runner_identity_sha256,
+            inherited_proxy_executable_sha256: &self.inherited_proxy_executable_sha256,
+            command_sha256: &self.command_sha256,
+            namespaces: &self.namespaces,
+        })
+    }
+
+    fn validate_observer_bindings(&self) -> PlanResult<()> {
+        self.observer.validate_structure()?;
+        if self.observer.runtime_claims_sha256 != self.claims_sha256()?
+            || self.observer.mappings.len() != self.executable_mappings.len()
+        {
+            return Err(PlanProtocolError::Invalid(
+                "signed observer does not bind the exact runtime claims and mapping inventory",
+            ));
+        }
+        for (observed, mapping) in self.observer.mappings.iter()
+            .zip(&self.executable_mappings)
+        {
+            // Precise positional permissions were checked above. Readability
+            // and private/shared mode stay signed observations; the outer
+            // mapping has only executable/writable flags to join here.
+            let permissions = observed.permissions.as_bytes();
+            if observed.runner_start != mapping.start
+                || observed.runner_end_exclusive != mapping.end
+                || observed.backing_identity_sha256 != mapping.content_sha256
+                || (permissions[1] == b'w') != mapping.writable
+                || (permissions[2] == b'x') != mapping.executable
+            {
+                return Err(PlanProtocolError::Invalid(
+                    "signed observer mapping differs from the runtime executable mapping",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate(
+        &self,
+        expected_source: &SourceCasReference,
+        expected_artifacts: Option<&ArtifactCasReference>,
+        expected_runner: &OciObjectReference,
+        allowed_executable_digests: &BTreeSet<Digest>,
+    ) -> PlanResult<()> {
+        self.validate_observer_bindings()?;
+        if &self.source != expected_source
+            || self.artifacts.as_ref() != expected_artifacts
+            || &self.runner != expected_runner
+        {
+            return Err(PlanProtocolError::Invalid(
+                "runner runtime evidence lost its independent source/artifact/image binding",
+            ));
+        }
+        for mapping in &self.executable_mappings {
             if !allowed_executable_digests
                 .contains(&mapping.content_sha256)
             {
@@ -797,26 +913,39 @@ struct ParsedElf {
 impl RunnerRuntimeEvidenceV12 {
     pub fn validate_authoritative_join(
         &self,
-        expected_runner_identity_sha256: &Digest,
-        expected_inherited_proxy_executable_sha256: &Digest,
-        expected_command_sha256: &Digest,
-        expected_namespaces: &RuntimeNamespaceIdentityV12,
-        observer_policy: &RuntimeObserverPolicy,
+        expected_runner: &RunnerIdentity,
+        expected_proxy: &Digest,
+        expected_command: &Digest,
+        policy: &RuntimeObserverPolicy,
     ) -> Result<(), EvidenceError> {
-        self.namespaces.validate()?;
-        self.observer.validate_structure()?;
-        if &self.runner_identity_sha256 != expected_runner_identity_sha256
-            || &self.inherited_proxy_executable_sha256
-                != expected_inherited_proxy_executable_sha256
-            || &self.command_sha256 != expected_command_sha256
-            || canonical_digest(&self.namespaces)?
-                != canonical_digest(expected_namespaces)?
+        expected_runner.validate()?;
+        expected_proxy.validate("independent inherited proxy executable")?;
+        expected_command.validate("independent runner command")?;
+        self.validate_observer_bindings()?;
+        if self.runner_identity_sha256 != canonical_digest(expected_runner)?
+            || self.runner != expected_runner.image
+            || self.runtime_executable_sha256 != expected_runner.runtime_executable_sha256
+            || self.rootfs_sha256 != expected_runner.rootfs_sha256
+            || &self.inherited_proxy_executable_sha256 != expected_proxy
+            || &self.command_sha256 != expected_command
         {
             return Err(EvidenceError::Invariant(
                 "runtime evidence does not join the exact runner launch contract".into(),
             ));
         }
-        observer_policy.verify(&self.observer)
+        for mapping in &self.executable_mappings {
+            if expected_runner.executable_closure_sha256
+                .binary_search(&mapping.content_sha256).is_err()
+            {
+                return Err(PlanProtocolError::Invalid(
+                    "signed runtime mapping is outside the independently admitted runner closure",
+                ));
+            }
+        }
+        // The signature authenticates the complete namespace/runtime scope.
+        // This verifier does not itself acquire target namespaces or mappings;
+        // that remains the independently admitted observer owner's duty.
+        policy.verify(&self.observer)
     }
 }
 

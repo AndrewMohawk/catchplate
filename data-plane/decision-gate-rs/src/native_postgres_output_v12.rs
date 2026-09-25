@@ -7,7 +7,7 @@
 //! a report. Logs are streamed, not accumulated into one aggregate allocation.
 
 use super::{
-    boottime_now_ns_v11, canonical_json_bytes_v11, digest_hex,
+    boottime_now_ns_v11, canonical_json_bytes_v12, digest_hex,
     ControllerError, Digest, Result,
 };
 use super::native_postgres_reports_v12::{self as reports, NativePostgresFileV12};
@@ -349,7 +349,7 @@ pub(super) fn admit_prepared(artifact_root: RawFd, source_root: RawFd,
     // Construct the one permitted canonical document instead of accepting a
     // parsed manifest's inventory. All strings here are fixed ASCII or hex.
     live(deadline)?;
-    let expected = canonical_json_bytes_v11(&json!({"schema": MANIFEST_SCHEMA, "scripts": rows}))?;
+    let expected = canonical_json_bytes_v12(&json!({"schema": MANIFEST_SCHEMA, "scripts": rows}))?;
     if expected.len() > MAX_MANIFEST_BYTES || original != expected {
         return Err(rejected("native prepared manifest is not the exact canonical source inventory"));
     }

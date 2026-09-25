@@ -101,6 +101,10 @@ with other v12 `Digest` fields, its wire value is a 32-byte JSON array. The fiel
 is required only for the signed native option and participates in the existing
 canonical terminal digest. The controller returns the unchanged original outer
 result; it does not synthesize that result from fixture JSON.
+The [shared body contract](controller-body-evidence.md) additionally binds this
+native digest and all ordinary result claims into the required v13 observer
+signature. Its original terminal wire is bounded to the existing 4 MiB plan
+frame. The independent observer acquisition/publisher is still unfinished.
 
 ## Remaining prerequisites
 

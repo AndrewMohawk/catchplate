@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+#[path = "dind_json_v12.rs"]
+mod dind_json_v12;
+
 #[path = "runner_isolation_v12.rs"]
 mod runner_isolation_v12;
 
@@ -16,11 +19,15 @@ mod native_postgres_output_v12;
 #[path = "runner_output_tests_v12.rs"]
 mod runner_output_tests_v12;
 
+use self::dind_json_v12::canonical_json_bytes_v12;
 use self::runner_isolation_v12::{
     execution_host_config_v12, validate_runner_inspect_v12,
 };
 use self::runner_output_storage_v12::RunnerOutputStorageV12;
 use crate::plan_protocol::RunnerExecutionBoundsV12;
+use crate::runtime_evidence::body_result_v12::{
+    BodyExecutionResultV12, MAX_BODY_RESULT_BYTES_V12,
+};
 
 use crate::coder_controller_v11::{
     canonical_json_bytes_v11, constant_time_eq, digest_hex, sha256,
@@ -1746,6 +1753,7 @@ struct PrivateDindHandleV12 {
 #[derive(Clone)]
 struct PrivateRunnerV12 {
     id: String,
+    identity: RunnerIdentity,
     expected_create: Value,
     command_sha256: Digest,
     output_mount: PathBuf,
@@ -3719,7 +3727,7 @@ impl PrivateDindLifecycleV12 {
         query.push((
             "buildargs",
             String::from_utf8(
-                canonical_json_bytes_v11(&build_args)?,
+                canonical_json_bytes_v12(&build_args)?,
             )
             .map_err(|_| {
                 ControllerError::Invalid(
@@ -3731,7 +3739,7 @@ impl PrivateDindLifecycleV12 {
         query.push((
             "labels",
             String::from_utf8(
-                canonical_json_bytes_v11(&labels)?,
+                canonical_json_bytes_v12(&labels)?,
             )
             .map_err(|_| {
                 ControllerError::Invalid(
@@ -3933,7 +3941,7 @@ impl PrivateDindLifecycleV12 {
         )?;
         let output_identity_sha256 =
             directory_fd_identity_sha256_v12(output_fd.as_raw_fd())?;
-        let output_storage_identity_sha256 = sha256(&canonical_json_bytes_v11(
+        let output_storage_identity_sha256 = sha256(&canonical_json_bytes_v12(
             &serde_json::to_value(&output_storage).map_err(|error| {
                 ControllerError::InvalidOwned(error.to_string())
             })?,
@@ -3974,6 +3982,7 @@ impl PrivateDindLifecycleV12 {
             .runners
             .insert(operation.request.lane, PrivateRunnerV12 {
                 id: id.clone(),
+                identity: runner.clone(),
                 expected_create: body.clone(),
                 command_sha256: command.command_sha256,
                 output_mount,
@@ -4028,7 +4037,7 @@ impl PrivateDindLifecycleV12 {
         )?;
         let inspected = require_docker_success_v12(&response, &[200])?;
         validate_runner_inspect_v12(&inspected, expected_create, id)?;
-        Ok(sha256(&canonical_json_bytes_v11(&inspected)?))
+        Ok(sha256(&canonical_json_bytes_v12(&inspected)?))
     }
 
     fn create_services_v12(
@@ -4176,7 +4185,8 @@ impl PrivateDindLifecycleV12 {
             let retained = require_active_handle_mut_v12(&mut state, operation)?
                 .runners.get_mut(&operation.request.lane)
                 .ok_or(ControllerError::Rejected("body runner was lost"))?;
-            if retained.id != runner.id || retained.expected_create != runner.expected_create
+            if retained.id != runner.id || retained.identity != runner.identity
+                || retained.expected_create != runner.expected_create
                 || retained.created_inspect_sha256 != runner.created_inspect_sha256
                 || retained.prestart_inspect_sha256.is_some()
             {
@@ -4250,13 +4260,13 @@ impl PrivateDindLifecycleV12 {
         );
         let result = read_runner_result_v12(
             output_fd.as_raw_fd(), &result_name, runner.uid, runner.gid,
-            16 * 1024 * 1024,
+            MAX_BODY_RESULT_BYTES_V12 as u64,
         ).or_else(|error| match error {
             ControllerError::Io(ref io_error)
                 if io_error.kind() == std::io::ErrorKind::NotFound => {
                 read_runner_result_v12(
                     output_fd.as_raw_fd(), PRIVATE_DIND_BODY_RESULT_V12,
-                    runner.uid, runner.gid, 16 * 1024 * 1024,
+                    runner.uid, runner.gid, MAX_BODY_RESULT_BYTES_V12 as u64,
                 )
             }
             other => Err(other),
@@ -4264,43 +4274,30 @@ impl PrivateDindLifecycleV12 {
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
         )?;
-        let value: Value =
-            serde_json::from_slice(&result).map_err(|_| {
-                ControllerError::Invalid(
-                    "repository body terminal result is not JSON",
-                )
-            })?;
-        if canonical_json_bytes_v11(&value)? != result
-            || value.get("version").and_then(Value::as_str)
-                != Some(PRIVATE_DIND_RESULT_VERSION_V12)
-            || value.get("planId")
-                != Some(&serde_json::to_value(operation.request.plan_id)
-                    .map_err(|_| {
-                        ControllerError::Invalid(
-                            "plan digest is not JSON serializable",
-                        )
-                    })?)
-            || value.get("lane")
-                != Some(&serde_json::to_value(operation.request.lane)
-                    .map_err(|_| {
-                        ControllerError::Invalid(
-                            "lane is not JSON serializable",
-                        )
-                    })?)
-            || value.get("bodySha256")
-                != Some(&serde_json::to_value(body_contract.body_sha256)
-                    .map_err(|_| {
-                        ControllerError::Invalid(
-                            "body digest is not JSON serializable",
-                        )
-                    })?)
-            || value.get("exitStatus").and_then(Value::as_i64)
-                != Some(exit_status)
+        let parsed = BodyExecutionResultV12::parse_original(&result)
+            .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
+        if parsed.version != PRIVATE_DIND_RESULT_VERSION_V12
+            || parsed.plan_id != operation.request.plan_id
+            || parsed.lane != operation.request.lane
+            || parsed.body_sha256 != body_contract.body_sha256
+            || parsed.command_sha256 != runner.command_sha256
+            || i64::from(parsed.exit_status) != exit_status
+            || parsed.runner_evidence.runner != runner.identity.image
+            || parsed.runner_evidence.runtime_executable_sha256
+                != runner.identity.runtime_executable_sha256
+            || parsed.runner_evidence.rootfs_sha256 != runner.identity.rootfs_sha256
+            || parsed.runner_evidence.runner_identity_sha256
+                != plan_sha256_bytes(&canonical_plan_bytes(&runner.identity)
+                    .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?)
         {
             return Err(ControllerError::Rejected(
                 "repository body terminal result differs from observed execution",
             ));
         }
+        // This checks original-byte commitments only. The plan executor still
+        // independently authenticates the pinned observer and static roles.
+        parsed.validate_terminal()
+            .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
         match (&body_contract.native_postgres, &native_inputs) {
             (Some(native), Some((artifacts, source))) => {
                 if exit_status != 0 {
@@ -4314,10 +4311,7 @@ impl PrivateDindLifecycleV12 {
                 let observed = native_postgres_output_v12::collect(
                     output_fd.as_raw_fd(), runner.uid, runner.gid, native, body_deadline,
                 )?;
-                if value.get("nativePostgresOutputSha256")
-                    != Some(&serde_json::to_value(observed).map_err(|error| {
-                        ControllerError::InvalidOwned(error.to_string())
-                    })?)
+                if parsed.native_postgres_output_sha256 != Some(observed)
                 {
                     return Err(ControllerError::Rejected(
                         "native PostgreSQL original output differs from the outer terminal commitment",
@@ -4330,7 +4324,7 @@ impl PrivateDindLifecycleV12 {
                     return Err(ControllerError::Rejected("native PostgreSQL result deadline expired"));
                 }
             }
-            (None, None) if value.get("nativePostgresOutputSha256").is_none() => {}
+            (None, None) if parsed.native_postgres_output_sha256.is_none() => {}
             _ => return Err(ControllerError::Rejected(
                 "native PostgreSQL result was not selected by its signed body",
             )),
@@ -4641,7 +4635,7 @@ impl PrivateDindLifecycleV12 {
         operation: &DockerLaneOperationV12,
         expected_repositories: &[String],
     ) -> Result<()> {
-        let filters = canonical_json_bytes_v11(&json!({
+        let filters = canonical_json_bytes_v12(&json!({
             "label": [
                 format!(
                     "{}={}",
@@ -4989,7 +4983,7 @@ impl PrivateDindLifecycleV12 {
         target: &str,
         value: &Value,
     ) -> Result<Vec<u8>> {
-        let body = canonical_json_bytes_v11(value)?;
+        let body = canonical_json_bytes_v12(value)?;
         self.docker_http_v12(
             operation,
             method,
@@ -5348,7 +5342,12 @@ impl PrivateDindLifecycleV12 {
                 Ok(json!({
                     "lane": lane,
                     "containerId": runner.id,
-                    "createRequestSha256": sha256(&canonical_json_bytes_v11(
+                    "runnerIdentitySha256": plan_sha256_bytes(
+                        &canonical_plan_bytes(&runner.identity).map_err(|error| {
+                            ControllerError::InvalidOwned(error.to_string())
+                        })?,
+                    ),
+                    "createRequestSha256": sha256(&canonical_json_bytes_v12(
                         &runner.expected_create,
                     )?),
                     "createdInspectSha256": runner.created_inspect_sha256,
@@ -6527,7 +6526,7 @@ fn validate_source_cas_mount_v12(
             "private DinD source CAS metadata is not JSON",
         )
     })?;
-    if canonical_json_bytes_v11(&value)? != bytes
+    if canonical_json_bytes_v12(&value)? != bytes
         || value.get("sourceObjectSha256")
             != Some(
                 &serde_json::to_value(payload.source.object_sha256)
@@ -7765,7 +7764,7 @@ fn canonicalize_docker_image_archive_v12(
                         "Docker image archive metadata is not JSON",
                     )
                 })?;
-            bytes = canonical_json_bytes_v11(&value)?;
+            bytes = canonical_json_bytes_v12(&value)?;
         }
         members.push(CanonicalDockerArchiveMemberV12 {
             path,

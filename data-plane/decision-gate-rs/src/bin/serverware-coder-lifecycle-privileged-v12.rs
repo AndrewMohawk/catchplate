@@ -75,6 +75,9 @@ mod linux {
     };
     use super::plan_protocol::{ExactBuildTuple, PinnedPull};
     use super::readiness::PinnedReadinessTrustV12;
+    use super::runtime_evidence::{
+        PinnedRuntimeObserverPolicyV12, RuntimeObserverPolicy,
+    };
     use super::docker_policy::{
         GENERATION_LABEL_V12, LANE_LABEL_V12, OWNER_LABEL_V12,
         RESOURCE_LABEL_V12,
@@ -976,6 +979,8 @@ mod linux {
             readiness_trust,
             readiness_public_key,
             readiness_manifest,
+            runtime_observer_policy,
+            inherited_proxy_executable_sha256,
         ) = load_readiness_root_bindings(&values, &release)?;
         let readiness_fixture_assets_sha256 =
             readiness_trust
@@ -1051,6 +1056,8 @@ mod linux {
                 &release,
                 "runc_binary_sha256",
             )?,
+            runtime_observer_policy,
+            inherited_proxy_executable_sha256,
             readiness_fixture_key_id:
                 readiness_trust.fixture_key_id,
             readiness_fixture_public_key:
@@ -1227,6 +1234,8 @@ mod linux {
             PinnedReadinessTrustV12,
             VerifyingKey,
             BTreeMap<String, String>,
+            RuntimeObserverPolicy,
+            Digest,
         ),
         String,
     > {
@@ -1245,6 +1254,27 @@ mod linux {
             serde_json::from_slice(&trust_config).map_err(|error| {
                 format!("parse root-pinned readiness trust: {error}")
             })?;
+        if trust_document.get("version").and_then(Value::as_str)
+            != Some("serverware/coder-plan-executor-config/v12")
+        {
+            return Err("release-bound executor configuration version differs".into());
+        }
+        // Reuse the same original configuration already authenticated by the
+        // signed release digest. No separate policy path, key or environment
+        // fallback may supply authority for root terminal publication.
+        let observer_pins: PinnedRuntimeObserverPolicyV12 = serde_json::from_value(
+            trust_document.get("runtime_observer_policy").cloned()
+                .ok_or("release-bound runtime observer policy is absent")?,
+        ).map_err(|error| format!("parse root-pinned runtime observer policy: {error}"))?;
+        let runtime_observer_policy = observer_pins.into_runtime()
+            .map_err(|error| error.to_string())?;
+        let inherited_proxy_executable_sha256: Digest = serde_json::from_value(
+            trust_document.get("inherited_proxy_executable_sha256").cloned()
+                .ok_or("release-bound inherited proxy executable pin is absent")?,
+        ).map_err(|error| format!("parse root-pinned inherited proxy digest: {error}"))?;
+        if inherited_proxy_executable_sha256 == [0; 32] {
+            return Err("release-bound inherited proxy executable pin is empty".into());
+        }
         let executor_lifecycle_signer = trust_document
             .get("lifecycle_root_signer_spki_sha256")
             .and_then(Value::as_str)
@@ -1288,6 +1318,11 @@ mod linux {
         .map_err(|error| {
             format!("parse root-pinned readiness binding: {error}")
         })?;
+        if trust_document.get("controller_generation").and_then(Value::as_u64)
+            != Some(pinned.controller_generation)
+        {
+            return Err("release-bound executor and readiness generations differ".into());
+        }
         let runtime = pinned
             .clone()
             .into_runtime()
@@ -1391,7 +1426,8 @@ mod linux {
                 ));
             }
         }
-        Ok((pinned, public_key, manifest))
+        Ok((pinned, public_key, manifest, runtime_observer_policy,
+            inherited_proxy_executable_sha256))
     }
 
     fn derived_readiness_fixture_set_id_v12(

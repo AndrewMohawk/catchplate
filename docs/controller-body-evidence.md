@@ -1,7 +1,8 @@
 # Controller body result and observer binding
 
-Status: source-implemented admission repairs, unbuilt and unexecuted. The live
-runtime observer and terminal publisher remain unfinished. A
+Status: source-implemented admission, observer client and controller terminal
+publication, unbuilt and unexecuted. The actual observer server and independent
+launch/event/mapping acquisition remain unfinished and unprovisioned. A
 [fixed supervisor and launch owner](controller-body-launch.md) and
 [controller-side stream/output collection](controller-body-output.md)
 are now source-implemented but unexecuted. This document does not
@@ -22,9 +23,10 @@ Tracing the missing result producer found three concrete source blockers:
   independent observation. Runtime executable/rootfs pins and the two mapping
   inventories also lacked exact joins.
 
-The choice is to repair these actual admission boundaries before introducing a
-publisher. A helper that merely fills the required fields cannot replace missing
-process observations or an independently authorized observer.
+Those admission repairs are now followed by a retained-output publisher and a
+fixed observer client. A helper that merely fills the required fields still
+cannot replace missing process observations or an independently authorized
+observer. No successful runtime flow is inferred from the client/publisher source.
 
 ## Separate byte formats
 
@@ -44,6 +46,8 @@ closed typed parsing and exact canonical wire reconstruction. Duplicate or
 unknown fields, alternative encodings, floats and an explicit null in place of
 an omitted native option are rejected. Wire object keys are sorted; all admitted
 keys in this closed schema are ASCII.
+The corresponding bounded `original_bytes` encoder preserves that exact wire;
+it does not obtain runtime observations or sign observer claims.
 
 The existing terminal digest recipe is preserved: serialize the typed result
 in its declared field order with `terminalSha256` zeroed, then SHA-256 those
@@ -95,32 +99,99 @@ Positional permissions must agree with executable, nonwritable file-backed
 mappings; arbitrary four-character permission strings are not accepted.
 The body consumer separately recomputes and joins the signed body-claims digest.
 
-The root lifecycle also retains the admitted runner identity from creation,
-compares the typed result against that identity and the actual Docker exit,
-checks terminal/claims commitments, and preserves the original result bytes.
+The root lifecycle retains the admitted runner identity from creation and now
+performs genuine original-result admission before publication, not merely
+structural commitment checks. The
+[fixed admission helper](../data-plane/decision-gate-rs/src/body_result_admission_v12.rs)
+checks both static executable roles, admitted source/artifact/body/native scope,
+the original runtime report and image/closure bindings, the real pinned observer
+signature, and terminal/body-claims commitments. Its observer policy and inherited
+proxy executable pin come from the same readiness-trust configuration originals
+authenticated by the release's `executor_config_sha256`; no new environment
+selector, key, policy default or self-enrollment is added.
+
 Before releasing the fixed supervisor's child gate, it now also holds the actual
 pidfd, process start ticks, executable and namespace descriptors and generation
 cgroup membership. The original result's observer PID/start ticks and runtime
 namespaces must agree with those observations, and the held pidfd must indicate
-termination after Docker wait. The local custody digest is unsigned; an
-independently opened observer pidfd is not asserted to be the same descriptor.
-Independent launch/event/mapping acquisition and an explicit observer custody
-handoff remain required. See [launch custody](controller-body-launch.md).
+termination after Docker wait. The client explicitly hands off that held pidfd
+along with the other target descriptors before release; the response's pidfd
+inode is joined to this shared descriptor identity, not to a separately opened
+pidfd assumed equivalent. The local custody digest and ready response remain
+unsigned. See [launch custody](controller-body-launch.md).
 The executor still performs independent pinned-key verification and static-role,
 source/artifact/closure checks. Native selection still requires actual collection
 and equality with the [33-file native commitment](native-postgres-controller-consumer.md).
 Neither layer synthesizes absent evidence or bypasses cleanup.
 
+## Fixed observer exchange and controller publication
+
+The fixed [BodyObserverExchangeV12 client](../data-plane/decision-gate-rs/src/body_observer_exchange_v12.rs)
+uses only the root-owned Unix stream endpoint
+`/run/serverware/coder/v12/runtime-observer/control.sock`. It checks the actual
+peer UID/GID `0:0` and immutable executable against the already admitted observer
+policy. This is not permission to substitute any root process or a caller-chosen
+socket. All phases retain the original absolute deadline; no retry or lifetime
+renewal is introduced.
+
+Before root releases the gated supervisor, the client sends a one-byte `L`
+handoff with exactly nine `SCM_RIGHTS` descriptors in fixed order: pidfd,
+`/proc/PID`, executable, user/mount/PID/network/cgroup namespaces, and actual
+cgroup directory. A bounded versioned begin frame binds the retained launch
+context and target PID/start ticks/pidfd inode/custody digest. The ready frame
+must echo the held scope and deadline. Readiness is an unsigned protocol join,
+not an observer signature or proof of continuous acquisition.
+
+The fixed frame versions are `serverware.controllerBodyObserverLaunch/v12`,
+`serverware.controllerBodyObserverReady/v12` and
+`serverware.controllerBodyObserverTerminal/v12`. The launch aggregate, including
+original context and source/artifact/proxy bindings, is capped at 4 MiB; ready
+and terminal-request frames are capped at 4 KiB each. These transport versions
+do not replace the separately signed v13 observer-evidence contract.
+
+After actual wait, complete capture and held-target termination, the controller
+collects streams and payload files and publishes the canonical manifest while
+retaining all original descriptors. Only then does it request a terminal. The
+closed `BodyObserverTerminalRequestV12` carries exactly plan ID, lane, body/command digests,
+actual exit status, stdout/stderr hashes and byte counts, manifest hash and the
+optional native output digest. These are actual controller observations; the
+client does not supply invented mapping/event evidence or an observer signature.
+Control frames use bounded typed-canonical JSON with unsigned big-endian
+32-bit lengths. The client half-closes after its terminal request, requires a
+4 MiB-bounded original result plus exact EOF, and rejects inbound ancillary data.
+The same connection retains its begin deadline; finish may only shorten it.
+
+The root then authenticates the original response through the fixed admission
+helper and joins actual exit, held kernel identities, captured streams, generic
+manifest and any separately reconciled native inventory. Only after those checks
+does it call the retained output owner's structural `finalize`. That owner
+rechecks its own files and exclusively publishes the exact original as
+`.serverware-controller-output-v12/terminal.json`. Legacy worker-root terminal
+reads and the lane/default fallback are removed. See
+[two-phase output custody](controller-body-output.md#manifest-and-original-result-joins).
+
+The architecture deliberately separates three responsibilities: the independent
+observer must acquire and sign genuine runtime evidence; the root must authenticate
+it and join actual execution/output observations; the held output owner must
+publish and recheck exact bytes without granting signature authority. The source
+client cannot stand in for the first responsibility.
+
+In particular, terminal-request measurements are root observations, not authority
+for a service to blindly sign supplied fields. The future independently admitted
+observer must own launch/event/mapping acquisition and reconcile actual terminal,
+static and output observations. Acquiring rooted output custody from the held
+process target before ready is one possible missing step, not implemented proof.
+The current client supplies neither that independent acquisition nor a signer/server.
+
 ## Still required for a genuine producer
 
 The create path now invokes a fixed supervisor with a controller-owned read-only
 launch context. The original signed command remains unchanged inside that context;
-no final plan ID is injected into its signed arguments. This supplies real
-supervision and unsigned target-custody code but not independent runtime acquisition/signing or terminal-file
-publication. The lifecycle subscribes before start, captures bounded separate
-stdout/stderr, independently reads the signed output tree and publishes its
-manifest under reserved controller filenames. This does not supply the missing
-original terminal publisher or observer.
+no final plan ID is injected into its signed arguments. The lifecycle now has
+source paths for supervision, held-target handoff, capture, collection, original
+observer-response admission and controller-only terminal publication. None is a
+replacement for the missing independent observer server and its genuine launch,
+event, mapping and original-response acquisition/signing implementation.
 
 Docker's rotating log is not a complete stream capture. Native combined logs
 are not separate stdout/stderr evidence. Generic stream/manifest digests must
@@ -128,6 +199,9 @@ now match actual controller capture and collection, not merely be nonzero. Stati
 measurement must use real retained executable descriptors; runtime acquisition
 must own the actual launch, process identity, namespaces, mapping events and
 terminal observations. Signing caller-supplied dictionaries is not that owner.
+Kernel-provided executable mappings such as `[vdso]` still require an explicit
+representation/acquisition decision; the file-backed contract is not widened by
+this exchange and no backing-file digest is fabricated.
 
 No observer key, policy, runtime, runner image or signed invocation was installed
 or reissued. Future deployment must deliberately enroll the new observer contract

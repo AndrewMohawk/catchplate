@@ -10,8 +10,8 @@ use sha2::{Digest as ShaDigest, Sha256};
 use std::collections::BTreeSet;
 use std::ffi::{CStr, CString};
 use std::fs::File;
-use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::unix::fs::FileExt;
 
 const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
 const CHUNK_BYTES: usize = 64 * 1024;
@@ -382,21 +382,28 @@ impl Leaf {
         let mut bytes = if retain_bytes { Vec::with_capacity(length) } else { Vec::new() };
         let mut hasher = Sha256::new();
         let mut remaining = length;
+        let mut offset = 0u64;
         let mut chunk = [0u8; CHUNK_BYTES];
         while remaining > 0 {
             live(deadline)?;
             let wanted = remaining.min(chunk.len());
-            let count = self.file.read(&mut chunk[..wanted])?;
+            // Positional reads preserve the held description's offset and
+            // permit a later owner phase to recheck these same original bytes.
+            let count = match self.file.read_at(&mut chunk[..wanted], offset) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result?,
+            };
             if count == 0 { return Err(rejected("native original ended before its retained byte count")); }
             live(deadline)?;
             hasher.update(&chunk[..count]);
             if retain_bytes { bytes.extend_from_slice(&chunk[..count]); }
             remaining -= count;
+            offset += count as u64;
             live(deadline)?;
         }
         live(deadline)?;
         let mut extra = [0u8; 1];
-        if self.file.read(&mut extra)? != 0 {
+        if self.file.read_at(&mut extra, offset)? != 0 {
             return Err(rejected("native original exceeds its retained byte count"));
         }
         live(deadline)?;

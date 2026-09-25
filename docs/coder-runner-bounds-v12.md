@@ -230,13 +230,19 @@ After the accepted start, a separate running inspect repeats the exact
 configuration checks and obtains the actual host `State.Pid`. Before the
 payload can execute, the controller acquires a pidfd, process and namespace
 descriptors, checks the expected static supervisor and generation membership,
-rechecks liveness, and publishes the fixed one-use release. Running-inspect,
+hands the exact retained descriptors to the pinned observer peer, requires its
+scope-bound channel readiness, rechecks liveness, and publishes the fixed
+one-use release. Running-inspect,
 held-target custody and release digests enter the generation observation.
 This gate is unsigned controller custody, not independent observer approval.
 After actual wait and capture, the retained pidfd must indicate termination;
 the original result's observer target PID/start ticks and namespace/cgroup
-claims must match the held target. Independently opened pidfd inode numbers
-are not equated without an actual descriptor handoff. The exact sequence and
+claims must match the held target. The observer's pidfd inode must identify the
+same open description transferred with `SCM_RIGHTS`, not an independently opened
+descriptor. Root verifies the original observer signature under existing
+release-bound trust before publishing the protected terminal. The client and
+publication path do not supply the still-missing independent observer server.
+The exact sequence and
 remaining observer/terminal-producer boundary are in
 [controller body launch](controller-body-launch.md).
 

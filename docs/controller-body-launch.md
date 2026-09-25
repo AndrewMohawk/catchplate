@@ -2,10 +2,12 @@
 
 Status: source implementation, unbuilt and unexecuted. The lifecycle selects a
 fixed supervisor, acquires its actual Linux process custody, and publishes a
-one-use release only for that held target and launch context. This unsigned
-controller gate does not supply the missing independent runtime observer or
-original terminal publisher. Ordinary child exit is not an accepted body result
-or independently signed runtime observation.
+one-use release only after the fixed observer channel has received that held
+target's nine descriptors. After execution and output collection, root verifies
+the observer's original signed evidence before publishing the terminal result.
+The independent observer server, continuous acquisition and signing owner are
+still unimplemented and unprovisioned. Ordinary child exit or a channel
+acknowledgement is not an accepted body result or signed runtime observation.
 
 ## Separate launch authority from workload arguments
 
@@ -37,10 +39,13 @@ admitted plan + exact runner and command
   -> retained root-owned launch directory
   -> one-use original context publication -> pre-start Docker inspect
   -> start fixed gated PID1 supervisor -> running inspect -> actual target custody
+  -> fixed observer channel + nine held FDs -> acknowledgement
   -> live custody recheck -> atomic root-owned release.json
   -> descriptor-pinned workload execution -> actual child exit/descendant cleanup
   -> actual wait + capture -> held pidfd termination
-  -> output/result joins [need independent observer + terminal producer: unfinished]
+  -> actual payload/stream collection + controller manifest
+  -> observer terminal original [independent server still missing]
+  -> root signature/scope/measurement joins -> root-only terminal publication
   -> existing authenticated full-generation destruction
 ```
 
@@ -90,6 +95,16 @@ Kernel PID and namespace views are the observations used here, not caller
 claims; see [`pidfd_open`](https://man7.org/linux/man-pages/man2/pidfd_open.2.html)
 and [`/proc/PID/status`](https://man7.org/linux/man-pages/man5/proc_pid_status.5.html).
 
+Before release, the fixed observer exchange receives the original launch
+context and source/artifact scope plus nine retained descriptors, in the fixed
+order: pidfd, proc directory, executable, user/mount/PID/network/cgroup namespaces,
+and cgroup directory. The fixed socket is
+`/run/serverware/coder/v12/runtime-observer/control.sock`; the client admits the
+root peer and its actual executable against the independently held observer pin.
+The bounded ready response must echo the original context, custody and target
+identities and deadline. Only that successful acknowledgement permits root to
+proceed; it neither signs the controller's claims nor substitutes for
+independently observed evidence.
 Root revalidates the held target, then
 [`HeldBodyLaunchV12::release`](../data-plane/decision-gate-rs/src/body_launch_storage_v12.rs)
 publishes a bounded original binding `contextSha256`, actual host PID, start
@@ -110,15 +125,41 @@ and actual [supervisor](../data-plane/decision-gate-rs/src/body_supervisor_v12.r
 After actual wait and capture completion, held-pidfd termination is required
 without following a possibly reused numeric PID or inventing an exit status.
 The original result's observer target PID/start ticks, namespace identities and
-cgroup digest must match the retained observations. A pidfd inode from a separate
-independent open is **not** treated as the same descriptor handoff. The separate
-observer signature and whole-body commitment checks remain mandatory.
+cgroup digest must match the retained observations. The observer now receives
+the actual retained pidfd through `SCM_RIGHTS` before release, so its signed
+pidfd inode must also match that shared kernel object; this is not a claim that
+two independently opened pidfds have the same identity.
+
+The root owner first collects actual streams and payloads and publishes their
+manifest without requiring a worker terminal. Native PostgreSQL reconciliation,
+when selected, must join the same payload records. Root then requests original
+terminal evidence and invokes
+[`body_result_admission_v12::admit_original`](../data-plane/decision-gate-rs/src/body_result_admission_v12.rs)
+before publication. This checks genuine observer signatures, static roles,
+source/artifact/image/executable scope, runtime commitments and the acyclic
+whole-body/terminal joins. Observer keys, revocations, executable pin and the
+inherited proxy pin come from the same executor configuration already bound by
+the signed release; there is no new key path, ambient fallback or self-admitted
+policy in the returned evidence.
+
+Root additionally compares the actual exit, captured streams, manifest, optional
+native digest, measured supervisor and retained target identities. Only then
+does the one-use output owner publish the exact admitted original, bounded to
+4 MiB and the remaining signed output capacity, under root-only control custody.
+The fixed destination is `.serverware-controller-output-v12/terminal.json`
+inside the retained tmpfs. See the
+[output publication contract](controller-body-output.md#manifest-and-original-result-joins)
+and [observer exchange boundary](controller-body-evidence.md#fixed-observer-exchange-and-controller-publication).
+The legacy worker-owned terminal-file inlet and fallback are no longer used by
+this path. These joins do not manufacture observer events or confer authority
+on a parsed result object.
 
 This two-stage gate prevents payload start from preceding root's process
 acquisition. It is not continuous executable-mapping observation, protection
-against a compromised privileged host, or a terminal evidence publisher. The
-held descriptors and repeated identity checks are intentionally distinct from
-the signed observer's still-unimplemented acquisition/event ownership.
+against a compromised privileged host, or independent observer authority. The
+implemented terminal publisher is conditional on genuine observer evidence;
+the held descriptors and repeated identity checks remain distinct from the
+observer's still-unimplemented acquisition/event and signing ownership.
 
 ## Supervisor scope
 
@@ -157,7 +198,8 @@ This is supervision, not continuous observation of descendant/transient mappings
 or independently signed launch events. No observer key is embedded, no absent
 runtime fields are synthesized, and no `BodyExecutionResultV12` is fabricated.
 An admitted image containing the genuinely immutable static supervisor, its
-closure pins, observer ownership and terminal producer must still be prepared.
+closure pins and independently provisioned observer ownership must still be
+prepared. The client and root publisher do not supply that missing server.
 The observer design also needs an explicit treatment of kernel-provided
 executable mappings: the current file-backed mapping contract cannot represent
 `[vdso]` as an ordinary file. This checkpoint neither invents backing-file

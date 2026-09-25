@@ -8,6 +8,7 @@
 use super::{boottime_now_ns_v11, canonical_plan_bytes, sha256, ControllerError, Digest, Result};
 use crate::runtime_evidence::{
     verify_static_executable_fd_bounded, ExecutableRole, RuntimeNamespaceIdentityV12,
+    StaticExecutableEvidenceV12,
 };
 use serde::Serialize;
 use std::ffi::{CStr, CString};
@@ -38,6 +39,7 @@ pub(super) struct HeldBodyTargetV12 {
     namespaces: RuntimeNamespaceIdentityV12,
     executable: OwnedFd,
     executable_identity: ExecutableIdentity,
+    supervisor_static: StaticExecutableEvidenceV12,
     cgroup_root: OwnedFd,
     cgroup_root_identity: NodeIdentity,
     generation: OwnedFd,
@@ -129,7 +131,8 @@ impl HeldBodyTargetV12 {
         let mut held = Self {
             owner_pid, host_pid: pid, start_ticks, deadline, pidfd, pidfd_identity,
             proc, proc_identity, ns_directory, namespace_fds, namespaces,
-            executable, executable_identity, cgroup_root, cgroup_root_identity,
+            executable, executable_identity, supervisor_static: measured,
+            cgroup_root, cgroup_root_identity,
             generation, generation_identity, generation_path, cgroup, cgroup_identity,
             cgroup_path, custody_sha256: [0; 32],
         };
@@ -165,6 +168,17 @@ impl HeldBodyTargetV12 {
     pub(super) fn namespaces(&self) -> &RuntimeNamespaceIdentityV12 { &self.namespaces }
     pub(super) fn cgroup_path_sha256(&self) -> Digest { self.namespaces.cgroup_v2_path_sha256 }
     pub(super) fn custody_sha256(&self) -> Digest { self.custody_sha256 }
+    pub(super) fn supervisor_static(&self) -> &StaticExecutableEvidenceV12 { &self.supervisor_static }
+
+    /// Borrow the exact nine held descriptors for the fixed observer channel.
+    /// SCM_RIGHTS duplicates these open descriptions; root retains ownership.
+    pub(super) fn observer_fds(&self, deadline: u64) -> Result<[RawFd; 9]> {
+        self.verify_live(deadline)?;
+        Ok([self.pidfd.as_raw_fd(), self.proc.as_raw_fd(), self.executable.as_raw_fd(),
+            self.namespace_fds[0].fd.as_raw_fd(), self.namespace_fds[1].fd.as_raw_fd(),
+            self.namespace_fds[2].fd.as_raw_fd(), self.namespace_fds[3].fd.as_raw_fd(),
+            self.namespace_fds[4].fd.as_raw_fd(), self.cgroup.as_raw_fd()])
+    }
 
     pub(super) fn verify_live(&self, deadline: u64) -> Result<()> {
         self.check_scope(deadline)?;

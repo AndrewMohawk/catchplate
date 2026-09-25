@@ -30,6 +30,12 @@ mod body_target_v12;
 #[path = "generation_cgroup_v12.rs"]
 mod generation_cgroup_v12;
 
+#[path = "body_result_admission_v12.rs"]
+mod body_result_admission_v12;
+
+#[path = "body_observer_exchange_v12.rs"]
+mod body_observer_exchange_v12;
+
 #[cfg(test)]
 #[path = "runner_output_tests_v12.rs"]
 mod runner_output_tests_v12;
@@ -44,6 +50,7 @@ use self::body_output_v12::CaptureOutputsV12;
 use self::body_launch_storage_v12::HeldBodyLaunchV12;
 use self::body_target_v12::HeldBodyTargetV12;
 use self::generation_cgroup_v12::HeldGenerationCgroupV12;
+use self::body_observer_exchange_v12::{BodyObserverExchangeV12, BodyObserverTerminalRequestV12};
 use crate::plan_protocol::body_launch_contract_v12::{
     BodyLaunchContextV12, CONTEXT_DIRECTORY, CONTEXT_PATH, SUPERVISOR_EXECUTABLE,
 };
@@ -51,9 +58,9 @@ use crate::plan_protocol::body_output_contract_v12::{
     native_subset_sha256, stream_byte_limit,
 };
 use crate::plan_protocol::RunnerExecutionBoundsV12;
-use crate::runtime_evidence::body_result_v12::{
-    BodyExecutionResultV12, MAX_BODY_RESULT_BYTES_V12,
-};
+use crate::plan_protocol::SourceCasReference;
+use crate::runtime_evidence::RuntimeObserverPolicy;
+use crate::runtime_evidence::body_result_v12::MAX_BODY_RESULT_BYTES_V12;
 
 use crate::coder_controller_v11::{
     canonical_json_bytes_v11, constant_time_eq, digest_hex, sha256,
@@ -1698,6 +1705,8 @@ const PRIVATE_DIND_BODY_RESULT_V12: &str =
 
 #[derive(Clone)]
 pub struct PrivateDindConfigV12 {
+    pub runtime_observer_policy: RuntimeObserverPolicy,
+    pub inherited_proxy_executable_sha256: Digest,
     pub state_root: PathBuf,
     pub lane_ledger_root: PathBuf,
     pub network_ownership_ledger: PathBuf,
@@ -1774,6 +1783,8 @@ struct PrivateDindHandleV12 {
     generation_cgroup: Arc<HeldGenerationCgroupV12>,
     source_mount: PathBuf,
     artifact_mount: Option<PathBuf>,
+    source: Option<SourceCasReference>,
+    artifacts: Option<ArtifactCasReference>,
     output_mount: PathBuf,
     runners: BTreeMap<LogicalLane, PrivateRunnerV12>,
     service_ids: BTreeMap<LogicalLane, Vec<String>>,
@@ -3265,6 +3276,21 @@ impl PrivateDindLifecycleV12 {
             &operation.decoded_payload,
             DockerLaneDecodedPayloadV12::Readiness(_)
         );
+        let (source, artifacts) = match &operation.decoded_payload {
+            DockerLaneDecodedPayloadV12::Operation(payload) => {
+                let artifacts = match &payload.content {
+                    DockerLanePayloadContentV12::CreateNoBuildDind { artifacts, .. } => Some(artifacts.clone()),
+                    DockerLanePayloadContentV12::CreateBuildDind { .. } => None,
+                    _ => return Err(ControllerError::Rejected("generation creation lacks exact source/artifact scope")),
+                };
+                if payload.artifact_manifest_sha256 != artifacts.as_ref().map(|value| value.manifest_sha256) {
+                    return Err(ControllerError::Rejected("generation artifact scope differs from admitted payload"));
+                }
+                (Some(payload.source.clone()), artifacts)
+            }
+            DockerLaneDecodedPayloadV12::Readiness(_) => (None, None),
+            _ => return Err(ControllerError::Rejected("generation creation lacks admitted source scope")),
+        };
         let mut attached_fds = attached_fds;
         if readiness {
             if !attached_fds.is_empty() {
@@ -3595,6 +3621,8 @@ impl PrivateDindLifecycleV12 {
                 generation_cgroup,
                 source_mount,
                 artifact_mount,
+                source,
+                artifacts,
                 output_mount,
                 runners: BTreeMap::new(),
                 service_ids: BTreeMap::new(),
@@ -4106,7 +4134,7 @@ impl PrivateDindLifecycleV12 {
         body_contract.validate().map_err(|error| {
             ControllerError::InvalidOwned(error.to_string())
         })?;
-        let (runner, native_inputs, generation_cgroup) = {
+        let (runner, native_inputs, generation_cgroup, source, artifacts) = {
             let state = self.state.lock().map_err(|_| {
                 ControllerError::Rejected(
                     "private DinD lifecycle mutex is poisoned",
@@ -4121,7 +4149,18 @@ impl PrivateDindLifecycleV12 {
                 )?;
                 Some((open_directory_fd_v12(artifacts)?, open_directory_fd_v12(&handle.source_mount)?))
             } else { None };
-            (runner, native_inputs, handle.cgroup.clone())
+            let source = handle.source.clone().ok_or(ControllerError::Rejected("body generation lacks retained source scope"))?;
+            let artifacts = handle.artifacts.clone();
+            let payload = match &operation.decoded_payload {
+                DockerLaneDecodedPayloadV12::Operation(payload) => payload,
+                _ => return Err(ControllerError::Rejected("body lacks its admitted operation payload")),
+            };
+            if payload.source != source
+                || payload.artifact_manifest_sha256 != artifacts.as_ref().map(|value| value.manifest_sha256)
+            {
+                return Err(ControllerError::Rejected("body source/artifacts differ from retained generation scope"));
+            }
+            (runner, native_inputs, handle.cgroup.clone(), source, artifacts)
         };
         if runner.command_sha256 != body_contract.command.command_sha256
             || runner.created_inspect_sha256.is_none()
@@ -4248,6 +4287,13 @@ impl PrivateDindLifecycleV12 {
             host_pid, runner.identity.runtime_executable_sha256,
             &generation_cgroup, body_deadline,
         )?;
+        let observer = BodyObserverExchangeV12::begin(
+            &launch_context, target.host_pid(), target.start_ticks(), target.pidfd_inode(),
+            target.custody_sha256(), &target.observer_fds(body_deadline)?,
+            self.config.runtime_observer_policy.expected_observer_executable_sha256,
+            &source, artifacts.as_ref(), &self.config.inherited_proxy_executable_sha256,
+            body_deadline,
+        )?;
         capture.health()?;
         target.verify_live(body_deadline)?;
         let release_sha256 = runner.launch.release(
@@ -4311,58 +4357,8 @@ impl PrivateDindLifecycleV12 {
                 "repository runner output identity changed during execution",
             ));
         }
-        let result_name = format!(
-            "{}-{}.json",
-            PRIVATE_DIND_BODY_RESULT_V12,
-            operation.request.lane.ordinal(),
-        );
-        let (result, terminal_name) = match read_runner_result_v12(
-            output_fd.as_raw_fd(), &result_name, runner.uid, runner.gid,
-            MAX_BODY_RESULT_BYTES_V12 as u64,
-        ) {
-            Ok(result) => (result, result_name),
-            Err(ControllerError::Io(ref io_error))
-                if io_error.kind() == std::io::ErrorKind::NotFound => {
-                (read_runner_result_v12(
-                    output_fd.as_raw_fd(), PRIVATE_DIND_BODY_RESULT_V12,
-                    runner.uid, runner.gid, MAX_BODY_RESULT_BYTES_V12 as u64,
-                )?, PRIVATE_DIND_BODY_RESULT_V12.to_owned())
-            }
-            Err(error) => return Err(error),
-        };
-        runner_output_storage_v12::verify(
-            output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
-        )?;
-        let parsed = BodyExecutionResultV12::parse_original(&result)
-            .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
-        if parsed.version != PRIVATE_DIND_RESULT_VERSION_V12
-            || parsed.plan_id != operation.request.plan_id
-            || parsed.lane != operation.request.lane
-            || parsed.body_sha256 != body_contract.body_sha256
-            || parsed.command_sha256 != runner.command_sha256
-            || i64::from(parsed.exit_status) != exit_status
-            || parsed.runner_evidence.runner != runner.identity.image
-            || parsed.runner_evidence.runtime_executable_sha256
-                != runner.identity.runtime_executable_sha256
-            || parsed.runner_evidence.rootfs_sha256 != runner.identity.rootfs_sha256
-            || parsed.runner_evidence.runner_identity_sha256
-                != plan_sha256_bytes(&canonical_plan_bytes(&runner.identity)
-                    .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?)
-            || parsed.runner_evidence.observer.target_pid != target.host_pid()
-            || parsed.runner_evidence.observer.target_start_ticks != target.start_ticks()
-            || &parsed.runner_evidence.namespaces != target.namespaces()
-        {
-            return Err(ControllerError::Rejected(
-                "repository body terminal result differs from observed execution",
-            ));
-        }
-        // This checks original-byte commitments only. The plan executor still
-        // independently authenticates the pinned observer and static roles.
-        // A separately opened observer pidfd is not claimed to be the same
-        // descriptor. Its identity needs an explicit future custody handoff;
-        // these local joins cannot manufacture that observer's evidence.
-        parsed.validate_terminal()
-            .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
+        // Collect actual outputs before asking for an original terminal. No
+        // worker-written terminal or legacy filename is an evidence inlet.
         let native_observed = match (&body_contract.native_postgres, &native_inputs) {
             (Some(native), Some((artifacts, source))) => {
                 if exit_status != 0 {
@@ -4376,12 +4372,6 @@ impl PrivateDindLifecycleV12 {
                 let observed = native_postgres_output_v12::collect(
                     output_fd.as_raw_fd(), runner.uid, runner.gid, native, body_deadline,
                 )?;
-                if parsed.native_postgres_output_sha256 != Some(observed)
-                {
-                    return Err(ControllerError::Rejected(
-                        "native PostgreSQL original output differs from the outer terminal commitment",
-                    ));
-                }
                 runner_output_storage_v12::verify(
                     output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
                 )?;
@@ -4390,35 +4380,69 @@ impl PrivateDindLifecycleV12 {
                 }
                 Some(observed)
             }
-            (None, None) if parsed.native_postgres_output_sha256.is_none() => None,
+            (None, None) => None,
             _ => return Err(ControllerError::Rejected(
                 "native PostgreSQL result was not selected by its signed body",
             )),
         };
-        let outputs = captured_outputs.finish(
-            &body_contract.expected_output_paths, &terminal_name,
+        let outputs = captured_outputs.collect(
+            &body_contract.expected_output_paths,
             &runner.identity.execution_bounds,
             (captured.stdout_sha256, captured.stdout_bytes),
             (captured.stderr_sha256, captured.stderr_bytes), body_deadline,
         )?;
-        if parsed.stdout_sha256 != outputs.stdout_sha256
-            || parsed.stderr_sha256 != outputs.stderr_sha256
-            || parsed.output_manifest_sha256 != outputs.output_manifest_sha256
-            || outputs.terminal_file_sha256 != sha256(&result)
-            || outputs.terminal_file_bytes != result.len() as u64
-        {
-            return Err(ControllerError::Rejected(
-                "body result differs from actual captured streams and collected output manifest",
-            ));
-        }
         if let Some(native) = native_observed {
-            let manifest_native = native_subset_sha256(&outputs.files)
+            let manifest_native = native_subset_sha256(outputs.files())
                 .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
             if manifest_native != native {
                 return Err(ControllerError::Rejected(
                     "native originals changed between report reconciliation and generic collection",
                 ));
             }
+        }
+        let actual_exit = i32::try_from(exit_status)
+            .map_err(|_| ControllerError::Rejected("Docker body exit exceeds the signed result range"))?;
+        let claims = BodyObserverTerminalRequestV12 {
+            plan_id: operation.request.plan_id, lane: operation.request.lane,
+            body_sha256: body_contract.body_sha256, command_sha256: runner.command_sha256,
+            exit_status: actual_exit,
+            stdout_sha256: outputs.stdout_sha256(), stdout_bytes: outputs.stdout_bytes(),
+            stderr_sha256: outputs.stderr_sha256(), stderr_bytes: outputs.stderr_bytes(),
+            output_manifest_sha256: outputs.output_manifest_sha256(),
+            native_postgres_output_sha256: native_observed,
+        };
+        let original = observer.finish(&claims, body_deadline)?;
+        let parsed = body_result_admission_v12::admit_original(
+            &original, operation.request.plan_id, operation.request.lane,
+            &body_contract, &runner.identity, &source, artifacts.as_ref(),
+            &self.config.inherited_proxy_executable_sha256,
+            &self.config.runtime_observer_policy,
+        )?;
+        if parsed.exit_status != actual_exit
+            || parsed.stdout_sha256 != outputs.stdout_sha256()
+            || parsed.stderr_sha256 != outputs.stderr_sha256()
+            || parsed.output_manifest_sha256 != outputs.output_manifest_sha256()
+            || parsed.native_postgres_output_sha256 != native_observed
+            || &parsed.runner_static_evidence != target.supervisor_static()
+            || parsed.runner_evidence.observer.target_pid != target.host_pid()
+            || parsed.runner_evidence.observer.target_start_ticks != target.start_ticks()
+            || parsed.runner_evidence.observer.pidfd_inode != target.pidfd_inode()
+            || &parsed.runner_evidence.namespaces != target.namespaces()
+        {
+            return Err(ControllerError::Rejected(
+                "authenticated observer result differs from actual held target and output measurements",
+            ));
+        }
+        // The observer received this same held pidfd via SCM_RIGHTS before
+        // release; its reported inode is not an unrelated independently opened
+        // descriptor. Signature checks above do not replace actual local joins.
+        target.require_terminated(body_deadline)?;
+        let published = outputs.finalize(&original, body_deadline)?;
+        if published.terminal_file_sha256 != sha256(&original)
+            || published.terminal_file_bytes != original.len() as u64
+            || published.original_result != original
+        {
+            return Err(ControllerError::Rejected("published terminal differs from admitted original evidence"));
         }
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
@@ -4427,7 +4451,7 @@ impl PrivateDindLifecycleV12 {
             return Err(ControllerError::Rejected("body output collection exceeded its original deadline"));
         }
         runner.launch.verify(body_deadline)?;
-        Ok(result)
+        Ok(published.original_result)
     }
 
     fn stop_runner_v12(
@@ -7635,6 +7659,11 @@ fn validate_private_dind_config_v12(
         require_absolute_normalized(path)?;
     }
     if config.netns_prefix != "serverware-coder-v12-"
+        || config.inherited_proxy_executable_sha256 == [0; 32]
+        || config.runtime_observer_policy.expected_observer_executable_sha256 == [0; 32]
+        || config.runtime_observer_policy.authorized_observer_keys.is_empty()
+        || config.runtime_observer_policy.authorized_observer_keys.keys().any(|key|
+            key.is_empty() || config.runtime_observer_policy.revoked_observer_keys.contains(key))
         || config.root_signer_spki_sha256 == [0; 32]
         || config.network_hook_sha256 == [0; 32]
         || config.readiness_fixture_key_id.is_empty()
@@ -8451,6 +8480,9 @@ fn create_runner_output_v12(
     runner_output_storage_v12::create(generation_root, path, bounds)
 }
 
+// Historical filesystem-reader fixtures only. Production body evidence now
+// arrives through the fixed observer channel, never a workload output path.
+#[cfg(test)]
 fn read_runner_result_v12(
     directory: RawFd, name: &str, uid: u32, gid: u32, maximum: u64,
 ) -> Result<Vec<u8>> {

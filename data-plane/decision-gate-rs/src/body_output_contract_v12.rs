@@ -14,6 +14,7 @@ pub const CONTROL_DIRECTORY: &str = ".serverware-controller-output-v12";
 pub const STDOUT_NAME: &str = "stdout.bin";
 pub const STDERR_NAME: &str = "stderr.bin";
 pub const MANIFEST_NAME: &str = "manifest.json";
+pub const TERMINAL_NAME: &str = "terminal.json";
 const CONTROL_PREFIX: &str = ".serverware-controller-";
 const MANIFEST_SCHEMA: &str = "serverware.controllerBodyOutputs/v12";
 const MAX_PATHS: usize = 256;

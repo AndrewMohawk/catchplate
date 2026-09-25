@@ -9,6 +9,8 @@ from typing import Any, Mapping, Sequence
 from . import authority_contract
 from .authority_artifact_spec import (
     ALLOWED_MUTABLE_STATE_PROTOCOLS,
+    RUNTIME_EVIDENCE_NAME,
+    RUNTIME_EVIDENCE_ROLES,
     ArtifactContractError,
     VerifiedArtifactPackage,
     canonical_json_bytes,
@@ -19,25 +21,27 @@ from .authority_artifact_spec import (
 )
 
 
-STAGE_ZERO_REQUEST_SCHEMA = "serverware.authorityNativeStageZeroRequest/v4"
+STAGE_ZERO_REQUEST_SCHEMA = "serverware.authorityNativeStageZeroRequest/v5"
 LAUNCH_IDENTITY_PAYLOAD_SCHEMA = (
-    "serverware.authorityLaunchIdentityCertificatePayload/v4"
+    "serverware.authorityLaunchIdentityCertificatePayload/v5"
 )
 SIGNED_LAUNCH_IDENTITY_SCHEMA = (
-    "serverware.signedAuthorityLaunchIdentityCertificate/v4"
+    "serverware.signedAuthorityLaunchIdentityCertificate/v5"
 )
-STAGE_ZERO_HANDOFF_SCHEMA = "serverware.authorityNativeStageZeroHandoff/v4"
-STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityNativeStageZeroInterface/v4"
+STAGE_ZERO_HANDOFF_SCHEMA = "serverware.authorityNativeStageZeroHandoff/v5"
+STAGE_ZERO_INTERFACE_SCHEMA = "serverware.authorityNativeStageZeroInterface/v5"
 STAGE_ZERO_REQUEST_DIGEST_DOMAIN = (
-    "serverware.authorityNativeStageZeroRequestDigest/v4"
+    "serverware.authorityNativeStageZeroRequestDigest/v5"
 )
-LAUNCH_ID_DOMAIN = "serverware.authorityLaunchIdentity/v4"
+LAUNCH_ID_DOMAIN = "serverware.authorityLaunchIdentity/v5"
 LAUNCH_CERTIFICATE_SIGNATURE_DOMAIN = (
-    "serverware.authorityLaunchIdentityCertificateSignature/v4"
+    "serverware.authorityLaunchIdentityCertificateSignature/v5"
 )
 BOOTSTRAP_CONTROL_NAME = "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
-BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA = "serverware.signedPolicyAuthorityLaunchManifest/v6"
+BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA = "serverware.signedPolicyAuthorityLaunchManifest/v7"
 MAX_BOOTSTRAP_CONTROL_BYTES = 64 * 1024 * 1024
+RUNTIME_EVIDENCE_PURPOSE = "authority-attestation"
+MAX_RUNTIME_EVIDENCE_BYTES = 4 * 1024 * 1024
 LISTENER_IDENTITY_DOMAIN = "serverware.authorityListenerIdentity/v1"
 CREDENTIAL_SET_DOMAIN = "serverware.authorityCredentialSet/v1"
 ENVIRONMENT_DOMAIN = "serverware.authorityLaunchEnvironment/v1"
@@ -86,7 +90,6 @@ ALLOWED_FILE_PURPOSES = frozenset(
 )
 ALLOWED_CREDENTIAL_PURPOSES = frozenset(
     {
-        "attestation-evidence",
         "configuration-signing-root",
         "database-credential",
         "external-witness-credential",
@@ -109,6 +112,7 @@ ALLOWED_ENVIRONMENT_KEYS = frozenset(
         "SERVERWARE_AUTHORITY_ROLE",
         "SERVERWARE_OPERATION_MANIFEST_DIGEST",
         BOOTSTRAP_CONTROL_NAME,
+        RUNTIME_EVIDENCE_NAME,
         "TZ",
     }
 )
@@ -157,6 +161,10 @@ NATIVE_STAGE_ZERO_REQUIREMENTS = (
     "a content-committed credential. Its original bounded bytes, seals, and "
     "root signature must be admitted by the launcher; this request alone "
     "does not authenticate that control document.",
+    "The five authority service roles receive a separate bounded runtime "
+    "attestation slot, never an ordinary credential commitment. Only actual "
+    "service signature and runtime admission authenticate the original receipt; "
+    "the planned slot supplies neither a receipt digest nor evidence authority.",
     "The witness mutable-state directory is retained by FD, mount-bound, "
     "lease-exclusive, quota-enforced, local-only, and limited to the signed "
     "atomic append-record protocol; no other role receives mutable state.",
@@ -535,6 +543,8 @@ def _validate_credential(value: object) -> None:
     _identifier(credential["name"], name="credential name")
     if credential["name"] == BOOTSTRAP_CONTROL_NAME:
         raise StageZeroContractError("launch manifest is a bootstrap control, not a credential")
+    if credential["name"] == RUNTIME_EVIDENCE_NAME:
+        raise StageZeroContractError("authority attestation is runtime evidence, not a credential")
     _integer(
         credential["fd"],
         name="credential fd",
@@ -596,6 +606,26 @@ def _validate_bootstrap_control(value: object) -> Mapping[str, Any]:
     if maximum != MAX_BOOTSTRAP_CONTROL_BYTES:
         raise StageZeroContractError("bootstrap control byte limit changed")
     return control
+
+
+def _validate_runtime_evidence(value: object, *, role: str) -> Mapping[str, Any] | None:
+    if role not in RUNTIME_EVIDENCE_ROLES:
+        if value is not None:
+            raise StageZeroContractError("non-service role cannot declare runtime attestation")
+        return None
+    evidence = _mapping(
+        value, name="runtime evidence", keys={"name", "fd", "purpose", "maximumBytes"},
+    )
+    if evidence["name"] != RUNTIME_EVIDENCE_NAME or evidence["purpose"] != RUNTIME_EVIDENCE_PURPOSE:
+        raise StageZeroContractError("runtime evidence name or purpose changed")
+    _integer(evidence["fd"], name="runtime evidence fd", minimum=3, maximum=2**31 - 1)
+    maximum = _integer(
+        evidence["maximumBytes"], name="runtime evidence byte limit",
+        minimum=1, maximum=MAX_RUNTIME_EVIDENCE_BYTES,
+    )
+    if maximum != MAX_RUNTIME_EVIDENCE_BYTES:
+        raise StageZeroContractError("runtime evidence byte limit changed")
+    return evidence
 
 
 def _validate_mutable_state_descriptor(value: object) -> None:
@@ -785,6 +815,7 @@ def validate_stage_zero_request(
             "retainedFiles",
             "listener",
             "bootstrapControl",
+            "runtimeEvidence",
             "credentials",
             "mutableStateDescriptors",
             "process",
@@ -961,6 +992,8 @@ def validate_stage_zero_request(
         },
     )
     role_name = _identifier(role["role"], name="role")
+    runtime_evidence = _validate_runtime_evidence(value["runtimeEvidence"], role=role_name)
+    runtime_evidence_fds = [] if runtime_evidence is None else [runtime_evidence["fd"]]
     _runtime_path("/" + _ascii(role["path"], name="role manifest path"))
     _digest(role["sha256"], name="role manifest digest")
     _identifier(role["processMode"], name="process mode")
@@ -1006,12 +1039,16 @@ def validate_stage_zero_request(
         )
     if BOOTSTRAP_CONTROL_NAME in role["credentialNames"]:
         raise StageZeroContractError("role credentials include the bootstrap control")
+    if RUNTIME_EVIDENCE_NAME in role["credentialNames"]:
+        raise StageZeroContractError("role credentials include runtime evidence")
     if role["environmentAllowlist"] != sorted(
         set(role["environmentAllowlist"])
     ):
         raise StageZeroContractError(
             "role environment allowlist is not sorted and unique"
         )
+    if (role_name in RUNTIME_EVIDENCE_ROLES) != (RUNTIME_EVIDENCE_NAME in role["environmentAllowlist"]):
+        raise StageZeroContractError("role runtime-evidence environment policy changed")
     if role["pathEntries"] != list(dict.fromkeys(role["pathEntries"])):
         raise StageZeroContractError("role PATH entries are repeated")
     role_state_policies = _list(
@@ -1408,6 +1445,8 @@ def validate_stage_zero_request(
         )
     if values.get(BOOTSTRAP_CONTROL_NAME) != str(bootstrap_control["fd"]):
         raise StageZeroContractError("bootstrap control environment descriptor changed")
+    if runtime_evidence is not None and values.get(RUNTIME_EVIDENCE_NAME) != str(runtime_evidence["fd"]):
+        raise StageZeroContractError("runtime evidence environment descriptor changed")
     if values.get("SERVERWARE_AUTHORITY_GENERATION_DIGEST") != generation[
         "digest"
     ]:
@@ -1568,6 +1607,7 @@ def validate_stage_zero_request(
         stage_zero["fd"],
         value["listener"]["fd"],
         bootstrap_control["fd"],
+        *runtime_evidence_fds,
         *(entry["fd"] for entry in directories),
         *(entry["fd"] for entry in files),
         *(entry["fd"] for entry in credentials),
@@ -1645,6 +1685,7 @@ def validate_stage_zero_request(
     expected_preserved = {
         value["listener"]["fd"],
         bootstrap_control["fd"],
+        *runtime_evidence_fds,
         *(entry["fd"] for entry in directories if entry["surviveExec"]),
         *(entry["fd"] for entry in files if entry["surviveExec"]),
         *(entry["fd"] for entry in credentials),
@@ -2594,6 +2635,14 @@ BOOTSTRAP_CONTROL_JSON_SCHEMA = _closed_schema(
         "maximumBytes": {"const": MAX_BOOTSTRAP_CONTROL_BYTES},
     }
 )
+RUNTIME_EVIDENCE_JSON_SCHEMA = _closed_schema(
+    {
+        "name": {"const": RUNTIME_EVIDENCE_NAME},
+        "fd": {"type": "integer", "minimum": 3, "maximum": 2**31 - 1},
+        "purpose": {"const": RUNTIME_EVIDENCE_PURPOSE},
+        "maximumBytes": {"const": MAX_RUNTIME_EVIDENCE_BYTES},
+    }
+)
 STAGE_ZERO_REQUEST_JSON_SCHEMA = _closed_schema(
     {
         "schema": {"const": STAGE_ZERO_REQUEST_SCHEMA},
@@ -2654,6 +2703,7 @@ STAGE_ZERO_REQUEST_JSON_SCHEMA = _closed_schema(
             "maxItems": MAX_CREDENTIALS,
         },
         "bootstrapControl": BOOTSTRAP_CONTROL_JSON_SCHEMA,
+        "runtimeEvidence": {"anyOf": [{"type": "null"}, RUNTIME_EVIDENCE_JSON_SCHEMA]},
         "hostEvidence": _closed_shape(
             [
                 "bootIdDigest",
@@ -2835,7 +2885,7 @@ LISTENER_JSON_SCHEMA = _closed_schema(
 )
 CREDENTIAL_JSON_SCHEMA = _closed_schema(
     {
-        "name": {"type": "string", "not": {"const": BOOTSTRAP_CONTROL_NAME}},
+        "name": {"type": "string", "not": {"enum": [BOOTSTRAP_CONTROL_NAME, RUNTIME_EVIDENCE_NAME]}},
         "fd": INTEGER_JSON_SCHEMA,
         "purpose": {"enum": sorted(ALLOWED_CREDENTIAL_PURPOSES)},
         "ownerRole": STRING_JSON_SCHEMA,
@@ -2860,7 +2910,7 @@ ROLE_BINDING_JSON_SCHEMA = _closed_schema(
         "listenerName": STRING_JSON_SCHEMA,
         "credentialNames": {
             "type": "array", "maxItems": MAX_CREDENTIALS,
-            "items": {"type": "string", "not": {"const": BOOTSTRAP_CONTROL_NAME}},
+            "items": {"type": "string", "not": {"enum": [BOOTSTRAP_CONTROL_NAME, RUNTIME_EVIDENCE_NAME]}},
         },
         "cwd": STRING_JSON_SCHEMA,
         "pathEntries": STRING_ARRAY_JSON_SCHEMA,
@@ -2884,6 +2934,11 @@ ROLE_BINDING_JSON_SCHEMA = _closed_schema(
         },
     }
 )
+ROLE_BINDING_JSON_SCHEMA["allOf"] = [{
+    "if": {"properties": {"role": {"enum": sorted(RUNTIME_EVIDENCE_ROLES)}}},
+    "then": {"properties": {"environmentAllowlist": {"contains": {"const": RUNTIME_EVIDENCE_NAME}}}},
+    "else": {"properties": {"environmentAllowlist": {"not": {"contains": {"const": RUNTIME_EVIDENCE_NAME}}}}},
+}]
 MUTABLE_STATE_DESCRIPTOR_JSON_SCHEMA = _closed_schema(
     {
         "name": STRING_JSON_SCHEMA,
@@ -3049,6 +3104,7 @@ STAGE_ZERO_REQUEST_JSON_SCHEMA = _closed_schema(
         },
         "listener": LISTENER_JSON_SCHEMA,
         "bootstrapControl": BOOTSTRAP_CONTROL_JSON_SCHEMA,
+        "runtimeEvidence": {"anyOf": [{"type": "null"}, RUNTIME_EVIDENCE_JSON_SCHEMA]},
         "credentials": {
             "type": "array",
             "maxItems": MAX_CREDENTIALS,
@@ -3067,6 +3123,11 @@ STAGE_ZERO_REQUEST_JSON_SCHEMA = _closed_schema(
         "trustMode": {"enum": sorted(TRUST_MODES)},
     }
 )
+STAGE_ZERO_REQUEST_JSON_SCHEMA["allOf"] = [{
+    "if": {"properties": {"role": {"properties": {"role": {"enum": sorted(RUNTIME_EVIDENCE_ROLES)}}}}},
+    "then": {"properties": {"runtimeEvidence": RUNTIME_EVIDENCE_JSON_SCHEMA}},
+    "else": {"properties": {"runtimeEvidence": {"type": "null"}}},
+}]
 LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA = _closed_schema(
     {
         "schema": {"const": LAUNCH_IDENTITY_PAYLOAD_SCHEMA},
@@ -3180,10 +3241,15 @@ __all__ = [
     "BOOTSTRAP_CONTROL_NAME",
     "BOOTSTRAP_CONTROL_ENVELOPE_SCHEMA",
     "MAX_BOOTSTRAP_CONTROL_BYTES",
+    "RUNTIME_EVIDENCE_NAME",
+    "RUNTIME_EVIDENCE_ROLES",
+    "RUNTIME_EVIDENCE_PURPOSE",
+    "MAX_RUNTIME_EVIDENCE_BYTES",
     "NATIVE_STAGE_ZERO_REQUIREMENTS",
     "StageZeroContractError",
     "STAGE_ZERO_REQUEST_JSON_SCHEMA",
     "BOOTSTRAP_CONTROL_JSON_SCHEMA",
+    "RUNTIME_EVIDENCE_JSON_SCHEMA",
     "LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA",
     "SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA",
     "STAGE_ZERO_HANDOFF_JSON_SCHEMA",

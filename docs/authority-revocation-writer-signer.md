@@ -66,9 +66,11 @@ credential named by
 trusted-host-local path opens the corresponding systemd credential name.
 This is not a general service `_PATH` fallback.
 
-Source `.112` distinguishes six ordinary writer credentials from the separately
-root-verified launch-manifest bootstrap control. The delivery inventory still
-contains all seven descriptors, including the dedicated writer signing key.
+Source `.114` distinguishes five ordinary writer credentials from the separately
+root-verified launch-manifest bootstrap control and runtime attestation evidence.
+The delivery inventory still contains all seven descriptors, including the
+dedicated writer signing key. Evidence delivery does not replace the service's
+actual receipt verification.
 Older manifests do not satisfy that phase-separated launch closure. Deployment
 requires provisioning the dedicated key and regenerating
 and reapproving the credential-set, launch, configuration and generation

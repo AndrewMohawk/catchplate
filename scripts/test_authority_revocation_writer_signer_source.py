@@ -18,7 +18,6 @@ WRITER_DESCRIPTORS = {
     "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
     "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
     "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-    "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
     WRITER_DESCRIPTOR,
     "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD",
 }
@@ -222,17 +221,18 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
         inventory = assigned(self.launcher, "ROLE_CREDENTIAL_DESCRIPTOR_NAMES")
         writer = field(inventory, "planner-writer")
         self.assertEqual({item.value for item in writer.args[0].elts}, WRITER_DESCRIPTORS)
-        self.assertEqual(len(writer.args[0].elts), 6)
+        self.assertEqual(len(writer.args[0].elts), 5)
         for key, value in zip(inventory.keys, inventory.values):
             if key.value != "planner-writer":
                 self.assertNotIn(WRITER_DESCRIPTOR, [node.value for node in ast.walk(value)
                     if isinstance(node, ast.Constant)])
         sources = assigned(self.entrypoint, "ROLE_SOURCES")
         writer_sources = field(sources, "planner-writer")
-        # Delivery includes separately admitted bootstrap control, whereas the
-        # ordinary credential inventory cannot contain the manifest itself.
+        # Delivery includes bootstrap control and runtime evidence, whereas
+        # ordinary credentials cannot hash either launch output into itself.
         self.assertEqual({item.elts[0].value for item in writer_sources.elts},
-                         WRITER_DESCRIPTORS | {"SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"})
+                         WRITER_DESCRIPTORS | {"SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
+                                               "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD"})
         signer_source, = [item for item in writer_sources.elts if item.elts[0].value == WRITER_DESCRIPTOR]
         self.shape(signer_source, '''("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
             "/run/secrets/serverware-authority-planner-writer-signing-key")''')

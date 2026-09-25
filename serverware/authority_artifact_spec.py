@@ -31,6 +31,10 @@ SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v7"
 UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v7"
 ROLE_BINDING_DOMAIN = "serverware.authorityRoleBinding/v1"
 ROLE_RUNTIME_CLOSURE_SCHEMA = "serverware.policyAuthorityRoleRuntimeClosure/v1"
+RUNTIME_EVIDENCE_NAME = "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD"
+RUNTIME_EVIDENCE_ROLES = frozenset(
+    {"verifier", "planner", "planner-writer", "issuer", "executor"}
+)
 CONFIGURATION_GENERATION_BINDING_SCHEMA = (
     "serverware.authorityConfigurationGenerationBinding/v1"
 )
@@ -1977,6 +1981,8 @@ def validate_role_reference(reference: object) -> None:
         raise ArtifactContractError("role environment allowlist is not sorted and unique")
     if "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD" not in environment_allowlist:
         raise ArtifactContractError("role environment omits the launch bootstrap control")
+    if (role["role"] in RUNTIME_EVIDENCE_ROLES) != (RUNTIME_EVIDENCE_NAME in environment_allowlist):
+        raise ArtifactContractError("role runtime-evidence environment policy changed")
     mutable_state = _require_list(
         role["mutableStateDescriptors"], name="role mutable-state descriptors", maximum=16,
     )
@@ -2010,6 +2016,8 @@ def validate_role_reference(reference: object) -> None:
             raise ArtifactContractError(
                 "the launch manifest is a bootstrap control, not a role credential"
             )
+        if credential_name == RUNTIME_EVIDENCE_NAME:
+            raise ArtifactContractError("authority attestation is runtime evidence, not a role credential")
     if list(credential_names) != sorted(set(credential_names)):
         raise ArtifactContractError("role credential names are not sorted and unique")
 
@@ -4082,7 +4090,7 @@ ROLE_MANIFEST_REFERENCE_JSON_SCHEMA = _closed_object_schema(
             "items": {
                 **TEXT_JSON_SCHEMA,
                 "not": {
-                    "const": "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
+                    "enum": ["SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD", RUNTIME_EVIDENCE_NAME]
                 },
             },
         },
@@ -4113,6 +4121,11 @@ ROLE_MANIFEST_REFERENCE_JSON_SCHEMA = _closed_object_schema(
         },
     }
 )
+ROLE_MANIFEST_REFERENCE_JSON_SCHEMA["allOf"] = [{
+    "if": {"properties": {"role": {"enum": sorted(RUNTIME_EVIDENCE_ROLES)}}},
+    "then": {"properties": {"environmentAllowlist": {"contains": {"const": RUNTIME_EVIDENCE_NAME}}}},
+    "else": {"properties": {"environmentAllowlist": {"not": {"contains": {"const": RUNTIME_EVIDENCE_NAME}}}}},
+}]
 MIGRATION_RECEIPT_PAYLOAD_JSON_SCHEMA = _closed_object_schema(
     {
         "schema": {
@@ -4616,6 +4629,8 @@ __all__ = [
     "UNSIGNED_PACKAGE_SCHEMA",
     "ROLE_BINDING_DOMAIN",
     "ROLE_RUNTIME_CLOSURE_SCHEMA",
+    "RUNTIME_EVIDENCE_NAME",
+    "RUNTIME_EVIDENCE_ROLES",
     "CONFIGURATION_GENERATION_BINDING_SCHEMA",
     "CONFIGURATION_PAYLOAD_SCHEMAS",
     "KEY_AUTHORIZATION_SCHEMA",

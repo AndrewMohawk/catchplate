@@ -63,6 +63,9 @@ OBSOLETE_STATIC_RELEASE_CONSUMER_NAMES = (
 # Delivery inventory, not the stage-zero ordinary credential inventory. The
 # launch manifest is delivered here as a separately root-verified bootstrap
 # control document; its bytes must never be hashed into their own payload.
+# Attestation is separately retained runtime evidence, not an ordinary
+# credential. Delivery preserves its original bytes; receipt admission remains
+# in the service and is not granted by opening the systemd credential.
 ROLE_SOURCES = {
     "control-plane": (
         (
@@ -513,7 +516,7 @@ def _open_trusted_host_local_witness_state(
         or set(manifest) != {"schema", "payload", "signature"}
         or canonical_manifest != manifest_value
         or manifest.get("schema")
-            != "serverware.signedPolicyAuthorityLaunchManifest/v6"
+            != "serverware.signedPolicyAuthorityLaunchManifest/v7"
         or not isinstance(payload, dict)
         or payload.get("role") != "witness"
         or payload.get("processMode") != "policy-authority-replay-witness"

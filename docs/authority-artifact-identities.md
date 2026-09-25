@@ -1,11 +1,13 @@
 # Authority artifact identities
 
-Source revisions `.108` through `.113` separate file, policy, generation, role,
-bootstrap-control and runtime credential identities. Direct final-generation and final-launch
+Source revisions `.108` through `.114` separate file, policy, generation, role,
+bootstrap-control, runtime credential and evidence-delivery identities.
+Direct final-generation and final-launch
 configuration pins are replaced by static commitments. The launch manifest no
 longer contains a credential hash of itself, and configuration no longer declares
-a digest of the credential set containing that configuration. Attestation-linked
-cycles remain. This is an implementation checkpoint, not a
+a digest of the credential set containing that configuration. The final launch
+no longer hashes its attestation receipt as a credential. The configuration-to-
+receipt cycle remains. This is an implementation checkpoint, not a
 successful build, launch or production release.
 
 ## Operation contract
@@ -169,14 +171,14 @@ credential admission, generation high-water, and active role checks remain.
 
 ## Root-verified bootstrap control
 
-Signed launch manifest and payload v6 separate the manifest's delivery from
-ordinary credentials. Stage-zero request v4 requires an exact `bootstrapControl`:
+Signed launch manifest and payload v7 separate the manifest's delivery from
+ordinary credentials. Stage-zero request v5 requires an exact `bootstrapControl`:
 
 | Field | Required meaning |
 | --- | --- |
 | `name` | `SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD` |
 | `fd` | The planned, separately preserved descriptor, at least 3 |
-| `envelopeSchema` | `serverware.signedPolicyAuthorityLaunchManifest/v6` |
+| `envelopeSchema` | `serverware.signedPolicyAuthorityLaunchManifest/v7` |
 | `maximumBytes` | 67108864, the unchanged manifest byte ceiling |
 
 The slot contains no manifest hash. It identifies a document to admit, not an
@@ -187,7 +189,8 @@ The exact environment binding and handoff-preservation set include it.
 Every artifact role includes the control name in `environmentAllowlist` and
 excludes it from `credentialNames`. Stage-zero rejects it as an ordinary
 credential, and the launcher rejects it in `retainedCredentialDescriptors`.
-All other credential name, owner, mode, seal, size and raw-hash checks remain.
+Ordinary credential name, owner, mode, seal, size and raw-hash checks remain;
+runtime evidence has its own mandatory admission described below.
 The entrypoint still delivers the real root-owned manifest through its sealed
 descriptor and existing `--descriptor` transport; it does not invent a manifest
 or declare successful admission.
@@ -211,8 +214,9 @@ that immutable observation separately and rechecks descriptor continuity when
 requiring an active launch. An observed raw checksum is not inserted into the
 manifest or request, nor does it substitute for the signature. Stage-zero
 interface, handoff, launch-identity schemas and their changed signature/digest
-domains are v4. The initial split used launch v5/stage-zero v3; `.113` advances
-these versions with the explicit root-custody contract. Old documents are not
+domains are v5. The initial split used launch v5/stage-zero v3; `.113` added
+root custody with launch v6/stage-zero v4, and `.114` adds the explicit runtime
+evidence slot with launch v7/stage-zero v5. Old documents are not
 silently adopted.
 
 ## Runtime credential custody
@@ -251,6 +255,54 @@ complete request and certificate admission still belong to the actual launcher.
 Nothing is inserted into the signed configuration payload. Public credential
 release evidence retains its separate runtime `credentialSetDigest`.
 
+## Separately held runtime evidence
+
+Stage-zero v5 adds `runtimeEvidence`. For verifier, planner, planner-writer,
+issuer and executor it is a mandatory exact four-field object:
+`name` is `SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD`, `fd` is the planned
+descriptor, `purpose` is `authority-attestation`, and `maximumBytes` is 4194304.
+For every other role the field must be null. The corresponding environment name
+is present only for those five roles and must contain the same descriptor.
+
+This slot has no content hash. Its descriptor participates in complete numeric
+collision rejection and exact exec/handoff preservation, including separation
+from bootstrap control and both launch-identity outputs. The ordinary credential
+validators reject both the attestation name and the old `attestation-evidence`
+purpose. Static role metadata and generator inventories follow the same split;
+all other ordinary credential content commitments remain intact.
+
+The existing systemd entrypoint still opens the actual root-owned attestation
+file and delivers its sealed descriptor with the existing CLI. The launcher
+checks bounded, private, sealed anonymous bytes and stable identity, then keeps
+its ten-item descriptor/stat/raw-SHA observation outside the signed launch and
+request. The guard requires that separately retained observation for exactly
+the five service roles, joins it to the declared slot and checks continuity.
+It does not declare that a receipt is genuine or that its claimed runtime exists.
+
+Before receipt verification, the service obtains that held identity, reads the
+exact bounded bytes at offset zero, checks their size and raw SHA, and rechecks
+the guard identity. Actual root signature, canonical receipt, configuration,
+generation, role, measurement, final launch, freshness and trust-mode checks
+still run afterward. No pathname fallback or arbitrary callback replaces them.
+The unsupported native/HSM/TEE/external-witness path remains denied.
+
+```text
+request: ordinary hashes + bootstrap slot + runtime-evidence slot
+                              |
+                              v
+                    final signed launch identity
+                              |
+                              v
+                 original signed attestation receipt
+                              |
+                              v
+           separate sealed delivery -> actual receipt admission
+```
+
+This removes the final-launch-to-receipt content-hash back-reference. It does
+not create an attestation producer or close the remaining static configuration
+receipt pin. Source presence is not successful delivery or serving evidence.
+
 ## Remaining attestation dependencies
 
 Direct generation and role-launch pins no longer force the static configuration
@@ -263,11 +315,10 @@ configuration --> attestation receipt --> configuration payload digest
 
 The trusted-host path compares a configured `attestationReceiptDigest` with a
 receipt that binds the configuration payload itself and final runtime identities.
-The role split does not make that receipt constructible or remove its verification.
-Attestation is still an ordinary hashed credential: its receipt binds final
-launch identity, while the launch commits that receipt's original bytes.
-These receipt dependencies still require explicit phase separation; no receipt
-or runtime credential digest check is bypassed by the bootstrap/custody changes.
+The delivery split does not make that configured receipt pin constructible or
+remove its verification. That remaining dependency requires explicit static
+attestation policy and independently admitted runtime identities; no receipt
+check is bypassed by the bootstrap/custody/delivery changes.
 
 The next implementation must version and integrate an acyclic binding across
 static policy production, artifact verification, launch and runtime attestation.

@@ -76,6 +76,10 @@ digest. Existing role commitments remain static policy; startup derives the
 actual content-bound set from the guard-held request and joins it to the original
 launch certificate, without overlaying the signed configuration. Root-owned
 sealed credential custody is distinct from the exact assigned service role.
+Attestation is delivered through the separate stage-zero v5 runtime-evidence
+slot, not an ordinary credential hash. The service reads the guard-held original
+bytes with size/hash/custody checks before unchanged genuine receipt admission;
+the delivery observation itself is not attestation authority.
 This successor requires a positive generation;
 the general service's generation-zero behavior is not changed.
 

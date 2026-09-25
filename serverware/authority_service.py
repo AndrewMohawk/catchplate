@@ -1915,12 +1915,30 @@ class MeasuredConfiguration:
         )
 
     def _verify_attestation(self, *, role: str) -> None:
-        attestation_value = _read_bounded_descriptor(
-            "SERVERWARE_POLICY_AUTHORITY_ATTESTATION",
-            maximum=4 * 1024 * 1024,
-            require_root_owned=True,
-            require_descriptor=True,
-        )
+        try:
+            identity = authority_launch_guard.runtime_evidence_identity(role)
+            if (
+                type(identity) is not tuple or len(identity) != 10
+                or any(type(value) is not int or value < 0 for value in identity[:9])
+                or not 3 <= identity[0] <= 2**31 - 1
+                or not 2 <= identity[6] <= 4 * 1024 * 1024
+            ):
+                raise AuthorityServiceError("attestation custody observation is invalid")
+            expected_digest = _require_digest(identity[9], "runtime attestation bytes digest")
+            # This is custody of original bytes, not receipt admission. The
+            # guard rechecks the separately retained, root-owned sealed file.
+            attestation_value = os.pread(identity[0], identity[6], 0)
+            if (
+                type(attestation_value) is not bytes
+                or len(attestation_value) != identity[6]
+                or _sha256(attestation_value) != expected_digest
+                or authority_launch_guard.runtime_evidence_identity(role) != identity
+            ):
+                raise AuthorityServiceError("attestation original bytes or custody changed")
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            if isinstance(exc, AuthorityServiceError):
+                raise
+            raise AuthorityServiceError("attestation runtime evidence is unavailable") from exc
         assurance = dict(authority_launch_guard.launch_assurance())
         if assurance.get("trustMode") == "trusted-host-local":
             self._verify_trusted_host_local_attestation(

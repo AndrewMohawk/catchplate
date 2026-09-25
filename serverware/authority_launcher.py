@@ -21,14 +21,19 @@ from typing import Any, Callable, Mapping
 
 
 LAUNCH_MANIFEST_SCHEMA = (
-    "serverware.signedPolicyAuthorityLaunchManifest/v6"
+    "serverware.signedPolicyAuthorityLaunchManifest/v7"
 )
-LAUNCH_PAYLOAD_SCHEMA = "serverware.policyAuthorityLaunchManifest/v6"
+LAUNCH_PAYLOAD_SCHEMA = "serverware.policyAuthorityLaunchManifest/v7"
 GENERATION_CONTEXT_SCHEMA = (
     "serverware.authorityGenerationLaunchContext/v4"
 )
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 BOOTSTRAP_CONTROL_NAME = "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
+RUNTIME_EVIDENCE_NAME = "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD"
+RUNTIME_EVIDENCE_ROLES = frozenset(
+    {"verifier", "planner", "planner-writer", "issuer", "executor"}
+)
+MAX_RUNTIME_EVIDENCE_BYTES = 4 * 1024 * 1024
 MAX_STAGE_ZERO_HANDOFF_BYTES = 1024 * 1024
 MAX_LAUNCH_IDENTITY_CERTIFICATE_BYTES = 1024 * 1024
 MAX_CLOSURE_FILES = 32768
@@ -103,7 +108,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-            "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
             "SERVERWARE_POLICY_AUTHORITY_VERIFIER_SIGNING_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD",
         }
@@ -113,7 +117,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-            "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
             "SERVERWARE_POLICY_AUTHORITY_PLANNER_SIGNING_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD",
         }
@@ -123,7 +126,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-            "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
             "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD",
         }
@@ -133,7 +135,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-            "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
             "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN_FD",
         }
     ),
@@ -142,7 +143,6 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
             "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-            "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
             "SERVERWARE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN_FD",
         }
     ),
@@ -1056,6 +1056,78 @@ def _require_bootstrap_control_identity(identity: tuple) -> None:
         raise LaunchError("verified bootstrap control identity changed")
 
 
+def _runtime_evidence_stamp(descriptor: int) -> tuple[int, ...]:
+    if type(descriptor) is not int or not 3 <= descriptor <= 2**31 - 1:
+        raise LaunchError("runtime evidence descriptor is invalid")
+    if (
+        os.environ.get(RUNTIME_EVIDENCE_NAME) != str(descriptor)
+        or os.environ.get("SERVERWARE_POLICY_AUTHORITY_ATTESTATION_PATH")
+    ):
+        raise LaunchError("runtime evidence environment binding changed")
+    _require_sealed_descriptor(descriptor, "runtime attestation evidence")
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 0 or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+        or not 2 <= metadata.st_size <= MAX_RUNTIME_EVIDENCE_BYTES
+    ):
+        raise LaunchError("runtime evidence is not private immutable root-owned bytes")
+    return (
+        descriptor, metadata.st_dev, metadata.st_ino, metadata.st_mode,
+        metadata.st_uid, metadata.st_gid, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+
+
+def _require_runtime_evidence_identity(identity: tuple) -> None:
+    if (
+        type(identity) is not tuple or len(identity) != 10
+        or any(type(value) is not int or value < 0 for value in identity[:9])
+        or not _is_digest(identity[9])
+        or _runtime_evidence_stamp(identity[0]) != identity[:9]
+    ):
+        raise LaunchError("runtime evidence custody changed")
+
+
+def _observe_runtime_evidence(
+    role: str, request: Mapping[str, Any], descriptor: int | None,
+) -> tuple | None:
+    if "runtimeEvidence" not in request:
+        raise LaunchError("runtime evidence declaration is missing")
+    slot = request["runtimeEvidence"]
+    if role not in RUNTIME_EVIDENCE_ROLES:
+        if (
+            slot is not None or descriptor is not None
+            or os.environ.get(RUNTIME_EVIDENCE_NAME)
+            or os.environ.get("SERVERWARE_POLICY_AUTHORITY_ATTESTATION_PATH")
+        ):
+            raise LaunchError("runtime evidence is not permitted for this role")
+        return None
+    if (
+        type(slot) is not dict
+        or set(slot) != {"name", "fd", "purpose", "maximumBytes"}
+        or slot["name"] != RUNTIME_EVIDENCE_NAME
+        or type(slot["fd"]) is not int or slot["fd"] != descriptor
+        or slot["purpose"] != "authority-attestation"
+        or type(slot["maximumBytes"]) is not int
+        or slot["maximumBytes"] != MAX_RUNTIME_EVIDENCE_BYTES
+    ):
+        raise LaunchError("runtime evidence slot differs from its actual descriptor")
+    before = _runtime_evidence_stamp(descriptor)
+    value = _require_sealed_descriptor_number(
+        descriptor, label="runtime attestation evidence",
+        maximum=MAX_RUNTIME_EVIDENCE_BYTES,
+    )
+    if _runtime_evidence_stamp(descriptor) != before:
+        raise LaunchError("runtime evidence changed while read")
+    # Observation of supplied originals is not receipt verification.
+    identity = (*before, "sha256:" + hashlib.sha256(value).hexdigest())
+    _require_runtime_evidence_identity(identity)
+    os.set_inheritable(descriptor, False)
+    return identity
+
+
 def _load_manifest(
     role: str, *, manifest_descriptor: int,
 ) -> tuple[dict[str, Any], str, tuple]:
@@ -1707,6 +1779,7 @@ def _enter(
     *,
     bootstrap_descriptor: int,
     manifest_descriptor: int,
+    runtime_evidence_descriptor: int | None,
     handoff_descriptor: int | None,
     trusted_host_local: bool,
 ) -> int:
@@ -1744,6 +1817,9 @@ def _enter(
     payload, manifest_digest, bootstrap_control_identity = _load_manifest(
         role, manifest_descriptor=manifest_descriptor,
     )
+    runtime_evidence_identity = _observe_runtime_evidence(
+        role, payload["stageZeroRequest"], runtime_evidence_descriptor,
+    )
     entries = payload.get("closure")
     package_versions = payload.get("packageVersions")
     native_mappings = payload.get("nativeExecutableMappings")
@@ -1773,6 +1849,7 @@ def _enter(
             or isinstance(binding.get("descriptor"), bool)
             or binding["descriptor"] < 3
             or binding["descriptor"] == manifest_descriptor
+            or binding["descriptor"] == runtime_evidence_descriptor
             or not isinstance(binding.get("kind"), str)
             or not binding["kind"]
             or not isinstance(binding.get("ownerUid"), int)
@@ -1829,7 +1906,12 @@ def _enter(
     }
     if handoff_descriptor is not None:
         retained.add(handoff_descriptor)
-    if len(retained) != (5 if handoff_descriptor is not None else 4):
+    if runtime_evidence_descriptor is not None:
+        retained.add(runtime_evidence_descriptor)
+    if len(retained) != (
+        4 + (handoff_descriptor is not None)
+        + (runtime_evidence_descriptor is not None)
+    ):
         raise LaunchError("stage-zero descriptor identities overlap")
     request = payload["stageZeroRequest"]
     retained_file_values = request.get("retainedFiles")
@@ -1903,6 +1985,11 @@ def _enter(
         other_request_descriptors.add(handoff_descriptor)
     if manifest_descriptor in other_request_descriptors:
         raise LaunchError("bootstrap control aliases another stage-zero descriptor")
+    if runtime_evidence_descriptor is not None and (
+        runtime_evidence_descriptor == manifest_descriptor
+        or runtime_evidence_descriptor in other_request_descriptors
+    ):
+        raise LaunchError("runtime evidence aliases another stage-zero descriptor")
     # Numeric declarations remain disjoint even when stage zero intentionally
     # closes their descriptors at exec. Only inherited descriptors can be
     # checked for a physical alias in this process.
@@ -1915,11 +2002,20 @@ def _enter(
     }
     if handoff_descriptor is not None:
         inherited_descriptors.add(handoff_descriptor)
+    if runtime_evidence_descriptor is not None:
+        inherited_descriptors.add(runtime_evidence_descriptor)
     inherited_descriptors.discard(manifest_descriptor)
     for descriptor in inherited_descriptors:
         metadata = os.fstat(descriptor)
         if (metadata.st_dev, metadata.st_ino) == bootstrap_control_identity[1:3]:
             raise LaunchError("bootstrap control inode aliases another descriptor")
+    if runtime_evidence_identity is not None:
+        evidence_others = inherited_descriptors - {runtime_evidence_descriptor}
+        evidence_others.add(manifest_descriptor)
+        for descriptor in evidence_others:
+            metadata = os.fstat(descriptor)
+            if (metadata.st_dev, metadata.st_ino) == runtime_evidence_identity[1:3]:
+                raise LaunchError("runtime evidence inode aliases another descriptor")
     retained.update(
         {
             stage_zero_value["fd"],
@@ -2071,6 +2167,8 @@ def _enter(
         )
         retained.add(descriptor)
     _require_bootstrap_control_identity(bootstrap_control_identity)
+    if runtime_evidence_identity is not None:
+        _require_runtime_evidence_identity(runtime_evidence_identity)
     required_contract_modules = {
         "serverware.authority_artifact_spec",
         "serverware.authority_stage_zero_contract",
@@ -2181,11 +2279,14 @@ def _enter(
     from serverware import authority_launch_guard
 
     _require_bootstrap_control_identity(bootstrap_control_identity)
+    if runtime_evidence_identity is not None:
+        _require_runtime_evidence_identity(runtime_evidence_identity)
     authority_launch_guard.activate(
         role=role,
         manifest_digest=manifest_digest,
         retained_descriptors=frozenset(retained),
         bootstrap_control_identity=bootstrap_control_identity,
+        runtime_evidence_identity=runtime_evidence_identity,
         package_versions={
             str(name): str(version)
             for name, version in package_versions.items()
@@ -2264,6 +2365,8 @@ def main(argv: list[str] | None = None) -> int:
     required_assignments = (
         ROLE_CREDENTIAL_DESCRIPTOR_NAMES[args.role] | {BOOTSTRAP_CONTROL_NAME}
     )
+    if args.role in RUNTIME_EVIDENCE_ROLES:
+        required_assignments |= {RUNTIME_EVIDENCE_NAME}
     assignments: dict[str, int] = {}
     for assignment in args.descriptor:
         name, separator, descriptor_text = assignment.partition("=")
@@ -2322,6 +2425,7 @@ def main(argv: list[str] | None = None) -> int:
         args.role,
         bootstrap_descriptor=args.bootstrap_fd,
         manifest_descriptor=assignments[BOOTSTRAP_CONTROL_NAME],
+        runtime_evidence_descriptor=assignments.get(RUNTIME_EVIDENCE_NAME),
         handoff_descriptor=args.stage_zero_handoff_fd,
         trusted_host_local=args.trusted_host_local,
     )

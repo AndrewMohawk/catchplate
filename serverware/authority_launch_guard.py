@@ -12,6 +12,10 @@ _active_role: str | None = None
 _manifest_digest: str | None = None
 _retained_descriptors: frozenset[int] = frozenset()
 _bootstrap_control_identity: tuple = ()
+_runtime_evidence_identity: tuple | None = None
+_RUNTIME_EVIDENCE_ROLES = frozenset(
+    {"verifier", "planner", "planner-writer", "issuer", "executor"}
+)
 _package_versions: Mapping[str, str] = MappingProxyType({})
 _generation: Mapping[str, Any] = MappingProxyType({})
 _native_stage_zero_handoff: Mapping[str, Any] = MappingProxyType({})
@@ -65,12 +69,51 @@ def _require_bootstrap_control_identity(identity: tuple) -> None:
         raise RuntimeError("authority bootstrap control custody changed")
 
 
+def _require_runtime_evidence_identity(identity: tuple) -> None:
+    """Check custody only; actual receipt verification belongs to the service."""
+    if (
+        type(identity) is not tuple or len(identity) != 10
+        or any(type(value) is not int or value < 0 for value in identity[:9])
+        or not 3 <= identity[0] <= 2**31 - 1
+        or type(identity[9]) is not str or len(identity[9]) != 71
+        or not identity[9].startswith("sha256:")
+        or any(character not in "0123456789abcdef" for character in identity[9][7:])
+    ):
+        raise RuntimeError("authority runtime evidence observation is invalid")
+    descriptor = identity[0]
+    if (
+        os.environ.get("SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD") != str(descriptor)
+        or os.environ.get("SERVERWARE_POLICY_AUTHORITY_ATTESTATION_PATH")
+    ):
+        raise RuntimeError("authority runtime evidence environment changed")
+    try:
+        metadata = os.fstat(descriptor)
+        seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+    except OSError as exc:
+        raise RuntimeError("authority runtime evidence descriptor is unavailable") from exc
+    required_seals = 0x0001 | 0x0002 | 0x0004 | 0x0008
+    actual = (
+        descriptor, metadata.st_dev, metadata.st_ino, metadata.st_mode,
+        metadata.st_uid, metadata.st_gid, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+    if (
+        actual != identity[:9] or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 0 or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+        or not 2 <= metadata.st_size <= 4 * 1024 * 1024
+        or seals & required_seals != required_seals
+    ):
+        raise RuntimeError("authority runtime evidence custody changed")
+
+
 def activate(
     *,
     role: str,
     manifest_digest: str,
     retained_descriptors: frozenset[int],
     bootstrap_control_identity: tuple,
+    runtime_evidence_identity: tuple | None,
     package_versions: Mapping[str, str],
     generation: Mapping[str, Any],
     native_stage_zero_handoff: Mapping[str, Any],
@@ -87,6 +130,7 @@ def activate(
     global _manifest_digest
     global _retained_descriptors
     global _bootstrap_control_identity
+    global _runtime_evidence_identity
     global _package_versions
     global _generation
     global _native_stage_zero_handoff
@@ -172,12 +216,35 @@ def activate(
         or control["name"] != "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
         or type(control["fd"]) is not int
         or control["fd"] != bootstrap_control_identity[0]
-        or control["envelopeSchema"] != "serverware.signedPolicyAuthorityLaunchManifest/v6"
+        or control["envelopeSchema"] != "serverware.signedPolicyAuthorityLaunchManifest/v7"
         or type(control["maximumBytes"]) is not int
         or control["maximumBytes"] != 64 * 1024 * 1024
         or control["fd"] not in retained_descriptors
     ):
         raise RuntimeError("authority bootstrap control is not the admitted request descriptor")
+    if "runtimeEvidence" not in stage_zero_request:
+        raise RuntimeError("authority runtime evidence declaration is missing")
+    evidence_slot = stage_zero_request["runtimeEvidence"]
+    if role in _RUNTIME_EVIDENCE_ROLES:
+        _require_runtime_evidence_identity(runtime_evidence_identity)
+        if (
+            not isinstance(evidence_slot, Mapping)
+            or set(evidence_slot) != {"name", "fd", "purpose", "maximumBytes"}
+            or evidence_slot["name"] != "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD"
+            or type(evidence_slot["fd"]) is not int
+            or evidence_slot["fd"] != runtime_evidence_identity[0]
+            or evidence_slot["purpose"] != "authority-attestation"
+            or type(evidence_slot["maximumBytes"]) is not int
+            or evidence_slot["maximumBytes"] != 4 * 1024 * 1024
+            or evidence_slot["fd"] not in retained_descriptors
+        ):
+            raise RuntimeError("authority runtime evidence is not the admitted request descriptor")
+    elif (
+        runtime_evidence_identity is not None or evidence_slot is not None
+        or os.environ.get("SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD")
+        or os.environ.get("SERVERWARE_POLICY_AUTHORITY_ATTESTATION_PATH")
+    ):
+        raise RuntimeError("authority runtime evidence is not permitted for this role")
     other_descriptors = {
         listener_descriptor,
         *launch_identity_descriptors.values(),
@@ -190,6 +257,11 @@ def activate(
     }
     if control["fd"] in other_descriptors:
         raise RuntimeError("authority bootstrap control aliases another descriptor")
+    if runtime_evidence_identity is not None and (
+        runtime_evidence_identity[0] == control["fd"]
+        or runtime_evidence_identity[0] in other_descriptors
+    ):
+        raise RuntimeError("authority runtime evidence aliases another descriptor")
     # Non-preserved stage-zero declarations still participate in numeric
     # collision rejection, but may already be closed in this process.
     inherited_descriptors = {
@@ -199,16 +271,26 @@ def activate(
         *(value["fd"] for value in stage_zero_request["credentials"]),
     }
     inherited_descriptors.discard(control["fd"])
+    if runtime_evidence_identity is not None:
+        inherited_descriptors.add(runtime_evidence_identity[0])
     for descriptor in inherited_descriptors:
         metadata = os.fstat(descriptor)
         if (metadata.st_dev, metadata.st_ino) == bootstrap_control_identity[1:3]:
             raise RuntimeError("authority bootstrap control inode aliases another descriptor")
+    if runtime_evidence_identity is not None:
+        evidence_others = inherited_descriptors - {runtime_evidence_identity[0]}
+        evidence_others.add(control["fd"])
+        for descriptor in evidence_others:
+            metadata = os.fstat(descriptor)
+            if (metadata.st_dev, metadata.st_ino) == runtime_evidence_identity[1:3]:
+                raise RuntimeError("authority runtime evidence inode aliases another descriptor")
     _active_role = role
     _manifest_digest = manifest_digest
     _retained_descriptors = retained_descriptors
     # The raw SHA is an observation after root verification, not a declaration
     # accepted from the signed request. Seals and the exact stamp protect it.
     _bootstrap_control_identity = bootstrap_control_identity
+    _runtime_evidence_identity = runtime_evidence_identity
     _package_versions = MappingProxyType(dict(package_versions))
     _generation = MappingProxyType(deepcopy(dict(generation)))
     _native_stage_zero_handoff = MappingProxyType(
@@ -245,7 +327,16 @@ def require_active(role: str) -> str:
             "authority service was not entered by the measured launcher"
         )
     _require_bootstrap_control_identity(_bootstrap_control_identity)
+    if role in _RUNTIME_EVIDENCE_ROLES:
+        _require_runtime_evidence_identity(_runtime_evidence_identity)
     return _manifest_digest
+
+
+def runtime_evidence_identity(role: str) -> tuple:
+    require_active(role)
+    if role not in _RUNTIME_EVIDENCE_ROLES or _runtime_evidence_identity is None:
+        raise RuntimeError("authority role has no runtime evidence descriptor")
+    return _runtime_evidence_identity
 
 
 def retained_descriptors() -> frozenset[int]:

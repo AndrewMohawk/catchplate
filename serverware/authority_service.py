@@ -348,7 +348,7 @@ def _webauthn_evidence_custody_purpose(purpose):
         else "webauthn.trust.installation.admit")
 
 
-def _webauthn_evidence_custody_context(process, *, role_name, signing, work):
+def _webauthn_evidence_custody_context(process, *, role_name, signing, work, read_roots=False):
     """Hold measured settings and any real signer before native callbacks.
 
     Invocation originals/history must already be owned. The fixed callers
@@ -361,7 +361,8 @@ def _webauthn_evidence_custody_context(process, *, role_name, signing, work):
             or role_name not in ("verifier", "planner", "planner-writer")
             or process.role_name != role_name
             or process.process_mode != "policy-authority-" + role_name
-            or type(signing) is not bool or signing and role_name == "planner-writer"):
+            or type(signing) is not bool or signing and role_name == "planner-writer"
+            or type(read_roots) is not bool or read_roots and role_name != "verifier"):
         raise AuthorityServiceError("WebAuthn evidence custody process is not configured")
     measured = process.configuration
     if type(measured) is not MeasuredConfiguration:
@@ -379,14 +380,17 @@ def _webauthn_evidence_custody_context(process, *, role_name, signing, work):
     owned = configuration._ConfigurationCapture(
         ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
     configuration.production._callback(work, lambda: authority_launch_guard.require_active(role_name))
-    writer_dsn = None
+    database_dsn = None
     if role_name == "planner-writer":
-        writer_dsn = configuration.production._callback(work,
+        database_dsn = configuration.production._callback(work,
             lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))
+    elif read_roots:
+        database_dsn = configuration.production._callback(work,
+            lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"))
     # Capture the actual generation last; no later process/descriptor/signer
     # lookup can interpose before the fixed configured action owns it.
     generation = configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))
-    return owned, digest, generation, writer_dsn, private_key
+    return owned, digest, generation, database_dsn, private_key
 
 
 def _revocation_writer_from_owned_configuration(*, owned_payload, configuration_digest, work):
@@ -4152,17 +4156,50 @@ class AuthorityProcess:
         return verifying.EvidencePlanVerifier.verify(verifier, envelope_bytes=originals[0],
             inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned, work=work)
 
+    def _read_webauthn_evidence_root_observations(self, *, purpose, work):
+        """Read actual verifier root metadata, not historical or execution proof.
+
+        The source-fixed read completes its real read-only transaction and
+        connection close before returning. A later write may change these roots;
+        neither this observation nor its generation check reserves that state.
+        """
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_evidence_root_configuration as root_configuration
+        from serverware import authority_webauthn_evidence_root_reader as root_reader
+
+        payload, digest, generation, read_dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=False, read_roots=True, work=work)
+        reader = root_configuration._reader_from_configuration_on_work(purpose=purpose,
+            payload=payload, configuration_digest=digest, generation=generation,
+            read_dsn=read_dsn, work=work)
+        inventory = root_reader.EvidenceRootReader.read(reader, work=work)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        configuration.capability.plan._same(
+            tuple(generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "WebAuthn evidence root read generation changed")
+        return inventory
+
     def _produce_webauthn_evidence_custody_intent(self, *, purpose, envelope_bytes,
             inputs_bytes, evaluation_context_bytes, expectations, work):
-        """Sign only after genuine replay of independently admitted history.
+        """Check live roots and genuinely replay independently admitted history.
 
-        The independent request/roots/input/time provenance remains upstream;
-        copied stored context cannot establish it. Preparation never sends,
-        persists or automatically retries the resulting original controls.
+        Root equality is checked using a completed verifier-owned snapshot. It
+        does not hold those roots current through signing or execution. Original
+        request/input/time provenance remains upstream; no stored context or
+        current observation can create it. Preparation never sends, persists or
+        automatically retries the resulting original controls.
         """
         operation = _webauthn_evidence_custody_purpose(purpose)
         from serverware import authority_webauthn_evidence_custody_actions as actions
         from serverware import authority_webauthn_evidence_custody_intent as intent
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_evidence_root_configuration as root_configuration
+        from serverware import authority_webauthn_evidence_root_reader as root_reader
+        from serverware import authority_webauthn_evidence_roots as roots
 
         originals = intent._raw3(envelope_bytes, inputs_bytes, evaluation_context_bytes)
         ledger = intent.evidence.capture._SharedLedger(work)
@@ -4171,10 +4208,28 @@ class AuthorityProcess:
         owned = intent.evidence.capture._JSONCapture(
             ledger, maximum_bytes=intent.retention.plan.contract.MAX_BYTES).visit(expectations)
         intent.retention.plan._validate_expectations(owned, operation)
-        payload, digest, generation, _dsn, signer = _webauthn_evidence_custody_context(
-            self, role_name="verifier", signing=True, work=work)
+        payload, digest, generation, read_dsn, signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=True, read_roots=True, work=work)
+        reader = root_configuration._reader_from_configuration_on_work(purpose=purpose,
+            payload=payload, configuration_digest=digest, generation=generation,
+            read_dsn=read_dsn, work=work)
+        inventory = root_reader.EvidenceRootReader.read(reader, work=work)
+        observed_roots = roots._project_on_work(inventory, operation=operation, work=work)
+        intent.evidence.plan._same(observed_roots,
+            (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"]), work,
+            "WebAuthn evidence custody roots differ from verifier database snapshot")
+        # Recheck the actual launch after all database scopes have closed. Hold
+        # the original configuration and signer; never reread mutable self or
+        # retime the independently owned historical context after callbacks.
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        intent.evidence.plan._same(
+            tuple(generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "WebAuthn evidence custody root read generation changed")
         return actions._produce_intent_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, envelope_bytes=originals[0],
+            configuration_digest=digest, generation=final_generation, envelope_bytes=originals[0],
             inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned,
             verifier_private_key=signer, work=work)
 

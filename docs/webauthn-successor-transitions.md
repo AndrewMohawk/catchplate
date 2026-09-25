@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.95`, implementation only. Configured verifier-to-planner relay
+Status: source `.96`, implementation only. Configured verifier-to-planner relay
 preparation is now separate from explicit forwarding of original controls and
 evidence plans through the planner to the writer. Fixed detached socket branches
 connect genuine replay to the actual writer transaction; responses are unsigned
@@ -11,8 +11,9 @@ does not establish historical provenance, key rollover or execution recovery.
 The two evidence-admission database APIs dispatch typed semantic requests
 through the real authority boundary.
 Live planning and retained replay use the same configured, metered original-input
-kernel computation. Writer and verifier owners remain separate; only the writer
-owns a database connection. Verified plans still do not authorize execution.
+kernel computation. Writer and verifier owners remain separate: the verifier
+now owns a reduced-privilege root-metadata snapshot, while retained-original
+custody remains with the writer. Verified plans still do not authorize execution.
 These helpers do not register missing kernels or repair service startup. They
 are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
@@ -643,6 +644,42 @@ The separate authenticated lookup below retrieves material without establishing
 historical key or root admission. External signing/witness/runtime
 infrastructure and release admission remain required. This implementation is
 source-only, unbuilt and unexecuted; no runtime proof is claimed.
+
+## Independent verifier root observations
+
+Source `.96` adds an actual verifier-owned PostgreSQL 16 SERIALIZABLE READ ONLY
+DEFERRABLE snapshot for the two evidence-admission operations. One fixed query
+reads only authenticated primary-root metadata: five source tables for
+registration (two business, three authorization), or three for installation
+(one business, two authorization). Their writable evidence-receipt table has
+no counted profiles; read-only tables may have profiles used by other operations.
+Exact source ordering, row counts, full root metadata and the query
+manifest are checked; the extra-row sentinel cannot silently hide corruption.
+No business rows, evidence records or counted heads are read by this owner.
+
+The service holds its measured configuration and protected verifier DSN, then
+the mapper checks the actual launch bindings and explicitly configured evidence
+policy. The real connection must match the signed verifier role and TLS identity
+and pass the existing source verifier privilege check. The query has its own
+source-derived physical acquisition caps and shares the original validation
+work allowance. Normal cursor/transaction/connection exit and a closed-handle
+check precede release of the full observations. No privilege grant or SQL write
+is added.
+
+Custody-intent signing now performs this real read and compares its metered
+four-field root projection to the independently held historical before-roots.
+After the read closes, the service rechecks the active launch and unchanged
+generation before passing the same held configuration and signer to genuine
+plan replay/signing. It never replaces historical roots, request, input
+commitment, database cutoff or time fields with values copied from a plan or a
+current observation. Changed roots reject new intent production; historical
+retained-original lookup remains a separate operation.
+
+This is an independent snapshot, not a reservation or a guarantee that roots
+remain current through signing, later custody or execution. It supplies neither
+historical request/time provenance nor successor execution authority. The six
+missing registry entries and independent production infrastructure remain
+unfinished. The implementation is unbuilt and unexecuted.
 
 ## Authenticated retained-original lookup
 

@@ -1003,6 +1003,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_assertion.py \
 	serverware/authority_webauthn_evidence.py \
 	serverware/authority_webauthn_evidence_acquisition.py \
+	serverware/authority_webauthn_evidence_roots.py \
+	serverware/authority_webauthn_evidence_root_reader.py \
+	serverware/authority_webauthn_evidence_root_configuration.py \
 	serverware/authority_webauthn_evidence_computation.py \
 	serverware/authority_webauthn_evidence_custody_configuration.py \
 	serverware/authority_webauthn_evidence_custody_actions.py \
@@ -2783,6 +2786,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
 				serverware/authority_webauthn_evidence_acquisition.py \
+				serverware/authority_webauthn_evidence_roots.py \
+				serverware/authority_webauthn_evidence_root_reader.py \
+				serverware/authority_webauthn_evidence_root_configuration.py \
 				serverware/authority_webauthn_evidence_computation.py \
 				serverware/authority_webauthn_evidence_custody_configuration.py \
 				serverware/authority_webauthn_evidence_custody_actions.py \

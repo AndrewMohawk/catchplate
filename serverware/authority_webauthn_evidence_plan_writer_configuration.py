@@ -22,9 +22,8 @@ import math
 from serverware import authority_revocation_configuration as configuration
 from serverware import authority_revocation_plan as plan
 from serverware import authority_revocation_writer_connection as writer
-from serverware import authority_webauthn_evidence_configuration as read_configuration
 from serverware import authority_webauthn_evidence_plan_persistence as persistence
-from serverware import authority_webauthn_evidence_policy as policy
+from serverware import authority_webauthn_evidence_plan_verifier_configuration as pins_configuration
 
 
 class WebAuthnEvidencePlanWriterConfigurationError(ValueError):
@@ -52,12 +51,6 @@ def _persistence_from_configuration_on_work(*, purpose, payload, configuration_d
             shape._literal(role["processMode"], "policy-authority-" + name)
             for field in ("measurementDigest", "attestationReceiptDigest", "responseSigningSpkiDigest"):
                 shape._digest(role[field])
-        operation = ("webauthn.registration.evidence.admit" if purpose == "registration"
-            else "webauthn.trust.installation.admit")
-        read_configuration._require_enabled_operation(planner, operation, work)
-        plan._same(owned["queryManifestDigest"], plan._QUERY_MANIFEST_DIGEST, work,
-            "evidence custody query manifest differs from the source")
-
         planner_encoded = planner["signingPublicKeyBase64Url"]
         planner_spki = planner["signingSpkiDigest"]
         planner_identity = {"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
@@ -69,8 +62,6 @@ def _persistence_from_configuration_on_work(*, purpose, payload, configuration_d
         for encoded in (planner_encoded, writer_role["plannerSigningPublicKeyBase64Url"]):
             shape._text(encoded, 43, minimum=43)
             shape._base64url(encoded)
-        plan._same(planner["responseSigningSpkiDigest"], planner_spki, work,
-            "evidence custody planner key differs from its response pin")
         plan._same((writer_role["plannerSessionIdentityDigest"], writer_role["plannerSigningSpkiDigest"],
                 writer_role["plannerSigningPublicKeyBase64Url"]),
             (planner_identity["sessionIdentityDigest"], planner_spki, planner_encoded), work,
@@ -85,31 +76,21 @@ def _persistence_from_configuration_on_work(*, purpose, payload, configuration_d
         database_identity = (writer_role["databaseRole"], writer_role["tlsClientDn"],
             writer_role["tlsClientSerial"], writer_role["tlsIssuerDn"])
         writer._validate_database_identity(database_identity)
-        if policy.FIELD not in owned:
-            raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody has no signed purpose policy")
-        purpose_policy, webauthn = owned[policy.FIELD], owned["webauthn"]
-        policy._shape(purpose_policy, webauthn=webauthn)
-        selected = purpose_policy[purpose]
-        if selected is None:
-            raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody purpose is disabled")
-        # Hold every scalar and identity member before the actual validator
-        # reconstructs either enabled purpose key. Do not reread these graphs
-        # after a native callback or adopt a returned policy as new authority.
-        evidence_identity = {name: selected["signerIdentity"][name] for name in (
-            "sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")}
-        evidence_spki = selected["signingSpkiDigest"]
-        maximum_age_ns, maximum_clock_skew_ns = selected["maximumAgeNs"], selected["maximumClockSkewNs"]
-        rp_id = selected["rpId"] if purpose == "registration" else None
-        origin = selected["origin"] if purpose == "registration" else None
-        target = selected["installationTargetDigest"] if purpose == "installation" else None
-        _purposes, public_keys = policy._validate_policy_on_work(purpose_policy, webauthn=webauthn, work=work)
-        evidence_key = public_keys[purpose]
-        planner_key = configuration._key(planner_encoded, work, expected_spki=planner_spki)
+        # Alias joins and all writer connection scalars are held before the
+        # shared helper's real key callbacks. It reuses this exact owned full
+        # graph without another configuration capture or planner key decode.
+        pins = pins_configuration._pins_from_owned_configuration_on_work(purpose=purpose,
+            owned_payload=owned, configuration_digest=configuration_digest, work=work)
+        (operation, planner_key, planner_identity, planner_spki, evidence_key, evidence_identity,
+            evidence_spki, configuration_digest, maximum_age_ns, maximum_clock_skew_ns,
+            rp_id, origin, target) = pins
         return persistence.EvidencePlanPersistence(writer_dsn=writer_dsn,
             connect_timeout_seconds=timeout, database_identity=database_identity, operation=operation,
-            planner_public_key=planner_key, expected_planner_identity=planner_identity,
+            planner_public_key=planner_key,
+            expected_planner_identity=dict(zip(pins_configuration._IDENTITY_FIELDS, planner_identity)),
             expected_planner_spki_digest=planner_spki, evidence_public_key=evidence_key,
-            expected_evidence_identity=evidence_identity, expected_evidence_spki_digest=evidence_spki,
+            expected_evidence_identity=dict(zip(pins_configuration._IDENTITY_FIELDS, evidence_identity)),
+            expected_evidence_spki_digest=evidence_spki,
             configuration_digest=configuration_digest, maximum_age_ns=maximum_age_ns,
             maximum_clock_skew_ns=maximum_clock_skew_ns, rp_id=rp_id, origin=origin,
             installation_target_digest=target)

@@ -1,10 +1,10 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.90`, implementation only. Evidence-plan storage now has a
-configured writer owner and protected service factory around the immutable
-PostgreSQL custody table and genuine three-original replay. The owner holds
-its public-key/policy/database pins and owns outer transaction and connection
-cleanup; per-call historical expectations remain independently required.
+Status: source `.91`, implementation only. Evidence plans now have separate
+configured writer and verifier owners and private service compositions. Both
+use the same held public-key/policy checks and genuine three-original replay;
+only the writer owns a database connection. Historical expectations remain
+independently required, and verified plans do not authorize business execution.
 These helpers do not register missing kernels or repair service startup. They
 are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
@@ -460,6 +460,33 @@ Cross-process serving, independently authenticated historical recovery,
 capability/current-root admission and authorized atomic execution remain open.
 The six missing-kernel and two missing-handler startup boundaries remain
 unchanged. This source has not opened a connection or proved a committed write.
+
+## Verifier-side original-plan handoff
+
+`EvidencePlanVerifier` holds the same thirteen immutable operation, key,
+identity, configuration and purpose-policy pins used by writer custody, without
+the writer's DSN, timeout or database identity. Its fixed `verify` method owns
+all three original byte references and independently supplied expectations
+before key callbacks. It joins every configured pin, checks both actual SPKIs,
+then calls the genuine retained-plan verifier: original context equality,
+planner/evidence signatures, semantics, queries, primary proofs and resulting
+roots are all rechecked on the same remaining work. No verification-result
+carrier is accepted as an input.
+
+The verifier mapper owns and checks the full root-admitted configuration and
+launch generation, requires the verifier process pins, and uses the same
+planner/purpose mapping as the writer. The writer separately retains its
+planner-alias, role/TLS and timeout checks before that shared key path. Neither
+mapper infers an evidence key from the generic verifier role or accepts a
+per-call policy override.
+
+The private verifier service handoff captures all eighteen independent
+expectations before factory, launch or key callbacks. Its factory owns measured
+configuration before checking the active verifier launch and captures generation
+last. No descriptor, private signer, database, new clock sample, network route
+or registry activation is introduced. Returned observations establish only the
+local historical replay performed by this call, not original-custody durability,
+historical input provenance, root currentness, a one-use capability or execution.
 
 ## Retained evidence and consumption
 

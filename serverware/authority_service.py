@@ -4028,6 +4028,80 @@ class AuthorityProcess:
         return mapper(payload=owned_payload, configuration_digest=configuration_digest,
             generation=generation, writer_dsn=writer_dsn, work=work)
 
+    def _webauthn_evidence_plan_verifier(self, *, purpose, work):
+        """Construct a private verifier from one owned measured configuration.
+
+        The signed configuration and active verifier launch remain real
+        upstream requirements. Capture the complete payload before callbacks,
+        then take generation last. Only the fixed purpose mapper supplies
+        public-key and policy pins; no descriptor, signer or caller override
+        is used, and no operation or serving route is enabled.
+        """
+        if type(purpose) is not str or purpose not in ("registration", "installation"):
+            raise AuthorityServiceError("WebAuthn evidence verification purpose is not supported")
+        if (type(self) is not AuthorityProcess or self.role_name != "verifier"
+                or self.process_mode != "policy-authority-verifier"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("WebAuthn evidence plan verifier process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        from serverware import authority_revocation_configuration
+        from serverware import authority_webauthn_evidence_plan_verifier_configuration
+
+        mapper = (
+            authority_webauthn_evidence_plan_verifier_configuration._registration_plan_verifier_from_configuration_on_work
+            if purpose == "registration" else
+            authority_webauthn_evidence_plan_verifier_configuration._installation_plan_verifier_from_configuration_on_work
+        )
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("WebAuthn evidence verifier configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("verifier"))
+        # No descriptor or other callback interposes before the fixed mapper
+        # owns this final seven-binding launch-generation snapshot.
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return mapper(payload=owned_payload, configuration_digest=configuration_digest,
+            generation=generation, work=work)
+
+    def _verify_webauthn_evidence_plan_handoff(self, *, purpose, envelope_bytes,
+            inputs_bytes, evaluation_context_bytes, expectations, work):
+        """Replay raw3 against independently admitted, owned historical inputs.
+
+        Original request, root, input-commitment and time provenance must be
+        established upstream. Own all eighteen expectations before factory,
+        key or launch callbacks; the stored context never supplies them. This
+        handoff samples no new clock and grants no custody or execution claim.
+        """
+        if type(purpose) is not str or purpose not in ("registration", "installation"):
+            raise AuthorityServiceError("WebAuthn evidence handoff purpose is not supported")
+        if (type(self) is not AuthorityProcess or self.role_name != "verifier"
+                or self.process_mode != "policy-authority-verifier"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("WebAuthn evidence handoff verifier is not configured")
+        from serverware import authority_webauthn_evidence_plan_retention as retention
+        from serverware import authority_webauthn_evidence_plan_verifier as verifying
+
+        originals = envelope_bytes, inputs_bytes, evaluation_context_bytes
+        for raw, maximum in zip(originals, (retention.plan.contract.MAX_BYTES,
+                retention.plan.inputs_wire.MAX_BYTES, retention.context_wire.MAX_BYTES)):
+            retention.plan.inputs_wire._raw(raw, 2, maximum)
+        ledger = retention.evidence.capture._SharedLedger(work)
+        retention.evidence.plan.contract._object(
+            expectations, retention.plan._EXPECTATION_FIELDS, "independent evidence handoff expectations")
+        owned = retention.evidence.capture._JSONCapture(
+            ledger, maximum_bytes=retention.plan.contract.MAX_BYTES).visit(expectations)
+        operation = ("webauthn.registration.evidence.admit" if purpose == "registration"
+            else "webauthn.trust.installation.admit")
+        retention.plan._validate_expectations(owned, operation)
+        verifier = AuthorityProcess._webauthn_evidence_plan_verifier(self, purpose=purpose, work=work)
+        return verifying.EvidencePlanVerifier.verify(verifier, envelope_bytes=originals[0],
+            inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned, work=work)
+
     def _produce_revocation_observed_plan(self, *, request, evidence, context,
             root_inventory, work):
         """Private measured-planner composition, not a serving purpose.

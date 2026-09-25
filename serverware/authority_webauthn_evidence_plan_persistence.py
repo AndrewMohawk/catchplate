@@ -22,13 +22,12 @@ from dataclasses import dataclass
 
 from serverware import authority_revocation_root_reader as reader
 from serverware import authority_revocation_writer_connection as writer
-from serverware import authority_webauthn_evidence_plan_retention as retention
+from serverware import authority_webauthn_evidence_plan_admission as admission
 from serverware.authority_store import webauthn_evidence_retention as store
 
 
-plan, evidence = retention.plan, retention.evidence
-_IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")
-_REGISTRATION = "webauthn.registration.evidence.admit"
+plan, evidence = admission.plan, admission.evidence
+_IDENTITY_FIELDS = admission._IDENTITY_FIELDS
 
 
 class WebAuthnEvidencePlanPersistenceError(ValueError):
@@ -39,37 +38,12 @@ def _configuration(values):
     """Check fixed exact scalars and real key types without key callbacks."""
     if type(values) is not tuple or len(values) != 16:
         raise WebAuthnEvidencePlanPersistenceError("evidence persistence configuration is not exact")
-    (dsn, timeout, database, operation, planner_key, planner_identity, planner_spki,
-        evidence_key, evidence_identity, evidence_spki, configuration_digest,
-        age, skew, rp_id, origin, target) = values
+    dsn, timeout, database = values[:3]
     reader._bounded_text(dsn, 65536)
     if "\n" in dsn or "\r" in dsn or type(timeout) is not int or not 2 <= timeout <= 300:
         raise WebAuthnEvidencePlanPersistenceError("evidence persistence connection settings are invalid")
     writer._validate_database_identity(database)
-    if type(operation) is not str or operation not in plan.contract.OPERATIONS:
-        raise WebAuthnEvidencePlanPersistenceError("evidence persistence operation is not source fixed")
-    if (not isinstance(planner_key, plan.Ed25519PublicKey)
-            or not isinstance(evidence_key, plan.Ed25519PublicKey)):
-        raise WebAuthnEvidencePlanPersistenceError("evidence persistence requires real Ed25519 public keys")
-    shape = evidence.plan.contract
-    for identity in (planner_identity, evidence_identity):
-        if type(identity) is not tuple or len(identity) != 3:
-            raise WebAuthnEvidencePlanPersistenceError("evidence persistence identity is not an exact triple")
-        for digest in identity:
-            shape._digest(digest)
-    for digest in (planner_spki, evidence_spki, configuration_digest):
-        shape._digest(digest)
-    shape._integer(age, evidence.authority.VERIFIER_RESPONSE_MAX_AGE_NS, minimum=1)
-    shape._integer(skew, evidence.authority.VERIFIER_MAX_CLOCK_SKEW_NS)
-    if operation == _REGISTRATION:
-        reader._bounded_text(rp_id, 4096)
-        reader._bounded_text(origin, 8192)
-        if target is not None:
-            raise WebAuthnEvidencePlanPersistenceError("registration custody cannot use an installation target")
-    else:
-        shape._digest(target)
-        if rp_id is not None or origin is not None:
-            raise WebAuthnEvidencePlanPersistenceError("installation custody cannot use a registration RP")
+    admission._validate_pins(values[3:])
     return values
 
 
@@ -80,29 +54,7 @@ def _snapshot(owner):
 
 
 def _capture(configured, expectations, work):
-    ledger = evidence.capture._SharedLedger(work)
-    evidence.plan.contract._object(expectations, plan._EXPECTATION_FIELDS,
-        "independent configured evidence custody expectations")
-    owned = evidence.capture._JSONCapture(ledger).visit(expectations)
-    plan._validate_expectations(owned, configured[3])
-    # These are joins to independently held configuration, not values adopted
-    # from the original envelope or stored evaluation context. Both purpose
-    # ages are the one measured policy age; there is no per-call expansion.
-    evidence.plan._same((owned["configurationDigest"], owned["plannerIdentity"],
-            owned["plannerSpkiDigest"], owned["evidenceIdentity"], owned["evidenceSpkiDigest"],
-            owned["maximumPlanAgeNs"], owned["maximumEvidenceAgeNs"],
-            owned["maximumClockSkewNs"], owned["rpId"], owned["origin"],
-            owned["installationTargetDigest"]),
-        (configured[10], dict(zip(_IDENTITY_FIELDS, configured[5])), configured[6],
-            dict(zip(_IDENTITY_FIELDS, configured[8])), configured[9], configured[11],
-            configured[11], configured[12], configured[13], configured[14], configured[15]),
-        work, "evidence custody expectations differ from held configuration")
-    # Every variable call graph and raw-byte reference has been held before
-    # these actual public-key export/hash callbacks. The store repeats genuine
-    # signature/proof/semantic replay; this binding is not a reusable token.
-    evidence.keys._public_binding(configured[4], configured[6], work)
-    evidence.keys._public_binding(configured[7], configured[9], work)
-    return owned
+    return admission._capture_expectations_on_work(configured[3:], expectations, work)
 
 
 def _connect(configured, work, psycopg, dict_row):

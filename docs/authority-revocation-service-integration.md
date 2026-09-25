@@ -60,9 +60,12 @@ construction is not equivalent to this admission chain.
 
 The inert mapper owns the full payload and the seven launch bindings used by
 measured configuration admission before key callbacks. It recomputes the
-canonical configuration commitment, requires membership in the launch's
-sorted unique configuration list, and joins generation, predecessor, rollback
-floor and operation manifest. This successor requires a positive generation;
+canonical configuration commitment, requires semantic service membership in
+launch-context v2's sorted, file-unique `configurationPayloadBindings`, and
+joins generation, predecessor, rollback floor and operation manifest. The
+actual loader separately checks the original file hash and its complete
+role/schema/raw/payload binding; the mapper is not file or root admission.
+This successor requires a positive generation;
 the general service's generation-zero behavior is not changed.
 
 The issuer and verifier mappers share that exact pre-key capture/commitment

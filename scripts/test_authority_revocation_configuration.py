@@ -37,11 +37,11 @@ import test_authority_revocation_plan as oracle
 
 
 CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v2"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v1"
+GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v2"
 VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 ISSUER_SESSION = "serverware.policyAuthorityCapabilityIssuerSession/v1"
 GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest", "minimumRollbackSequence",
-    "operationManifestDigest", "configurationDigests")
+    "operationManifestDigest", "configurationPayloadBindings")
 
 
 def raw_key(key):
@@ -50,6 +50,13 @@ def raw_key(key):
 
 def spki(key):
     return oracle.sha(key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo))
+
+
+def configuration_binding(digest):
+    """Independent synthetic file identity; never measured launch admission."""
+    file_bytes = oracle.wire({"fixtureConfigurationDigest": digest})
+    return {"fileDigest": oracle.sha(file_bytes), "payloadDigest": digest,
+        "payloadSchema": CONFIG_SCHEMA, "role": "authority-service"}
 
 
 class ConfigurationFixture:
@@ -86,7 +93,7 @@ class ConfigurationFixture:
             *(value.encode("utf-8") for value in self.issuer_frames()))
         self.generation = {"schema": GENERATION_SCHEMA, "sequence": 3, "digest": cap.generation_digest,
             "predecessorDigest": self.payload["generationPredecessorDigest"], "minimumRollbackSequence": 2,
-            "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST, "configurationDigests": []}
+            "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST, "configurationPayloadBindings": []}
         self.commit_payload()
         self.rebuild_originals()
 
@@ -97,7 +104,7 @@ class ConfigurationFixture:
 
     def commit_payload(self):
         self.digest = oracle.framed(CONFIG_SCHEMA, oracle.wire(self.payload))
-        self.generation["configurationDigests"] = [self.digest]
+        self.generation["configurationPayloadBindings"] = [configuration_binding(self.digest)]
 
     def expected_verifier_identity(self):
         verifier = self.payload["roles"]["verifier"]
@@ -152,7 +159,7 @@ def independent_configuration_work(fixture):
     phases = {"capture": add(graph(payload, 1, 1), graph(launch, 1, 1)),
         "commitment": add(graph(payload), oracle.frame_cost(CONFIG_SCHEMA, (oracle.wire(payload),)),
             same(fixture.digest, fixture.digest)),
-        "generation": add(same(joined, joined), graph(generation["configurationDigests"]))}
+        "generation": add(same(joined, joined), graph(generation["configurationPayloadBindings"]))}
     keys = []
     for role in (payload["roles"]["planner"], payload["roles"]["verifier"]):
         keys.extend((same(role["responseSigningSpkiDigest"], role["signingSpkiDigest"]),
@@ -272,10 +279,12 @@ class RevocationConfigurationTests(unittest.TestCase):
                 if mode == "predecessor": launch["predecessorDigest"] = oracle.sha(b"different predecessor")
                 if mode == "floor": launch["minimumRollbackSequence"] = 4
                 if mode == "manifest": launch["operationManifestDigest"] = oracle.sha(b"different manifest")
-                if mode == "absent": launch["configurationDigests"] = [oracle.sha(b"other config")]
-                if mode == "duplicate": launch["configurationDigests"] = [fixture.digest, fixture.digest]
-                if mode == "unsorted": launch["configurationDigests"] = sorted([fixture.digest, oracle.sha(b"other config")], reverse=True)
-                if mode == "empty": launch["configurationDigests"] = []
+                if mode == "absent": launch["configurationPayloadBindings"] = [configuration_binding(oracle.sha(b"other config"))]
+                if mode == "duplicate": launch["configurationPayloadBindings"] = [configuration_binding(fixture.digest), configuration_binding(fixture.digest)]
+                if mode == "unsorted": launch["configurationPayloadBindings"] = sorted(
+                    [configuration_binding(fixture.digest), configuration_binding(oracle.sha(b"other config"))],
+                    key=lambda binding: binding["fileDigest"], reverse=True)
+                if mode == "empty": launch["configurationPayloadBindings"] = []
                 with patch.object(Ed25519PublicKey, "from_public_bytes", wraps=Ed25519PublicKey.from_public_bytes) as decoded:
                     with self.assertRaises(configuration.RevocationConfigurationError): self.build(fixture)
                 self.assertEqual(decoded.call_count, 0)
@@ -369,7 +378,7 @@ class RevocationConfigurationTests(unittest.TestCase):
                     fixture.payload["roles"]["issuer"].clear()
                     fixture.payload["roles"]["verifier"].clear()
                     fixture.payload["unusedConfiguration"].clear()
-                    fixture.generation["configurationDigests"].clear()
+                    fixture.generation["configurationPayloadBindings"].clear()
             def construct(raw):
                 actual = original(raw)
                 if phase == "construction":

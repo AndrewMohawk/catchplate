@@ -188,10 +188,12 @@ class RevocationWriterConfigurationTests(unittest.TestCase):
             elif mode == "predecessor": generation["predecessorDigest"] = oracle.sha(b"other predecessor")
             elif mode == "floor": generation["minimumRollbackSequence"] = 4
             elif mode == "manifest": generation["operationManifestDigest"] = oracle.sha(b"other operation manifest")
-            elif mode == "absent": generation["configurationDigests"] = [oracle.sha(b"other configuration")]
-            elif mode == "empty": generation["configurationDigests"] = []
-            elif mode == "duplicate": generation["configurationDigests"] = [fixture.digest, fixture.digest]
-            else: generation["configurationDigests"] = sorted([fixture.digest, oracle.sha(b"second configuration")], reverse=True)
+            elif mode == "absent": generation["configurationPayloadBindings"] = [configuration_oracle.configuration_binding(oracle.sha(b"other configuration"))]
+            elif mode == "empty": generation["configurationPayloadBindings"] = []
+            elif mode == "duplicate": generation["configurationPayloadBindings"] = [configuration_oracle.configuration_binding(fixture.digest), configuration_oracle.configuration_binding(fixture.digest)]
+            else: generation["configurationPayloadBindings"] = sorted(
+                [configuration_oracle.configuration_binding(fixture.digest), configuration_oracle.configuration_binding(oracle.sha(b"second configuration"))],
+                key=lambda binding: binding["fileDigest"], reverse=True)
             with self.subTest(mode=mode), patch.object(Ed25519PublicKey, "from_public_bytes",
                     wraps=Ed25519PublicKey.from_public_bytes) as constructed:
                 with self.assertRaises(mapper.RevocationWriterConfigurationError): self.build(fixture)

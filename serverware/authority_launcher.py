@@ -24,7 +24,7 @@ LAUNCH_MANIFEST_SCHEMA = (
 )
 LAUNCH_PAYLOAD_SCHEMA = "serverware.policyAuthorityLaunchManifest/v4"
 GENERATION_CONTEXT_SCHEMA = (
-    "serverware.authorityGenerationLaunchContext/v1"
+    "serverware.authorityGenerationLaunchContext/v2"
 )
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 MAX_STAGE_ZERO_HANDOFF_BYTES = 1024 * 1024
@@ -1428,6 +1428,10 @@ def _validate_canonical_launch_evidence(
         "roleManifestDigests": role_manifest_digests,
         "configurationDigests":
             list(generation["configurationDigests"]),
+        "configurationPayloadBindings": [
+            dict(binding)
+            for binding in generation["configurationPayloadBindings"]
+        ],
         "trustMode": verified_package.trust_mode,
         "externalHighWater": {
             "sequence": trust_state["currentGenerationSequence"],

@@ -188,10 +188,12 @@ class RevocationPlannerConfigurationTests(unittest.TestCase):
             if mode == "predecessor": launch["predecessorDigest"] = oracle.sha(b"foreign predecessor")
             if mode == "floor": launch["minimumRollbackSequence"] = 4
             if mode == "manifest": launch["operationManifestDigest"] = oracle.sha(b"foreign operation source")
-            if mode == "absent": launch["configurationDigests"] = [oracle.sha(b"foreign configuration")]
-            if mode == "empty": launch["configurationDigests"] = []
-            if mode == "duplicate": launch["configurationDigests"] = [fixture.digest, fixture.digest]
-            if mode == "unsorted": launch["configurationDigests"] = sorted([fixture.digest, oracle.sha(b"second")], reverse=True)
+            if mode == "absent": launch["configurationPayloadBindings"] = [configuration_oracle.configuration_binding(oracle.sha(b"foreign configuration"))]
+            if mode == "empty": launch["configurationPayloadBindings"] = []
+            if mode == "duplicate": launch["configurationPayloadBindings"] = [configuration_oracle.configuration_binding(fixture.digest), configuration_oracle.configuration_binding(fixture.digest)]
+            if mode == "unsorted": launch["configurationPayloadBindings"] = sorted(
+                [configuration_oracle.configuration_binding(fixture.digest), configuration_oracle.configuration_binding(oracle.sha(b"second"))],
+                key=lambda binding: binding["fileDigest"], reverse=True)
             with self.subTest(mode=mode), patch.object(Ed25519PublicKey, "from_public_bytes",
                     wraps=Ed25519PublicKey.from_public_bytes) as constructed:
                 with self.assertRaises(ValueError): self.build(fixture)

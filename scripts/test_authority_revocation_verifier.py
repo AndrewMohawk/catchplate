@@ -37,10 +37,10 @@ import test_authority_revocation_retention as record_oracle
 
 
 CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v2"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v1"
+GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v2"
 VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest",
-    "minimumRollbackSequence", "operationManifestDigest", "configurationDigests")
+    "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings")
 IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")
 CONFIGURED_FIELDS = ("expectedPlannerIdentity", "expectedVerifierIdentity", "maximumAssertionAgeNs",
     "maximumPlanAgeNs", "maximumClockSkewNs")
@@ -78,13 +78,13 @@ class VerifierFixture:
             "digest": self.payload["generationDigest"],
             "predecessorDigest": self.payload["generationPredecessorDigest"],
             "minimumRollbackSequence": 2, "operationManifestDigest": authority.OPERATION_MANIFEST_DIGEST,
-            "configurationDigests": []}
+            "configurationPayloadBindings": []}
         self.commit_payload()
         self.rebuild_originals()
 
     def commit_payload(self):
         self.digest = oracle.framed(CONFIG_SCHEMA, oracle.wire(self.payload))
-        self.generation["configurationDigests"] = [self.digest]
+        self.generation["configurationPayloadBindings"] = [configuration_oracle.configuration_binding(self.digest)]
 
     def expected_verifier_identity(self):
         role = self.payload["roles"]["verifier"]
@@ -144,7 +144,7 @@ def independent_factory_work(fixture):
     phases = {"capture": add(graph(payload, 1, 1), graph(launch, 1, 1)),
         "commitment": add(graph(payload), oracle.frame_cost(CONFIG_SCHEMA, (oracle.wire(payload),)),
             same(fixture.digest, fixture.digest)),
-        "generation": add(same(joined, joined), graph(generation["configurationDigests"]))}
+        "generation": add(same(joined, joined), graph(generation["configurationPayloadBindings"]))}
     keys = [same(payload["queryManifestDigest"], oracle.source_manifest_digest())]
     for role in (payload["roles"]["planner"], payload["roles"]["verifier"]):
         keys.extend((same(role["responseSigningSpkiDigest"], role["signingSpkiDigest"]),
@@ -253,11 +253,13 @@ class RevocationVerifierTests(unittest.TestCase):
                 if mode == "predecessor": launch["predecessorDigest"] = oracle.sha(b"other predecessor")
                 if mode == "floor": launch["minimumRollbackSequence"] = 4
                 if mode == "manifest": launch["operationManifestDigest"] = oracle.sha(b"other operations")
-                if mode == "absent": launch["configurationDigests"] = [oracle.sha(b"other config")]
-                if mode == "empty": launch["configurationDigests"] = []
-                if mode == "duplicate": launch["configurationDigests"] = [fixture.digest, fixture.digest]
+                if mode == "absent": launch["configurationPayloadBindings"] = [configuration_oracle.configuration_binding(oracle.sha(b"other config"))]
+                if mode == "empty": launch["configurationPayloadBindings"] = []
+                if mode == "duplicate": launch["configurationPayloadBindings"] = [configuration_oracle.configuration_binding(fixture.digest), configuration_oracle.configuration_binding(fixture.digest)]
                 if mode == "unsorted":
-                    launch["configurationDigests"] = sorted([fixture.digest, oracle.sha(b"other config")], reverse=True)
+                    launch["configurationPayloadBindings"] = sorted(
+                        [configuration_oracle.configuration_binding(fixture.digest), configuration_oracle.configuration_binding(oracle.sha(b"other config"))],
+                        key=lambda binding: binding["fileDigest"], reverse=True)
                 with patch.object(Ed25519PublicKey, "from_public_bytes", wraps=Ed25519PublicKey.from_public_bytes) as decoded:
                     with self.assertRaises(verifier.RevocationVerifierError): self.build(fixture)
                 self.assertEqual(decoded.call_count, 0)
@@ -425,7 +427,7 @@ class RevocationVerifierTests(unittest.TestCase):
                     fixture.payload["roles"]["verifier"].clear()
                     fixture.payload["webauthn"].clear()
                     fixture.payload["unusedConfiguration"].clear()
-                    fixture.generation["configurationDigests"].clear()
+                    fixture.generation["configurationPayloadBindings"].clear()
             def observed_key(raw):
                 key = construct(raw)
                 if stage == "construction":

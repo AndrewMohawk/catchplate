@@ -49,7 +49,7 @@ WITNESS_STATE_RECORD_SCHEMA = (
     "serverware.policyAuthorityReplayWitnessStateRecord/v1"
 )
 GENERATION_CONTEXT_SCHEMA = (
-    "serverware.authorityGenerationLaunchContext/v1"
+    "serverware.authorityGenerationLaunchContext/v2"
 )
 LAUNCH_KEY_ID_DOMAIN = (
     "serverware.authorityLaunchPublicKey/v1"
@@ -324,6 +324,7 @@ def _validate_generation_value(
         "operationManifestDigest",
         "roleManifestDigests",
         "configurationDigests",
+        "configurationPayloadBindings",
         "trustMode",
         "externalHighWater",
         "launchIdentityIssuer",
@@ -394,6 +395,8 @@ def _validate_generation_value(
             != statement["operationManifestDigest"]
         or generation.get("configurationDigests")
             != statement["configurationDigests"]
+        or generation.get("configurationPayloadBindings")
+            != statement["configurationPayloadBindings"]
         or generation.get("trustMode")
             != statement["trustMode"]["mode"]
         or not isinstance(role_digests, dict)
@@ -472,6 +475,17 @@ def _validate_generation_value(
     if checkpoint_digest != high_water["witnessCheckpointDigest"]:
         raise WitnessError("witness generation high-water changed")
     return generation
+
+
+def _service_configuration_digests(
+    generation: Mapping[str, Any],
+) -> list[str]:
+    """Project semantic service identities from an admitted generation."""
+    return sorted({
+        binding["payloadDigest"]
+        for binding in generation["configurationPayloadBindings"]
+        if binding["role"] == "authority-service"
+    })
 
 
 def _parse_canonical_timestamp(
@@ -635,7 +649,14 @@ def _load_configuration() -> tuple[dict[str, Any], str]:
         require_current_validity=True,
     )
     payload["generation"] = payload_generation
+    file_digest = "sha256:" + hashlib.sha256(config_value).hexdigest()
     digest = _domain_digest(CONFIG_SCHEMA, payload_bytes)
+    own_binding = {
+        "fileDigest": file_digest,
+        "payloadDigest": digest,
+        "payloadSchema": CONFIG_SCHEMA,
+        "role": "witness",
+    }
     if (
         set(payload) != required
         or payload.get("schema") != CONFIG_SCHEMA
@@ -654,11 +675,13 @@ def _load_configuration() -> tuple[dict[str, Any], str]:
             != authority_contract.OPERATION_MANIFEST_DIGEST
         or payload.get("operationManifestDigest")
             != payload["generation"].get("operationManifestDigest")
+        or file_digest not in launch_generation["configurationDigests"]
+        or own_binding not in launch_generation["configurationPayloadBindings"]
         or not isinstance(
             payload.get("authorityConfigurationDigests"), list
         )
         or payload["authorityConfigurationDigests"]
-            != payload["generation"]["configurationDigests"]
+            != _service_configuration_digests(payload_generation)
         or not Path(str(payload.get("socketPath", ""))).is_absolute()
         or payload.get("socketPath")
             != "/run/serverware/authority-witness/authority.sock"
@@ -1678,19 +1701,8 @@ class WitnessStateStore:
                     if phase in TERMINAL_PHASES
                     else None
                 )
-            or (
-                not is_historical_generation
-                and request.get("configurationDigest")
-                    not in self.configuration[
-                        "authorityConfigurationDigests"
-                    ]
-            )
-            or (
-                is_historical_generation
-                and not _is_digest(
-                    request.get("configurationDigest")
-                )
-            )
+            or request.get("configurationDigest")
+                not in _service_configuration_digests(generation)
             or request.get("operationManifestDigest")
                 != generation["operationManifestDigest"]
             or request.get("generationSequence")

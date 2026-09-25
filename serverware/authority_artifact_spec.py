@@ -25,10 +25,16 @@ except ImportError:  # The contract fails closed when crypto is unavailable.
     Ed25519PublicKey = None
 
 
-ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v3"
-GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v3"
-SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v3"
-UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v3"
+ARTIFACT_BUNDLE_SCHEMA = "serverware.authorityArtifactBundle/v4"
+GENERATION_STATEMENT_SCHEMA = "serverware.authorityGenerationStatement/v4"
+SIGNED_PACKAGE_SCHEMA = "serverware.signedAuthorityArtifactPackage/v4"
+UNSIGNED_PACKAGE_SCHEMA = "serverware.unsignedAuthorityArtifactPackage/v4"
+CONFIGURATION_PAYLOAD_SCHEMAS = MappingProxyType(
+    {
+        "authority-service": "serverware.policyAuthorityServiceConfiguration/v2",
+        "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v2",
+    }
+)
 KEY_AUTHORIZATION_SCHEMA = "serverware.authorityKeyAuthorizations/v1"
 KEY_REVOCATION_SCHEMA = "serverware.authorityKeyRevocations/v1"
 TRUST_STATE_SCHEMA = "serverware.authorityArtifactTrustState/v1"
@@ -1724,6 +1730,111 @@ def _validate_digest_file_reference(
     return reference
 
 
+def _configuration_payload_binding_key(value: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        value[field]
+        for field in ("fileDigest", "role", "payloadDigest", "payloadSchema")
+    )
+
+
+def validate_configuration_payload_bindings(
+    bindings: object,
+    *,
+    configuration_digests: object,
+) -> None:
+    """Validate identity declarations, not configuration signatures or authority."""
+    raw_digests = _require_list(
+        configuration_digests,
+        name="configuration digests",
+        maximum=MAX_CONFIGURATION_DIGESTS,
+    )
+    previous_digest = None
+    for digest in raw_digests:
+        _require_digest(digest, name="configuration file digest")
+        if previous_digest is not None and digest <= previous_digest:
+            raise ArtifactContractError(
+                "configuration digests are not sorted and unique"
+            )
+        previous_digest = digest
+    values = _require_list(
+        bindings,
+        name="configuration payload bindings",
+        maximum=MAX_CONFIGURATION_DIGESTS,
+    )
+    previous_key = None
+    file_offset = 0
+    for raw in values:
+        binding = _require_mapping(
+            raw,
+            name="configuration payload binding",
+            keys={"fileDigest", "payloadDigest", "payloadSchema", "role"},
+        )
+        role = _require_identifier(binding["role"], name="configuration payload role")
+        if (
+            role not in CONFIGURATION_PAYLOAD_SCHEMAS
+            or binding["payloadSchema"] != CONFIGURATION_PAYLOAD_SCHEMAS[role]
+        ):
+            raise ArtifactContractError("configuration payload schema or role changed")
+        file_digest = _require_digest(
+            binding["fileDigest"], name="configuration binding file digest"
+        )
+        _require_digest(binding["payloadDigest"], name="configuration payload digest")
+        key = _configuration_payload_binding_key(binding)
+        if previous_key is not None and (
+            key <= previous_key or file_digest == previous_key[0]
+        ):
+            raise ArtifactContractError(
+                "configuration payload bindings repeat a file or are not sorted"
+            )
+        while file_offset < len(raw_digests) and raw_digests[file_offset] < file_digest:
+            file_offset += 1
+        if file_offset == len(raw_digests) or raw_digests[file_offset] != file_digest:
+            raise ArtifactContractError(
+                "configuration payload binding is outside the raw configuration inventory"
+            )
+        previous_key = key
+
+
+def configuration_payload_bindings(configurations: object) -> list[dict[str, str]]:
+    """Project supported semantic identities while retaining separate raw hashes."""
+    references = _require_list(
+        configurations,
+        name="configuration files",
+        minimum=1,
+        maximum=MAX_CONFIGURATION_DIGESTS,
+    )
+    bindings = []
+    for entry in references:
+        reference = _validate_digest_file_reference(
+            entry,
+            name="configuration file",
+            extra_keys={"name", "role", "payloadSchema", "payloadDigest"},
+        )
+        _require_identifier(reference["name"], name="configuration name")
+        role = _require_identifier(reference["role"], name="configuration role")
+        if role not in CONFIGURATION_PAYLOAD_SCHEMAS:
+            if reference["payloadSchema"] is not None or reference["payloadDigest"] is not None:
+                raise ArtifactContractError(
+                    "non-authority configuration cannot declare a payload identity"
+                )
+            continue
+        if reference["payloadSchema"] != CONFIGURATION_PAYLOAD_SCHEMAS[role]:
+            raise ArtifactContractError("configuration payload schema changed")
+        _require_digest(reference["payloadDigest"], name="configuration payload digest")
+        bindings.append({
+            "fileDigest": reference["sha256"],
+            "payloadDigest": reference["payloadDigest"],
+            "payloadSchema": reference["payloadSchema"],
+            "role": role,
+        })
+    bindings.sort(key=_configuration_payload_binding_key)
+    validate_configuration_payload_bindings(
+        bindings,
+        configuration_digests=sorted({entry["sha256"] for entry in references}),
+    )
+    return bindings
+
+
 def _validate_trust_mode(value: object) -> None:
     trust = _require_mapping(
         value,
@@ -2154,18 +2265,7 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
         minimum=1,
         maximum=MAX_CONFIGURATION_DIGESTS,
     )
-    for entry in configurations:
-        configuration = _validate_digest_file_reference(
-            entry,
-            name="configuration file",
-            extra_keys={"name", "role"},
-        )
-        _require_identifier(
-            configuration["name"], name="configuration name"
-        )
-        _require_identifier(
-            configuration["role"], name="configuration role"
-        )
+    configuration_payload_bindings(configurations)
     _require_sorted_unique(
         configurations,
         name="configuration files",
@@ -2900,6 +3000,7 @@ def validate_generation_statement(
             "migrationReceiptDigests",
             "roleManifestDigests",
             "configurationDigests",
+            "configurationPayloadBindings",
             "keyAuthorizationsDigest",
             "keyRevocationsDigest",
             "witnessCheckpoint",
@@ -2975,6 +3076,10 @@ def validate_generation_statement(
             _require_digest(digest, name=field)
         if list(digests) != sorted(set(digests)):
             raise ArtifactContractError(f"{field} is not sorted and unique")
+    validate_configuration_payload_bindings(
+        value["configurationPayloadBindings"],
+        configuration_digests=value["configurationDigests"],
+    )
     _require_digest(
         value["keyAuthorizationsDigest"],
         name="key authorizations digest",
@@ -3489,6 +3594,8 @@ def _validate_generation_bundle_bindings(
         != sorted(role["sha256"] for role in bundle["roleManifests"])
         or generation["trustMode"] != bundle["trustMode"]
         or generation["configurationDigests"] != configuration_digests
+        or generation["configurationPayloadBindings"]
+        != configuration_payload_bindings(bundle["configurations"])
         or generation["roleSetDigest"] != role_set_digest
         or generation["stageZeroContract"]
         != bundle["stageZero"]["interfaceSchema"]
@@ -3839,8 +3946,40 @@ CONFIGURATION_REFERENCE_JSON_SCHEMA = _closed_object_schema(
         "sha256": SHA256_JSON_SCHEMA,
         "name": TEXT_JSON_SCHEMA,
         "role": TEXT_JSON_SCHEMA,
+        "payloadSchema": {"type": ["string", "null"]},
+        "payloadDigest": {"anyOf": [SHA256_JSON_SCHEMA, {"type": "null"}]},
     }
 )
+CONFIGURATION_REFERENCE_JSON_SCHEMA["oneOf"] = [
+    {
+        "properties": {
+            "role": {"const": role},
+            "payloadSchema": {"const": schema},
+            "payloadDigest": SHA256_JSON_SCHEMA,
+        }
+    }
+    for role, schema in CONFIGURATION_PAYLOAD_SCHEMAS.items()
+] + [
+    {
+        "properties": {
+            "role": {"not": {"enum": sorted(CONFIGURATION_PAYLOAD_SCHEMAS)}},
+            "payloadSchema": {"type": "null"},
+            "payloadDigest": {"type": "null"},
+        }
+    }
+]
+CONFIGURATION_PAYLOAD_BINDING_JSON_SCHEMA = _closed_object_schema(
+    {
+        "fileDigest": SHA256_JSON_SCHEMA,
+        "payloadDigest": SHA256_JSON_SCHEMA,
+        "payloadSchema": TEXT_JSON_SCHEMA,
+        "role": {"enum": sorted(CONFIGURATION_PAYLOAD_SCHEMAS)},
+    }
+)
+CONFIGURATION_PAYLOAD_BINDING_JSON_SCHEMA["oneOf"] = [
+    {"properties": {"role": {"const": role}, "payloadSchema": {"const": schema}}}
+    for role, schema in CONFIGURATION_PAYLOAD_SCHEMAS.items()
+]
 ROLE_MANIFEST_REFERENCE_JSON_SCHEMA = _closed_object_schema(
     {
         "path": RELATIVE_PATH_JSON_SCHEMA,
@@ -4218,6 +4357,12 @@ GENERATION_STATEMENT_JSON_SCHEMA = _closed_object_schema(
             "maxItems": MAX_CONFIGURATION_DIGESTS,
             "items": SHA256_JSON_SCHEMA,
         },
+        "configurationPayloadBindings": {
+            "type": "array",
+            "maxItems": MAX_CONFIGURATION_DIGESTS,
+            "uniqueItems": True,
+            "items": CONFIGURATION_PAYLOAD_BINDING_JSON_SCHEMA,
+        },
         "keyAuthorizationsDigest": SHA256_JSON_SCHEMA,
         "keyRevocationsDigest": SHA256_JSON_SCHEMA,
         "witnessCheckpoint": WITNESS_CHECKPOINT_JSON_SCHEMA,
@@ -4369,6 +4514,7 @@ __all__ = [
     "GENERATION_STATEMENT_SCHEMA",
     "SIGNED_PACKAGE_SCHEMA",
     "UNSIGNED_PACKAGE_SCHEMA",
+    "CONFIGURATION_PAYLOAD_SCHEMAS",
     "KEY_AUTHORIZATION_SCHEMA",
     "KEY_REVOCATION_SCHEMA",
     "TRUST_STATE_SCHEMA",
@@ -4382,6 +4528,8 @@ __all__ = [
     "VerifiedAuthorityKey",
     "VerifiedArtifactPackage",
     "ARTIFACT_FILE_JSON_SCHEMA",
+    "CONFIGURATION_REFERENCE_JSON_SCHEMA",
+    "CONFIGURATION_PAYLOAD_BINDING_JSON_SCHEMA",
     "ARTIFACT_BUNDLE_JSON_SCHEMA",
     "GENERATION_STATEMENT_JSON_SCHEMA",
     "SIGNED_ARTIFACT_PACKAGE_JSON_SCHEMA",
@@ -4390,6 +4538,7 @@ __all__ = [
     "assemble_signed_artifact_package",
     "canonical_json_bytes",
     "closure_receipt_digest",
+    "configuration_payload_bindings",
     "domain_digest",
     "ed25519_public_key_from_seed",
     "generation_statement_digest",
@@ -4400,6 +4549,7 @@ __all__ = [
     "strict_base64url_encode",
     "validate_artifact_bundle",
     "validate_generation_statement",
+    "validate_configuration_payload_bindings",
     "validate_closure_receipt",
     "validate_snapshot_receipt",
     "validate_signed_artifact_package",

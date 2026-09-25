@@ -28,6 +28,7 @@ from serverware.authority_artifact_spec import (
     artifact_bundle_digest,
     canonical_json_bytes,
     closure_receipt_digest,
+    configuration_payload_bindings,
     domain_digest,
     package_signature_message,
     snapshot_receipt_digest,
@@ -661,10 +662,10 @@ def _validate_configuration_document(
     file_entry: Mapping[str, Any],
     *,
     source_revision: str,
-) -> None:
+) -> tuple[str | None, str | None]:
     role = reference["role"]
     if role not in {AUTHORITY_SERVICE_CONFIGURATION_ROLE, "witness"}:
-        return
+        return None, None
     _, document = _canonical_json_document(
         root_fd,
         reference["path"],
@@ -881,6 +882,9 @@ def _validate_configuration_document(
                 raise GeneratorError(
                     "authority WebAuthn transition policy is invalid"
                 ) from exc
+    return expected_payload_schema, domain_digest(
+        expected_payload_schema, canonical_json_bytes(payload)
+    )
 
 
 def _validate_required_role_manifests(
@@ -1039,12 +1043,14 @@ def _build_bundle(
                 keys={"name", "role"},
                 files=file_by_path,
             )
-            _validate_configuration_document(
+            payload_schema, payload_digest = _validate_configuration_document(
                 root_fd,
                 configuration,
                 file_by_path[configuration["path"]],
                 source_revision=spec["sourceRevision"],
             )
+            configuration["payloadSchema"] = payload_schema
+            configuration["payloadDigest"] = payload_digest
             configurations.append(configuration)
         _sorted_unique(
             configurations,
@@ -1675,6 +1681,9 @@ def _build_package(
             "configurationDigests": sorted(
                 configuration["sha256"]
                 for configuration in bundle["configurations"]
+            ),
+            "configurationPayloadBindings": configuration_payload_bindings(
+                bundle["configurations"]
             ),
             "keyAuthorizationsDigest": trust_document_digest(
                 material["keyAuthorizations"]

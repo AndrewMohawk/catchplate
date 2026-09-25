@@ -25,10 +25,15 @@ from serverware import authority_revocation_issuance as configured
 
 
 CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v2"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v1"
+GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v2"
 MAX_CONFIGURATION_DIGESTS = 4096
 _GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest",
-    "minimumRollbackSequence", "operationManifestDigest", "configurationDigests")
+    "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings")
+_CONFIGURATION_BINDING_FIELDS = frozenset({"fileDigest", "payloadDigest", "payloadSchema", "role"})
+_CONFIGURATION_PAYLOAD_SCHEMAS = {
+    "authority-service": CONFIG_SCHEMA,
+    "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v2",
+}
 _VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 _ISSUER_SESSION = "serverware.policyAuthorityCapabilityIssuerSession/v1"
 
@@ -119,19 +124,28 @@ def _generation_binding(payload, generation, configuration_digest, work):
         (payload["generationSequence"], payload["generationDigest"], payload["generationPredecessorDigest"],
          payload["generationMinimumRollbackSequence"], authority.OPERATION_MANIFEST_DIGEST), work,
         "issuer configuration differs from the active launch generation")
-    digests = generation["configurationDigests"]
-    shape._array(digests, MAX_CONFIGURATION_DIGESTS, "launch configuration digests")
+    bindings = generation["configurationPayloadBindings"]
+    shape._array(bindings, MAX_CONFIGURATION_DIGESTS, "launch configuration payload bindings")
     # One full bounded scan, with scalar references only: no set, sort or
     # additional variable graph is constructed during order/membership checks.
-    work.prepare_scan(digests)
+    work.prepare_scan(bindings)
     previous, present = None, False
-    for digest in digests:
-        shape._digest(digest)
-        if previous is not None and previous >= digest:
-            raise RevocationConfigurationError("launch configuration digests are not sorted and unique")
-        if digest == configuration_digest:
+    for binding in bindings:
+        shape._object(binding, _CONFIGURATION_BINDING_FIELDS, "launch configuration payload binding")
+        file_digest = binding["fileDigest"]
+        payload_digest = binding["payloadDigest"]
+        role = binding["role"]
+        shape._digest(file_digest)
+        shape._digest(payload_digest)
+        if type(role) is not str or role not in _CONFIGURATION_PAYLOAD_SCHEMAS:
+            raise RevocationConfigurationError("launch configuration payload role is not source-supported")
+        shape._literal(binding["payloadSchema"], _CONFIGURATION_PAYLOAD_SCHEMAS[role])
+        # fileDigest is the first ordering field and is independently unique.
+        if previous is not None and previous >= file_digest:
+            raise RevocationConfigurationError("launch configuration payload bindings are not sorted and unique")
+        if role == "authority-service" and payload_digest == configuration_digest:
             present = True
-        previous = digest
+        previous = file_digest
     if not present:
         raise RevocationConfigurationError("issuer configuration is not in the active launch generation")
 
@@ -148,8 +162,8 @@ def _capture_configuration_on_work(*, payload, configuration_digest, generation,
     if type(payload) is not dict or type(generation) is not dict:
         raise RevocationConfigurationError("issuer configuration requires exact local JSON objects")
     # Validate exact keys before fixed lookups can encounter a foreign
-    # string subclass. The real launch-context/v1 has twenty fields.
-    capability.shape._bounded_object(generation, 20, "issuer launch context")
+    # string subclass. The real launch-context/v2 has twenty-one fields.
+    capability.shape._bounded_object(generation, 21, "issuer launch context")
     owned = _ConfigurationCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
     launch = capability.capture._JSONCapture(ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(
         {name: generation[name] for name in _GENERATION_FIELDS})
@@ -165,7 +179,7 @@ def _capture_configuration_on_work(*, payload, configuration_digest, generation,
 def _issuer_from_configuration_on_work(*, payload, configuration_digest, generation, work):
     """Map an owned configuration on the existing remaining work allowance.
 
-    Only the seven bindings used from the actual twenty-field launch context
+    Only the seven bindings used from the actual twenty-one-field launch context
     are captured; its signed statement and provisioning bodies are not new
     proof inputs. The service's measured load and active guard supply admission.
     The single issuer age policy is the minimum of its measured internal age

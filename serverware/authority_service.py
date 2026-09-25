@@ -1054,6 +1054,7 @@ class MeasuredConfiguration:
     digest: str
     root_key: Ed25519PublicKey
     attestation_evidence: dict[str, Any] | None = None
+    file_digest: str | None = None
 
     @classmethod
     def load(cls, *, role: str) -> "MeasuredConfiguration":
@@ -1069,6 +1070,7 @@ class MeasuredConfiguration:
             require_root_owned=True,
             require_descriptor=True,
         )
+        file_digest = "sha256:" + hashlib.sha256(config_value).hexdigest()
         root_key = _load_ed25519_public_key(root_value)
         try:
             envelope = json.loads(config_value)
@@ -1185,6 +1187,7 @@ class MeasuredConfiguration:
             payload=payload,
             digest=_domain_digest(CONFIG_SCHEMA, payload_bytes),
             root_key=root_key,
+            file_digest=file_digest,
         )
         configuration._verify_generation_binding()
         configuration._verify_role_topology()
@@ -1212,8 +1215,20 @@ class MeasuredConfiguration:
 
     def _verify_generation_binding(self) -> None:
         generation = dict(authority_launch_guard.generation())
+        file_digest = _require_digest(
+            self.file_digest, "authority configuration file digest"
+        )
+        bindings = generation.get("configurationPayloadBindings")
+        expected_binding = {
+            "fileDigest": file_digest,
+            "payloadDigest": self.digest,
+            "payloadSchema": CONFIG_SCHEMA,
+            "role": "authority-service",
+        }
         if (
-            generation.get("sequence")
+            generation.get("schema")
+                != "serverware.authorityGenerationLaunchContext/v2"
+            or generation.get("sequence")
                 != self.payload.get("generationSequence")
             or generation.get("digest")
                 != self.payload.get("generationDigest")
@@ -1223,8 +1238,14 @@ class MeasuredConfiguration:
                 != self.payload.get("generationMinimumRollbackSequence")
             or generation.get("operationManifestDigest")
                 != authority_contract.OPERATION_MANIFEST_DIGEST
-            or self.digest not in generation.get(
+            or file_digest not in generation.get(
                 "configurationDigests", ()
+            )
+            or type(bindings) is not list
+            or not 1 <= len(bindings) <= 4096
+            or not any(
+                type(binding) is dict and binding == expected_binding
+                for binding in bindings
             )
         ):
             raise AuthorityServiceError(

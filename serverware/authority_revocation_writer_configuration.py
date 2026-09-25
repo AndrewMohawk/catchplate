@@ -30,7 +30,7 @@ class RevocationWriterConfigurationError(ValueError):
 
 
 def _persistence_from_configuration_on_work(*, payload, configuration_digest,
-                                           generation, persistence_dsn, work):
+                                           generation, runtime_role_identities, persistence_dsn, work):
     """Construct the genuine owner from independently admitted local inputs.
 
     The writer's explicit planner aliases must agree with the actual planner
@@ -42,6 +42,9 @@ def _persistence_from_configuration_on_work(*, payload, configuration_digest,
     try:
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         writer.reader._bounded_text(persistence_dsn, 65536)
         if "\n" in persistence_dsn or "\r" in persistence_dsn:
             raise RevocationWriterConfigurationError("revocation writer DSN is not one bounded descriptor value")
@@ -53,7 +56,7 @@ def _persistence_from_configuration_on_work(*, payload, configuration_digest,
             if type(role) is not dict:
                 raise RevocationWriterConfigurationError("revocation writer role is not an exact object")
             plan.contract._literal(role["processMode"], "policy-authority-" + name)
-            for field in ("measurementDigest", "attestationReceiptDigest", "responseSigningSpkiDigest"):
+            for field in ("measurementDigest", "responseSigningSpkiDigest"):
                 plan.contract._digest(role[field])
         for role in (planner, verifier):
             plan.contract._digest(role["signingSpkiDigest"])
@@ -80,23 +83,27 @@ def _persistence_from_configuration_on_work(*, payload, configuration_digest,
             writer_role["tlsClientSerial"], writer_role["tlsIssuerDn"])
         writer._validate_database_identity(database_identity)
 
+        planner_identity = {"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
+            "measurementDigest": planner["measurementDigest"],
+            "attestationReceiptDigest": runtime["roles"]["planner"]["attestationReceiptDigest"]}
+        planner_encoded, planner_spki = planner["signingPublicKeyBase64Url"], planner["signingSpkiDigest"]
+        verifier_encoded, verifier_spki = verifier["signingPublicKeyBase64Url"], verifier["signingSpkiDigest"]
+        verifier_measurement = verifier["measurementDigest"]
+        verifier_receipt = runtime["roles"]["verifier"]["attestationReceiptDigest"]
         # All configuration graphs, alias joins and scalar settings above are
         # owned before these genuine, work-guarded key callbacks. Decode only
         # the actual planner/verifier keys; equality binds the writer alias to
         # that same canonical raw32 planner transport without a third decode.
-        planner_key = configuration._key(planner["signingPublicKeyBase64Url"], work,
-            expected_spki=planner["signingSpkiDigest"])
-        verifier_key = configuration._key(verifier["signingPublicKeyBase64Url"], work,
-            expected_spki=verifier["signingSpkiDigest"])
+        planner_key = configuration._key(planner_encoded, work, expected_spki=planner_spki)
+        verifier_key = configuration._key(verifier_encoded, work, expected_spki=verifier_spki)
         verifier_session = configuration._frame_text(configuration._VERIFIER_SESSION,
-            (configuration_digest, verifier["measurementDigest"], verifier["attestationReceiptDigest"]), work)
+            (configuration_digest, verifier_measurement, verifier_receipt), work)
         return persistence.RevocationPlannerPersistence(
             persistence_dsn=persistence_dsn, connect_timeout_seconds=timeout,
             planner_public_key=planner_key, verifier_public_key=verifier_key,
-            expected_planner_identity={"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
-                "measurementDigest": planner["measurementDigest"], "attestationReceiptDigest": planner["attestationReceiptDigest"]},
+            expected_planner_identity=planner_identity,
             expected_verifier_identity={"sessionIdentityDigest": verifier_session,
-                "measurementDigest": verifier["measurementDigest"], "attestationReceiptDigest": verifier["attestationReceiptDigest"]},
+                "measurementDigest": verifier_measurement, "attestationReceiptDigest": verifier_receipt},
             writer_database_identity=database_identity)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RevocationWriterConfigurationError):

@@ -1,13 +1,14 @@
 # Authority artifact identities
 
-Source revisions `.108` through `.114` separate file, policy, generation, role,
-bootstrap-control, runtime credential and evidence-delivery identities.
+Source revisions `.108` through `.115` separate file, policy, generation, role,
+bootstrap-control, runtime credential, evidence-delivery and admitted receipt identities.
 Direct final-generation and final-launch
 configuration pins are replaced by static commitments. The launch manifest no
 longer contains a credential hash of itself, and configuration no longer declares
 a digest of the credential set containing that configuration. The final launch
-no longer hashes its attestation receipt as a credential. The configuration-to-
-receipt cycle remains. This is an implementation checkpoint, not a
+no longer hashes its attestation receipt as a credential. Service configuration
+v6 no longer pins the receipts that attest that same configuration; their identities
+come from independently admitted runtime evidence. This is an implementation checkpoint, not a
 successful build, launch or production release.
 
 ## Operation contract
@@ -51,6 +52,8 @@ for the operation contract; `.109` added configuration identities in v4; `.110`
 binds configuration v3 in v5 packages; `.111` binds configuration v4 in v6 packages.
 Revision `.113` binds service configuration v5 and witness configuration v4 in
 v7 packages; generation launch context retains its unchanged v4 shape.
+Revision `.115` advances the service configuration to v6, with artifact/package
+v7, witness configuration v4, launch v7 and stage-zero v5 shapes unchanged.
 Existing digest domains remain unchanged;
 each canonical body carries its schema version. Older packages are not admitted
 through a compatibility fallback.
@@ -299,38 +302,79 @@ request: ordinary hashes + bootstrap slot + runtime-evidence slot
            separate sealed delivery -> actual receipt admission
 ```
 
-This removes the final-launch-to-receipt content-hash back-reference. It does
-not create an attestation producer or close the remaining static configuration
-receipt pin. Source presence is not successful delivery or serving evidence.
+This removes the final-launch-to-receipt content-hash back-reference. Revision
+`.115` separately removes the configuration-to-receipt back-reference below.
+Neither change creates an independent attestation producer. Source presence is
+not successful delivery or serving evidence.
 
-## Remaining attestation dependencies
+## Runtime attestation cohort
 
-Direct generation and role-launch pins no longer force the static configuration
-to contain those final identities. The receipt back-reference remains enforced:
+Service configuration v6 contains static measurement, role, package, key, TLS,
+freshness and trust-policy pins. It contains neither role receipt digests nor
+the issuer session digest that is derived from those receipts. Other existing
+predeclared session and credential-issuance pins remain; they are not replaced
+with fabricated runtime observations.
 
 ```text
-configuration --> attestation receipt --> configuration payload digest
-                                     --> final launch/package/generation identities
+static signed configuration + admitted generation/launch observations
+                      |
+                      v
+             five root-signed role receipts
+                      |
+                      v
+          root-signed exact five-role cohort
+                      |
+            separate sealed evidence slot
+                      |
+                      v
+         signature, scope and local launch admission
+                 /                    \
+                v                      v
+   original local receipt      separate runtime identity map
+   for existing protocols      for configured operation mappers
 ```
 
-The trusted-host path compares a configured `attestationReceiptDigest` with a
-receipt that binds the configuration payload itself and final runtime identities.
-The delivery split does not make that configured receipt pin constructible or
-remove its verification. That remaining dependency requires explicit static
-attestation policy and independently admitted runtime identities; no receipt
-check is bypassed by the bootstrap/custody/delivery changes.
+The unchanged 4 MiB evidence slot carries canonical
+`serverware.signedTrustedHostLocalAttestationCohort/v1`: the exact
+`schema`, `payload`, `signature` envelope. Its payload has ten fields: schema,
+source revision, configuration digest, generation digest, operation-manifest
+digest, artifact-package digest, role-binding digests, receipts, issuance time
+and expiry. Receipts are the five existing signed local-attestation envelopes,
+ordered by role (`executor`, `issuer`, `planner`, `planner-writer`, `verifier`).
+All six signatures are verified with the independently admitted configuration
+root. Signature and receipt identities use the existing service protocol's
+domain-plus-NUL and length-framed hashing, not artifact-package framing.
 
-The next implementation must version and integrate an acyclic binding across
-static policy production, artifact verification, launch and runtime attestation.
-Static policy commitments must precede final generation/launch identities;
-runtime evidence must retain genuine independent signature, role, measurement,
-nonce, generation and rollback admission without embedding its own final hash.
-Current and peer-role runtime receipts must be separately admitted before their
-identities reach operation mappers; inserting derived values into the signed
-configuration payload would change its identity and is not a valid handoff.
-Skipping membership checks, treating a caller-supplied digest as authority, or
-enrolling historical configuration from retained data is not a remedy. Durable
-caller recovery and historical resolution remain pending that admission work.
+Every receipt joins the admitted configuration/generation/package and static
+role measurement/key pins. Its runtime closure binds its signed launch digest
+to the actual admitted package inventory. The selected local receipt additionally
+matches the active guard's launch and stage-zero observations. Peer launch
+claims are assertions of the trusted root signer, not local observations of
+peer liveness. The cohort's original validity interval cannot exceed any inner
+receipt interval, and all intervals are rechecked after signature admission.
+This profile explicitly remains trusted-host-local: it asserts no native stage
+zero, HSM, TEE or independently operated witness assurance.
+
+The service retains the original cohort bytes and derives a separate bounded
+runtime map. Configured mappers capture that map on their existing work allowance
+before key callbacks and join its configuration, generation and static role pins.
+They perform consistency checks, not root enrollment. The signed configuration
+payload is never amended. The issuer session digest keeps its existing derivation
+over DB/TLS identity, measurement, the admitted receipt and the predeclared
+credential-issuance pin. Historic expectations are not refreshed from this map.
+
+Independent receipt/cohort production, historical configuration/key resolution,
+durable caller recovery and successor execution remain implementation or
+provisioning work. Caller-supplied digest maps and retained history do not acquire
+admission authority from this split. Broad fixture adaptation and consolidated
+runtime verification are deferred until implementation is complete.
+
+The runtime client's signed trust document is also post-package material: it
+contains verifier attestation evidence and is loaded independently from a
+root-owned sealed credential. Its bytes remain committed by the later runtime
+launch. Do not place that current-generation trust document in the artifact
+package whose identity its receipt already binds; generic raw configuration
+references do not currently prohibit that circular construction automatically.
 
 Older launch-context and journal snapshots do not satisfy context v4. They need
 an explicitly admitted migration before reuse; no automatic adoption is added.

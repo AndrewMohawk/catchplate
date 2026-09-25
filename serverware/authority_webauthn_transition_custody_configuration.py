@@ -59,18 +59,21 @@ def _endpoint(source, target, work):
 
 
 def _capture_on_work(*, operation, payload, configuration_digest, generation,
-        writer_dsn=None, work):
+        runtime_role_identities, writer_dsn=None, work):
     """Own configuration once and derive fixed custody inputs on the same work."""
     try:
         pins_configuration._operation(operation)
         owned, launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=launch, work=work)
         verifier = pins_configuration._role(owned, "verifier")
         planner = pins_configuration._role(owned, "planner")
         writer = pins_configuration._role(owned, "planner-writer")
         shape = configuration.capability.shape
         for role in (verifier, planner, writer):
-            for field in ("measurementDigest", "attestationReceiptDigest", "responseSigningSpkiDigest"):
+            for field in ("measurementDigest", "responseSigningSpkiDigest"):
                 shape._digest(role[field])
             for field in ("serviceUid", "serviceGid"):
                 shape._integer(role[field], 0xFFFFFFFF, minimum=1)
@@ -99,7 +102,8 @@ def _capture_on_work(*, operation, payload, configuration_digest, generation,
         # owns explicit transition policy and role pins before its callbacks;
         # it neither recaptures full configuration nor substitutes a role key.
         pins = pins_configuration._pins_from_owned_configuration_on_work(operation=operation,
-            owned_payload=owned, configuration_digest=configuration_digest, work=work)
+            owned_payload=owned, owned_runtime_identities=runtime,
+            configuration_digest=configuration_digest, work=work)
         verifier_key = configuration._key(verifier_encoded, work, expected_spki=verifier_spki)
         wire._distinct_keys(pins[1], verifier_key, work)
         configured_writer = (None if database is None else

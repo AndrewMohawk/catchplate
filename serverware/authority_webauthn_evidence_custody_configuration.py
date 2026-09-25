@@ -63,13 +63,16 @@ def _endpoint(source, target, work):
 
 
 def _capture_on_work(*, purpose, payload, configuration_digest, generation,
-        writer_dsn=None, work):
+        runtime_role_identities, writer_dsn=None, work):
     """Capture once and derive fixed custody settings on the original work."""
     try:
         if type(purpose) is not str or purpose not in ("registration", "installation"):
             raise WebAuthnEvidenceCustodyConfigurationError("evidence custody purpose is not source fixed")
         owned, launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=launch, work=work)
         roles = owned["roles"]
         if type(roles) is not dict:
             raise WebAuthnEvidenceCustodyConfigurationError("evidence custody roles are not an exact object")
@@ -79,7 +82,7 @@ def _capture_on_work(*, purpose, payload, configuration_digest, generation,
             if type(role) is not dict:
                 raise WebAuthnEvidenceCustodyConfigurationError("evidence custody role is not an exact object")
             shape._literal(role["processMode"], "policy-authority-" + name)
-            for field in ("measurementDigest", "attestationReceiptDigest", "responseSigningSpkiDigest"):
+            for field in ("measurementDigest", "responseSigningSpkiDigest"):
                 shape._digest(role[field])
             for field in ("serviceUid", "serviceGid"):
                 shape._integer(role[field], 0xFFFFFFFF, minimum=1)
@@ -109,7 +112,8 @@ def _capture_on_work(*, purpose, payload, configuration_digest, generation,
         # its first key callback; it neither recaptures configuration nor adopts
         # a generic verifier key as the evidence-purpose key.
         pins = pins_configuration._pins_from_owned_configuration_on_work(purpose=purpose,
-            owned_payload=owned, configuration_digest=configuration_digest, work=work)
+            owned_payload=owned, owned_runtime_identities=runtime,
+            configuration_digest=configuration_digest, work=work)
         verifier_key = configuration._key(verifier_encoded, work, expected_spki=verifier_spki)
         wire._distinct_keys(pins[1], verifier_key, work)
         wire._pins(configuration_digest, generation_sequence, generation_digest, pins[0])

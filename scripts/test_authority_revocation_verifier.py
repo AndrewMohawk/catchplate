@@ -36,7 +36,7 @@ import test_authority_revocation_plan as oracle
 import test_authority_revocation_retention as record_oracle
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v5"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
 GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
 VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
 GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest",

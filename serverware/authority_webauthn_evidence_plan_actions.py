@@ -44,6 +44,7 @@ def _fresh(timing, window, configured, work):
 
 
 def _produce_request_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         request, business_before_roots, authorization_before_roots, inputs_bytes,
         deadline_epoch_ns, verifier_private_key, work):
     _operation(purpose)
@@ -56,7 +57,8 @@ def _produce_request_on_configuration(*, purpose, payload, configuration_digest,
         "authorizationBeforeRoots": authorization_before_roots,
         "deadlineEpochNs": deadline_epoch_ns})
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     return request_wire._produce_on_work(request=owned["request"],
         business_before_roots=owned["businessBeforeRoots"],
         authorization_before_roots=owned["authorizationBeforeRoots"], inputs_bytes=original_inputs,
@@ -67,6 +69,7 @@ def _produce_request_on_configuration(*, purpose, payload, configuration_digest,
 
 
 def _produce_plan_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, context_bytes, inputs_bytes, read_dsn, planner_private_key, work):
     _operation(purpose)
     originals = transport._validate_request(control_bytes=control_bytes,
@@ -83,13 +86,15 @@ def _produce_plan_on_configuration(*, purpose, payload, configuration_digest, ge
     evidence.plan.contract._digest(digest)
     if type(payload) is not dict or type(generation) is not dict:
         raise WebAuthnEvidencePlanActionError("evidence planning configuration is not closed data")
-    measured.capability.shape._bounded_object(generation, 20, "evidence planning launch context")
+    measured.capability.shape._bounded_object(generation, 24, "evidence planning launch context")
     owned_payload = measured._ConfigurationCapture(
         ledger, maximum_bytes=wire.authority.MAX_REQUEST_BYTES).visit(payload)
+    owned_runtime_identities = evidence.capture._JSONCapture(ledger, maximum_bytes=8192).visit(runtime_role_identities)
     held_generation = evidence.capture._JSONCapture(ledger).visit(
         {name: generation[name] for name in measured._GENERATION_FIELDS})
     configured = configuration._capture_on_work(purpose=purpose, payload=owned_payload,
-        configuration_digest=digest, generation=held_generation, work=work)
+        configuration_digest=digest, generation=held_generation,
+        runtime_role_identities=owned_runtime_identities, work=work)
     verified = request_wire._verify_on_work(control_bytes=originals[0], context_bytes=originals[1],
         inputs_bytes=originals[2], pins=configured.pins,
         generation_sequence=configured.generation_sequence, generation_digest=configured.generation_digest,
@@ -101,6 +106,7 @@ def _produce_plan_on_configuration(*, purpose, payload, configuration_digest, ge
     _fresh(timing, window, configured, work)
     producer = producer_configuration._producer_from_configuration_on_work(purpose=purpose,
         payload=owned_payload, configuration_digest=digest, generation=held_generation,
+        runtime_role_identities=owned_runtime_identities,
         read_dsn=dsn, planner_private_key=private_key, work=work)
     _fresh(timing, window, configured, work)
     result = producing.EvidenceAdmissionPlanOwner.produce_originals(producer,
@@ -125,12 +131,14 @@ def _produce_plan_on_configuration(*, purpose, payload, configuration_digest, ge
 
 
 def _request_plan_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, context_bytes, inputs_bytes, work):
     _operation(purpose)
     originals = transport._validate_request(control_bytes=control_bytes,
         context_bytes=context_bytes, inputs_bytes=inputs_bytes)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     verified = request_wire._verify_on_work(control_bytes=originals[0], context_bytes=originals[1],
         inputs_bytes=originals[2], pins=configured.pins,
         generation_sequence=configured.generation_sequence, generation_digest=configured.generation_digest,

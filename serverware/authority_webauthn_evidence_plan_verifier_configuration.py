@@ -29,7 +29,8 @@ class WebAuthnEvidencePlanVerifierConfigurationError(ValueError):
     pass
 
 
-def _pins_from_owned_configuration_on_work(*, purpose, owned_payload, configuration_digest, work):
+def _pins_from_owned_configuration_on_work(*, purpose, owned_payload, owned_runtime_identities,
+        configuration_digest, work):
     """Continue only after this invocation's genuine full configuration capture.
 
     Callers must retain their role-specific settings before this helper's key
@@ -57,7 +58,7 @@ def _pins_from_owned_configuration_on_work(*, purpose, owned_payload, configurat
         planner_encoded = planner["signingPublicKeyBase64Url"]
         planner_spki, response_spki = planner["signingSpkiDigest"], planner["responseSigningSpkiDigest"]
         planner_identity = (planner["plannerSessionIdentityDigest"],
-            planner["measurementDigest"], planner["attestationReceiptDigest"])
+            planner["measurementDigest"], owned_runtime_identities["roles"]["planner"]["attestationReceiptDigest"])
         shape._text(planner_encoded, 43, minimum=43)
         shape._base64url(planner_encoded)
         for digest in (*planner_identity, planner_spki, response_spki):
@@ -92,25 +93,29 @@ def _pins_from_owned_configuration_on_work(*, purpose, owned_payload, configurat
         raise WebAuthnEvidencePlanVerifierConfigurationError("evidence plan pin configuration failed") from exc
 
 
-def _verifier_from_configuration_on_work(*, purpose, payload, configuration_digest, generation, work):
+def _verifier_from_configuration_on_work(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities, work):
     try:
         if type(purpose) is not str or purpose not in ("registration", "installation"):
             raise WebAuthnEvidencePlanVerifierConfigurationError("evidence verifier purpose is not source fixed")
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         roles = owned["roles"]
         if type(roles) is not dict or type(roles.get("verifier")) is not dict:
             raise WebAuthnEvidencePlanVerifierConfigurationError("evidence verifier role is absent")
         role = roles["verifier"]
         shape = configuration.capability.shape
         shape._literal(role["processMode"], "policy-authority-verifier")
-        for field in ("measurementDigest", "attestationReceiptDigest", "responseSigningSpkiDigest",
+        for field in ("measurementDigest", "responseSigningSpkiDigest",
                 "signingSpkiDigest"):
             shape._digest(role[field])
         plan._same(role["responseSigningSpkiDigest"], role["signingSpkiDigest"], work,
             "evidence verifier role differs from its measured response pin")
         pins = _pins_from_owned_configuration_on_work(purpose=purpose, owned_payload=owned,
-            configuration_digest=configuration_digest, work=work)
+            owned_runtime_identities=runtime, configuration_digest=configuration_digest, work=work)
         from serverware import authority_webauthn_evidence_plan_verifier as verifier
 
         return verifier.EvidencePlanVerifier(pins=pins)
@@ -120,11 +125,15 @@ def _verifier_from_configuration_on_work(*, purpose, payload, configuration_dige
         raise WebAuthnEvidencePlanVerifierConfigurationError("evidence plan verifier configuration failed") from exc
 
 
-def _registration_plan_verifier_from_configuration_on_work(*, payload, configuration_digest, generation, work):
+def _registration_plan_verifier_from_configuration_on_work(*, payload, configuration_digest, generation,
+        runtime_role_identities, work):
     return _verifier_from_configuration_on_work(purpose="registration", payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
 
 
-def _installation_plan_verifier_from_configuration_on_work(*, payload, configuration_digest, generation, work):
+def _installation_plan_verifier_from_configuration_on_work(*, payload, configuration_digest, generation,
+        runtime_role_identities, work):
     return _verifier_from_configuration_on_work(purpose="installation", payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)

@@ -38,14 +38,10 @@ def _validate_originals(*, control_bytes, request_bytes, evidence_bytes,
     transport._validate_request_lengths(tuple(len(raw) for raw in originals))
 
 
-def _capture_payload(payload, configuration_digest, work):
+def _capture_payload(payload, configuration_digest, generation, work):
     """Own the full graph and hold role/scope scalars before mapper callbacks."""
-    ledger = request.capture._SharedLedger(work)
-    request.plan.contract._digest(configuration_digest)
-    if type(payload) is not dict:
-        raise RevocationPlanningReceiverError("planning receiver configuration is not an exact object")
-    owned = configuration._ConfigurationCapture(
-        ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
+    owned, launch = configuration._capture_configuration_on_work(payload=payload,
+        configuration_digest=configuration_digest, generation=generation, work=work)
     roles = owned["roles"]
     if type(roles) is not dict:
         raise RevocationPlanningReceiverError("planning receiver roles are not an exact object")
@@ -58,12 +54,13 @@ def _capture_payload(payload, configuration_digest, work):
         request.plan.contract._integer(role["maximumInternalAgeNs"], minimum=1)
         ages.append(role["maximumInternalAgeNs"])
     request._require_enabled_operation(roles["planner"], work)
-    scope = (configuration_digest, owned["generationSequence"], owned["generationDigest"])
+    scope = (configuration_digest, launch["sequence"], launch["digest"])
     request.commitment._pins(*scope)
-    return owned, scope, min(ages)
+    return owned, launch, scope, min(ages)
 
 
 def _produce_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, request_bytes, evidence_bytes, context_bytes,
         root_inventory_bytes, read_dsn, planner_private_key, work):
     """Authenticate originals, run the real planner, then recheck freshness.
@@ -85,9 +82,10 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
         _validate_originals(control_bytes=control_bytes, request_bytes=request_bytes,
             evidence_bytes=evidence_bytes, context_bytes=context_bytes,
             root_inventory_bytes=root_inventory_bytes)
-        owned_payload, scope, role_age = _capture_payload(payload, configuration_digest, work)
+        owned_payload, launch, scope, role_age = _capture_payload(payload, configuration_digest, generation, work)
         owner = planner_configuration._planner_from_configuration_on_work(
-            payload=owned_payload, configuration_digest=scope[0], generation=generation,
+            payload=owned_payload, configuration_digest=scope[0], generation=launch,
+            runtime_role_identities=runtime_role_identities,
             read_dsn=read_dsn, planner_private_key=planner_private_key, work=work)
         fixed = owner._snapshot_configuration()
         maximum_age = min(role_age, fixed[8])

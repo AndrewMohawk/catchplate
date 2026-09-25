@@ -47,16 +47,19 @@ def _endpoint(verifier, planner, work):
         planner["serviceUid"], planner["serviceGid"])
 
 
-def _capture_on_work(*, operation, payload, configuration_digest, generation, work):
+def _capture_on_work(*, operation, payload, configuration_digest, generation, runtime_role_identities, work):
     try:
         pins_configuration._operation(operation)
         owned, launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=launch, work=work)
         verifier = pins_configuration._role(owned, "verifier")
         planner = pins_configuration._role(owned, "planner")
         shape = configuration.capability.shape
         for role in (verifier, planner):
-            for field in ("measurementDigest", "attestationReceiptDigest", "signingSpkiDigest",
+            for field in ("measurementDigest", "signingSpkiDigest",
                     "responseSigningSpkiDigest"):
                 shape._digest(role[field])
             request.evidence.plan._same(role["responseSigningSpkiDigest"], role["signingSpkiDigest"],
@@ -79,7 +82,8 @@ def _capture_on_work(*, operation, payload, configuration_digest, generation, wo
         # The shared continuation holds all planner/explicit-purpose pins
         # before its native callbacks. Only immutable exchange scalars follow.
         pins = pins_configuration._pins_from_owned_configuration_on_work(operation=operation,
-            owned_payload=owned, configuration_digest=configuration_digest, work=work)
+            owned_payload=owned, owned_runtime_identities=runtime,
+            configuration_digest=configuration_digest, work=work)
         verifier_key = configuration._key(encoded, work, expected_spki=spki)
         request.wire._distinct_keys(pins[1], verifier_key, work)
         return _ExchangeConfiguration(pins=pins, verifier_public_key=verifier_key,

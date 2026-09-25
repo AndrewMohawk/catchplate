@@ -34,7 +34,7 @@ def _text_on_work(value, maximum, work):
 
 
 def _reader_from_configuration_on_work(*, purpose, payload, configuration_digest,
-        generation, read_dsn, work):
+        generation, runtime_role_identities, read_dsn, work):
     try:
         if type(purpose) is not str or purpose not in ("registration", "installation"):
             raise WebAuthnEvidenceRootConfigurationError("evidence root purpose is not source fixed")
@@ -42,6 +42,9 @@ def _reader_from_configuration_on_work(*, purpose, payload, configuration_digest
             else "webauthn.trust.installation.admit")
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         dsn = read_dsn
         _text_on_work(dsn, 65536, work)
         if "\r" in dsn or "\n" in dsn:
@@ -52,9 +55,9 @@ def _reader_from_configuration_on_work(*, purpose, payload, configuration_digest
         role = roles["verifier"]
         shape = configuration.capability.shape
         shape._literal(role["processMode"], "policy-authority-verifier")
-        measurement, attestation = role["measurementDigest"], role["attestationReceiptDigest"]
+        measurement = role["measurementDigest"]
         response_spki, signing_spki = role["responseSigningSpkiDigest"], role["signingSpkiDigest"]
-        for digest in (measurement, attestation, response_spki, signing_spki):
+        for digest in (measurement, response_spki, signing_spki):
             shape._digest(digest)
         plan._same(response_spki, signing_spki, work,
             "evidence root verifier signing key differs from its measured response pin")
@@ -78,7 +81,8 @@ def _reader_from_configuration_on_work(*, purpose, payload, configuration_digest
         # enforces the selected operation's allowlist and explicit purpose
         # policy; its ordinary pins are not substituted for root observations.
         pins = pins_configuration._pins_from_owned_configuration_on_work(purpose=purpose,
-            owned_payload=owned, configuration_digest=configuration_digest, work=work)
+            owned_payload=owned, owned_runtime_identities=runtime,
+            configuration_digest=configuration_digest, work=work)
         if pins[0] != operation:
             raise WebAuthnEvidenceRootConfigurationError("evidence root purpose operation changed")
         from serverware import authority_webauthn_evidence_root_reader as roots

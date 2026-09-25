@@ -25,17 +25,21 @@ class WebAuthnTransitionWriterConfigurationError(ValueError):
 
 
 def _persistence_from_configuration_on_work(*, operation, payload, configuration_digest,
-        generation, writer_dsn, work):
+        generation, runtime_role_identities, writer_dsn, work):
     try:
         pins_configuration._operation(operation)
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         # This actual shared helper reads no purpose-policy slot and performs
         # no key callback. Its database3 is immutable before the next phase.
         dsn, timeout, database = database_configuration._database_from_owned_configuration_on_work(
             owned_payload=owned, writer_dsn=writer_dsn, work=work)
         pins = pins_configuration._pins_from_owned_configuration_on_work(operation=operation,
-            owned_payload=owned, configuration_digest=configuration_digest, work=work)
+            owned_payload=owned, owned_runtime_identities=runtime,
+            configuration_digest=configuration_digest, work=work)
         return persistence.TransitionPlanPersistence(writer_dsn=dsn,
             connect_timeout_seconds=timeout, database_identity=database, pins=pins)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:

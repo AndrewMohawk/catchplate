@@ -34,7 +34,7 @@ class RevocationPlannerCustodyClientError(ValueError):
     pass
 
 
-def _configured(payload, configuration_digest, generation, work):
+def _configured(payload, configuration_digest, generation, runtime_role_identities, work):
     """Own full configuration and hold all endpoint/key pins before callbacks."""
     ledger = commitment.capture._SharedLedger(work)
     commitment.plan.contract._digest(configuration_digest)
@@ -64,7 +64,8 @@ def _configured(payload, configuration_digest, generation, work):
     if writer_pin in other_pins:
         raise RevocationPlannerCustodyClientError("planner custody writer response key reuses another role pin")
     owner = verifier._verifier_from_configuration_on_work(payload=owned,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     fixed = owner._snapshot_configuration()
     return fixed, (path, peer_uid, peer_gid, timeout), age, writer_key_bytes, writer_pin
 
@@ -82,6 +83,7 @@ def _fresh_now(pins, age, skew, work):
 
 
 def _request_relay_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, envelope_bytes, evaluation_context_bytes,
         historical_expectations_bytes, work):
     """Return one authenticated original relay without forwarding any custody."""
@@ -91,7 +93,7 @@ def _request_relay_on_configuration(*, payload, configuration_digest, generation
         commitment._body_bounds(envelope_bytes, evaluation_context_bytes, historical_expectations_bytes)
         transport._validate_relay_lengths((len(intent_bytes), len(envelope_bytes),
             len(evaluation_context_bytes), len(historical_expectations_bytes)))
-        fixed, endpoint, age, _, _ = _configured(payload, configuration_digest, generation, work)
+        fixed, endpoint, age, _, _ = _configured(payload, configuration_digest, generation, runtime_role_identities, work)
         path, peer_uid, peer_gid, timeout = endpoint
         epoch, monotonic = _clocks(work)
         _, history, pins = commitment._verify_intent_on_work(
@@ -138,6 +140,7 @@ def _request_relay_on_configuration(*, payload, configuration_digest, generation
 
 
 def _forward_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, relay_bytes, envelope_bytes, evaluation_context_bytes,
         historical_expectations_bytes, work):
     """Explicitly forward fixed originals and authenticate the writer's ACK.
@@ -155,7 +158,7 @@ def _forward_on_configuration(*, payload, configuration_digest, generation,
         transport._validate_forward_lengths((len(intent_bytes), len(relay_bytes), len(envelope_bytes),
             len(evaluation_context_bytes), len(historical_expectations_bytes)))
         fixed, endpoint, age, writer_key_bytes, writer_pin = _configured(
-            payload, configuration_digest, generation, work)
+            payload, configuration_digest, generation, runtime_role_identities, work)
         path, peer_uid, peer_gid, timeout = endpoint
         writer_public_key = configuration._key(writer_key_bytes, work, expected_spki=writer_pin)
         epoch, monotonic = _clocks(work)

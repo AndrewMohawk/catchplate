@@ -93,6 +93,7 @@ def _capture_payload(payload, role_names, work):
 
 
 def _produce_intent_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities,
         envelope_bytes, evaluation_context_bytes, expected_request, context, root_inventory,
         planned_at_epoch_ns, envelope_id, planner_transaction_id, verifier_private_key, work):
     """Replay originals with independent roots, then sign newly owned history.
@@ -116,7 +117,8 @@ def _produce_intent_on_configuration(*, payload, configuration_digest, generatio
         inventory = verifier.handoff.observed._capture_root_inventory(root_inventory, work=work)
         owned_payload, maximum_age = _capture_payload(payload, ("verifier", "planner", "planner-writer"), work)
         owner = verifier._verifier_from_configuration_on_work(payload=owned_payload,
-            configuration_digest=configuration_digest, generation=generation, work=work)
+            configuration_digest=configuration_digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, work=work)
         fixed = owner._snapshot_configuration()
         verified = owner.verify_handoff(envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes, expected_request=request,
@@ -148,6 +150,7 @@ def _produce_intent_on_configuration(*, payload, configuration_digest, generatio
 
 
 def _produce_relay_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, envelope_bytes, evaluation_context_bytes, historical_expectations_bytes,
         planner_private_key, work):
     """Authenticate the original intent, then return a separate original relay.
@@ -165,7 +168,8 @@ def _produce_relay_on_configuration(*, payload, configuration_digest, generation
             raise RevocationWriterProducerError("writer relay requires its configured planner signer")
         owned_payload, maximum_age = _capture_payload(payload, ("planner", "planner-writer"), work)
         owner = verifier._verifier_from_configuration_on_work(payload=owned_payload,
-            configuration_digest=configuration_digest, generation=generation, work=work)
+            configuration_digest=configuration_digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, work=work)
         fixed = owner._snapshot_configuration()
         now_monotonic = configuration.production._callback(work, time.monotonic_ns)
         now_epoch = configuration.production._callback(work, time.time_ns)

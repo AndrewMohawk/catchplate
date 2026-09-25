@@ -54,6 +54,7 @@ def _historical_retention_on_work(payload_bytes, historical_times, retained_at_e
 
 
 def _produce_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         retained_record_digest, expectations, verifier_private_key, work):
     ledger = evidence.capture._SharedLedger(work)
     operation = _operation(purpose)
@@ -66,7 +67,8 @@ def _produce_on_configuration(*, purpose, payload, configuration_digest, generat
     owned = evidence.capture._JSONCapture(ledger).visit(expectations)
     retention.plan._validate_expectations(owned, operation)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     return request._produce_on_work(retained_record_digest=record_digest, expectations=owned,
         pins=configured.pins, generation_sequence=configured.generation_sequence,
         generation_digest=configured.generation_digest, verifier_private_key=private_key,
@@ -75,13 +77,15 @@ def _produce_on_configuration(*, purpose, payload, configuration_digest, generat
 
 
 def _read_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, historical_expectations_bytes, writer_dsn, work):
     evidence.capture._SharedLedger(work)
     _operation(purpose)
     originals = transport._validate_request(control_bytes=control_bytes,
         historical_expectations_bytes=historical_expectations_bytes)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, writer_dsn=writer_dsn, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, writer_dsn=writer_dsn, work=work)
     writer_configuration = configured.writer_configuration
     if writer_configuration is None:
         raise WebAuthnEvidenceCustodyReadActionError("evidence custody read requires protected writer configuration")
@@ -116,6 +120,7 @@ def _read_on_configuration(*, purpose, payload, configuration_digest, generation
 
 
 def _request_originals_on_configuration(*, forward, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, historical_expectations_bytes, work):
     evidence.capture._SharedLedger(work)
     if type(forward) is not bool:
@@ -124,7 +129,8 @@ def _request_originals_on_configuration(*, forward, purpose, payload, configurat
     originals = transport._validate_request(control_bytes=control_bytes,
         historical_expectations_bytes=historical_expectations_bytes)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     pins, public_key = configured.pins, configured.verifier_public_key
     sequence, generation_digest = configured.generation_sequence, configured.generation_digest
     age, skew = configured.maximum_control_age_ns, pins[9]
@@ -159,14 +165,18 @@ def _request_originals_on_configuration(*, forward, purpose, payload, configurat
 
 
 def _request_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, historical_expectations_bytes, work):
     return _request_originals_on_configuration(forward=False, purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, control_bytes=control_bytes,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, control_bytes=control_bytes,
         historical_expectations_bytes=historical_expectations_bytes, work=work)
 
 
 def _forward_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, historical_expectations_bytes, work):
     return _request_originals_on_configuration(forward=True, purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, control_bytes=control_bytes,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, control_bytes=control_bytes,
         historical_expectations_bytes=historical_expectations_bytes, work=work)

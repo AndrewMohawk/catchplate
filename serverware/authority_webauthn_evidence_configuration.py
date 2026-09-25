@@ -45,7 +45,7 @@ def _require_enabled_operation(planner, operation, work):
         raise WebAuthnEvidenceConfigurationError("evidence operation is not enabled by the signed planner policy")
 
 
-def _planner_from_owned_configuration_on_work(*, purpose, owned_payload, read_dsn, work):
+def _planner_from_owned_configuration_on_work(*, purpose, owned_payload, owned_runtime_identities, read_dsn, work):
     """Continue only from this invocation's actual full configuration capture.
 
     The private fixed mapper caller must already have owned and checked the
@@ -71,7 +71,7 @@ def _planner_from_owned_configuration_on_work(*, purpose, owned_payload, read_ds
         operation = ("webauthn.registration.evidence.admit" if purpose == "registration"
             else "webauthn.trust.installation.admit")
         _require_enabled_operation(planner, operation, work)
-        for name in ("plannerSessionIdentityDigest", "measurementDigest", "attestationReceiptDigest"):
+        for name in ("plannerSessionIdentityDigest", "measurementDigest"):
             plan.contract._digest(planner[name])
         plan._same(owned["queryManifestDigest"], plan._QUERY_MANIFEST_DIGEST, work,
             "evidence planner query manifest differs from the source")
@@ -83,7 +83,7 @@ def _planner_from_owned_configuration_on_work(*, purpose, owned_payload, read_ds
         timeout = int(timeout)
         database_identity = (planner["databaseRole"], planner["tlsClientDn"], planner["tlsClientSerial"],
             planner["tlsIssuerDn"], planner["plannerSessionIdentityDigest"],
-            planner["measurementDigest"], planner["attestationReceiptDigest"])
+            planner["measurementDigest"], owned_runtime_identities["roles"]["planner"]["attestationReceiptDigest"])
         reader._bounded_text(database_identity[0], 63)
         for value in database_identity[1:4]:
             reader._bounded_text(value, 4096)
@@ -111,14 +111,17 @@ def _planner_from_owned_configuration_on_work(*, purpose, owned_payload, read_ds
 
 
 def _planner_from_configuration_on_work(*, purpose, payload, configuration_digest,
-                                       generation, read_dsn, work):
+                                       generation, runtime_role_identities, read_dsn, work):
     try:
         if type(purpose) is not str or purpose not in ("registration", "installation"):
             raise WebAuthnEvidenceConfigurationError("evidence configuration purpose is not source fixed")
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         return _planner_from_owned_configuration_on_work(purpose=purpose,
-            owned_payload=owned, read_dsn=read_dsn, work=work)
+            owned_payload=owned, owned_runtime_identities=runtime, read_dsn=read_dsn, work=work)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, WebAuthnEvidenceConfigurationError):
             raise
@@ -126,12 +129,14 @@ def _planner_from_configuration_on_work(*, purpose, payload, configuration_diges
 
 
 def _registration_planner_from_configuration_on_work(*, payload, configuration_digest,
-                                                     generation, read_dsn, work):
+                                                     generation, runtime_role_identities, read_dsn, work):
     return _planner_from_configuration_on_work(purpose="registration", payload=payload,
-        configuration_digest=configuration_digest, generation=generation, read_dsn=read_dsn, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, read_dsn=read_dsn, work=work)
 
 
 def _installation_planner_from_configuration_on_work(*, payload, configuration_digest,
-                                                     generation, read_dsn, work):
+                                                     generation, runtime_role_identities, read_dsn, work):
     return _planner_from_configuration_on_work(purpose="installation", payload=payload,
-        configuration_digest=configuration_digest, generation=generation, read_dsn=read_dsn, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, read_dsn=read_dsn, work=work)

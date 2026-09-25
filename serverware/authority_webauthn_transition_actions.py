@@ -52,6 +52,7 @@ def _verify_request(originals, configured, work):
 
 
 def _produce_request_on_configuration(*, operation, payload, configuration_digest, generation,
+        runtime_role_identities,
         request, business_before_roots, authorization_before_roots, counted_before_heads,
         inputs_bytes, now_epoch_ns, deadline_epoch_ns, invocation, verifier_private_key, work):
     operation = _operation(operation)
@@ -66,7 +67,8 @@ def _produce_request_on_configuration(*, operation, payload, configuration_diges
         "countedBeforeHeads": counted_before_heads, "nowEpochNs": now_epoch_ns,
         "deadlineEpochNs": deadline_epoch_ns, "invocation": invocation})
     configured = configuration._capture_on_work(operation=operation, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     return request_wire._produce_on_work(request=owned["request"],
         business_before_roots=owned["businessBeforeRoots"],
         authorization_before_roots=owned["authorizationBeforeRoots"],
@@ -79,6 +81,7 @@ def _produce_request_on_configuration(*, operation, payload, configuration_diges
 
 
 def _produce_plan_on_configuration(*, operation, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, context_bytes, inputs_bytes, read_dsn, planner_private_key, work):
     operation = _operation(operation)
     originals = transport._validate_request(control_bytes, context_bytes, inputs_bytes)
@@ -92,15 +95,17 @@ def _produce_plan_on_configuration(*, operation, payload, configuration_digest, 
     evidence.plan.contract._digest(digest)
     if type(payload) is not dict or type(generation) is not dict:
         raise WebAuthnTransitionActionError("transition configuration is not closed data")
-    measured.capability.shape._bounded_object(generation, 20, "transition planning launch context")
+    measured.capability.shape._bounded_object(generation, 24, "transition planning launch context")
     # Both actual mappers consume these same owned snapshots. Native work in
     # the exchange mapper cannot cause a later reread of caller configuration.
     owned_payload = measured._ConfigurationCapture(
         ledger, maximum_bytes=wire.authority.MAX_REQUEST_BYTES).visit(payload)
+    owned_runtime_identities = evidence.capture._JSONCapture(ledger, maximum_bytes=8192).visit(runtime_role_identities)
     held_generation = evidence.capture._JSONCapture(ledger).visit(
         {name: generation[name] for name in measured._GENERATION_FIELDS})
     configured = configuration._capture_on_work(operation=operation, payload=owned_payload,
-        configuration_digest=digest, generation=held_generation, work=work)
+        configuration_digest=digest, generation=held_generation,
+        runtime_role_identities=owned_runtime_identities, work=work)
     verified = _verify_request(originals, configured, work)
     context, window = verified.context, verified.window
     issued, expires = verified.issued_at_epoch_ns, verified.expires_at_epoch_ns
@@ -110,6 +115,7 @@ def _produce_plan_on_configuration(*, operation, payload, configuration_digest, 
     # configured producer. It opens its own fixed read owner, never a caller DB.
     producer = producing_configuration._producer_from_configuration_on_work(operation=operation,
         payload=owned_payload, configuration_digest=digest, generation=held_generation,
+        runtime_role_identities=owned_runtime_identities,
         read_dsn=dsn, planner_private_key=private, work=work)
     _fresh(timing, window, configured, work)
     work.prepare_copy(context["countedBeforeHeads"])
@@ -137,11 +143,13 @@ def _produce_plan_on_configuration(*, operation, payload, configuration_digest, 
 
 
 def _request_plan_on_configuration(*, operation, payload, configuration_digest, generation,
+        runtime_role_identities,
         control_bytes, context_bytes, inputs_bytes, work):
     operation = _operation(operation)
     originals = transport._validate_request(control_bytes, context_bytes, inputs_bytes)
     configured = configuration._capture_on_work(operation=operation, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     verified = _verify_request(originals, configured, work)
     context, window = verified.context, verified.window
     issued, expires = verified.issued_at_epoch_ns, verified.expires_at_epoch_ns

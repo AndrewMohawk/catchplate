@@ -52,6 +52,7 @@ def _fresh_controls_on_work(*, intent_window, relay_window, intent_times, relay_
 
 
 def _produce_intent_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         envelope_bytes, inputs_bytes, evaluation_context_bytes, expectations,
         verifier_private_key, work):
     ledger = evidence.capture._SharedLedger(work)
@@ -65,7 +66,8 @@ def _produce_intent_on_configuration(*, purpose, payload, configuration_digest, 
     owned = evidence.capture._JSONCapture(ledger).visit(expectations)
     wire.retention.plan._validate_expectations(owned, operation)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     return intent._produce_on_work(envelope_bytes=originals[0], inputs_bytes=originals[1],
         evaluation_context_bytes=originals[2], expectations=owned, pins=configured.pins,
         generation_sequence=configured.generation_sequence, generation_digest=configured.generation_digest,
@@ -74,6 +76,7 @@ def _produce_intent_on_configuration(*, purpose, payload, configuration_digest, 
 
 
 def _produce_relay_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, envelope_bytes, inputs_bytes, evaluation_context_bytes,
         historical_expectations_bytes, planner_private_key, work):
     evidence.capture._SharedLedger(work)
@@ -85,7 +88,8 @@ def _produce_relay_on_configuration(*, purpose, payload, configuration_digest, g
     if not isinstance(private_key, wire.retention.plan.Ed25519PrivateKey):
         raise WebAuthnEvidenceCustodyActionError("evidence custody relay requires the real planner signer")
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     return relay._produce_on_work(intent_bytes=original_intent, envelope_bytes=originals[0],
         inputs_bytes=originals[1], evaluation_context_bytes=originals[2],
         historical_expectations_bytes=originals[3], pins=configured.pins,
@@ -95,6 +99,7 @@ def _produce_relay_on_configuration(*, purpose, payload, configuration_digest, g
 
 
 def _persist_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, relay_bytes, envelope_bytes, inputs_bytes, evaluation_context_bytes,
         historical_expectations_bytes, writer_dsn, work):
     evidence.capture._SharedLedger(work)
@@ -104,7 +109,8 @@ def _persist_on_configuration(*, purpose, payload, configuration_digest, generat
         relay._raw_control(raw)
     originals = wire._raw4(envelope_bytes, inputs_bytes, evaluation_context_bytes, historical_expectations_bytes)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, writer_dsn=writer_dsn, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, writer_dsn=writer_dsn, work=work)
     writer_configuration = configured.writer_configuration
     if writer_configuration is None:
         raise WebAuthnEvidenceCustodyActionError("evidence custody persistence requires protected writer configuration")
@@ -117,6 +123,7 @@ def _persist_on_configuration(*, purpose, payload, configuration_digest, generat
 
 
 def _request_relay_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, envelope_bytes, inputs_bytes, evaluation_context_bytes,
         historical_expectations_bytes, work):
     evidence.capture._SharedLedger(work)
@@ -125,7 +132,8 @@ def _request_relay_on_configuration(*, purpose, payload, configuration_digest, g
         envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes, evaluation_context_bytes=evaluation_context_bytes,
         historical_expectations_bytes=historical_expectations_bytes)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     pins, public_key = configured.pins, configured.verifier_public_key
     sequence, digest = configured.generation_sequence, configured.generation_digest
     age, skew = configured.maximum_control_age_ns, pins[9]
@@ -153,6 +161,7 @@ def _request_relay_on_configuration(*, purpose, payload, configuration_digest, g
 
 
 def _send_originals_on_configuration(*, forward, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, relay_bytes, envelope_bytes, inputs_bytes, evaluation_context_bytes,
         historical_expectations_bytes, work):
     evidence.capture._SharedLedger(work)
@@ -163,7 +172,8 @@ def _send_originals_on_configuration(*, forward, purpose, payload, configuration
         envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes, evaluation_context_bytes=evaluation_context_bytes,
         historical_expectations_bytes=historical_expectations_bytes)
     configured = configuration._capture_on_work(purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, work=work)
     pins, public_key = configured.pins, configured.verifier_public_key
     sequence, digest = configured.generation_sequence, configured.generation_digest
     age, skew = configured.maximum_control_age_ns, pins[9]
@@ -201,20 +211,24 @@ def _send_originals_on_configuration(*, forward, purpose, payload, configuration
 
 
 def _send_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, relay_bytes, envelope_bytes, inputs_bytes, evaluation_context_bytes,
         historical_expectations_bytes, work):
     return _send_originals_on_configuration(forward=False, purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, intent_bytes=intent_bytes,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, intent_bytes=intent_bytes,
         relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
         evaluation_context_bytes=evaluation_context_bytes, historical_expectations_bytes=historical_expectations_bytes,
         work=work)
 
 
 def _forward_on_configuration(*, purpose, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, relay_bytes, envelope_bytes, inputs_bytes, evaluation_context_bytes,
         historical_expectations_bytes, work):
     return _send_originals_on_configuration(forward=True, purpose=purpose, payload=payload,
-        configuration_digest=configuration_digest, generation=generation, intent_bytes=intent_bytes,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, intent_bytes=intent_bytes,
         relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
         evaluation_context_bytes=evaluation_context_bytes, historical_expectations_bytes=historical_expectations_bytes,
         work=work)

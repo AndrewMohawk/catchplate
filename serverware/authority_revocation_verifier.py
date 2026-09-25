@@ -129,7 +129,8 @@ class RevocationPlanVerifier:
             planner_public_key=values[0], verifier_public_key=values[1], work=work)
 
 
-def _verifier_from_configuration_on_work(*, payload, configuration_digest, generation, work):
+def _verifier_from_configuration_on_work(*, payload, configuration_digest, generation,
+        runtime_role_identities, work):
     """Map root-admitted configuration without granting it admission here.
 
     Assertion age remains exactly the measured WebAuthn challenge policy,
@@ -142,6 +143,9 @@ def _verifier_from_configuration_on_work(*, payload, configuration_digest, gener
     try:
         owned, launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=launch, work=work)
         roles = owned["roles"]
         if type(roles) is not dict:
             raise RevocationVerifierError("revocation verifier roles are not an exact object")
@@ -150,7 +154,7 @@ def _verifier_from_configuration_on_work(*, payload, configuration_digest, gener
             if type(role) is not dict:
                 raise RevocationVerifierError("revocation verifier role is not an exact object")
             handoff.plan.contract._literal(role["processMode"], "policy-authority-" + name)
-            for field in ("measurementDigest", "attestationReceiptDigest", "signingSpkiDigest"):
+            for field in ("measurementDigest", "signingSpkiDigest"):
                 handoff.plan.contract._digest(role[field])
             handoff.plan._same(role["responseSigningSpkiDigest"], role["signingSpkiDigest"], work,
                 "revocation verifier key differs from its measured response pin")
@@ -168,23 +172,28 @@ def _verifier_from_configuration_on_work(*, payload, configuration_digest, gener
         handoff.plan.contract._integer(plan_age, minimum=1)
         handoff.plan.contract._integer(skew)
 
+        planner_identity = {"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
+            "measurementDigest": planner["measurementDigest"],
+            "attestationReceiptDigest": runtime["roles"]["planner"]["attestationReceiptDigest"]}
+        verifier_measurement = verifier["measurementDigest"]
+        verifier_receipt = runtime["roles"]["verifier"]["attestationReceiptDigest"]
+        planner_encoded, planner_spki = planner["signingPublicKeyBase64Url"], planner["signingSpkiDigest"]
+        verifier_encoded, verifier_spki = verifier["signingPublicKeyBase64Url"], verifier["signingSpkiDigest"]
+        generation_sequence, generation_digest = launch["sequence"], launch["digest"]
         # All graph inputs and scalar policy are owned before these real key
         # callbacks. Raw32, DER44 and their actual hash/comparison work are
         # charged by the existing guarded configuration helper.
-        planner_key = configuration._key(planner["signingPublicKeyBase64Url"], work,
-            expected_spki=planner["signingSpkiDigest"])
-        verifier_key = configuration._key(verifier["signingPublicKeyBase64Url"], work,
-            expected_spki=verifier["signingSpkiDigest"])
+        planner_key = configuration._key(planner_encoded, work, expected_spki=planner_spki)
+        verifier_key = configuration._key(verifier_encoded, work, expected_spki=verifier_spki)
         verifier_session = configuration._frame_text(configuration._VERIFIER_SESSION,
-            (configuration_digest, verifier["measurementDigest"], verifier["attestationReceiptDigest"]), work)
+            (configuration_digest, verifier_measurement, verifier_receipt), work)
         return RevocationPlanVerifier(planner_public_key=planner_key, verifier_public_key=verifier_key,
-            expected_planner_identity={"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
-                "measurementDigest": planner["measurementDigest"], "attestationReceiptDigest": planner["attestationReceiptDigest"]},
+            expected_planner_identity=planner_identity,
             expected_verifier_identity={"sessionIdentityDigest": verifier_session,
-                "measurementDigest": verifier["measurementDigest"], "attestationReceiptDigest": verifier["attestationReceiptDigest"]},
+                "measurementDigest": verifier_measurement, "attestationReceiptDigest": verifier_receipt},
             maximum_assertion_age_ns=assertion_age, maximum_plan_age_ns=plan_age, maximum_clock_skew_ns=skew,
             expected_configuration_digest=configuration_digest,
-            expected_generation_sequence=launch["sequence"], expected_generation_digest=launch["digest"])
+            expected_generation_sequence=generation_sequence, expected_generation_digest=generation_digest)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RevocationVerifierError):
             raise

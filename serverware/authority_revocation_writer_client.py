@@ -30,6 +30,7 @@ class RevocationWriterClientError(ValueError):
 
 
 def _send_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities,
         intent_bytes, relay_bytes, envelope_bytes, evaluation_context_bytes,
         historical_expectations_bytes, work):
     """Authenticate one fixed exchange on the caller's existing allowance.
@@ -96,7 +97,8 @@ def _send_on_configuration(*, payload, configuration_digest, generation,
         # Both independently configured identities and historical age policy
         # come from this mapper, never from retained context or ACK fields.
         owner = verifier._verifier_from_configuration_on_work(payload=owned,
-            configuration_digest=configuration_digest, generation=generation, work=work)
+            configuration_digest=configuration_digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, work=work)
         fixed = owner._snapshot_configuration()
         writer_public_key = configuration._key(writer_key_bytes, work, expected_spki=writer_pin)
         now_monotonic_ns = configuration.production._callback(work, time.monotonic_ns)

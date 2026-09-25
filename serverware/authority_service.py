@@ -70,9 +70,9 @@ from serverware.authority_store.verifier_read_sql import (
 SOURCE_REVISION = (
     authority_contract.SOURCE_REVISION
 )
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v5"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
 SIGNED_CONFIG_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v5"
+    "serverware.signedPolicyAuthorityServiceConfiguration/v6"
 )
 ATTESTATION_SCHEMA = (
     "serverware.policyAuthorityCredentialReleaseAttestation/v2"
@@ -333,6 +333,7 @@ def _revocation_custody_context(process, *, role_name, work):
     if type(measured) is not MeasuredConfiguration:
         raise AuthorityServiceError("revocation custody measured configuration is unavailable")
     payload, digest = measured.payload, measured.digest
+    runtime_role_identities = measured.runtime_role_identities
     from serverware import authority_revocation_configuration as configuration
 
     ledger = configuration.capability.capture._SharedLedger(work)
@@ -341,9 +342,11 @@ def _revocation_custody_context(process, *, role_name, work):
         raise AuthorityServiceError("revocation custody configuration is not closed data")
     owned = configuration._ConfigurationCapture(
         ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+    owned_runtime_identities = configuration.capability.capture._JSONCapture(
+        ledger, maximum_bytes=8192).visit(runtime_role_identities)
     configuration.production._callback(work, lambda: authority_launch_guard.require_active(role_name))
     generation = configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))
-    return owned, digest, generation
+    return owned, digest, generation, owned_runtime_identities
 
 
 def _webauthn_evidence_custody_purpose(purpose):
@@ -375,6 +378,7 @@ def _webauthn_evidence_custody_context(process, *, role_name, signing, work,
     if type(measured) is not MeasuredConfiguration:
         raise AuthorityServiceError("WebAuthn evidence custody measured configuration is unavailable")
     payload, digest = measured.payload, measured.digest
+    runtime_role_identities = measured.runtime_role_identities
     private_key = process.signing_key if signing else None
     if signing and not isinstance(private_key, Ed25519PrivateKey):
         raise AuthorityServiceError("WebAuthn evidence custody signing key is unavailable")
@@ -386,6 +390,8 @@ def _webauthn_evidence_custody_context(process, *, role_name, signing, work,
         raise AuthorityServiceError("WebAuthn evidence custody configuration is not closed data")
     owned = configuration._ConfigurationCapture(
         ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+    owned_runtime_identities = configuration.capability.capture._JSONCapture(
+        ledger, maximum_bytes=8192).visit(runtime_role_identities)
     configuration.production._callback(work, lambda: authority_launch_guard.require_active(role_name))
     database_dsn = None
     if role_name == "planner-writer":
@@ -400,10 +406,11 @@ def _webauthn_evidence_custody_context(process, *, role_name, signing, work,
     # Capture the actual generation last; no later process/descriptor/signer
     # lookup can interpose before the fixed configured action owns it.
     generation = configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))
-    return owned, digest, generation, database_dsn, private_key
+    return owned, digest, generation, database_dsn, private_key, owned_runtime_identities
 
 
-def _revocation_writer_from_owned_configuration(*, owned_payload, configuration_digest, work):
+def _revocation_writer_from_owned_configuration(*, owned_payload, owned_runtime_identities,
+        configuration_digest, work):
     """Return the genuine writer and held final launch identity, never self.
 
     This fixed private continuation accepts no caller-supplied callback and
@@ -426,7 +433,7 @@ def _revocation_writer_from_owned_configuration(*, owned_payload, configuration_
     authority_revocation_configuration.capability.shape._digest(held_launch[1])
     persistence = authority_revocation_writer_configuration._persistence_from_configuration_on_work(
         payload=owned_payload, configuration_digest=configuration_digest,
-        generation=generation, persistence_dsn=persistence_dsn, work=work)
+        runtime_role_identities=owned_runtime_identities, generation=generation, persistence_dsn=persistence_dsn, work=work)
     return persistence, held_launch
 
 
@@ -1059,6 +1066,8 @@ class MeasuredConfiguration:
     root_key: Ed25519PublicKey
     attestation_evidence: dict[str, Any] | None = None
     file_digest: str | None = None
+    runtime_role_identities: dict[str, Any] | None = None
+    attestation_cohort_bytes: bytes | None = None
 
     @classmethod
     def load(cls, *, role: str) -> "MeasuredConfiguration":
@@ -1110,7 +1119,6 @@ class MeasuredConfiguration:
             "credentialReleaseTrust",
             "replayWitness",
             "webauthn",
-            "issuerSessionIdentityDigest",
             "executorSessionIdentityDigest",
             "executorRole",
             "executorTlsClientDn",
@@ -1177,7 +1185,6 @@ class MeasuredConfiguration:
                     "launchNonceDigest",
                     "queryManifestDigest",
                     "generationBindingDigest",
-                    "issuerSessionIdentityDigest",
                     "executorSessionIdentityDigest",
                     "issuerCredentialIssuanceDigest",
                     "executorCredentialIssuanceDigest",
@@ -1265,7 +1272,29 @@ class MeasuredConfiguration:
             raise AuthorityServiceError(
                 f"authority {role} configuration is unavailable"
             )
-        return dict(value)
+        # This is a derived runtime view, never the root-signed payload. The
+        # loader uses static roles before evidence admission; process consumers
+        # see the separately admitted receipt identity afterward.
+        result = dict(value)
+        if self.runtime_role_identities is not None:
+            result["attestationReceiptDigest"] = self.runtime_role_identities[
+                "roles"
+            ][role]["attestationReceiptDigest"]
+        return result
+
+    def issuer_session_identity_digest(self) -> str:
+        if self.runtime_role_identities is None:
+            raise AuthorityServiceError("issuer runtime identity is not admitted")
+        issuer = self.role("issuer")
+        return _domain_digest(
+            "serverware.policyAuthorityCapabilityIssuerSession/v1",
+            *(value.encode("utf-8") for value in (
+                issuer["databaseRole"], issuer["tlsClientDn"],
+                issuer["tlsClientSerial"], issuer["tlsIssuerDn"],
+                issuer["measurementDigest"], issuer["attestationReceiptDigest"],
+                self.payload["issuerCredentialIssuanceDigest"],
+            )),
+        )
 
     def _verify_role_topology(self) -> None:
         roles = self.payload.get("roles")
@@ -1448,7 +1477,6 @@ class MeasuredConfiguration:
             "tlsClientSerial",
             "tlsIssuerDn",
             "measurementDigest",
-            "attestationReceiptDigest",
             "responseSigningSpkiDigest",
             "requestTimeoutSeconds",
             "databaseConnectTimeoutSeconds",
@@ -1519,7 +1547,6 @@ class MeasuredConfiguration:
                     ) != role_value.get(field)
                     for field in (
                         "measurementDigest",
-                        "attestationReceiptDigest",
                     )
                 )
                 or any(
@@ -1762,157 +1789,46 @@ class MeasuredConfiguration:
         role: str,
         attestation_value: bytes,
     ) -> None:
+        from serverware import authority_attestation_cohort
+
         try:
-            envelope = json.loads(attestation_value)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise AuthorityServiceError(
-                "trusted-host-local attestation is not JSON"
-            ) from exc
-        assurance = dict(authority_launch_guard.launch_assurance())
-        generation = dict(authority_launch_guard.generation())
-        verified_package = (
-            authority_launch_guard.verified_artifact_package()
-        )
-        launch_manifest_digest = _require_digest(
-            authority_launch_guard.require_active(role),
-            "authority attested launch manifest digest",
-        )
-        measured_packages = dict(authority_launch_guard.package_versions())
-        runtime_closure_digest = _domain_digest(
-            "serverware.policyAuthorityRuntimeClosure/v2",
-            launch_manifest_digest.encode("ascii"),
-            _canonical(measured_packages),
-        )
-        payload = (
-            envelope.get("payload")
-            if isinstance(envelope, dict)
-            else None
-        )
-        required_payload = {
-            "schema",
-            "role",
-            "processMode",
-            "configurationDigest",
-            "sourceRevision",
-            "launchManifestDigest",
-            "runtimeClosureDigest",
-            "operationManifestDigest",
-            "generationDigest",
-            "stageZeroRequestDigest",
-            "artifactPackageDigest",
-            "measurementDigest",
-            "responseSigningSpkiDigest",
-            "trustMode",
-            "coLocated",
-            "hardwareBacked",
-            "nativeStageZero",
-            "hsmBackedKeys",
-            "teeVerified",
-            "externalWitnessVerified",
-            "issuedAtEpochNs",
-            "expiresAtEpochNs",
-        }
-        now_epoch_ns = time.time_ns()
-        if (
-            not isinstance(envelope, dict)
-            or set(envelope) != {"schema", "payload", "signature"}
-            or envelope.get("schema")
-                != TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA
-            or not isinstance(payload, dict)
-            or set(payload) != required_payload
-            or attestation_value != _canonical(envelope)
-            or payload.get("schema")
-                != TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA
-            or payload.get("role") != role
-            or payload.get("processMode") != PROCESS_MODES[role]
-            or payload.get("configurationDigest") != self.digest
-            or payload.get("sourceRevision") != SOURCE_REVISION
-            or measured_packages != self.payload["packageVersions"]
-            or payload.get("launchManifestDigest")
-                != launch_manifest_digest
-            or payload.get("runtimeClosureDigest")
-                != runtime_closure_digest
-            or payload.get("operationManifestDigest")
-                != authority_contract.OPERATION_MANIFEST_DIGEST
-            or payload.get("generationDigest")
-                != generation.get("digest")
-            or payload.get("stageZeroRequestDigest")
-                != generation.get("stageZeroRequestDigest")
-            or payload.get("artifactPackageDigest")
-                != verified_package.package_digest
-            or payload.get("measurementDigest")
-                != self.role(role).get("measurementDigest")
-            or payload.get("responseSigningSpkiDigest")
-                != self.role(role).get("responseSigningSpkiDigest")
-            or {
-                field: payload.get(field)
-                for field in (
-                    "trustMode",
-                    "coLocated",
-                    "hardwareBacked",
-                    "nativeStageZero",
-                    "hsmBackedKeys",
-                    "teeVerified",
-                    "externalWitnessVerified",
-                )
+            admitted = authority_attestation_cohort._admit_on_current_launch(
+                original_bytes=attestation_value,
+                role=role,
+                configuration_payload=self.payload,
+                configuration_digest=self.digest,
+                root_public_key=self.root_key,
+            )
+        except ValueError as exc:
+            raise AuthorityServiceError("trusted-host-local attestation cohort is invalid") from exc
+        runtime_roles = {}
+        local_receipt = None
+        for receipt_role, receipt_bytes, receipt_digest in admitted.receipts:
+            # These are the canonical immutable originals already admitted by
+            # the helper, not reconstructed or caller-selected receipt claims.
+            envelope = json.loads(receipt_bytes)
+            receipt = envelope["payload"]
+            runtime_roles[receipt_role] = {
+                "measurementDigest": receipt["measurementDigest"],
+                "responseSigningSpkiDigest": receipt["responseSigningSpkiDigest"],
+                "attestationReceiptDigest": receipt_digest,
             }
-                != {
-                    field: assurance[field]
-                    for field in (
-                        "trustMode",
-                        "coLocated",
-                        "hardwareBacked",
-                        "nativeStageZero",
-                        "hsmBackedKeys",
-                        "teeVerified",
-                        "externalWitnessVerified",
-                    )
-                }
-            or not isinstance(payload.get("issuedAtEpochNs"), int)
-            or isinstance(payload.get("issuedAtEpochNs"), bool)
-            or not isinstance(payload.get("expiresAtEpochNs"), int)
-            or isinstance(payload.get("expiresAtEpochNs"), bool)
-            or payload["issuedAtEpochNs"] > now_epoch_ns
-            or payload["expiresAtEpochNs"] <= now_epoch_ns
-            or payload["expiresAtEpochNs"]
-                - payload["issuedAtEpochNs"]
-                > int(
-                    self.payload["credentialReleaseTrust"][
-                        "maximumReceiptAgeNs"
-                    ]
-                )
-        ):
-            raise AuthorityServiceError(
-                "trusted-host-local attestation binding changed"
-            )
-        try:
-            self.root_key.verify(
-                _b64url_decode(envelope["signature"], size=64),
-                _domain_digest(
-                    TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA,
-                    _canonical(payload),
-                ).encode("ascii"),
-            )
-        except InvalidSignature as exc:
-            raise AuthorityServiceError(
-                "trusted-host-local attestation signature is invalid"
-            ) from exc
-        receipt_digest = _domain_digest(
-            TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA,
-            _canonical(envelope),
-        )
-        if (
-            self.role(role).get("attestationReceiptDigest")
-            != receipt_digest
-        ):
-            raise AuthorityServiceError(
-                "trusted-host-local attestation digest changed"
-            )
-        object.__setattr__(
-            self,
-            "attestation_evidence",
-            dict(envelope),
-        )
+            if receipt_role == role:
+                local_receipt = envelope
+        if local_receipt is None:
+            raise AuthorityServiceError("attestation cohort omits the active role")
+        object.__setattr__(self, "runtime_role_identities", {
+            "schema": "serverware.policyAuthorityRuntimeRoleIdentities/v1",
+            "configurationDigest": self.digest,
+            "generationSequence": admitted.generation_sequence,
+            "generationDigest": admitted.generation_digest,
+            "cohortDigest": admitted.cohort_digest,
+            "roles": runtime_roles,
+        })
+        object.__setattr__(self, "attestation_cohort_bytes", admitted.cohort_bytes)
+        # Existing consumption/response protocols continue to use the genuine
+        # individual local receipt and its unchanged identity domain.
+        object.__setattr__(self, "attestation_evidence", local_receipt)
 
     def _verify_attestation(self, *, role: str) -> None:
         try:
@@ -3171,6 +3087,8 @@ class AuthorityProcess:
         self.role_name = role
         self.process_mode = PROCESS_MODES[role]
         self.configuration = configuration
+        if configuration.runtime_role_identities is None:
+            raise AuthorityServiceError("authority runtime role identities are not admitted")
         self.role_config = configuration.role(role)
         if (
             os.getuid() != int(self.role_config["serviceUid"])
@@ -4052,6 +3970,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation plan verifier process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
         from serverware import authority_revocation_verifier
 
@@ -4064,12 +3983,15 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation plan verifier configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("verifier"))
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         verifier = authority_revocation_verifier._verifier_from_configuration_on_work(
             payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities,
             generation=generation, work=work)
         return verifier.verify_handoff(envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes, expected_request=owned_request,
@@ -4269,6 +4191,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("WebAuthn evidence planner process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
         from serverware import authority_webauthn_evidence_configuration
 
@@ -4283,6 +4206,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("WebAuthn evidence planner configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("planner"))
         read_dsn = authority_revocation_configuration.production._callback(
@@ -4292,6 +4217,7 @@ class AuthorityProcess:
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return mapper(payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities,
             generation=generation, read_dsn=read_dsn, work=work)
 
     def _webauthn_evidence_plan_producer(self, *, purpose, work):
@@ -4312,6 +4238,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("WebAuthn evidence plan producer process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         planner_private_key = self.signing_key
         if not isinstance(planner_private_key, Ed25519PrivateKey):
             raise AuthorityServiceError("WebAuthn evidence plan planner signer is unavailable")
@@ -4329,6 +4256,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("WebAuthn evidence plan configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("planner"))
         read_dsn = authority_revocation_configuration.production._callback(
@@ -4338,6 +4267,7 @@ class AuthorityProcess:
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return mapper(payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities,
             generation=generation, read_dsn=read_dsn,
             planner_private_key=planner_private_key, work=work)
 
@@ -4359,6 +4289,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("WebAuthn evidence plan writer process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
         from serverware import authority_webauthn_evidence_plan_writer_configuration
 
@@ -4373,6 +4304,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("WebAuthn evidence plan writer configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("planner-writer"))
         writer_dsn = authority_revocation_configuration.production._callback(
@@ -4382,6 +4315,7 @@ class AuthorityProcess:
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return mapper(payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities,
             generation=generation, writer_dsn=writer_dsn, work=work)
 
     def _webauthn_evidence_plan_verifier(self, *, purpose, work):
@@ -4401,6 +4335,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("WebAuthn evidence plan verifier process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
         from serverware import authority_webauthn_evidence_plan_verifier_configuration
 
@@ -4415,6 +4350,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("WebAuthn evidence verifier configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("verifier"))
         # No descriptor or other callback interposes before the fixed mapper
@@ -4422,6 +4359,7 @@ class AuthorityProcess:
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return mapper(payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities,
             generation=generation, work=work)
 
     def _verify_webauthn_evidence_plan_handoff(self, *, purpose, envelope_bytes,
@@ -4482,10 +4420,11 @@ class AuthorityProcess:
             request_wire.evidence.capture._SharedLedger(work),
             maximum_bytes=request_wire.MAX_CONTEXT_BYTES).visit(request)
         request_wire.plan.contract._request(owned, operation, request_wire.plan.contract._SPECS[operation])
-        payload, digest, generation, read_dsn, signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, read_dsn, signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=True, read_roots=True, work=work)
         reader = root_configuration._reader_from_configuration_on_work(purpose=purpose,
             payload=payload, configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities,
             read_dsn=read_dsn, work=work)
         inventory = root_reader.EvidenceRootReader.read(reader, work=work)
         business, authorization = roots._project_on_work(inventory, operation=operation, work=work)
@@ -4498,6 +4437,7 @@ class AuthorityProcess:
             "WebAuthn evidence planning root read generation changed")
         return actions._produce_request_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=final_generation, request=owned,
+            runtime_role_identities=runtime_role_identities,
             business_before_roots=business, authorization_before_roots=authorization,
             inputs_bytes=original_inputs, deadline_epoch_ns=deadline,
             verifier_private_key=signer, work=work)
@@ -4515,10 +4455,11 @@ class AuthorityProcess:
 
         originals = evidence_plan_transport._validate_request(control_bytes=control_bytes,
             context_bytes=context_bytes, inputs_bytes=inputs_bytes)
-        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, work=work)
         result = actions._request_plan_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
             context_bytes=originals[1], inputs_bytes=originals[2], work=work)
         configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
         final_generation = configuration.production._callback(
@@ -4542,10 +4483,11 @@ class AuthorityProcess:
 
         originals = evidence_plan_transport._validate_request(control_bytes=control_bytes,
             context_bytes=context_bytes, inputs_bytes=inputs_bytes)
-        payload, digest, generation, read_dsn, signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, read_dsn, signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="planner", signing=True, planning=True, work=work)
         result = actions._produce_plan_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
             context_bytes=originals[1], inputs_bytes=originals[2], read_dsn=read_dsn,
             planner_private_key=signer, work=work)
         configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner"))
@@ -4569,10 +4511,11 @@ class AuthorityProcess:
         from serverware import authority_webauthn_evidence_root_configuration as root_configuration
         from serverware import authority_webauthn_evidence_root_reader as root_reader
 
-        payload, digest, generation, read_dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, read_dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, read_roots=True, work=work)
         reader = root_configuration._reader_from_configuration_on_work(purpose=purpose,
             payload=payload, configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities,
             read_dsn=read_dsn, work=work)
         inventory = root_reader.EvidenceRootReader.read(reader, work=work)
         configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
@@ -4609,10 +4552,11 @@ class AuthorityProcess:
         owned = intent.evidence.capture._JSONCapture(
             ledger, maximum_bytes=intent.retention.plan.contract.MAX_BYTES).visit(expectations)
         intent.retention.plan._validate_expectations(owned, operation)
-        payload, digest, generation, read_dsn, signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, read_dsn, signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=True, read_roots=True, work=work)
         reader = root_configuration._reader_from_configuration_on_work(purpose=purpose,
             payload=payload, configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities,
             read_dsn=read_dsn, work=work)
         inventory = root_reader.EvidenceRootReader.read(reader, work=work)
         observed_roots = roots._project_on_work(inventory, operation=operation, work=work)
@@ -4631,6 +4575,7 @@ class AuthorityProcess:
             "WebAuthn evidence custody root read generation changed")
         return actions._produce_intent_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=final_generation, envelope_bytes=originals[0],
+            runtime_role_identities=runtime_role_identities,
             inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned,
             verifier_private_key=signer, work=work)
 
@@ -4645,10 +4590,11 @@ class AuthorityProcess:
             envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
-        payload, digest, generation, _dsn, signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, _dsn, signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="planner", signing=True, work=work)
         return actions._produce_relay_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, intent_bytes=originals[0],
             envelope_bytes=originals[1], inputs_bytes=originals[2], evaluation_context_bytes=originals[3],
             historical_expectations_bytes=originals[4], planner_private_key=signer, work=work)
 
@@ -4663,10 +4609,11 @@ class AuthorityProcess:
             envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
-        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, work=work)
         return actions._request_relay_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, intent_bytes=originals[0],
             envelope_bytes=originals[1], inputs_bytes=originals[2], evaluation_context_bytes=originals[3],
             historical_expectations_bytes=originals[4], work=work)
 
@@ -4681,10 +4628,11 @@ class AuthorityProcess:
             relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
-        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, work=work)
         return actions._forward_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, intent_bytes=originals[0],
             relay_bytes=originals[1], envelope_bytes=originals[2], inputs_bytes=originals[3],
             evaluation_context_bytes=originals[4], historical_expectations_bytes=originals[5], work=work)
 
@@ -4699,10 +4647,11 @@ class AuthorityProcess:
             relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
-        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="planner", signing=False, work=work)
         return actions._send_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, intent_bytes=originals[0],
             relay_bytes=originals[1], envelope_bytes=originals[2], inputs_bytes=originals[3],
             evaluation_context_bytes=originals[4], historical_expectations_bytes=originals[5], work=work)
 
@@ -4721,10 +4670,11 @@ class AuthorityProcess:
             relay_bytes=relay_bytes, envelope_bytes=envelope_bytes, inputs_bytes=inputs_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
-        payload, digest, generation, writer_dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, writer_dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="planner-writer", signing=False, work=work)
         return actions._persist_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, intent_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, intent_bytes=originals[0],
             relay_bytes=originals[1], envelope_bytes=originals[2], inputs_bytes=originals[3],
             evaluation_context_bytes=originals[4], historical_expectations_bytes=originals[5],
             writer_dsn=writer_dsn, work=work)
@@ -4748,10 +4698,11 @@ class AuthorityProcess:
         owned = wire.evidence.capture._JSONCapture(wire.evidence.capture._SharedLedger(work),
             maximum_bytes=wire.retention.plan.contract.MAX_BYTES).visit(expectations)
         wire.retention.plan._validate_expectations(owned, operation)
-        payload, digest, generation, _dsn, signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, _dsn, signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=True, work=work)
         return actions._produce_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities,
             retained_record_digest=retained_record_digest, expectations=owned,
             verifier_private_key=signer, work=work)
 
@@ -4763,10 +4714,11 @@ class AuthorityProcess:
 
         originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
-        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, work=work)
         return actions._request_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
             historical_expectations_bytes=originals[1], work=work)
 
     def _forward_webauthn_evidence_custody_read(self, *, purpose, control_bytes,
@@ -4777,10 +4729,11 @@ class AuthorityProcess:
 
         originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
-        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="planner", signing=False, work=work)
         return actions._forward_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
             historical_expectations_bytes=originals[1], work=work)
 
     def _read_webauthn_evidence_custody(self, *, purpose, control_bytes,
@@ -4795,10 +4748,11 @@ class AuthorityProcess:
 
         originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
-        payload, digest, generation, writer_dsn, _signer = _webauthn_evidence_custody_context(
+        payload, digest, generation, writer_dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="planner-writer", signing=False, work=work)
         return actions._read_on_configuration(purpose=purpose, payload=payload,
-            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
             historical_expectations_bytes=originals[1], writer_dsn=writer_dsn, work=work)
 
     def _produce_revocation_observed_plan(self, *, request, evidence, context,
@@ -4818,6 +4772,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation planner process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         planner_private_key = self.signing_key
         if not isinstance(planner_private_key, Ed25519PrivateKey):
             raise AuthorityServiceError("revocation planner signing key is unavailable")
@@ -4834,6 +4789,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation planner configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("planner"))
         read_dsn = authority_revocation_configuration.production._callback(
@@ -4844,6 +4801,7 @@ class AuthorityProcess:
             work, lambda: dict(authority_launch_guard.generation()))
         planner = authority_revocation_planner_configuration._planner_from_configuration_on_work(
             payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities,
             generation=generation, read_dsn=read_dsn,
             planner_private_key=planner_private_key, work=work)
         return planner.produce_observed(request=owned["request"], evidence=owned["evidence"],
@@ -4866,6 +4824,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation planning client process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         verifier_private_key = self.signing_key
         if not isinstance(verifier_private_key, Ed25519PrivateKey):
             raise AuthorityServiceError("revocation planning verifier signer is unavailable")
@@ -4883,6 +4842,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation planning verifier configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         role = owned_payload["roles"]["verifier"]
         try:
             timeout = role["databaseConnectTimeoutSeconds"]
@@ -4906,7 +4867,8 @@ class AuthorityProcess:
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return authority_revocation_planning_client._request_on_configuration(
-            payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
+            payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities, generation=generation,
             request=owned["request"], evidence=owned["evidence"], context=owned["context"],
             root_inventory=inventory, verifier_private_key=verifier_private_key, work=work)
 
@@ -4926,6 +4888,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation planning receiver process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         planner_private_key = self.signing_key
         if not isinstance(planner_private_key, Ed25519PrivateKey):
             raise AuthorityServiceError("revocation planning receiver signer is unavailable")
@@ -4941,6 +4904,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation planning receiver configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("planner"))
         read_dsn = authority_revocation_configuration.production._callback(
@@ -4948,7 +4913,8 @@ class AuthorityProcess:
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return authority_revocation_planning_receiver._produce_on_configuration(
-            payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
+            payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities, generation=generation,
             control_bytes=control_bytes, request_bytes=request_bytes, evidence_bytes=evidence_bytes,
             context_bytes=context_bytes, root_inventory_bytes=root_inventory_bytes,
             read_dsn=read_dsn, planner_private_key=planner_private_key, work=work)
@@ -4972,6 +4938,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation intent verifier process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         verifier_private_key = self.signing_key
         if not isinstance(verifier_private_key, Ed25519PrivateKey):
             raise AuthorityServiceError("revocation intent verifier signing key is unavailable")
@@ -4990,6 +4957,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation intent verifier configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         if (type(owned_payload.get("roles")) is not dict
                 or type(owned_payload["roles"].get("verifier")) is not dict):
             raise AuthorityServiceError("revocation intent verifier role is not closed data")
@@ -5018,7 +4987,8 @@ class AuthorityProcess:
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return authority_revocation_writer_producers._produce_intent_on_configuration(
-            payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
+            payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities, generation=generation,
             envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
             expected_request=owned_request, context=owned_context, root_inventory=inventory,
             planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
@@ -5040,6 +5010,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation relay planner process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         planner_private_key = self.signing_key
         if not isinstance(planner_private_key, Ed25519PrivateKey):
             raise AuthorityServiceError("revocation relay planner signing key is unavailable")
@@ -5056,12 +5027,15 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation relay planner configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("planner"))
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return authority_revocation_writer_producers._produce_relay_on_configuration(
-            payload=owned_payload, configuration_digest=configuration_digest, generation=generation,
+            payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities, generation=generation,
             intent_bytes=intent_bytes, envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes,
@@ -5079,8 +5053,9 @@ class AuthorityProcess:
 
         _revocation_custody_originals((intent_bytes, envelope_bytes,
             evaluation_context_bytes, historical_expectations_bytes), relay=True)
-        payload, digest, generation = _revocation_custody_context(self, role_name="verifier", work=work)
+        payload, digest, generation, runtime_role_identities = _revocation_custody_context(self, role_name="verifier", work=work)
         return client._request_relay_on_configuration(payload=payload, configuration_digest=digest,
+            runtime_role_identities=runtime_role_identities,
             generation=generation, intent_bytes=intent_bytes, envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes, work=work)
@@ -5097,8 +5072,9 @@ class AuthorityProcess:
 
         _revocation_custody_originals((intent_bytes, relay_bytes, envelope_bytes,
             evaluation_context_bytes, historical_expectations_bytes), relay=False)
-        payload, digest, generation = _revocation_custody_context(self, role_name="verifier", work=work)
+        payload, digest, generation, runtime_role_identities = _revocation_custody_context(self, role_name="verifier", work=work)
         return client._forward_on_configuration(payload=payload, configuration_digest=digest,
+            runtime_role_identities=runtime_role_identities,
             generation=generation, intent_bytes=intent_bytes, relay_bytes=relay_bytes,
             envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes, work=work)
@@ -5116,8 +5092,9 @@ class AuthorityProcess:
         planner_private_key = self.signing_key
         if not isinstance(planner_private_key, Ed25519PrivateKey):
             raise AuthorityServiceError("revocation custody planner signer is unavailable")
-        payload, digest, generation = _revocation_custody_context(self, role_name="planner", work=work)
+        payload, digest, generation, runtime_role_identities = _revocation_custody_context(self, role_name="planner", work=work)
         return receiver._produce_relay_on_configuration(payload=payload, configuration_digest=digest,
+            runtime_role_identities=runtime_role_identities,
             generation=generation, raw4=(intent_bytes, envelope_bytes,
                 evaluation_context_bytes, historical_expectations_bytes),
             planner_private_key=planner_private_key, work=work)
@@ -5134,8 +5111,9 @@ class AuthorityProcess:
 
         _revocation_custody_originals((intent_bytes, relay_bytes, envelope_bytes,
             evaluation_context_bytes, historical_expectations_bytes), relay=False)
-        payload, digest, generation = _revocation_custody_context(self, role_name="planner", work=work)
+        payload, digest, generation, runtime_role_identities = _revocation_custody_context(self, role_name="planner", work=work)
         return receiver._forward_on_configuration(payload=payload, configuration_digest=digest,
+            runtime_role_identities=runtime_role_identities,
             generation=generation, raw5=(intent_bytes, relay_bytes, envelope_bytes,
                 evaluation_context_bytes, historical_expectations_bytes), work=work)
 
@@ -5149,7 +5127,7 @@ class AuthorityProcess:
         from serverware import authority_revocation_custody_read_client as client
 
         custody_read_transport._validate_ids(execution_envelope_id, planner_transaction_id)
-        payload, digest, generation = _revocation_custody_context(self, role_name="verifier", work=work)
+        payload, digest, generation, runtime_role_identities = _revocation_custody_context(self, role_name="verifier", work=work)
         return client._read_from_planner_on_configuration(payload=payload, configuration_digest=digest,
             generation=generation, execution_envelope_id=execution_envelope_id,
             planner_transaction_id=planner_transaction_id, work=work)
@@ -5159,7 +5137,7 @@ class AuthorityProcess:
         from serverware import authority_revocation_custody_read_client as client
 
         custody_read_transport._validate_ids(execution_envelope_id, planner_transaction_id)
-        payload, digest, generation = _revocation_custody_context(self, role_name="planner", work=work)
+        payload, digest, generation, runtime_role_identities = _revocation_custody_context(self, role_name="planner", work=work)
         return client._read_from_writer_on_configuration(payload=payload, configuration_digest=digest,
             generation=generation, execution_envelope_id=execution_envelope_id,
             planner_transaction_id=planner_transaction_id, work=work)
@@ -5215,6 +5193,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation writer client process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
         from serverware import authority_revocation_writer_client
         from serverware import authority_revocation_writer_commitment
@@ -5231,12 +5210,15 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation writer client configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("planner"))
         generation = authority_revocation_configuration.production._callback(
             work, lambda: dict(authority_launch_guard.generation()))
         return authority_revocation_writer_client._send_on_configuration(
             payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities,
             generation=generation, intent_bytes=intent_bytes, relay_bytes=relay_bytes,
             envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes, work=work)
@@ -5259,6 +5241,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation writer process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
 
         ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
@@ -5267,7 +5250,10 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation writer configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         persistence, _held_launch = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
+            owned_runtime_identities=owned_runtime_identities,
             configuration_digest=configuration_digest, work=work)
         return persistence
 
@@ -5289,6 +5275,7 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation writer process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
         from serverware import authority_revocation_writer_action
 
@@ -5302,8 +5289,11 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation writer configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         authority_revocation_writer_action._assert_policy_on_work(owned_payload, owned, work)
         persistence, _held_launch = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
+            owned_runtime_identities=owned_runtime_identities,
             configuration_digest=configuration_digest, work=work)
         return persistence.persist_and_reserve_execution(**arguments, work=work, **owned)
 
@@ -5340,6 +5330,7 @@ class AuthorityProcess:
                 or not isinstance(launch_private_key, Ed25519PrivateKey)):
             raise AuthorityServiceError("revocation writer response or launch key is not configured")
         payload, configuration_digest = configuration.payload, configuration.digest
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
         from serverware import authority_revocation_writer_composition
 
@@ -5353,6 +5344,8 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation writer configuration is not closed data")
         owned_payload = authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
         if (type(owned_payload.get("roles")) is not dict
                 or type(owned_payload["roles"].get("planner-writer")) is not dict):
             raise AuthorityServiceError("revocation writer configuration has no exact writer role")
@@ -5371,6 +5364,7 @@ class AuthorityProcess:
         if not isinstance(launch_public_key, Ed25519PublicKey):
             raise AuthorityServiceError("revocation writer launch key did not derive Ed25519")
         persistence, held_launch = _revocation_writer_from_owned_configuration(owned_payload=owned_payload,
+            owned_runtime_identities=owned_runtime_identities,
             configuration_digest=configuration_digest, work=work)
         generation_sequence, generation_digest = held_launch
         configuration_snapshot = persistence._snapshot_configuration()
@@ -5397,13 +5391,24 @@ class AuthorityProcess:
             raise AuthorityServiceError("revocation issuer process is not configured")
         configuration = self.configuration
         payload, configuration_digest = configuration.payload, configuration.digest
-        authority_launch_guard.require_active("issuer")
-        generation = dict(authority_launch_guard.generation())
+        runtime_role_identities = configuration.runtime_role_identities
         from serverware import authority_revocation_configuration
 
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation issuer configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        owned_runtime_identities = authority_revocation_configuration.capability.capture._JSONCapture(
+            ledger, maximum_bytes=8192).visit(runtime_role_identities)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("issuer"))
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
         return authority_revocation_configuration._issuer_from_configuration_on_work(
-            payload=payload, configuration_digest=configuration_digest,
-            generation=generation, work=work)
+            payload=owned_payload, configuration_digest=configuration_digest,
+            runtime_role_identities=owned_runtime_identities, generation=generation, work=work)
 
     def _issue_revocation_invocation_bytes(self, *, envelope_bytes, work):
         """Private original-byte composition, not an enabled service purpose."""
@@ -7942,9 +7947,7 @@ class AuthorityProcess:
             "issuedAtEpochNs": issued_at_epoch_ns,
             "expiresAtEpochNs": deadline_epoch_ns,
             "issuerSessionIdentityDigest":
-                self.configuration.payload[
-                    "issuerSessionIdentityDigest"
-                ],
+                self.configuration.issuer_session_identity_digest(),
         }
         capability_digest = _domain_digest(
             authority_contract.CAPABILITY_SCHEMA,

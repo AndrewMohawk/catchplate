@@ -32,20 +32,23 @@ def _text_on_work(value, maximum, work):
 
 
 def _reader_from_configuration_on_work(*, operation, payload, configuration_digest,
-        generation, read_dsn, work):
+        generation, runtime_role_identities, read_dsn, work):
     try:
         pins_configuration._operation(operation)
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         dsn = read_dsn
         _text_on_work(dsn, 65536, work)
         if "\r" in dsn or "\n" in dsn:
             raise WebAuthnTransitionRootConfigurationError("transition root DSN is not one protected descriptor value")
         role = pins_configuration._role(owned, "verifier")
         shape = configuration.capability.shape
-        measurement, attestation = role["measurementDigest"], role["attestationReceiptDigest"]
+        measurement = role["measurementDigest"]
         response_spki, signing_spki = role["responseSigningSpkiDigest"], role["signingSpkiDigest"]
-        for digest in (measurement, attestation, response_spki, signing_spki):
+        for digest in (measurement, response_spki, signing_spki):
             shape._digest(digest)
         plan._same(response_spki, signing_spki, work,
             "transition root verifier signing key differs from its measured response pin")
@@ -68,7 +71,8 @@ def _reader_from_configuration_on_work(*, operation, payload, configuration_dige
         # continuation owns policy graphs and reconstructs configured keys;
         # no returned policy/key data becomes a substitute root inventory.
         pins = pins_configuration._pins_from_owned_configuration_on_work(operation=operation,
-            owned_payload=owned, configuration_digest=configuration_digest, work=work)
+            owned_payload=owned, owned_runtime_identities=runtime,
+            configuration_digest=configuration_digest, work=work)
         if pins[0] != operation:
             raise WebAuthnTransitionRootConfigurationError("transition root configured operation changed")
         from serverware import authority_webauthn_transition_root_reader as roots

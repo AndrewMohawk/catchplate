@@ -21,9 +21,9 @@ from serverware import authority_webauthn_transition_custody_transport as transp
 def _context_on_work(process, *, role, signing, work):
     descriptor = ("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"
         if role == "planner-writer" else None)
-    payload, digest, generation, dsn, private = service._measured_context_on_work(
+    payload, digest, generation, dsn, private, runtime_role_identities = service._measured_context_on_work(
         process, role=role, signing=signing, read_descriptor=descriptor, work=work)
-    return payload, digest, service._generation_on_work(generation, work), dsn, private
+    return payload, digest, service._generation_on_work(generation, work), dsn, private, runtime_role_identities
 
 
 def _produce_intent_on_work(process, *, operation, envelope_bytes, proof_bytes,
@@ -32,10 +32,11 @@ def _produce_intent_on_work(process, *, operation, envelope_bytes, proof_bytes,
     operation = service._operation(operation)
     originals = service.retention._raw4(envelope_bytes, proof_bytes, inputs_bytes, context_bytes)
     owned = service._history_on_work(operation, expectations, work)
-    payload, digest, generation, _dsn, private = _context_on_work(
+    payload, digest, generation, _dsn, private, runtime_role_identities = _context_on_work(
         process, role="verifier", signing=True, work=work)
     result = actions._produce_intent_on_configuration(operation=operation,
         payload=payload, configuration_digest=digest, generation=generation,
+        runtime_role_identities=runtime_role_identities,
         envelope_bytes=originals[0], proof_bytes=originals[1], inputs_bytes=originals[2],
         context_bytes=originals[3], expectations=owned, verifier_private_key=private, work=work)
     service._require_generation_on_work("verifier", generation, work)
@@ -52,10 +53,11 @@ def _relay_on_work(process, *, operation, intent_bytes, envelope_bytes, proof_by
         envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
         context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes)
     role = "planner" if producing else "verifier"
-    payload, digest, generation, _dsn, private = _context_on_work(
+    payload, digest, generation, _dsn, private, runtime_role_identities = _context_on_work(
         process, role=role, signing=producing, work=work)
     arguments = {"operation": operation, "payload": payload,
         "configuration_digest": digest, "generation": generation,
+        "runtime_role_identities": runtime_role_identities,
         "intent_bytes": originals[0], "envelope_bytes": originals[1],
         "proof_bytes": originals[2], "inputs_bytes": originals[3],
         "context_bytes": originals[4], "historical_expectations_bytes": originals[5], "work": work}
@@ -93,10 +95,11 @@ def _delivery_on_work(process, *, operation, intent_bytes, relay_bytes, envelope
         envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
         context_bytes=context_bytes, historical_expectations_bytes=historical_expectations_bytes)
     role = {"forward": "verifier", "send": "planner", "persist": "planner-writer"}[kind]
-    payload, digest, generation, dsn, _private = _context_on_work(
+    payload, digest, generation, dsn, _private, runtime_role_identities = _context_on_work(
         process, role=role, signing=False, work=work)
     arguments = {"operation": operation, "payload": payload,
         "configuration_digest": digest, "generation": generation,
+        "runtime_role_identities": runtime_role_identities,
         "intent_bytes": originals[0], "relay_bytes": originals[1],
         "envelope_bytes": originals[2], "proof_bytes": originals[3], "inputs_bytes": originals[4],
         "context_bytes": originals[5], "historical_expectations_bytes": originals[6], "work": work}

@@ -24,7 +24,12 @@ from serverware import authority_revocation_invocation as invocation
 from serverware import authority_revocation_issuance as configured
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v5"
+CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
+RUNTIME_ROLE_IDENTITIES_SCHEMA = "serverware.policyAuthorityRuntimeRoleIdentities/v1"
+_RUNTIME_FIELDS = frozenset({"schema", "configurationDigest", "generationSequence",
+    "generationDigest", "cohortDigest", "roles"})
+_RUNTIME_ROLE_FIELDS = frozenset({"measurementDigest", "responseSigningSpkiDigest",
+    "attestationReceiptDigest"})
 GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
 MAX_CONFIGURATION_DIGESTS = 4096
 _GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest",
@@ -201,7 +206,45 @@ def _capture_configuration_on_work(*, payload, configuration_digest, generation,
     return owned, launch
 
 
-def _issuer_from_configuration_on_work(*, payload, configuration_digest, generation, work):
+def _capture_runtime_role_identities_on_work(*, runtime_role_identities, owned_payload,
+        configuration_digest, launch, work):
+    """Own separately admitted cohort identities without changing signed JSON.
+
+    This is a same-work consistency check, not receipt or cohort admission.
+    The service supplies the root-verified cohort for this configuration and
+    actual generation; historical callers must retain their original cohort.
+    """
+    ledger = capability.capture._SharedLedger(work)
+    owned = capability.capture._JSONCapture(ledger, maximum_bytes=8192).visit(runtime_role_identities)
+    shape = capability.shape
+    shape._object(owned, _RUNTIME_FIELDS, "runtime role identities")
+    shape._literal(owned["schema"], RUNTIME_ROLE_IDENTITIES_SCHEMA)
+    for name in ("configurationDigest", "generationDigest", "cohortDigest"):
+        shape._digest(owned[name])
+    shape._integer(owned["generationSequence"], minimum=1)
+    shape._object(owned["roles"], _ROLE_FIELDS, "runtime roles")
+    shape._object(owned_payload["roles"], _ROLE_FIELDS, "configured roles")
+    work.prepare_scan(owned)
+    capability.plan._same((owned["configurationDigest"], owned["generationSequence"], owned["generationDigest"]),
+        (configuration_digest, launch["sequence"], launch["digest"]), work,
+        "runtime role cohort differs from the admitted configuration and generation")
+    for name in _ROLE_NAMES:
+        runtime, role = owned["roles"][name], owned_payload["roles"][name]
+        shape._object(runtime, _RUNTIME_ROLE_FIELDS, "runtime role identity")
+        for digest in runtime.values():
+            shape._digest(digest)
+        if type(role) is not dict:
+            raise RevocationConfigurationError("configured runtime role is not an exact object")
+        shape._digest(role["measurementDigest"])
+        shape._digest(role["responseSigningSpkiDigest"])
+        capability.plan._same((runtime["measurementDigest"], runtime["responseSigningSpkiDigest"]),
+            (role["measurementDigest"], role["responseSigningSpkiDigest"]), work,
+            "runtime role cohort differs from its static role policy")
+    return owned
+
+
+def _issuer_from_configuration_on_work(*, payload, configuration_digest, generation,
+        runtime_role_identities, work):
     """Map an owned configuration on the existing remaining work allowance.
 
     Only the nine bindings used from the actual twenty-four-field launch context
@@ -214,6 +257,8 @@ def _issuer_from_configuration_on_work(*, payload, configuration_digest, generat
     try:
         owned, launch = _capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = _capture_runtime_role_identities_on_work(runtime_role_identities=runtime_role_identities,
+            owned_payload=owned, configuration_digest=configuration_digest, launch=launch, work=work)
 
         roles = owned["roles"]
         if type(roles) is not dict:
@@ -223,13 +268,13 @@ def _issuer_from_configuration_on_work(*, payload, configuration_digest, generat
             if type(role) is not dict:
                 raise RevocationConfigurationError("issuer configuration role is not an exact object")
             capability.shape._literal(role["processMode"], "policy-authority-" + name)
-            for field in ("measurementDigest", "attestationReceiptDigest"):
+            for field in ("measurementDigest",):
                 capability.shape._digest(role[field])
         witness = owned["replayWitness"]
         if type(witness) is not dict:
             raise RevocationConfigurationError("issuer witness configuration is not an exact object")
-        for digest in (witness["identityDigest"], owned["issuerSessionIdentityDigest"],
-                       owned["issuerCredentialIssuanceDigest"], planner["plannerSessionIdentityDigest"]):
+        for digest in (witness["identityDigest"], owned["issuerCredentialIssuanceDigest"],
+                       planner["plannerSessionIdentityDigest"]):
             capability.shape._digest(digest)
         for role in (planner, verifier):
             capability.shape._digest(role["signingSpkiDigest"])
@@ -241,31 +286,40 @@ def _issuer_from_configuration_on_work(*, payload, configuration_digest, generat
         capability.shape._integer(maximum_age_ns, minimum=1)
         capability.shape._integer(maximum_clock_skew_ns)
 
+        planner_identity = {"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
+            "measurementDigest": planner["measurementDigest"],
+            "attestationReceiptDigest": runtime["roles"]["planner"]["attestationReceiptDigest"]}
+        verifier_measurement = verifier["measurementDigest"]
+        verifier_receipt = runtime["roles"]["verifier"]["attestationReceiptDigest"]
+        issuer_measurement = issuer["measurementDigest"]
+        issuer_receipt = runtime["roles"]["issuer"]["attestationReceiptDigest"]
+        issuance = owned["issuerCredentialIssuanceDigest"]
+        issuer_frames = (issuer["databaseRole"], issuer["tlsClientDn"], issuer["tlsClientSerial"],
+            issuer["tlsIssuerDn"], issuer_measurement, issuer_receipt, issuance)
+        planner_encoded, planner_spki = planner["signingPublicKeyBase64Url"], planner["signingSpkiDigest"]
+        verifier_encoded, verifier_spki = verifier["signingPublicKeyBase64Url"], verifier["signingSpkiDigest"]
+        witness_encoded, witness_identity = witness["signingPublicKeyBase64Url"], witness["identityDigest"]
+        generation_sequence, generation_digest = launch["sequence"], launch["digest"]
         # All graphs and scalar pins above are owned before the first key
         # constructor/serialization callback. Native crypto internals are not
         # counted as JSON/hash work; actual encodings and hashes are charged.
-        planner_key = _key(planner["signingPublicKeyBase64Url"], work, expected_spki=planner["signingSpkiDigest"])
-        verifier_key = _key(verifier["signingPublicKeyBase64Url"], work, expected_spki=verifier["signingSpkiDigest"])
-        witness_key = _key(witness["signingPublicKeyBase64Url"], work)
+        planner_key = _key(planner_encoded, work, expected_spki=planner_spki)
+        verifier_key = _key(verifier_encoded, work, expected_spki=verifier_spki)
+        witness_key = _key(witness_encoded, work)
         verifier_session = _frame_text(_VERIFIER_SESSION,
-            (configuration_digest, verifier["measurementDigest"], verifier["attestationReceiptDigest"]), work)
-        issuer_session = _frame_text(_ISSUER_SESSION,
-            (issuer["databaseRole"], issuer["tlsClientDn"], issuer["tlsClientSerial"], issuer["tlsIssuerDn"],
-             issuer["measurementDigest"], issuer["attestationReceiptDigest"], owned["issuerCredentialIssuanceDigest"]), work)
-        capability.plan._same(issuer_session, owned["issuerSessionIdentityDigest"], work,
-            "issuer session does not bind its configured role, TLS and issuance pins")
+            (configuration_digest, verifier_measurement, verifier_receipt), work)
+        issuer_session = _frame_text(_ISSUER_SESSION, issuer_frames, work)
         return configured.RevocationCapabilityIssuer(
             planner_public_key=planner_key, verifier_public_key=verifier_key, witness_public_key=witness_key,
-            expected_planner_identity={"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
-                "measurementDigest": planner["measurementDigest"], "attestationReceiptDigest": planner["attestationReceiptDigest"]},
+            expected_planner_identity=planner_identity,
             expected_verifier_identity={"sessionIdentityDigest": verifier_session,
-                "measurementDigest": verifier["measurementDigest"], "attestationReceiptDigest": verifier["attestationReceiptDigest"]},
+                "measurementDigest": verifier_measurement, "attestationReceiptDigest": verifier_receipt},
             expected_issuer_session_identity_digest=issuer_session,
-            issuer_pins={"measurementDigest": issuer["measurementDigest"], "attestationReceiptDigest": issuer["attestationReceiptDigest"],
-                "credentialIssuanceDigest": owned["issuerCredentialIssuanceDigest"], "maximumAgeNs": maximum_age_ns,
+            issuer_pins={"measurementDigest": issuer_measurement, "attestationReceiptDigest": issuer_receipt,
+                "credentialIssuanceDigest": issuance, "maximumAgeNs": maximum_age_ns,
                 "maximumClockSkewNs": maximum_clock_skew_ns},
-            expected_configuration_digest=configuration_digest, expected_witness_identity_digest=witness["identityDigest"],
-            expected_generation_sequence=launch["sequence"], expected_generation_digest=launch["digest"])
+            expected_configuration_digest=configuration_digest, expected_witness_identity_digest=witness_identity,
+            expected_generation_sequence=generation_sequence, expected_generation_digest=generation_digest)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RevocationConfigurationError):
             raise

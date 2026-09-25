@@ -40,7 +40,7 @@ CONFIGURATION_GENERATION_BINDING_SCHEMA = (
 )
 CONFIGURATION_PAYLOAD_SCHEMAS = MappingProxyType(
     {
-        "authority-service": "serverware.policyAuthorityServiceConfiguration/v5",
+        "authority-service": "serverware.policyAuthorityServiceConfiguration/v6",
         "witness": "serverware.policyAuthorityReplayWitnessConfiguration/v4",
     }
 )

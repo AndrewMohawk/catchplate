@@ -52,14 +52,12 @@ def _database_from_owned_configuration_on_work(*, owned_payload, writer_dsn, wor
             if type(role) is not dict:
                 raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody role is not an exact object")
             shape._literal(role["processMode"], "policy-authority-" + name)
-            for field in ("measurementDigest", "attestationReceiptDigest", "responseSigningSpkiDigest"):
+            for field in ("measurementDigest", "responseSigningSpkiDigest"):
                 shape._digest(role[field])
         planner_encoded = planner["signingPublicKeyBase64Url"]
         planner_spki = planner["signingSpkiDigest"]
-        planner_identity = {"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
-            "measurementDigest": planner["measurementDigest"],
-            "attestationReceiptDigest": planner["attestationReceiptDigest"]}
-        for digest in (*planner_identity.values(), planner_spki,
+        planner_session = planner["plannerSessionIdentityDigest"]
+        for digest in (planner_session, planner_spki,
                 writer_role["plannerSessionIdentityDigest"], writer_role["plannerSigningSpkiDigest"]):
             shape._digest(digest)
         for encoded in (planner_encoded, writer_role["plannerSigningPublicKeyBase64Url"]):
@@ -67,7 +65,7 @@ def _database_from_owned_configuration_on_work(*, owned_payload, writer_dsn, wor
             shape._base64url(encoded)
         plan._same((writer_role["plannerSessionIdentityDigest"], writer_role["plannerSigningSpkiDigest"],
                 writer_role["plannerSigningPublicKeyBase64Url"]),
-            (planner_identity["sessionIdentityDigest"], planner_spki, planner_encoded), work,
+            (planner_session, planner_spki, planner_encoded), work,
             "evidence custody writer aliases differ from the configured planner")
 
         timeout = writer_role["databaseConnectTimeoutSeconds"]
@@ -87,19 +85,23 @@ def _database_from_owned_configuration_on_work(*, owned_payload, writer_dsn, wor
 
 
 def _persistence_from_configuration_on_work(*, purpose, payload, configuration_digest,
-        generation, writer_dsn, work):
+        generation, runtime_role_identities, writer_dsn, work):
     try:
         if type(purpose) is not str or purpose not in ("registration", "installation"):
             raise WebAuthnEvidencePlanWriterConfigurationError("evidence custody purpose is not source fixed")
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         writer_dsn, timeout, database_identity = _database_from_owned_configuration_on_work(
             owned_payload=owned, writer_dsn=writer_dsn, work=work)
         # Alias joins and all writer connection scalars are held before the
         # shared helper's real key callbacks. It reuses this exact owned full
         # graph without another configuration capture or planner key decode.
         pins = pins_configuration._pins_from_owned_configuration_on_work(purpose=purpose,
-            owned_payload=owned, configuration_digest=configuration_digest, work=work)
+            owned_payload=owned, owned_runtime_identities=runtime,
+            configuration_digest=configuration_digest, work=work)
         (operation, planner_key, planner_identity, planner_spki, evidence_key, evidence_identity,
             evidence_spki, configuration_digest, maximum_age_ns, maximum_clock_skew_ns,
             rp_id, origin, target) = pins
@@ -120,12 +122,14 @@ def _persistence_from_configuration_on_work(*, purpose, payload, configuration_d
 
 
 def _registration_plan_persistence_from_configuration_on_work(*, payload, configuration_digest,
-        generation, writer_dsn, work):
+        generation, runtime_role_identities, writer_dsn, work):
     return _persistence_from_configuration_on_work(purpose="registration", payload=payload,
-        configuration_digest=configuration_digest, generation=generation, writer_dsn=writer_dsn, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, writer_dsn=writer_dsn, work=work)
 
 
 def _installation_plan_persistence_from_configuration_on_work(*, payload, configuration_digest,
-        generation, writer_dsn, work):
+        generation, runtime_role_identities, writer_dsn, work):
     return _persistence_from_configuration_on_work(purpose="installation", payload=payload,
-        configuration_digest=configuration_digest, generation=generation, writer_dsn=writer_dsn, work=work)
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, writer_dsn=writer_dsn, work=work)

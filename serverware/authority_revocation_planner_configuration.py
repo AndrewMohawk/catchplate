@@ -47,7 +47,7 @@ def _bind_signer(private_key, public_key, work):
 
 
 def _planner_from_configuration_on_work(*, payload, configuration_digest, generation,
-                                       read_dsn, planner_private_key, work):
+                                       runtime_role_identities, read_dsn, planner_private_key, work):
     """Construct only from independently admitted local configuration inputs.
 
     The historical policy must equal the configured handoff receiver's policy:
@@ -59,6 +59,9 @@ def _planner_from_configuration_on_work(*, payload, configuration_digest, genera
     try:
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         planning.reader._bounded_text(read_dsn, 65536)
         if "\n" in read_dsn or "\r" in read_dsn:
             raise RevocationPlannerConfigurationError("observed planner DSN is not one bounded descriptor value")
@@ -72,7 +75,7 @@ def _planner_from_configuration_on_work(*, payload, configuration_digest, genera
             if type(role) is not dict:
                 raise RevocationPlannerConfigurationError("observed planner role is not an exact object")
             plan.contract._literal(role["processMode"], "policy-authority-" + name)
-            for field in ("measurementDigest", "attestationReceiptDigest", "signingSpkiDigest"):
+            for field in ("measurementDigest", "signingSpkiDigest"):
                 plan.contract._digest(role[field])
             plan._same(role["responseSigningSpkiDigest"], role["signingSpkiDigest"], work,
                 "observed planner key differs from its measured response pin")
@@ -88,7 +91,7 @@ def _planner_from_configuration_on_work(*, payload, configuration_digest, genera
         timeout = int(timeout)
         database_identity = (planner["databaseRole"], planner["tlsClientDn"],
             planner["tlsClientSerial"], planner["tlsIssuerDn"], planner["plannerSessionIdentityDigest"],
-            planner["measurementDigest"], planner["attestationReceiptDigest"])
+            planner["measurementDigest"], runtime["roles"]["planner"]["attestationReceiptDigest"])
         planning._validate_read_configuration((read_dsn, timeout, database_identity, planner_private_key))
         webauthn = owned["webauthn"]
         if type(webauthn) is not dict:
@@ -101,14 +104,16 @@ def _planner_from_configuration_on_work(*, payload, configuration_digest, genera
         plan.contract._integer(plan_age, minimum=1)
         plan.contract._integer(skew)
 
+        planner_encoded, planner_spki = planner["signingPublicKeyBase64Url"], planner["signingSpkiDigest"]
+        verifier_encoded, verifier_spki = verifier["signingPublicKeyBase64Url"], verifier["signingSpkiDigest"]
+        verifier_measurement = verifier["measurementDigest"]
+        verifier_receipt = runtime["roles"]["verifier"]["attestationReceiptDigest"]
         # Full graphs and scalar settings are owned before any key callback.
         # No issuer/verifier owner or caller-produced success token is reused.
-        planner_key = configuration._key(planner["signingPublicKeyBase64Url"], work,
-            expected_spki=planner["signingSpkiDigest"])
-        verifier_key = configuration._key(verifier["signingPublicKeyBase64Url"], work,
-            expected_spki=verifier["signingSpkiDigest"])
+        planner_key = configuration._key(planner_encoded, work, expected_spki=planner_spki)
+        verifier_key = configuration._key(verifier_encoded, work, expected_spki=verifier_spki)
         verifier_session = configuration._frame_text(configuration._VERIFIER_SESSION,
-            (configuration_digest, verifier["measurementDigest"], verifier["attestationReceiptDigest"]), work)
+            (configuration_digest, verifier_measurement, verifier_receipt), work)
         _bind_signer(planner_private_key, planner_key, work)
         # Resolve the actual successor only after owning and binding the same
         # configured inputs. Registry construction itself imports no planner.
@@ -119,7 +124,7 @@ def _planner_from_configuration_on_work(*, payload, configuration_digest, genera
             database_identity=database_identity, planner_private_key=planner_private_key,
             planner_public_key=planner_key, verifier_public_key=verifier_key,
             expected_verifier_identity={"sessionIdentityDigest": verifier_session,
-                "measurementDigest": verifier["measurementDigest"], "attestationReceiptDigest": verifier["attestationReceiptDigest"]},
+                "measurementDigest": verifier_measurement, "attestationReceiptDigest": verifier_receipt},
             maximum_assertion_age_ns=assertion_age, maximum_plan_age_ns=plan_age, maximum_clock_skew_ns=skew)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RevocationPlannerConfigurationError):

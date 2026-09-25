@@ -29,7 +29,7 @@ class WebAuthnEvidencePlanConfigurationError(ValueError):
 
 
 def _producer_from_configuration_on_work(*, purpose, payload, configuration_digest,
-        generation, read_dsn, planner_private_key, work):
+        generation, runtime_role_identities, read_dsn, planner_private_key, work):
     try:
         if type(purpose) is not str or purpose not in ("registration", "installation"):
             raise WebAuthnEvidencePlanConfigurationError("evidence plan purpose is not source fixed")
@@ -37,6 +37,9 @@ def _producer_from_configuration_on_work(*, purpose, payload, configuration_dige
             raise WebAuthnEvidencePlanConfigurationError("evidence plan local planner signer is not Ed25519")
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         roles = owned["roles"]
         if type(roles) is not dict or type(roles.get("planner")) is not dict:
             raise WebAuthnEvidencePlanConfigurationError("evidence plan planner role is absent")
@@ -48,7 +51,7 @@ def _producer_from_configuration_on_work(*, purpose, payload, configuration_dige
         response_spki = planner["responseSigningSpkiDigest"]
         identity = {"sessionIdentityDigest": planner["plannerSessionIdentityDigest"],
             "measurementDigest": planner["measurementDigest"],
-            "attestationReceiptDigest": planner["attestationReceiptDigest"]}
+            "attestationReceiptDigest": runtime["roles"]["planner"]["attestationReceiptDigest"]}
         shape._text(encoded_key, 43, minimum=43)
         shape._base64url(encoded_key)
         for pin in (*identity.values(), planner_spki, response_spki):
@@ -59,7 +62,8 @@ def _producer_from_configuration_on_work(*, purpose, payload, configuration_dige
         # and purpose policy, and constructs its genuine evidence public key.
         # No later lookup reads the caller's or the owned planner role graph.
         read_planner = read_configuration._planner_from_owned_configuration_on_work(
-            purpose=purpose, owned_payload=owned, read_dsn=read_dsn, work=work)
+            purpose=purpose, owned_payload=owned, owned_runtime_identities=runtime,
+            read_dsn=read_dsn, work=work)
         planner_public_key = configuration._key(encoded_key, work, expected_spki=planner_spki)
         evidence.keys._pair_on_work(planner_private_key, planner_public_key, work)
         from serverware import authority_transition_registry as registry
@@ -78,14 +82,14 @@ def _producer_from_configuration_on_work(*, purpose, payload, configuration_dige
 
 
 def _registration_plan_producer_from_configuration_on_work(*, payload, configuration_digest,
-        generation, read_dsn, planner_private_key, work):
+        generation, runtime_role_identities, read_dsn, planner_private_key, work):
     return _producer_from_configuration_on_work(purpose="registration", payload=payload,
         configuration_digest=configuration_digest, generation=generation, read_dsn=read_dsn,
-        planner_private_key=planner_private_key, work=work)
+        runtime_role_identities=runtime_role_identities, planner_private_key=planner_private_key, work=work)
 
 
 def _installation_plan_producer_from_configuration_on_work(*, payload, configuration_digest,
-        generation, read_dsn, planner_private_key, work):
+        generation, runtime_role_identities, read_dsn, planner_private_key, work):
     return _producer_from_configuration_on_work(purpose="installation", payload=payload,
         configuration_digest=configuration_digest, generation=generation, read_dsn=read_dsn,
-        planner_private_key=planner_private_key, work=work)
+        runtime_role_identities=runtime_role_identities, planner_private_key=planner_private_key, work=work)

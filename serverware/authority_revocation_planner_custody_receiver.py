@@ -29,22 +29,25 @@ class RevocationPlannerCustodyReceiverError(ValueError):
     pass
 
 
-def _capture_configuration(*, payload, configuration_digest, generation, work):
-    """Own full configuration and all seven launch bindings before callbacks."""
+def _capture_configuration(*, payload, configuration_digest, generation, runtime_role_identities, work):
+    """Own full configuration, launch bindings and the separate runtime cohort."""
     owned, launch = configuration._capture_configuration_on_work(
         payload=payload, configuration_digest=configuration_digest,
         generation=generation, work=work)
+    runtime = configuration._capture_runtime_role_identities_on_work(
+        runtime_role_identities=runtime_role_identities, owned_payload=owned,
+        configuration_digest=configuration_digest, launch=launch, work=work)
     roles = owned["roles"]
     if type(roles) is not dict or type(roles["planner"]) is not dict:
         raise RevocationPlannerCustodyReceiverError("planner custody role is not an exact object")
     configuration.capability.shape._literal(
         roles["planner"]["processMode"], "policy-authority-planner")
     request._require_enabled_operation(roles["planner"], work)
-    return owned, launch
+    return owned, launch, runtime
 
 
 def _produce_relay_on_configuration(*, payload, configuration_digest, generation,
-        raw4, planner_private_key, work):
+        runtime_role_identities, raw4, planner_private_key, work):
     """Prepare a separately returned relay; no forward or custody action.
 
     Exact immutable originals and all local/aggregate lengths are checked
@@ -58,10 +61,12 @@ def _produce_relay_on_configuration(*, payload, configuration_digest, generation
                 or any(type(raw) is not bytes for raw in raw4)):
             raise RevocationPlannerCustodyReceiverError("planner relay requires four original byte strings")
         transport._validate_relay_lengths(tuple(len(raw) for raw in raw4))
-        owned, launch = _capture_configuration(payload=payload,
-            configuration_digest=configuration_digest, generation=generation, work=work)
+        owned, launch, runtime = _capture_configuration(payload=payload,
+            configuration_digest=configuration_digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, work=work)
         relay_bytes = producers._produce_relay_on_configuration(
             payload=owned, configuration_digest=configuration_digest, generation=launch,
+            runtime_role_identities=runtime,
             intent_bytes=raw4[0], envelope_bytes=raw4[1], evaluation_context_bytes=raw4[2],
             historical_expectations_bytes=raw4[3], planner_private_key=planner_private_key, work=work)
         if type(relay_bytes) is not bytes or not 2 <= len(relay_bytes) <= transport.MAX_RELAY_BYTES:
@@ -73,7 +78,7 @@ def _produce_relay_on_configuration(*, payload, configuration_digest, generation
         raise RevocationPlannerCustodyReceiverError("configured planner relay preparation failed") from exc
 
 
-def _forward_on_configuration(*, payload, configuration_digest, generation, raw5, work):
+def _forward_on_configuration(*, payload, configuration_digest, generation, runtime_role_identities, raw5, work):
     """Forward only retained originals and return their genuinely verified ACK.
 
     The actual client authenticates both controls, performs genuine retained
@@ -88,10 +93,12 @@ def _forward_on_configuration(*, payload, configuration_digest, generation, raw5
                 or any(type(raw) is not bytes for raw in raw5)):
             raise RevocationPlannerCustodyReceiverError("planner forwarding requires five original byte strings")
         transport._validate_forward_lengths(tuple(len(raw) for raw in raw5))
-        owned, launch = _capture_configuration(payload=payload,
-            configuration_digest=configuration_digest, generation=generation, work=work)
+        owned, launch, runtime = _capture_configuration(payload=payload,
+            configuration_digest=configuration_digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, work=work)
         acknowledgment_bytes = client._send_on_configuration(
             payload=owned, configuration_digest=configuration_digest, generation=launch,
+            runtime_role_identities=runtime,
             intent_bytes=raw5[0], relay_bytes=raw5[1], envelope_bytes=raw5[2],
             evaluation_context_bytes=raw5[3], historical_expectations_bytes=raw5[4], work=work)
         if (type(acknowledgment_bytes) is not bytes

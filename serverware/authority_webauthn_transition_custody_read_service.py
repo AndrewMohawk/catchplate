@@ -24,10 +24,11 @@ def _produce_on_work(process, *, operation, retained_record_digest, expectations
     service.plan.contract.shape._digest(retained_record_digest)
     record_digest = retained_record_digest
     owned = service._history_on_work(operation, expectations, work)
-    payload, digest, generation, _dsn, private = custody._context_on_work(
+    payload, digest, generation, _dsn, private, runtime_role_identities = custody._context_on_work(
         process, role="verifier", signing=True, work=work)
     result = actions._produce_on_configuration(operation=operation,
         payload=payload, configuration_digest=digest, generation=generation,
+        runtime_role_identities=runtime_role_identities,
         retained_record_digest=record_digest, expectations=owned,
         verifier_private_key=private, work=work)
     service._require_generation_on_work("verifier", generation, work)
@@ -42,10 +43,11 @@ def _lookup_on_work(process, *, operation, control_bytes, historical_expectation
     originals = transport._validate_request(control_bytes=control_bytes,
         historical_expectations_bytes=historical_expectations_bytes)
     role = {"request": "verifier", "forward": "planner", "read": "planner-writer"}[kind]
-    payload, digest, generation, dsn, _private = custody._context_on_work(
+    payload, digest, generation, dsn, _private, runtime_role_identities = custody._context_on_work(
         process, role=role, signing=False, work=work)
     arguments = {"operation": operation, "payload": payload,
         "configuration_digest": digest, "generation": generation,
+        "runtime_role_identities": runtime_role_identities,
         "control_bytes": originals[0], "historical_expectations_bytes": originals[1], "work": work}
     if kind == "read":
         result = actions._read_on_configuration(**arguments, writer_dsn=dsn)

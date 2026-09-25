@@ -58,10 +58,10 @@ CLOSURE_SIGNATURE_DOMAIN = (
 )
 ROLE_SET_DIGEST_DOMAIN = "serverware.authorityRoleSet/v1"
 SERVICE_CONFIGURATION_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v5"
+    "serverware.signedPolicyAuthorityServiceConfiguration/v6"
 )
 SERVICE_CONFIGURATION_PAYLOAD_SCHEMA = (
-    "serverware.policyAuthorityServiceConfiguration/v5"
+    "serverware.policyAuthorityServiceConfiguration/v6"
 )
 WITNESS_CONFIGURATION_SCHEMA = (
     "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v4"
@@ -96,7 +96,6 @@ SERVICE_CONFIGURATION_FIELDS = frozenset(
         "credentialReleaseTrust",
         "replayWitness",
         "webauthn",
-        "issuerSessionIdentityDigest",
         "executorSessionIdentityDigest",
         "executorRole",
         "executorTlsClientDn",
@@ -119,7 +118,6 @@ SERVICE_ROLE_COMMON_FIELDS = frozenset(
         "tlsClientSerial",
         "tlsIssuerDn",
         "measurementDigest",
-        "attestationReceiptDigest",
         "responseSigningSpkiDigest",
         "requestTimeoutSeconds",
         "databaseConnectTimeoutSeconds",
@@ -809,7 +807,6 @@ def _validate_configuration_document(
                 )
             for digest_field in (
                 "measurementDigest",
-                "attestationReceiptDigest",
                 "responseSigningSpkiDigest",
             ):
                 _digest(
@@ -880,25 +877,11 @@ def _validate_configuration_document(
                 name="executor credential-issuance digest",
             )
             != payload["executorCredentialIssuanceDigest"]
-            or _digest(
-                issuer.get("attestationReceiptDigest"),
-                name="issuer attestation receipt digest",
-            )
-            != issuer.get("attestationReceiptDigest")
-            or _digest(
-                executor.get("attestationReceiptDigest"),
-                name="executor attestation receipt digest",
-            )
-            != executor.get("attestationReceiptDigest")
-            or payload["issuerCredentialIssuanceDigest"]
-            == issuer.get("attestationReceiptDigest")
-            or payload["executorCredentialIssuanceDigest"]
-            == executor.get("attestationReceiptDigest")
             or payload["issuerCredentialIssuanceDigest"]
             == payload["executorCredentialIssuanceDigest"]
         ):
             raise GeneratorError(
-                "credential-issuance and attestation digests are not distinct"
+                "credential-issuance digests are invalid or not distinct"
             )
         if evidence_policy.FIELD in payload:
             try:

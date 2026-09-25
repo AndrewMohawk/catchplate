@@ -63,6 +63,7 @@ def _measured_context_on_work(process, *, role, signing, read_descriptor, work):
     if type(measured) is not service.MeasuredConfiguration:
         raise service.AuthorityServiceError("transition measured configuration is unavailable")
     payload, digest = measured.payload, measured.digest
+    runtime_role_identities = measured.runtime_role_identities
     private = process.signing_key if signing else None
     if signing and not isinstance(private, service.Ed25519PrivateKey):
         raise service.AuthorityServiceError("transition service signer is unavailable")
@@ -72,6 +73,8 @@ def _measured_context_on_work(process, *, role, signing, read_descriptor, work):
         raise service.AuthorityServiceError("transition configuration is not closed data")
     owned = configuration._ConfigurationCapture(
         ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
+    owned_runtime_identities = configuration.capability.capture._JSONCapture(
+        ledger, maximum_bytes=8192).visit(runtime_role_identities)
     configuration.production._callback(work, lambda: service.authority_launch_guard.require_active(role))
     dsn = (None if read_descriptor is None else configuration.production._callback(work,
         lambda: service._read_dsn_descriptor(read_descriptor)))
@@ -79,7 +82,7 @@ def _measured_context_on_work(process, *, role, signing, read_descriptor, work):
     # The fixed selected mapper immediately owns and checks its seven bindings.
     generation = configuration.production._callback(
         work, lambda: dict(service.authority_launch_guard.generation()))
-    return owned, digest, generation, dsn, private
+    return owned, digest, generation, dsn, private, owned_runtime_identities
 
 
 def _context_on_work(process, *, operation, kind, work):
@@ -100,10 +103,11 @@ def _context_on_work(process, *, operation, kind, work):
         "roots": root_mapping._reader_from_configuration_on_work,
         "persistence": writer_mapping._persistence_from_configuration_on_work,
     }[kind]
-    owned, digest, generation, dsn, private = _measured_context_on_work(process,
+    owned, digest, generation, dsn, private, runtime_role_identities = _measured_context_on_work(process,
         role=role, signing=kind == "producer", read_descriptor=descriptor, work=work)
     arguments = {"operation": operation, "payload": owned, "configuration_digest": digest,
         "generation": generation, "work": work}
+    arguments["runtime_role_identities"] = runtime_role_identities
     if kind == "persistence":
         arguments["writer_dsn"] = dsn
     elif kind != "verifier":
@@ -140,7 +144,7 @@ def _persistence_on_work(process, *, operation, work):
 
 def _generation_on_work(value, work):
     ledger = configuration.capability.capture._SharedLedger(work)
-    configuration.capability.shape._bounded_object(value, 20, "transition root launch context")
+    configuration.capability.shape._bounded_object(value, 24, "transition root launch context")
     return configuration.capability.capture._JSONCapture(ledger).visit(
         {name: value[name] for name in configuration._GENERATION_FIELDS})
 
@@ -228,18 +232,20 @@ def _produce_request_on_work(process, *, operation, request, inputs_bytes,
         configuration.capability.shape._integer(owned[name], minimum=1)
     if owned["nowEpochNs"] >= owned["deadlineEpochNs"]:
         raise ValueError("transition planning invocation has no positive lifetime")
-    payload, digest, generation, dsn, private = _measured_context_on_work(process,
+    payload, digest, generation, dsn, private, runtime_role_identities = _measured_context_on_work(process,
         role="verifier", signing=True,
         read_descriptor="SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN", work=work)
     held_generation = _generation_on_work(generation, work)
     reader = root_mapping._reader_from_configuration_on_work(operation=operation,
-        payload=payload, configuration_digest=digest, generation=held_generation, read_dsn=dsn, work=work)
+        payload=payload, configuration_digest=digest, generation=held_generation,
+        runtime_role_identities=runtime_role_identities, read_dsn=dsn, work=work)
     inventory = root_reader.TransitionRootReader.read(reader, request=request_owned, work=work)
     business, authorization, heads = root_contract._project_on_work(
         inventory, operation=operation, request=request_owned, work=work)
     _require_generation_on_work("verifier", held_generation, work)
     result = actions._produce_request_on_configuration(operation=operation,
         payload=payload, configuration_digest=digest, generation=held_generation,
+        runtime_role_identities=runtime_role_identities,
         request=request_owned, business_before_roots=business,
         authorization_before_roots=authorization, counted_before_heads=heads,
         inputs_bytes=original_inputs, now_epoch_ns=owned["nowEpochNs"],
@@ -257,11 +263,12 @@ def _request_plan_on_work(process, *, operation, control_bytes, context_bytes, i
     operation = _operation(operation)
     originals = transport._validate_request(control_bytes=control_bytes,
         context_bytes=context_bytes, inputs_bytes=inputs_bytes)
-    payload, digest, generation, _dsn, _private = _measured_context_on_work(process,
+    payload, digest, generation, _dsn, _private, runtime_role_identities = _measured_context_on_work(process,
         role="verifier", signing=False, read_descriptor=None, work=work)
     held_generation = _generation_on_work(generation, work)
     result = actions._request_plan_on_configuration(operation=operation,
         payload=payload, configuration_digest=digest, generation=held_generation,
+        runtime_role_identities=runtime_role_identities,
         control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2], work=work)
     _require_generation_on_work("verifier", held_generation, work)
     return result
@@ -275,12 +282,13 @@ def _produce_plan_on_work(process, *, operation, control_bytes, context_bytes, i
     operation = _operation(operation)
     originals = transport._validate_request(control_bytes=control_bytes,
         context_bytes=context_bytes, inputs_bytes=inputs_bytes)
-    payload, digest, generation, dsn, private = _measured_context_on_work(process,
+    payload, digest, generation, dsn, private, runtime_role_identities = _measured_context_on_work(process,
         role="planner", signing=True,
         read_descriptor="SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN", work=work)
     held_generation = _generation_on_work(generation, work)
     result = actions._produce_plan_on_configuration(operation=operation,
         payload=payload, configuration_digest=digest, generation=held_generation,
+        runtime_role_identities=runtime_role_identities,
         control_bytes=originals[0], context_bytes=originals[1], inputs_bytes=originals[2],
         read_dsn=dsn, planner_private_key=private, work=work)
     _require_generation_on_work("planner", held_generation, work)

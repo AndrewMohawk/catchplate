@@ -50,12 +50,12 @@ def _role(owned, name):
     return role
 
 
-def _key_material(role, work):
+def _key_material(role, runtime_role, work):
     """Hold measured role scalars before any actual key construction callback."""
     shape = configuration.capability.shape
     encoded, spki, response = (role["signingPublicKeyBase64Url"],
         role["signingSpkiDigest"], role["responseSigningSpkiDigest"])
-    measurement, attestation = role["measurementDigest"], role["attestationReceiptDigest"]
+    measurement, attestation = role["measurementDigest"], runtime_role["attestationReceiptDigest"]
     shape._text(encoded, 43, minimum=43)
     shape._base64url(encoded)
     for value in (spki, response, measurement, attestation):
@@ -64,7 +64,7 @@ def _key_material(role, work):
     return encoded, spki, measurement, attestation
 
 
-def _read_settings(owned, read_dsn):
+def _read_settings(owned, owned_runtime_identities, read_dsn):
     """Hold the complete real read connection tuple before policy key callbacks."""
     reader._bounded_text(read_dsn, 65536)
     if "\n" in read_dsn or "\r" in read_dsn:
@@ -77,7 +77,7 @@ def _read_settings(owned, read_dsn):
         raise WebAuthnTransitionConfigurationError("transition planner timeout is outside its bounded interval")
     database = (planner["databaseRole"], planner["tlsClientDn"], planner["tlsClientSerial"],
         planner["tlsIssuerDn"], planner["plannerSessionIdentityDigest"],
-        planner["measurementDigest"], planner["attestationReceiptDigest"])
+        planner["measurementDigest"], owned_runtime_identities["roles"]["planner"]["attestationReceiptDigest"])
     reader._bounded_text(database[0], 63)
     for value in database[1:4]:
         reader._bounded_text(value, 4096)
@@ -86,7 +86,8 @@ def _read_settings(owned, read_dsn):
     return read_dsn, int(timeout), database
 
 
-def _pins_from_owned_configuration_on_work(*, operation, owned_payload, configuration_digest, work):
+def _pins_from_owned_configuration_on_work(*, operation, owned_payload, owned_runtime_identities,
+        configuration_digest, work):
     """Shared fixed pins without another full capture, DSN, clock or signer.
 
     Only callers that just performed the real full configuration/generation
@@ -103,11 +104,13 @@ def _pins_from_owned_configuration_on_work(*, operation, owned_payload, configur
     read_configuration._require_enabled_operation(planner, operation, work)
     plan._same(owned_payload["queryManifestDigest"], plan._QUERY_MANIFEST_DIGEST, work,
         "transition query manifest differs from the source")
-    planner_encoded, planner_spki, planner_measurement, planner_attestation = _key_material(planner, work)
+    planner_encoded, planner_spki, planner_measurement, planner_attestation = _key_material(
+        planner, owned_runtime_identities["roles"]["planner"], work)
     planner_session = planner["plannerSessionIdentityDigest"]
     shape._digest(planner_session)
     planner_identity = (planner_session, planner_measurement, planner_attestation)
-    verifier_encoded, verifier_spki, verifier_measurement, verifier_attestation = _key_material(verifier, work)
+    verifier_encoded, verifier_spki, verifier_measurement, verifier_attestation = _key_material(
+        verifier, owned_runtime_identities["roles"]["verifier"], work)
     if policy.FIELD not in owned_payload:
         raise WebAuthnTransitionConfigurationError("transition operation has no signed purpose policy")
     purpose_policy, webauthn = owned_payload[policy.FIELD], owned_payload["webauthn"]
@@ -166,14 +169,17 @@ def _read_owner(settings, pins):
 
 
 def _planner_from_configuration_on_work(*, operation, payload, configuration_digest,
-        generation, read_dsn, work):
+        generation, runtime_role_identities, read_dsn, work):
     try:
         _operation(operation)
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
-        settings = _read_settings(owned, read_dsn)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
+        settings = _read_settings(owned, runtime, read_dsn)
         pins = _pins_from_owned_configuration_on_work(operation=operation, owned_payload=owned,
-            configuration_digest=configuration_digest, work=work)
+            owned_runtime_identities=runtime, configuration_digest=configuration_digest, work=work)
         return _read_owner(settings, pins)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, WebAuthnTransitionConfigurationError):
@@ -182,16 +188,19 @@ def _planner_from_configuration_on_work(*, operation, payload, configuration_dig
 
 
 def _producer_from_configuration_on_work(*, operation, payload, configuration_digest,
-        generation, read_dsn, planner_private_key, work):
+        generation, runtime_role_identities, read_dsn, planner_private_key, work):
     try:
         _operation(operation)
         if not isinstance(planner_private_key, Ed25519PrivateKey):
             raise WebAuthnTransitionConfigurationError("transition planner signer is not Ed25519")
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
-        settings = _read_settings(owned, read_dsn)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
+        settings = _read_settings(owned, runtime, read_dsn)
         pins = _pins_from_owned_configuration_on_work(operation=operation, owned_payload=owned,
-            configuration_digest=configuration_digest, work=work)
+            owned_runtime_identities=runtime, configuration_digest=configuration_digest, work=work)
         evidence.keys._pair_on_work(planner_private_key, pins[1], work)
         read_planner = _read_owner(settings, pins)
         from serverware import authority_transition_registry as registry
@@ -206,13 +215,17 @@ def _producer_from_configuration_on_work(*, operation, payload, configuration_di
         raise WebAuthnTransitionConfigurationError("transition plan producer configuration failed") from exc
 
 
-def _verifier_from_configuration_on_work(*, operation, payload, configuration_digest, generation, work):
+def _verifier_from_configuration_on_work(*, operation, payload, configuration_digest, generation,
+        runtime_role_identities, work):
     try:
         _operation(operation)
         owned, _launch = configuration._capture_configuration_on_work(payload=payload,
             configuration_digest=configuration_digest, generation=generation, work=work)
+        runtime = configuration._capture_runtime_role_identities_on_work(
+            runtime_role_identities=runtime_role_identities, owned_payload=owned,
+            configuration_digest=configuration_digest, launch=_launch, work=work)
         pins = _pins_from_owned_configuration_on_work(operation=operation, owned_payload=owned,
-            configuration_digest=configuration_digest, work=work)
+            owned_runtime_identities=runtime, configuration_digest=configuration_digest, work=work)
         from serverware import authority_webauthn_transition_plan_verifier as verifier
 
         return verifier.TransitionPlanVerifier(pins=pins)

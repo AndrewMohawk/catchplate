@@ -69,6 +69,7 @@ def _current(context, age, skew, work):
 
 
 def _request_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities,
         request, evidence, context, root_inventory, verifier_private_key, work):
     """Sign one request, exchange originals and genuinely replay its response.
 
@@ -93,7 +94,8 @@ def _request_on_configuration(*, payload, configuration_digest, generation,
             ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
         path, peer_uid, peer_gid, timeout, age = _endpoint(owned_payload, work)
         owner = verifier._verifier_from_configuration_on_work(payload=owned_payload,
-            configuration_digest=configuration_digest, generation=generation, work=work)
+            configuration_digest=configuration_digest, generation=generation,
+            runtime_role_identities=runtime_role_identities, work=work)
         fixed = owner._snapshot_configuration()
         age = min(age, fixed[5])
         epoch, monotonic = _current(owned["context"], age, fixed[6], work)

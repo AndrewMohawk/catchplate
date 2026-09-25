@@ -55,6 +55,7 @@ from serverware import authority_revocation_custody_read_transport as custody_re
 from serverware import authority_revocation_planning_transport as planning_transport
 from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_webauthn_evidence_custody_transport as evidence_custody_transport
+from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
@@ -4272,6 +4273,78 @@ class AuthorityProcess:
             evaluation_context_bytes=originals[4], historical_expectations_bytes=originals[5],
             writer_dsn=writer_dsn, work=work)
 
+    def _produce_webauthn_evidence_custody_read_request(self, *, purpose,
+            retained_record_digest, expectations, work):
+        """Authorize a bounded lookup, not renewed retention or execution.
+
+        Historical request/root/configuration provenance must already be
+        independently admitted. No stored original is available to replay at
+        this preparation step; the real returned originals are verified later.
+        """
+        operation = _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_read_actions as actions
+        from serverware import authority_webauthn_evidence_custody_wire as wire
+
+        shape = wire.evidence.plan.contract
+        shape._digest(retained_record_digest)
+        shape._object(expectations, wire.retention.plan._EXPECTATION_FIELDS,
+            "independent evidence custody read history")
+        owned = wire.evidence.capture._JSONCapture(wire.evidence.capture._SharedLedger(work),
+            maximum_bytes=wire.retention.plan.contract.MAX_BYTES).visit(expectations)
+        wire.retention.plan._validate_expectations(owned, operation)
+        payload, digest, generation, _dsn, signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=True, work=work)
+        return actions._produce_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation,
+            retained_record_digest=retained_record_digest, expectations=owned,
+            verifier_private_key=signer, work=work)
+
+    def _request_webauthn_evidence_custody_read(self, *, purpose, control_bytes,
+            historical_expectations_bytes, work):
+        """Verifier lookup through the planner, with actual original replay."""
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_read_actions as actions
+
+        originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=False, work=work)
+        return actions._request_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            historical_expectations_bytes=originals[1], work=work)
+
+    def _forward_webauthn_evidence_custody_read(self, *, purpose, control_bytes,
+            historical_expectations_bytes, work):
+        """Only the configured planner can forward a signed lookup to writer."""
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_read_actions as actions
+
+        originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="planner", signing=False, work=work)
+        return actions._forward_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            historical_expectations_bytes=originals[1], work=work)
+
+    def _read_webauthn_evidence_custody(self, *, purpose, control_bytes,
+            historical_expectations_bytes, work):
+        """Authenticate before the real SELECT path and normal owner close.
+
+        Missing custody raises; it does not prove that a prior write failed.
+        This read does not insert, reserve, execute or automatically retry.
+        """
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_webauthn_evidence_custody_read_actions as actions
+
+        originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
+            historical_expectations_bytes=historical_expectations_bytes)
+        payload, digest, generation, writer_dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="planner-writer", signing=False, work=work)
+        return actions._read_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            historical_expectations_bytes=originals[1], writer_dsn=writer_dsn, work=work)
+
     def _produce_revocation_observed_plan(self, *, request, evidence, context,
             root_inventory, work):
         """Private measured-planner composition, not a serving purpose.
@@ -8477,6 +8550,49 @@ class AuthorityServer:
         evidence_custody_transport._check_deadline(deadline_ns)
         evidence_custody_transport._send_response(connection, record_digest, retained_at, deadline_ns=deadline_ns)
 
+    def _serve_webauthn_evidence_custody_read(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Peer-checked signed read, separate from all retaining operations.
+
+        The signed control and history must be fully received with exact EOF
+        before the one source allowance is allocated. Missing/invalid records
+        close the exchange, never return absence, rollback or retry authority.
+        Returned originals remain historical evidence, not current permission.
+        """
+        process = self.process
+        forwarded = prefix in (evidence_custody_read_transport.REGISTRATION_FORWARD_MAGIC,
+            evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC)
+        direct = prefix in (evidence_custody_read_transport.REGISTRATION_REQUEST_MAGIC,
+            evidence_custody_read_transport.INSTALLATION_REQUEST_MAGIC)
+        if not (forwarded or direct):
+            raise AuthorityServiceError("evidence custody read purpose is invalid")
+        role = "planner-writer" if forwarded else "planner"
+        if (type(process) is not AuthorityProcess or process.role_name != role
+                or process.process_mode != "policy-authority-" + role):
+            raise AuthorityServiceError("evidence custody read has the wrong service role")
+        if forwarded:
+            purpose, originals = evidence_custody_read_transport._recv_forward_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        else:
+            purpose, originals = evidence_custody_read_transport._recv_request(
+                connection, deadline_ns=deadline_ns, prefix=prefix)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        evidence_custody_read_transport._check_deadline(deadline_ns)
+        if forwarded:
+            result = AuthorityProcess._read_webauthn_evidence_custody(process,
+                purpose=purpose, control_bytes=originals[0],
+                historical_expectations_bytes=originals[1], work=work)
+            response = (result["envelope_bytes"], result["inputs_bytes"], result["evaluation_context_bytes"],
+                result["retained_record_digest"], result["retained_at_epoch_ns"])
+        else:
+            response = AuthorityProcess._forward_webauthn_evidence_custody_read(process,
+                purpose=purpose, control_bytes=originals[0],
+                historical_expectations_bytes=originals[1], work=work)
+        evidence_custody_read_transport._check_deadline(deadline_ns)
+        evidence_custody_read_transport._send_response(connection, response, deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -8495,7 +8611,11 @@ class AuthorityServer:
                 evidence_custody_transport.REGISTRATION_RELAY_MAGIC,
                 evidence_custody_transport.INSTALLATION_RELAY_MAGIC,
                 evidence_custody_transport.REGISTRATION_FORWARD_MAGIC,
-                evidence_custody_transport.INSTALLATION_FORWARD_MAGIC)
+                evidence_custody_transport.INSTALLATION_FORWARD_MAGIC,
+                evidence_custody_read_transport.REGISTRATION_REQUEST_MAGIC,
+                evidence_custody_read_transport.INSTALLATION_REQUEST_MAGIC,
+                evidence_custody_read_transport.REGISTRATION_FORWARD_MAGIC,
+                evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC)
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
@@ -8515,6 +8635,12 @@ class AuthorityServer:
                     evidence_custody_transport.REGISTRATION_FORWARD_MAGIC,
                     evidence_custody_transport.INSTALLATION_FORWARD_MAGIC):
                 self._serve_webauthn_evidence_custody(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix in (evidence_custody_read_transport.REGISTRATION_REQUEST_MAGIC,
+                    evidence_custody_read_transport.INSTALLATION_REQUEST_MAGIC,
+                    evidence_custody_read_transport.REGISTRATION_FORWARD_MAGIC,
+                    evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC):
+                self._serve_webauthn_evidence_custody_read(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

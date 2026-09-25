@@ -1,10 +1,13 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.94`, implementation only. Configured verifier-to-planner relay
+Status: source `.95`, implementation only. Configured verifier-to-planner relay
 preparation is now separate from explicit forwarding of original controls and
 evidence plans through the planner to the writer. Fixed detached socket branches
 connect genuine replay to the actual writer transaction; responses are unsigned
 peer observations, not execution permission or signed durability receipts.
+A separate verifier-signed lookup now retrieves retained originals through the
+same peer chain for genuine historical replay. This recovery-material path
+does not establish historical provenance, key rollover or execution recovery.
 The two evidence-admission database APIs dispatch typed semantic requests
 through the real authority boundary.
 Live planning and retained replay use the same configured, metered original-input
@@ -272,8 +275,9 @@ from untrusted storage supplies none of that authority. A current configured
 owner alone cannot resolve historical keys or policy. These methods do not
 verify selected-row/root proofs, grant current execution, sign, persist or open
 SQL. The separate signed-plan composition below adds actual proof replay around
-these semantic workers. Durable original-input custody and executor/recovery
-integration remain missing. V3 cannot silently acquire these fields, and
+these semantic workers. Original-input custody and authenticated material
+lookup are described below; authorized executor/recovery integration remains
+missing. V3 cannot silently acquire these fields, and
 revocation-only v4 remains unchanged.
 
 ## Separate signed admission plans and proof replay
@@ -499,8 +503,9 @@ configuration before active-launch and protected writer-descriptor callbacks,
 and captures generation last. No private signer, route, policy extension,
 permission expansion or registered handler is added.
 
-Cross-process serving, independently authenticated historical recovery,
-capability/current-root admission and authorized atomic execution remain open.
+Scoped cross-process retention and authenticated material lookup are described
+below. Independent historical provenance, capability/current-root admission
+and authorized atomic execution/recovery remain open.
 The six missing-kernel startup boundaries remain. The two dispatch-only handler
 APIs are now present, but this source has not opened a connection or proved a
 committed write.
@@ -633,10 +638,62 @@ outcome, not rollback or automatic retry authority.
 
 All six missing registry entries remain unactivated. These custody branches do
 not supply public business invocation, independent request/root provenance,
-one-use capabilities, reservations, authorized atomic execution or historically
-admitted read/recovery for evidence plans. External signing/witness/runtime
+one-use capabilities, reservations or authorized atomic execution/recovery.
+The separate authenticated lookup below retrieves material without establishing
+historical key or root admission. External signing/witness/runtime
 infrastructure and release admission remain required. This implementation is
 source-only, unbuilt and unexecuted; no runtime proof is claimed.
+
+## Authenticated retained-original lookup
+
+Source `.95` adds the separate 13-field
+`serverware.signedPolicyAuthorityWebAuthnEvidenceCustodyReadRequest/v1` control,
+with purpose `read-evidence-plan`. One verifier signature binds the requested
+retained-record digest, exact historical-document digest/count, current
+configuration and generation, source, operation and issue/expiry times. The
+planner forwards those same original control/history bytes to the writer;
+there is no additional planner signature or write authorization. Producing a
+lookup request cannot claim replay of originals that have not been retrieved.
+
+The actual producer owns independent historical expectations and joins every
+configured purpose/key pin before signing. Each receiver verifies the original
+signature, canonical bytes and current scope, then the complete history
+commitment before decoding that history and repeating the configured joins.
+A fresh actual monotonic/epoch read window permits lookup after the historical
+plan deadline expires, but renews neither that plan nor its evidence or retention
+authority. Its source-capped control age preserves stricter role bounds and
+the purpose's clock-skew bound; the same original window is checked around I/O
+and after replay. Current configuration/source/generation must still match:
+no historical key rollover, root provenance or policy admission is inferred.
+
+The writer authenticates before the real database gate and invokes the existing
+store's SELECT lookup and genuine three-original replay. It performs no
+application mutation, but deliberately retains the existing SERIALIZABLE,
+read-write, non-deferrable writer owner and privileges—not a database READ ONLY
+transaction or reduced-privilege owner. Its result escapes only after normal
+outer transaction exit and connection close. Both receiving clients repeat
+actual configured signature/proof/semantic replay against the authenticated
+independent history and join the derived record digest to the requested and
+returned identities.
+
+The response contains the original signed plan, inputs and evaluation context,
+plus unsigned record/time metadata. The timestamp is checked against the
+genuinely replayed plan's historical freshness interval and rejected if beyond
+current time plus allowed skew; it remains informational, not a signed receipt.
+All request lengths are checked before allocating either body: control at most
+4 MiB, history at most 64 MiB, combined at most 64 MiB. Response raw3 lengths and
+all metadata are validated before body allocation, with raw3 plus the 79-byte
+digest/time metadata bounded to 64 MiB. Fixed peer checks, absolute per-connection
+deadlines, request half-close and exact request/response EOF remain mandatory.
+Each serving invocation allocates one source work allowance after complete
+request receipt; its captures, authentication and replay share that allowance.
+
+Missing or incomplete custody raises; a failed read is not proof of absence,
+rollback or permission to regenerate/retry a write. Lookup neither inserts,
+reserves, executes nor automatically retries. These private serving branches
+do not enable public business invocation, repair registry startup or provision
+external infrastructure. Implementation and verification remain source-only;
+no runtime, durability or completed execution-recovery claim is made.
 
 ## Retained evidence and consumption
 

@@ -11,8 +11,9 @@ the reserve's capabilityDigest. It cannot commit the dependent pending receipt
 or computation snapshot without creating a cycle. Revocation's original
 signed capability ID and snapshot remain separate commitments.
 
-No publisher or grant issuer accepting a scope DTO is provided. The existing
-revocation database issuer has no independent all-operation authorizer key.
+Separate trusted producers construct root delegations and grants from genuine
+originals; this verifier offers no signing API accepting a scope DTO. The
+existing revocation database issuer has no independent all-operation authorizer key.
 A trusted caller-authorization/signing owner, cold enrollment, key provisioning,
 durable reservation and executor admission remain separate prerequisites.
 There is no clock, SQL, I/O, new work allowance, retry or execution here.

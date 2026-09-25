@@ -58,6 +58,12 @@ Grant verification authenticates the enrolled authorizer's assertion; it does
 not independently establish the caller's session, key custody or measurement.
 No generic scope-object-to-production-grant issuer is provided.
 
+Source `.143` adds [original-plan grant and dedicated authorizer enrollment
+production](authority-successor-execution-grant-production.md). The grant
+producer performs genuine plan replay itself and signs only same-call derived
+claims with independent authorization scope; public caller admission, cold
+authorizer ownership and key/service provisioning remain external.
+
 [`authority_successor_execution_preparation._produce_reserve_on_work`](../serverware/authority_successor_execution_preparation.py)
 connects an original grant to actual reserve production. It accepts grant and
 enrollment originals, independent authorization/history/key inputs and the

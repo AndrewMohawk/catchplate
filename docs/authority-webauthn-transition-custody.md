@@ -1,6 +1,6 @@
 # Private WebAuthn transition custody
 
-Status: source `.107`, implementation only; unbuilt and unexecuted. This is the
+Status: source `.116`, implementation only; unbuilt and unexecuted. This is the
 private retention and authenticated lookup path for `webauthn.registration.finalize`,
 `webauthn.trust.stage` and `webauthn.trust.complete`, not execution of those
 business transitions. See the [successor overview](webauthn-successor-transitions.md)
@@ -68,9 +68,13 @@ is checked against original plan history and the current future-time bound,
 not treated as a signed durability receipt.
 
 A fresh bounded lookup window permits retrieval after a historical plan has
-expired, without renewing any plan, evidence or invocation time. Current pinned
-configuration and source must still match the supplied history, and the control
-must match the current generation; there is no historical key-rollover resolver.
+expired, without renewing any plan, evidence or invocation time. The control
+must still match the current configuration and generation. Source `.116` adds
+a separately admitted [historical archive](authority-historical-replay.md) for
+configuration/cohort/key rollover under the same supported source and schemas.
+Current lookup authentication precedes historical selection; stored context
+cannot enroll keys. The fresh lookup interval must also fit inside the current
+archive authorization interval. Unsupported old source versions still fail.
 Raw-two requests and raw-four
 responses plus metadata retain the 64 MiB aggregate limit, preallocation length
 checks, configured peers, absolute deadlines, exact EOF and one shared allowance
@@ -94,8 +98,8 @@ does not prove rollback or absence and does not authorize an automatic retry.
 Transport completion, source inspection and a returned ordinary object do not
 establish tested deployment behavior or exactly-once business execution.
 
-Authenticated retrieval is implemented at source level. Independent historical
-resolution, durable caller retention/reconciliation, authorized recovery,
+Authenticated retrieval and supported-version historical trust resolution are
+implemented at source level. Cross-source replay, durable caller retention/reconciliation, authorized recovery,
 public orchestration and atomic successor execution remain unfinished. This
 path does not keep roots current, reserve a logical operation, issue execution
 authority or complete the public workflow.

@@ -55,6 +55,17 @@ class _VerifiedReadRequest:
     window: tuple
 
 
+def _archive_validity(value):
+    if type(value) is not tuple or len(value) != 2:
+        raise WebAuthnEvidenceCustodyReadRequestError("evidence read archive validity is not an exact pair")
+    lower, upper = value
+    for instant in (lower, upper):
+        evidence.plan.contract._integer(instant, minimum=1)
+    if lower >= upper:
+        raise WebAuthnEvidenceCustodyReadRequestError("evidence read archive validity is empty")
+    return lower, upper
+
+
 def _shape(value, *, signed=True):
     shape = evidence.plan.contract
     shape._object(value, _FIELDS if signed else _FIELDS - {"signatureBase64Url"},
@@ -101,7 +112,8 @@ def _sign_control(unsigned, *, private_key, public_key, work):
     unsigned_size, unsigned_nodes = work.measure(owned)
     envelope_size, envelope_nodes = work.measure(envelope)
     if (max(unsigned_size, envelope_size) > MAX_CONTROL_BYTES
-            or max(unsigned_nodes, envelope_nodes) > MAX_CONTROL_NODES):
+            or max(unsigned_nodes, envelope_nodes) > MAX_CONTROL_NODES
+            or envelope_size + owned["historyByteCount"] > authority.MAX_RESULT_BYTES):
         raise WebAuthnEvidenceCustodyReadRequestError("evidence read signed output exceeds its control bound")
     # Prepay both actual encodings, the post-callback full comparison, final
     # envelope and signature transport before the native signing callback.
@@ -129,11 +141,15 @@ def _sign_control(unsigned, *, private_key, public_key, work):
     return result
 
 
-def _produce_on_work(*, retained_record_digest, expectations, pins,
+def _produce_on_work(*, retained_record_digest, expectations, pins, historical_pins,
         generation_sequence, generation_digest, verifier_private_key, verifier_public_key,
-        maximum_control_age_ns, work):
+        maximum_control_age_ns, archive_validity, work):
     evidence.capture._SharedLedger(work)
+    archive_from, archive_until = _archive_validity(archive_validity)
     pins = admission._validate_pins(pins)
+    historical_pins = admission._validate_pins(historical_pins)
+    evidence.plan._same(pins[0], historical_pins[0], work,
+        "evidence lookup and historical replay operations differ")
     shape = evidence.plan.contract
     shape._digest(retained_record_digest)
     record_digest = retained_record_digest
@@ -144,17 +160,19 @@ def _produce_on_work(*, retained_record_digest, expectations, pins,
         raise WebAuthnEvidenceCustodyReadRequestError("evidence read signer is not Ed25519")
     shape._integer(maximum_control_age_ns, authority.VERIFIER_RESPONSE_MAX_AGE_NS, minimum=1)
     # Independent history is fully owned before the first real key callback.
-    # These joins validate configured expectations, not a missing stored plan.
-    owned = admission._capture_expectations_on_work(pins, expectations, work)
+    # These joins use the separately admitted historical configuration, not
+    # current control pins and not a missing stored plan.
+    owned = admission._capture_expectations_on_work(historical_pins, expectations, work)
     historical = context_wire._encode_on_work(expectations=owned, work=work)
     wire._distinct_keys(pins[1], public_key, work)
     evidence.keys._pair_on_work(private_key, public_key, work)
     history_digest = retention._bytes_digest(historical, work)
-    # The source integer ceiling is not an old plan's deadline. The actual
-    # clock owner clips it to a new bounded lookup lifetime from current time.
-    window = clock._open_on_work(deadline_epoch_ns=shape.I64_MAX,
+    # The current archive, not an old plan deadline, bounds this new lookup.
+    window = clock._open_on_work(deadline_epoch_ns=archive_until,
         maximum_lifetime_ns=maximum_control_age_ns, maximum_clock_skew_ns=pins[9], work=work)
     issued, expires = window[0], clock._deadline_epoch_ns(window)
+    if issued < archive_from or expires > archive_until:
+        raise WebAuthnEvidenceCustodyReadRequestError("evidence read lifetime exceeds the admitted archive")
     timing = {"issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     unsigned = {"schema": SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
         "purpose": PURPOSE, "configurationDigest": scope[0], "generationSequence": scope[1],
@@ -169,15 +187,20 @@ def _produce_on_work(*, retained_record_digest, expectations, pins,
     return _ProducedReadRequest(original, historical)
 
 
-def _verify_on_work(*, control_bytes, historical_expectations_bytes, pins,
-        generation_sequence, generation_digest, verifier_public_key, maximum_control_age_ns, work):
+def _authenticate_on_work(*, control_bytes, historical_expectations_bytes, pins,
+        generation_sequence, generation_digest, verifier_public_key, maximum_control_age_ns,
+        archive_validity, work):
+    """Authenticate current lookup and original history bytes, without decoding history."""
     ledger = evidence.capture._SharedLedger(work)
+    archive_from, archive_until = _archive_validity(archive_validity)
     pins = admission._validate_pins(pins)
     for raw, maximum in ((control_bytes, MAX_CONTROL_BYTES),
             (historical_expectations_bytes, context_wire.MAX_BYTES)):
         if type(raw) is not bytes or not 2 <= len(raw) <= maximum:
             raise WebAuthnEvidenceCustodyReadRequestError("evidence read requires bounded immutable originals")
     original, historical = control_bytes, historical_expectations_bytes
+    if len(original) + len(historical) > authority.MAX_RESULT_BYTES:
+        raise WebAuthnEvidenceCustodyReadRequestError("evidence read originals exceed their aggregate bound")
     scope = wire._pins(pins[7], generation_sequence, generation_digest, pins[0])
     public_key = verifier_public_key
     if not isinstance(public_key, retention.plan.Ed25519PublicKey):
@@ -186,6 +209,8 @@ def _verify_on_work(*, control_bytes, historical_expectations_bytes, pins,
     value, signature, unsigned_wire = _read_control(original, work)
     record_digest = value["retainedRecordDigest"]
     issued, expires = value["issuedAtEpochNs"], value["expiresAtEpochNs"]
+    if issued < archive_from or expires > archive_until:
+        raise WebAuthnEvidenceCustodyReadRequestError("evidence read lifetime exceeds the admitted archive")
     history_commitment = value["historyBytesDigest"], value["historyByteCount"]
     timing = {"issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     evidence.capability._signature(public_key, signature, SCHEMA, unsigned_wire, ledger)
@@ -198,10 +223,29 @@ def _verify_on_work(*, control_bytes, historical_expectations_bytes, pins,
         maximum_clock_skew_ns=pins[9], work=work)
     evidence.plan._same((retention._bytes_digest(historical, work), len(historical)),
         history_commitment, work, "evidence read differs from its complete historical-byte commitment")
-    # Only the authenticated committed history may now be decoded. Current
-    # configured pins still must match it; no rollover or provenance is inferred.
-    decoded = context_wire._decode_on_work(historical, work=work)
-    admission._capture_expectations_on_work(pins, decoded, work)
     wire._fresh_on_work(timing, window=window, maximum_age_ns=maximum_control_age_ns,
         maximum_clock_skew_ns=pins[9], work=work)
     return _VerifiedReadRequest(record_digest, issued, expires, window)
+
+
+def _verify_on_work(*, control_bytes, historical_expectations_bytes, pins, historical_pins,
+        generation_sequence, generation_digest, verifier_public_key, maximum_control_age_ns,
+        archive_validity, work):
+    """Authenticate once, then join only independently admitted historical pins."""
+    held_validity = _archive_validity(archive_validity)
+    pins = admission._validate_pins(pins)
+    historical_pins = admission._validate_pins(historical_pins)
+    original, historical = control_bytes, historical_expectations_bytes
+    evidence.plan._same(pins[0], historical_pins[0], work,
+        "evidence lookup and historical replay operations differ")
+    verified = _authenticate_on_work(control_bytes=original, historical_expectations_bytes=historical,
+        pins=pins, generation_sequence=generation_sequence, generation_digest=generation_digest,
+        verifier_public_key=verifier_public_key, maximum_control_age_ns=maximum_control_age_ns,
+        archive_validity=held_validity, work=work)
+    window = verified.window
+    timing = {"issuedAtEpochNs": verified.issued_at_epoch_ns, "expiresAtEpochNs": verified.expires_at_epoch_ns}
+    decoded = context_wire._decode_on_work(historical, work=work)
+    admission._capture_expectations_on_work(historical_pins, decoded, work)
+    wire._fresh_on_work(timing, window=window, maximum_age_ns=maximum_control_age_ns,
+        maximum_clock_skew_ns=pins[9], work=work)
+    return verified

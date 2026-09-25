@@ -3629,6 +3629,46 @@ def verify_signed_artifact_package(
     )
 
 
+def verify_historical_artifact_package(
+    package: Mapping[str, Any],
+    *,
+    historical_trust_state: Mapping[str, Any],
+    expected_package_digest: str,
+    expected_generation_digest: str,
+    expected_generation_sequence: int,
+    validation_time: str,
+) -> VerifiedArtifactPackage:
+    """Verify an independently admitted old exact state, never advance it.
+
+    The caller must authenticate the historical trust snapshot and expected
+    identities independently of this package. Neither a stored plan nor this
+    ordinary return value enrolls its keys. Current source/schema restrictions
+    and every real package, key, revocation and checkpoint check remain intact.
+    This is startup artifact verification, not a measured request-work API.
+    """
+    _require_digest(expected_package_digest, name="historical package digest")
+    _require_digest(expected_generation_digest, name="historical generation digest")
+    _require_int(expected_generation_sequence, name="historical generation sequence",
+        minimum=0, maximum=2**63 - 1)
+    state = validate_trust_state(historical_trust_state)
+    if (
+        state["currentPackageDigest"] != expected_package_digest
+        or state["currentGenerationDigest"] != expected_generation_digest
+        or state["currentSequence"] != expected_generation_sequence
+    ):
+        raise ArtifactContractError("historical trust snapshot differs from admitted identities")
+    verified = verify_signed_artifact_package(package,
+        trust_state=historical_trust_state, validation_time=validation_time)
+    if (
+        verified.disposition != "CurrentExactRetry"
+        or verified.package_digest != expected_package_digest
+        or verified.generation_digest != expected_generation_digest
+        or verified.generation_sequence != expected_generation_sequence
+    ):
+        raise ArtifactContractError("historical package is not the admitted exact generation")
+    return verified
+
+
 def _validate_generation_bundle_bindings(
     bundle: Mapping[str, Any],
     generation: Mapping[str, Any],
@@ -4683,6 +4723,7 @@ __all__ = [
     "validate_trust_state",
     "validate_unsigned_artifact_package",
     "verify_ed25519_signature",
+    "verify_historical_artifact_package",
     "verify_external_evidence_receipt",
     "verify_signed_artifact_package",
 ]

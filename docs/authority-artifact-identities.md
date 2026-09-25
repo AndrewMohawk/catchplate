@@ -1,6 +1,6 @@
 # Authority artifact identities
 
-Source revisions `.108` through `.115` separate file, policy, generation, role,
+Source revisions `.108` through `.116` separate file, policy, generation, role,
 bootstrap-control, runtime credential, evidence-delivery and admitted receipt identities.
 Direct final-generation and final-launch
 configuration pins are replaced by static commitments. The launch manifest no
@@ -68,6 +68,12 @@ framing its canonical payload with the source-defined `payloadSchema`.
 Other configuration roles must carry null for both payload fields; no raw hash
 is substituted for an unsupported semantic identity. Generator inputs cannot
 supply either payload field.
+
+Service configuration uses its existing service protocol framing (ASCII domain,
+NUL, then length-framed canonical payload). Witness configuration uses its existing
+artifact-style length-prefixed domain. Source `.116` corrects the generator's
+service projection to match the actual loader; these two framings cannot be
+substituted for each other merely because both identities are SHA-256 strings.
 
 The generation retains its raw `configurationDigests` inventory and adds
 `configurationPayloadBindings`. Each binding contains exactly `fileDigest`,
@@ -334,7 +340,11 @@ static signed configuration + admitted generation/launch observations
    for existing protocols      for configured operation mappers
 ```
 
-The unchanged 4 MiB evidence slot carries canonical
+Within the unchanged 4 MiB evidence slot, source `.116` uses a canonical
+`serverware.authorityRuntimeEvidence/v1` wrapper containing the current cohort
+and a separately root-authorized historical archive. See
+[historical replay](authority-historical-replay.md) for admission and lifetime
+boundaries. The current cohort remains canonical
 `serverware.signedTrustedHostLocalAttestationCohort/v1`: the exact
 `schema`, `payload`, `signature` envelope. Its payload has ten fields: schema,
 source revision, configuration digest, generation digest, operation-manifest
@@ -363,7 +373,9 @@ payload is never amended. The issuer session digest keeps its existing derivatio
 over DB/TLS identity, measurement, the admitted receipt and the predeclared
 credential-issuance pin. Historic expectations are not refreshed from this map.
 
-Independent receipt/cohort production, historical configuration/key resolution,
+Supported-version historical configuration/key resolution is integrated in
+source `.116`; unsupported old source/schema replay remains denied.
+Independent receipt/cohort/archive production, cross-source replay,
 durable caller recovery and successor execution remain implementation or
 provisioning work. Caller-supplied digest maps and retained history do not acquire
 admission authority from this split. Broad fixture adaptation and consolidated

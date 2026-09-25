@@ -901,9 +901,17 @@ def _validate_configuration_document(
                 raise GeneratorError(
                     "authority WebAuthn transition policy is invalid"
                 ) from exc
-    return expected_payload_schema, domain_digest(
-        expected_payload_schema, canonical_json_bytes(payload)
-    )
+    payload_bytes = canonical_json_bytes(payload)
+    if expected_payload_schema == SERVICE_CONFIGURATION_PAYLOAD_SCHEMA:
+        # Service configuration identity uses the service protocol's NUL
+        # domain framing. Witness configuration deliberately uses artifact
+        # length-prefixed domain framing; these are not interchangeable.
+        digest = hashlib.sha256()
+        digest.update(expected_payload_schema.encode("ascii") + b"\x00")
+        digest.update(len(payload_bytes).to_bytes(8, "big"))
+        digest.update(payload_bytes)
+        return expected_payload_schema, "sha256:" + digest.hexdigest()
+    return expected_payload_schema, domain_digest(expected_payload_schema, payload_bytes)
 
 
 def _validate_required_role_manifests(

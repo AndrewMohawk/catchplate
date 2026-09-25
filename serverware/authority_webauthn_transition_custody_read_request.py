@@ -55,6 +55,17 @@ class _VerifiedReadRequest:
     window: tuple
 
 
+def _archive_validity(value):
+    if type(value) is not tuple or len(value) != 2:
+        raise WebAuthnTransitionCustodyReadRequestError("transition read archive validity is not an exact pair")
+    lower, upper = value
+    for instant in (lower, upper):
+        retention.plan.contract.shape._integer(instant, minimum=1)
+    if lower >= upper:
+        raise WebAuthnTransitionCustodyReadRequestError("transition read archive validity is empty")
+    return lower, upper
+
+
 def _raw2(control_bytes, historical_expectations_bytes):
     originals = control_bytes, historical_expectations_bytes
     for raw, maximum in zip(originals, (MAX_CONTROL_BYTES, MAX_HISTORY_BYTES)):
@@ -142,11 +153,15 @@ def _sign_control(unsigned, *, private_key, public_key, work):
     return result
 
 
-def _produce_on_work(*, retained_record_digest, expectations, pins,
+def _produce_on_work(*, retained_record_digest, expectations, pins, historical_pins,
         generation_sequence, generation_digest, verifier_private_key, verifier_public_key,
-        maximum_control_age_ns, work):
+        maximum_control_age_ns, archive_validity, work):
     evidence.capture._SharedLedger(work)
+    archive_from, archive_until = _archive_validity(archive_validity)
     pins = admission._validate_pins(pins)
+    historical_pins = admission._validate_pins(historical_pins)
+    evidence.plan._same(pins[0], historical_pins[0], work,
+        "transition lookup and historical replay operations differ")
     shape = retention.plan.contract.shape
     shape._digest(retained_record_digest)
     record_digest = retained_record_digest
@@ -157,20 +172,22 @@ def _produce_on_work(*, retained_record_digest, expectations, pins,
         raise WebAuthnTransitionCustodyReadRequestError("transition read signer is not Ed25519")
     shape._integer(maximum_control_age_ns, authority.VERIFIER_RESPONSE_MAX_AGE_NS, minimum=1)
     # This actual helper captures all independent5 before key callbacks, then
-    # checks their full configured policy/key bindings. It cannot verify a
+    # checks their historical policy/key bindings, separate from current
+    # control scope. It cannot verify a
     # missing retained plan or enroll history from the record digest.
-    owned = admission._capture_expectations_on_work(pins, expectations, work)
+    owned = admission._capture_expectations_on_work(historical_pins, expectations, work)
     historical = context_wire._encode_on_work(expectations=owned, work=work)
     if len(historical) + 2 > MAX_REQUEST_BYTES:
         raise WebAuthnTransitionCustodyReadRequestError("transition read history cannot fit its aggregate bound")
     wire._distinct_keys(pins[1], public_key, work)
     evidence.keys._pair_on_work(private_key, public_key, work)
     history_digest = retention._bytes_digest(historical, work)
-    # A fresh lookup is not constrained by an expired historical plan. The
-    # real clock clips this integer ceiling to the current configured lifetime.
-    window = clock._open_on_work(deadline_epoch_ns=shape.I64_MAX,
+    # A fresh lookup is bounded by the current archive, not the old plan.
+    window = clock._open_on_work(deadline_epoch_ns=archive_until,
         maximum_lifetime_ns=maximum_control_age_ns, maximum_clock_skew_ns=skew, work=work)
     issued, expires = window[0], clock._deadline_epoch_ns(window)
+    if issued < archive_from or expires > archive_until:
+        raise WebAuthnTransitionCustodyReadRequestError("transition read lifetime exceeds the admitted archive")
     timing = {"issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     unsigned = {"schema": SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
         "purpose": PURPOSE, "configurationDigest": scope[0], "generationSequence": scope[1],
@@ -186,9 +203,12 @@ def _produce_on_work(*, retained_record_digest, expectations, pins,
     return _ProducedReadRequest(original, historical)
 
 
-def _verify_on_work(*, control_bytes, historical_expectations_bytes, pins,
-        generation_sequence, generation_digest, verifier_public_key, maximum_control_age_ns, work):
+def _authenticate_on_work(*, control_bytes, historical_expectations_bytes, pins,
+        generation_sequence, generation_digest, verifier_public_key, maximum_control_age_ns,
+        archive_validity, work):
+    """Authenticate current lookup and original history bytes, without decoding history."""
     ledger = evidence.capture._SharedLedger(work)
+    archive_from, archive_until = _archive_validity(archive_validity)
     original, historical = _raw2(control_bytes, historical_expectations_bytes)
     pins = admission._validate_pins(pins)
     scope = wire._pins(pins[5], generation_sequence, generation_digest, pins[0])
@@ -199,6 +219,8 @@ def _verify_on_work(*, control_bytes, historical_expectations_bytes, pins,
     value, signature, unsigned_wire = _read_control(original, work)
     record_digest = value["retainedRecordDigest"]
     issued, expires = value["issuedAtEpochNs"], value["expiresAtEpochNs"]
+    if issued < archive_from or expires > archive_until:
+        raise WebAuthnTransitionCustodyReadRequestError("transition read lifetime exceeds the admitted archive")
     history_commitment = value["historyBytesDigest"], value["historyByteCount"]
     timing = {"issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     evidence.capability._signature(public_key, signature, SCHEMA, unsigned_wire, ledger)
@@ -211,10 +233,29 @@ def _verify_on_work(*, control_bytes, historical_expectations_bytes, pins,
         maximum_clock_skew_ns=skew, work=work)
     evidence.plan._same((retention._bytes_digest(historical, work), len(historical)),
         history_commitment, work, "transition read differs from its complete historical-byte commitment")
-    # Signature, scope and complete byte commitment precede history decoding.
-    # Current pins must match; neither key rollover nor provenance is inferred.
-    decoded = context_wire._decode_on_work(historical, work=work)
-    admission._capture_expectations_on_work(pins, decoded, work)
     wire._fresh_on_work(timing, window=window, maximum_age_ns=maximum_control_age_ns,
         maximum_clock_skew_ns=skew, work=work)
     return _VerifiedReadRequest(record_digest, issued, expires, window)
+
+
+def _verify_on_work(*, control_bytes, historical_expectations_bytes, pins, historical_pins,
+        generation_sequence, generation_digest, verifier_public_key, maximum_control_age_ns,
+        archive_validity, work):
+    """Authenticate once, then join only independently admitted historical pins."""
+    held_validity = _archive_validity(archive_validity)
+    pins = admission._validate_pins(pins)
+    historical_pins = admission._validate_pins(historical_pins)
+    original, historical = _raw2(control_bytes, historical_expectations_bytes)
+    evidence.plan._same(pins[0], historical_pins[0], work,
+        "transition lookup and historical replay operations differ")
+    verified = _authenticate_on_work(control_bytes=original, historical_expectations_bytes=historical,
+        pins=pins, generation_sequence=generation_sequence, generation_digest=generation_digest,
+        verifier_public_key=verifier_public_key, maximum_control_age_ns=maximum_control_age_ns,
+        archive_validity=held_validity, work=work)
+    window = verified.window
+    timing = {"issuedAtEpochNs": verified.issued_at_epoch_ns, "expiresAtEpochNs": verified.expires_at_epoch_ns}
+    decoded = context_wire._decode_on_work(historical, work=work)
+    admission._capture_expectations_on_work(historical_pins, decoded, work)
+    wire._fresh_on_work(timing, window=window, maximum_age_ns=maximum_control_age_ns,
+        maximum_clock_skew_ns=pins[6][1], work=work)
+    return verified

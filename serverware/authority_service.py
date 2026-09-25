@@ -1068,6 +1068,7 @@ class MeasuredConfiguration:
     file_digest: str | None = None
     runtime_role_identities: dict[str, Any] | None = None
     attestation_cohort_bytes: bytes | None = None
+    history_archive: Any | None = None
 
     @classmethod
     def load(cls, *, role: str) -> "MeasuredConfiguration":
@@ -1790,16 +1791,32 @@ class MeasuredConfiguration:
         attestation_value: bytes,
     ) -> None:
         from serverware import authority_attestation_cohort
+        from serverware import authority_historical_archive
+        from serverware import authority_revocation_configuration
 
         try:
+            delivery = json.loads(attestation_value)
+            if (
+                type(delivery) is not dict
+                or set(delivery) != {"schema", "currentCohort", "historicalArchive"}
+                or delivery["schema"] != "serverware.authorityRuntimeEvidence/v1"
+                or attestation_value != _canonical(delivery)
+            ):
+                raise AuthorityServiceError("runtime evidence delivery is not closed canonical data")
+            active_launch = authority_launch_guard.require_active(role)
+            generation = dict(authority_launch_guard.generation())
+            held_generation = {
+                name: generation[name]
+                for name in authority_revocation_configuration._GENERATION_FIELDS
+            }
             admitted = authority_attestation_cohort._admit_on_current_launch(
-                original_bytes=attestation_value,
+                original_bytes=_canonical(delivery["currentCohort"]),
                 role=role,
                 configuration_payload=self.payload,
                 configuration_digest=self.digest,
                 root_public_key=self.root_key,
             )
-        except ValueError as exc:
+        except (KeyError, TypeError, ValueError, RecursionError) as exc:
             raise AuthorityServiceError("trusted-host-local attestation cohort is invalid") from exc
         runtime_roles = {}
         local_receipt = None
@@ -1817,14 +1834,55 @@ class MeasuredConfiguration:
                 local_receipt = envelope
         if local_receipt is None:
             raise AuthorityServiceError("attestation cohort omits the active role")
-        object.__setattr__(self, "runtime_role_identities", {
+        runtime_identities = {
             "schema": "serverware.policyAuthorityRuntimeRoleIdentities/v1",
             "configurationDigest": self.digest,
             "generationSequence": admitted.generation_sequence,
             "generationDigest": admitted.generation_digest,
             "cohortDigest": admitted.cohort_digest,
             "roles": runtime_roles,
-        })
+        }
+        if (held_generation["sequence"], held_generation["digest"]) != (
+            admitted.generation_sequence, admitted.generation_digest
+        ):
+            raise AuthorityServiceError("current historical snapshot differs from the active launch")
+        try:
+            # The archive is explicitly authorized by the CURRENT root and
+            # scoped to this current configuration/generation. Stored plans
+            # cannot enroll historical keys or manufacture old trust state.
+            archive_bytes = _canonical(delivery["historicalArchive"])
+            archive_payload = delivery["historicalArchive"]["payload"]
+            archive_interval = (
+                archive_payload["issuedAtEpochNs"], archive_payload["expiresAtEpochNs"]
+            )
+            current_snapshot = authority_historical_archive._HistoricalSnapshot(
+                payload=self.payload, configuration_digest=self.digest,
+                generation=held_generation, runtime_role_identities=runtime_identities,
+                valid_from_epoch_ns=max(admitted.valid_from_epoch_ns,
+                    authority_attestation_cohort._generation_time_ns(
+                        generation["validFrom"], "current generation validFrom")),
+                valid_until_epoch_ns=min(admitted.valid_until_epoch_ns,
+                    authority_attestation_cohort._generation_time_ns(
+                        generation["validUntil"], "current generation validUntil")),
+            )
+            history_archive = authority_historical_archive._admit_on_startup(
+                original_bytes=archive_bytes, current_snapshot=current_snapshot,
+                current_root_public_key=self.root_key, now_epoch_ns=time.time_ns(),
+            )
+            # Cold admission can be expensive. Repeat the genuine live
+            # custody and original current intervals after archive verification.
+            if authority_launch_guard.require_active(role) != active_launch:
+                raise AuthorityServiceError("launch changed during historical archive admission")
+            final_now = time.time_ns()
+            if not (
+                admitted.valid_from_epoch_ns <= final_now < admitted.valid_until_epoch_ns
+                and archive_interval[0] <= final_now < archive_interval[1]
+            ):
+                raise AuthorityServiceError("runtime evidence expired during startup admission")
+        except (KeyError, TypeError, ValueError, RecursionError) as exc:
+            raise AuthorityServiceError("historical archive admission failed") from exc
+        object.__setattr__(self, "history_archive", history_archive)
+        object.__setattr__(self, "runtime_role_identities", runtime_identities)
         object.__setattr__(self, "attestation_cohort_bytes", admitted.cohort_bytes)
         # Existing consumption/response protocols continue to use the genuine
         # individual local receipt and its unchanged identity domain.
@@ -3087,7 +3145,7 @@ class AuthorityProcess:
         self.role_name = role
         self.process_mode = PROCESS_MODES[role]
         self.configuration = configuration
-        if configuration.runtime_role_identities is None:
+        if configuration.runtime_role_identities is None or configuration.history_archive is None:
             raise AuthorityServiceError("authority runtime role identities are not admitted")
         self.role_config = configuration.role(role)
         if (
@@ -4698,11 +4756,17 @@ class AuthorityProcess:
         owned = wire.evidence.capture._JSONCapture(wire.evidence.capture._SharedLedger(work),
             maximum_bytes=wire.retention.plan.contract.MAX_BYTES).visit(expectations)
         wire.retention.plan._validate_expectations(owned, operation)
+        if type(self) is not AuthorityProcess:
+            raise AuthorityServiceError("evidence custody read process is not configured")
+        measured = self.configuration
+        if type(measured) is not MeasuredConfiguration:
+            raise AuthorityServiceError("evidence custody read configuration is unavailable")
+        held_archive = measured.history_archive
         payload, digest, generation, _dsn, signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=True, work=work)
         return actions._produce_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=generation,
-            runtime_role_identities=runtime_role_identities,
+            runtime_role_identities=runtime_role_identities, history_archive=held_archive,
             retained_record_digest=retained_record_digest, expectations=owned,
             verifier_private_key=signer, work=work)
 
@@ -4714,11 +4778,18 @@ class AuthorityProcess:
 
         originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
+        if type(self) is not AuthorityProcess:
+            raise AuthorityServiceError("evidence custody read process is not configured")
+        measured = self.configuration
+        if type(measured) is not MeasuredConfiguration:
+            raise AuthorityServiceError("evidence custody read configuration is unavailable")
+        held_archive = measured.history_archive
         payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="verifier", signing=False, work=work)
         return actions._request_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=generation,
-            runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
+            runtime_role_identities=runtime_role_identities, history_archive=held_archive,
+            control_bytes=originals[0],
             historical_expectations_bytes=originals[1], work=work)
 
     def _forward_webauthn_evidence_custody_read(self, *, purpose, control_bytes,
@@ -4729,11 +4800,18 @@ class AuthorityProcess:
 
         originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
+        if type(self) is not AuthorityProcess:
+            raise AuthorityServiceError("evidence custody read process is not configured")
+        measured = self.configuration
+        if type(measured) is not MeasuredConfiguration:
+            raise AuthorityServiceError("evidence custody read configuration is unavailable")
+        held_archive = measured.history_archive
         payload, digest, generation, _dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="planner", signing=False, work=work)
         return actions._forward_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=generation,
-            runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
+            runtime_role_identities=runtime_role_identities, history_archive=held_archive,
+            control_bytes=originals[0],
             historical_expectations_bytes=originals[1], work=work)
 
     def _read_webauthn_evidence_custody(self, *, purpose, control_bytes,
@@ -4748,11 +4826,18 @@ class AuthorityProcess:
 
         originals = evidence_custody_read_transport._validate_request(control_bytes=control_bytes,
             historical_expectations_bytes=historical_expectations_bytes)
+        if type(self) is not AuthorityProcess:
+            raise AuthorityServiceError("evidence custody read process is not configured")
+        measured = self.configuration
+        if type(measured) is not MeasuredConfiguration:
+            raise AuthorityServiceError("evidence custody read configuration is unavailable")
+        held_archive = measured.history_archive
         payload, digest, generation, writer_dsn, _signer, runtime_role_identities = _webauthn_evidence_custody_context(
             self, role_name="planner-writer", signing=False, work=work)
         return actions._read_on_configuration(purpose=purpose, payload=payload,
             configuration_digest=digest, generation=generation,
-            runtime_role_identities=runtime_role_identities, control_bytes=originals[0],
+            runtime_role_identities=runtime_role_identities, history_archive=held_archive,
+            control_bytes=originals[0],
             historical_expectations_bytes=originals[1], writer_dsn=writer_dsn, work=work)
 
     def _produce_revocation_observed_plan(self, *, request, evidence, context,

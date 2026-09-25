@@ -1,6 +1,6 @@
 # Completing the WebAuthn authority transitions
 
-Status: source `.98`, implementation only, not an enabled public protocol or
+Status: source `.99`, implementation only, not an enabled public protocol or
 migration. All six WebAuthn successor operations now have genuine configured
 programs in the separate `typed-successor-planning` registry. Legacy `KERNELS` and
 `PLANNING_PROGRAMS`, service routing, SQL execution and witness admission exclude
@@ -15,6 +15,16 @@ guarded transaction scope and work allowance; they do not yet produce signed
 plans. None of these registrations supplies public invocation, successor
 reservation/capability/atomic execution, physical readback or production
 readiness. All source is unbuilt and unexecuted.
+
+Source `.99` adds `acquire_originals` to the three transition read owners without
+changing `acquire`. It owns invocation graphs before callbacks and retains a
+canonical input commitment before database acquisition, then after normal read-scope exits repeats genuine
+semantic/query/capacity computation and compares the full effects and work totals.
+Registration's input graph is empty because original evidence is in its request;
+stage retains candidate/assertion/context; completion retains raw installation
+envelope/bundle/state, with committed-stage history independently supplied.
+This same-work replay supplies neither signed plans nor full offline primary/count
+proof replay, durable custody or execution. The `.98` registry split is unchanged.
 
 The remainder records the original design and revision-specific gaps. The current
 [successor implementation status](webauthn-successor-transitions.md) tracks the

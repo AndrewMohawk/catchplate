@@ -1,14 +1,16 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.98`, implementation only. All six WebAuthn successor operations
+Status: source `.99`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
 legacy service, SQL execution and witness gates exclude these successors.
 Revocation and the two evidence-admission programs produce signed originals;
-registration finalization, trust staging and completion have actual read-proof
-acquisition owners, not signed-plan producers. All source remains unbuilt and
-unexecuted. Independent authority, successor execution and release gates remain.
+registration finalization, trust staging and completion now retain original
+inputs and replay actual semantics, query bindings and capacity effects after
+their read-proof acquisitions, but are not signed-plan producers. All source
+remains unbuilt and unexecuted. Independent authority, successor execution and
+release gates remain.
 
 ## Genuine successor program selection
 
@@ -29,13 +31,38 @@ counted-write tracing; the two evidence-admission operations use ordinary
 exact-key traces. No replacement allowance or caller-supplied proof result is
 introduced.
 
-These three new owners return acquisition observations only. Configuration,
-request/current-root/time authority, assertion/capability bindings and committed
+These three owners return ordinary acquisition/retention observations.
+Configuration, request/current-root/time authority, assertion/capability bindings and committed
 stage or physical-readback provenance remain independently admitted inputs.
 They still need signed-plan integration. Registry selection does not supply
 public invocation, successor reservation, one-use capability, authorized atomic
 execution, recovery or independent production infrastructure. Earlier revision
 sections below describe their respective source checkpoints, not later closure.
+
+## Original inputs and replay for the three transition owners
+
+Source `.99` adds `acquire_originals` alongside each unchanged `acquire` method.
+It owns invocation graphs before callbacks, encodes and hashes the original-input
+record before database acquisition, and waits for all genuine read scopes to
+close. Before returning, it reruns the actual semantic worker, regenerates and
+validates query observations, finalizes audit capacity and compares complete
+mutations, result and both work totals with the acquisition. All steps spend the
+same caller allowance. The returned carrier contains the actual acquisition,
+original input bytes/digest and ordinary replay observations, not proof authority.
+
+The registration record has an empty input graph because its original evidence
+is already bound in the request. Stage retains its original candidate bundle,
+assertion and verification context. Completion retains only the original
+installation envelope, installed bundle and rollback-state bytes; committed-stage
+history, installer/target policy and time remain separately admitted inputs.
+Completion reuses the actual database cutoff, without inventing a new observation
+instant. Decoded records do not enroll keys, roots or historical authority.
+
+This is a foundation for signing, not signed plans for these three operations,
+full offline primary/count-proof replay, durable custody or execution. Genuine
+proof acquisition remains in the existing read path; the new semantic replay
+does not replace those proof engines. The `.98` six-program registry split and
+legacy exclusions are unchanged. Source is unbuilt and unexecuted.
 
 ## Evidence without circular dependencies
 

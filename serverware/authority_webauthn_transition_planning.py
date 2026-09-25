@@ -6,6 +6,10 @@ native constructor, key or database callback. The actual read scope supplies
 its admitted manifest and source trace; the genuine acquisition repeats query,
 membership, semantic, capacity and write-root computation on the same work.
 Results escape only after normal cursor, transaction and connection exits.
+The separate acquire_originals methods additionally retain canonical original
+inputs before database acquisition and repeat actual semantic/query/capacity
+computation after closing the scope. They do not replace membership or counted
+proof verification, sign plans or preserve independently admitted history.
 
 Configuration, request/current-root/time, assertion/capability and committed
 stage or physical readback provenance remain independent caller obligations.
@@ -26,6 +30,10 @@ from serverware import authority_transition_webauthn_registration as registratio
 from serverware import authority_transition_webauthn_trust_stage as stage
 from serverware import authority_transition_webauthn_completion as completion
 from serverware import authority_webauthn_trust_candidate as candidate
+from serverware import authority_webauthn_transition_inputs as originals
+from serverware import authority_webauthn_registration_replay as registration_replay
+from serverware import authority_webauthn_stage_replay as stage_replay
+from serverware import authority_webauthn_completion_replay as completion_replay
 
 
 authority, evidence = registration.authority, registration.evidence
@@ -135,6 +143,13 @@ def _hold_candidate(context):
     return der, schema, verified_at
 
 
+def _acquired_transition(acquisition, work):
+    """Ordinary claimed effects for genuine replay, never a proof shortcut."""
+    work.prepare_copy(acquisition.mutations)
+    return {"mutations": list(acquisition.mutations), "result": acquisition.kernel.result,
+        "kernelWorkUnits": acquisition.kernel.work_units, "workUnits": acquisition.work_units}
+
+
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
 class RegistrationTransitionPlanner:
     _configured: tuple
@@ -150,11 +165,27 @@ class RegistrationTransitionPlanner:
 
     def acquire(self, *, request, business_before_roots, authorization_before_roots,
             expected_counted_heads, now_epoch_ns, deadline_epoch_ns, work):
+        return self._acquire(request=request, business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots, expected_counted_heads=expected_counted_heads,
+            now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns, work=work, retain_originals=False)
+
+    def acquire_originals(self, *, request, business_before_roots, authorization_before_roots,
+            expected_counted_heads, now_epoch_ns, deadline_epoch_ns, work):
+        """Acquire actual proofs, then retain inputs and repeat real semantics."""
+        return self._acquire(request=request, business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots, expected_counted_heads=expected_counted_heads,
+            now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns, work=work, retain_originals=True)
+
+    def _acquire(self, *, request, business_before_roots, authorization_before_roots,
+            expected_counted_heads, now_epoch_ns, deadline_epoch_ns, work, retain_originals):
         configured = _snapshot(self, RegistrationTransitionPlanner, registration.OPERATION)
         owned = _capture(registration.OPERATION, request=request,
             business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
             expected_counted_heads=expected_counted_heads, now_epoch_ns=now_epoch_ns,
             deadline_epoch_ns=deadline_epoch_ns, inputs={}, work=work)
+        if retain_originals:
+            inputs_bytes = registration_replay._encode_inputs_on_work(work=work)
+            inputs_digest = originals._digest_on_work(inputs_bytes, work)
         evidence.keys._public_binding(configured[3], configured[5], work)
         from serverware import authority_planner as planner
 
@@ -168,7 +199,17 @@ class RegistrationTransitionPlanner:
                 expected_signer_spki_digest=configured[5], expected_rp_id=configured[6], expected_origin=configured[7],
                 now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
                 maximum_age_ns=configured[8], maximum_clock_skew_ns=configured[9], query_work=work, trace=trace)
-        return result
+        if not retain_originals:
+            return result
+        replay = registration_replay._replay_on_work(request=owned["request"],
+            selected_rows=result.selected_rows, database_now=result.state.database_now,
+            query_reads=result.state.query_reads, inputs_bytes=inputs_bytes, expected_inputs_digest=inputs_digest,
+            expected_transition=_acquired_transition(result, work), evidence_public_key=configured[3],
+            expected_signer_identity=dict(zip(_IDENTITY_FIELDS, configured[4])),
+            expected_signer_spki_digest=configured[5], expected_rp_id=configured[6], expected_origin=configured[7],
+            now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
+            maximum_age_ns=configured[8], maximum_clock_skew_ns=configured[9], work=work)
+        return originals._RetainedAcquisition(result, inputs_bytes, inputs_digest, replay)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -189,6 +230,25 @@ class TrustStageTransitionPlanner:
     def acquire(self, *, request, business_before_roots, authorization_before_roots,
             expected_counted_heads, assertion_evidence, capability_id, candidate_bundle_bytes,
             candidate_verification_context, now_epoch_ns, deadline_epoch_ns, work):
+        return self._acquire(request=request, business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots, expected_counted_heads=expected_counted_heads,
+            assertion_evidence=assertion_evidence, capability_id=capability_id,
+            candidate_bundle_bytes=candidate_bundle_bytes, candidate_verification_context=candidate_verification_context,
+            now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns, work=work, retain_originals=False)
+
+    def acquire_originals(self, *, request, business_before_roots, authorization_before_roots,
+            expected_counted_heads, assertion_evidence, capability_id, candidate_bundle_bytes,
+            candidate_verification_context, now_epoch_ns, deadline_epoch_ns, work):
+        """Retain candidate/assertion originals, acquire and repeat stage effects."""
+        return self._acquire(request=request, business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots, expected_counted_heads=expected_counted_heads,
+            assertion_evidence=assertion_evidence, capability_id=capability_id,
+            candidate_bundle_bytes=candidate_bundle_bytes, candidate_verification_context=candidate_verification_context,
+            now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns, work=work, retain_originals=True)
+
+    def _acquire(self, *, request, business_before_roots, authorization_before_roots,
+            expected_counted_heads, assertion_evidence, capability_id, candidate_bundle_bytes,
+            candidate_verification_context, now_epoch_ns, deadline_epoch_ns, work, retain_originals):
         configured = _snapshot(self, TrustStageTransitionPlanner, stage.OPERATION)
         original = _raw(candidate_bundle_bytes, 1, candidate.bundle_core.MAX_INPUT_BYTES)
         context_fields = _hold_candidate(candidate_verification_context)
@@ -208,6 +268,10 @@ class TrustStageTransitionPlanner:
         # Reconstruction uses only held immutable members after every caller
         # graph is owned; the actual acquisition repeats signature admission.
         held_context = candidate.bundle_core.TrustVerificationContext(*context_fields, _work=work)
+        if retain_originals:
+            inputs_bytes = stage_replay._encode_inputs_on_work(assertion_evidence=owned["inputs"]["assertion"],
+                candidate_bundle_bytes=original, candidate_verification_context=held_context, work=work)
+            inputs_digest = originals._digest_on_work(inputs_bytes, work)
         from serverware import authority_planner as planner
 
         with planning._read_scope(configured[:3], operation=stage.OPERATION, work=work) as (cursor, manifest, trace):
@@ -223,7 +287,18 @@ class TrustStageTransitionPlanner:
                 development_enabled=configured[6], require_approval=configured[7], require_approver_webauthn=configured[8],
                 now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
                 maximum_age_ns=configured[9], maximum_clock_skew_ns=configured[10], query_work=work, trace=trace)
-        return result
+        if not retain_originals:
+            return result
+        replay = stage_replay._replay_on_work(request=owned["request"], selected_rows=result.selected_rows,
+            database_now=result.state.database_now, query_reads=result.state.query_reads,
+            inputs_bytes=inputs_bytes, expected_inputs_digest=inputs_digest,
+            expected_transition=_acquired_transition(result, work), verifier_public_key=configured[3],
+            verifier_identity=dict(zip(_IDENTITY_FIELDS, configured[4])), capability_id=owned["inputs"]["capabilityId"],
+            expected_candidate_signing_key_id=configured[5], development_enabled=configured[6],
+            require_approval=configured[7], require_approver_webauthn=configured[8],
+            now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
+            maximum_age_ns=configured[9], maximum_clock_skew_ns=configured[10], work=work)
+        return originals._RetainedAcquisition(result, inputs_bytes, inputs_digest, replay)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -242,8 +317,27 @@ class TrustCompletionTransitionPlanner:
     def acquire(self, *, request, business_before_roots, authorization_before_roots,
             expected_counted_heads, installation_envelope_bytes, installed_bundle_bytes, installed_state_bytes,
             expected_committed_stage, now_epoch_ns, deadline_epoch_ns, work):
+        return self._acquire(request=request, business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots, expected_counted_heads=expected_counted_heads,
+            installation_envelope_bytes=installation_envelope_bytes, installed_bundle_bytes=installed_bundle_bytes,
+            installed_state_bytes=installed_state_bytes, expected_committed_stage=expected_committed_stage,
+            now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns, work=work, retain_originals=False)
+
+    def acquire_originals(self, *, request, business_before_roots, authorization_before_roots,
+            expected_counted_heads, installation_envelope_bytes, installed_bundle_bytes, installed_state_bytes,
+            expected_committed_stage, now_epoch_ns, deadline_epoch_ns, work):
+        """Retain installed originals without enrolling committed-stage history."""
+        return self._acquire(request=request, business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots, expected_counted_heads=expected_counted_heads,
+            installation_envelope_bytes=installation_envelope_bytes, installed_bundle_bytes=installed_bundle_bytes,
+            installed_state_bytes=installed_state_bytes, expected_committed_stage=expected_committed_stage,
+            now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns, work=work, retain_originals=True)
+
+    def _acquire(self, *, request, business_before_roots, authorization_before_roots,
+            expected_counted_heads, installation_envelope_bytes, installed_bundle_bytes, installed_state_bytes,
+            expected_committed_stage, now_epoch_ns, deadline_epoch_ns, work, retain_originals):
         configured = _snapshot(self, TrustCompletionTransitionPlanner, completion.OPERATION)
-        originals = (_raw(installation_envelope_bytes, 2, evidence.MAX_EVIDENCE_BYTES),
+        raw3 = (_raw(installation_envelope_bytes, 2, evidence.MAX_EVIDENCE_BYTES),
             _raw(installed_bundle_bytes, 2, completion.bundle_core.MAX_INSTALLATION_BYTES),
             _raw(installed_state_bytes, 2, completion.bundle_core.MAX_STATE_BYTES))
         owned = _capture(completion.OPERATION, request=request,
@@ -251,6 +345,10 @@ class TrustCompletionTransitionPlanner:
             expected_counted_heads=expected_counted_heads, now_epoch_ns=now_epoch_ns,
             deadline_epoch_ns=deadline_epoch_ns, inputs={"committedStage": expected_committed_stage}, work=work)
         completion._object(owned["inputs"]["committedStage"], completion._STAGE_FIELDS, "committed stage")
+        if retain_originals:
+            inputs_bytes = completion_replay._encode_inputs_on_work(installation_envelope_bytes=raw3[0],
+                installed_bundle_bytes=raw3[1], installed_state_bytes=raw3[2], work=work)
+            inputs_digest = originals._digest_on_work(inputs_bytes, work)
         evidence.keys._public_binding(configured[3], configured[5], work)
         from serverware import authority_planner as planner
 
@@ -260,11 +358,22 @@ class TrustCompletionTransitionPlanner:
                 business_before_roots=owned["businessBeforeRoots"],
                 authorization_before_roots=owned["authorizationBeforeRoots"],
                 expected_counted_heads=owned["expectedCountedHeads"],
-                installation_envelope_bytes=originals[0], installed_bundle_bytes=originals[1],
-                installed_state_bytes=originals[2], installation_target_digest=configured[6],
+                installation_envelope_bytes=raw3[0], installed_bundle_bytes=raw3[1],
+                installed_state_bytes=raw3[2], installation_target_digest=configured[6],
                 expected_committed_stage=owned["inputs"]["committedStage"], installer_public_key=configured[3],
                 expected_installer_identity=dict(zip(_IDENTITY_FIELDS, configured[4])),
                 expected_installer_spki_digest=configured[5], now_epoch_ns=owned["nowEpochNs"],
                 deadline_epoch_ns=owned["deadlineEpochNs"], maximum_age_ns=configured[7],
                 maximum_clock_skew_ns=configured[8], query_work=work, trace=trace)
-        return result
+        if not retain_originals:
+            return result
+        replay = completion_replay._replay_on_work(request=owned["request"], selected_rows=result.selected_rows,
+            database_now=result.state.database_now, query_reads=result.state.query_reads,
+            inputs_bytes=inputs_bytes, expected_inputs_digest=inputs_digest,
+            expected_transition=_acquired_transition(result, work), installation_target_digest=configured[6],
+            expected_committed_stage=owned["inputs"]["committedStage"], installer_public_key=configured[3],
+            expected_installer_identity=dict(zip(_IDENTITY_FIELDS, configured[4])),
+            expected_installer_spki_digest=configured[5], now_epoch_ns=owned["nowEpochNs"],
+            deadline_epoch_ns=owned["deadlineEpochNs"], maximum_age_ns=configured[7],
+            maximum_clock_skew_ns=configured[8], work=work)
+        return originals._RetainedAcquisition(result, inputs_bytes, inputs_digest, replay)

@@ -1,6 +1,6 @@
 # Private WebAuthn transition custody
 
-Status: source `.116`, implementation only; unbuilt and unexecuted. This is the
+Status: source `.117`, implementation only; unbuilt and unexecuted. This is the
 private retention and authenticated lookup path for `webauthn.registration.finalize`,
 `webauthn.trust.stage` and `webauthn.trust.complete`, not execution of those
 business transitions. See the [successor overview](webauthn-successor-transitions.md)
@@ -37,8 +37,11 @@ neither is an execution capability or proof that the database committed.
 
 Preparation never automatically forwards, signs replacement originals or
 retries. Before a potentially committing forward, the caller must durably retain
-the exact request originals needed for later reconciliation. That durable caller
-orchestration is still unfinished; this source path does not provide it.
+the exact request originals needed for later reconciliation. Source `.117` adds
+a separate [caller journal and private forwarding client](control-plane-custody-journal.md)
+that writes an irreversible local attempt marker before one explicit send via
+the existing runtime relay and verifier. Deployment provisioning, public
+preparation/orchestration and lookup-based reconciliation remain unfinished.
 
 All three hops use dedicated eight-byte operation/action prefixes, complete
 length vectors, exact EOF and a 64 MiB aggregate including controls. Controls

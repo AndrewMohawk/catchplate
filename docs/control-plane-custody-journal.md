@@ -1,8 +1,7 @@
 # Opaque caller custody journal
 
-Source-only caller storage implementation; unbuilt and unexecuted. This is
-separate from the authority's signed custody and replay protocols and does not
-advance their source revision.
+Caller storage and private forwarding at authority source `.117`; unbuilt and
+unexecuted. Local storage remains separate from signed custody/replay authority.
 
 `control_plane_custody_records.py` encodes exact original bytes without admitting
 their signatures, history, keys or policy:
@@ -36,11 +35,11 @@ fixed 40-byte attempt marker.
 ```text
 exact originals -> immutable PREPARED record
                 -> irreversible local ATTEMPTED marker
-                -> future explicit forwarding, not implemented here
+                -> one explicit caller-to-relay-to-verifier exchange
 ```
 
-The intended caller must establish ATTEMPTED before beginning any network
-forward. `append_evidence` and `append_transition` retain PREPARED originals;
+The caller establishes ATTEMPTED before beginning any network forward.
+`append_evidence` and `append_transition` retain PREPARED originals;
 `load` returns the original prepared record, `inventory` returns bounded local
 metadata, and `claim_attempt` establishes the one-attempt barrier. Constructor
 recovery is mandatory. Unknown or temporary files poison admission rather than
@@ -59,12 +58,60 @@ journal also cannot prove resistance to an administrator restoring older storage
 The one-attempt rule is per exact local record, not logical-operation
 deduplication across new controls or source revisions.
 
+## Private configured forwarding
+
+`ControlPlaneCustodyClient.from_environment` first uses the actual runtime-trust
+loader: root signature, process/UID/GID, current source/configuration, attestation
+and exact inherited-descriptor admission remain mandatory. Only afterward does
+it open the journal's private directory handle. The borrowed journal descriptor
+must already be in the root-admitted control-plane descriptor inventory; no
+extra descriptor is silently allowed. Directory identity and quotas are explicit
+provisioning inputs, not derived from a retrieved plan or a default path.
+The original admitted runtime-attestation interval is retained without renewal.
+Client and relay forwarding require it to remain live and cap their monotonic
+deadline by its remaining lifetime, including final response checks. Expiry
+after the durable attempt marker remains an uncertain, spent attempt.
+
+Preparation and delivery remain separate. `forward_once(localdigest)` loads
+the retained original record, refuses an unsupported source, establishes its
+deadline, durably claims ATTEMPTED, and makes one fixed relay request. A failure
+after the claim never clears it, even if no request bytes were sent. The client
+does not create an intent, obtain a relay signature or infer retry permission.
+
+```text
+caller journal -> root-pinned runtime relay -> measured verifier
+                                                |
+                                      existing planner -> writer
+```
+
+The distinct five-selector binary protocol carries the unchanged raw-six or
+raw-seven originals plus the current configuration digest. The runtime relay
+and verifier compare that scope with their independently admitted configuration.
+The existing control-plane/relay/verifier/planner/writer peer topology is
+unchanged. The verifier authenticates the actual intent and relay and replays
+the plan through the existing configured forwarding method; opaque journal
+records and local markers do not substitute for that work.
+
+Each transport exchange has bounded framing, peer checks, half-close and exact
+EOF. The runtime relay starts its ingress deadline before queuing and preserves
+that deadline across its verifier exchange and response. Verifier ingress has
+its own bounded deadline; original signed-control windows continue to govern
+downstream forwarding and persistence. This is not distributed cancellation:
+a late/missing response can follow a commit. Detached failures close the
+connection instead of falling through to a legacy JSON response or retry.
+
+The returned digest/time is still an unsigned peer observation, not a remote
+durability receipt or business-execution result. The authority's verifier
+mutable-state policy, SQL privileges, legacy public operation gates and work
+ceilings are unchanged.
+
 ## Integration still required
 
-An authoritative caller process, its directory/lease/quota provisioning and an
-authenticated caller-to-verifier handoff remain missing. No current forwarding
-path is protected by this library. The authority's verifier mutable-state policy,
-SQL privileges and business-execution gates are unchanged.
+Deployment provisioning of the caller directory and signed descriptor inventory,
+public invocation/preparation, authenticated lookup-based reconciliation, and
+business successor orchestration/execution remain unfinished. The private
+client is not automatically installed into control-plane startup or public HTTP
+routes. This source path has not been built, launched or exercised.
 
 The [historical resolver](authority-historical-replay.md) supplies a separate
 trust-admission boundary; these opaque stored bytes cannot replace it. Explicit

@@ -50,6 +50,7 @@ from serverware import authority_contract
 from serverware import authority_planner
 from serverware import authority_transition_registry
 from serverware import authority_transport
+from serverware import authority_custody_caller_transport as custody_caller_transport
 from serverware import authority_revocation_planner_custody_transport as custody_transport
 from serverware import authority_revocation_custody_read_transport as custody_read_transport
 from serverware import authority_revocation_planning_transport as planning_transport
@@ -3027,29 +3028,61 @@ class AuthorityRuntimeRelay:
     def serve_forever(self) -> None:
         while True:
             connection, _ = self.socket.accept()
+            try:
+                deadline_ns = writer_transport._deadline_ns(self.trust.timeout_seconds)
+            except BaseException:
+                connection.close()
+                raise
             if not self.in_flight.acquire(blocking=False):
                 connection.close()
                 continue
-            future = self.pool.submit(
-                self._serve_connection,
-                connection,
-            )
+            try:
+                future = self.pool.submit(
+                    self._serve_connection, connection, deadline_ns=deadline_ns,
+                )
+            except BaseException:
+                try:
+                    connection.close()
+                finally:
+                    self.in_flight.release()
+                raise
             future.add_done_callback(
                 lambda _future: self.in_flight.release()
             )
 
-    def _serve_connection(self, connection: socket.socket) -> None:
+    def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
+        detached = False
+        trust = self.trust
         try:
-            connection.settimeout(self.trust.timeout_seconds)
+            writer_transport._check_deadline(deadline_ns)
             uid, gid, _pid = _peer_identity(connection)
             if (
-                uid != self.trust.control_plane_uid
-                or gid != self.trust.control_plane_gid
+                uid != trust.control_plane_uid
+                or gid != trust.control_plane_gid
             ):
                 raise AuthorityServiceError(
                     "authority relay peer identity is not allowed"
                 )
-            request = _recv_message(connection)
+            prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
+            detached = prefix in custody_caller_transport.REQUEST_MAGICS
+            if detached:
+                from serverware import authority_custody_caller_service
+
+                authority_custody_caller_service._serve_relay(
+                    trust, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            # Preserve legacy canonical JSON framing after reading its length
+            # prefix. Detached custody never falls through to this protocol.
+            size = int.from_bytes(prefix, "big")
+            if not 2 <= size <= MAX_MESSAGE_BYTES:
+                raise AuthorityServiceError("authority message size is invalid")
+            encoded = writer_transport._recv_exact_until(connection, size, deadline_ns=deadline_ns)
+            try:
+                request = json.loads(encoded)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise AuthorityServiceError("authority message is not JSON") from exc
+            if not isinstance(request, dict) or _canonical(request) != encoded:
+                raise AuthorityServiceError("authority message is not canonical")
             now_monotonic_ns = time.monotonic_ns()
             if (
                 set(request)
@@ -3074,9 +3107,9 @@ class AuthorityRuntimeRelay:
                     not in authority_contract.OPERATIONS
                 or not isinstance(request.get("input"), dict)
                 or request.get("configurationDigest")
-                    != self.trust.configuration_digest
+                    != trust.configuration_digest
                 or request.get("operationManifestDigest")
-                    != self.trust.operation_manifest_digest
+                    != trust.operation_manifest_digest
                 or not isinstance(
                     request.get("startedMonotonicNs"), int
                 )
@@ -3089,7 +3122,7 @@ class AuthorityRuntimeRelay:
                     >= request["deadlineMonotonicNs"]
                 or request["deadlineMonotonicNs"]
                     - request["startedMonotonicNs"]
-                    > self.trust.maximum_deadline_ns
+                    > trust.maximum_deadline_ns
                 or len(_canonical(request))
                     > authority_contract.MAX_REQUEST_BYTES
             ):
@@ -3097,7 +3130,7 @@ class AuthorityRuntimeRelay:
                     "authority relay request is not closed"
                 )
             remaining_seconds = (
-                request["deadlineMonotonicNs"]
+                min(request["deadlineMonotonicNs"], deadline_ns)
                 - time.monotonic_ns()
             ) / 1_000_000_000
             if remaining_seconds <= 0:
@@ -3105,23 +3138,27 @@ class AuthorityRuntimeRelay:
                     "authority relay request deadline expired"
                 )
             response = _socket_request(
-                self.trust.verifier_socket_path,
+                trust.verifier_socket_path,
                 request,
                 timeout_seconds=min(
-                    self.trust.timeout_seconds,
+                    trust.timeout_seconds,
                     remaining_seconds,
                 ),
-                expected_peer_uid=self.trust.verifier_uid,
-                expected_peer_gid=self.trust.verifier_gid,
+                expected_peer_uid=trust.verifier_uid,
+                expected_peer_gid=trust.verifier_gid,
             )
             if time.monotonic_ns() >= request["deadlineMonotonicNs"]:
                 raise AuthorityServiceError(
                     "authority relay response was late"
                 )
-            _send_message(connection, response)
+            _send_message_until(connection, response, deadline_ns=deadline_ns)
         except Exception as exc:
+            if detached:
+                # Response loss after a custody commit is uncertain. Never
+                # append a legacy JSON error or retry a detached operation.
+                return
             try:
-                _send_message(
+                _send_message_until(
                     connection,
                     {
                         "schema":
@@ -3131,6 +3168,7 @@ class AuthorityRuntimeRelay:
                             str(exc).encode("utf-8")
                         ),
                     },
+                    deadline_ns=deadline_ns,
                 )
             except Exception:
                 pass
@@ -9282,6 +9320,7 @@ class AuthorityServer:
                 )
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
             detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
+                *custody_caller_transport.REQUEST_MAGICS,
                 custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC,
                 custody_read_transport.REQUEST_MAGIC,
                 evidence_custody_transport.REGISTRATION_REQUEST_MAGIC,
@@ -9302,6 +9341,12 @@ class AuthorityServer:
                 *transition_custody_transport.FORWARD_REQUEST_MAGICS,
                 *transition_custody_read_transport.REQUEST_MAGICS,
                 *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
+            if prefix in custody_caller_transport.REQUEST_MAGICS:
+                from serverware import authority_custody_caller_service
+
+                authority_custody_caller_service._serve_verifier(
+                    self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return

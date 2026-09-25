@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.116`, implementation only. All six WebAuthn successor operations
+Status: source `.117`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -35,14 +35,17 @@ plan lifetimes are never renewed. Exact source/schema pins still exclude
 arbitrary cross-source replay. Stored context cannot supply independent request,
 root or evaluation-time provenance.
 
-Public invocation, durable caller orchestration/recovery and successor execution
+The [caller journal](control-plane-custody-journal.md) now has a private configured
+forwarding client and dedicated control-plane-to-relay-to-verifier ingress.
+Exact originals and a durable one-attempt marker precede its single send;
+current configuration and existing peer topology are checked at each boundary.
+It does not prepare public invocations, automatically retry or reconcile outcomes.
+
+Public invocation, complete caller orchestration/recovery and successor execution
 remain unfinished, as do independent evidence production/infrastructure and
 frozen-build verification. Root observations do not hold roots current for later
 execution; reservation, one-use capability and atomic execution gates remain.
 The revision-specific sections below retain their original checkpoint status.
-Separate [opaque caller journal storage](control-plane-custody-journal.md) adds
-only a local PREPARED/ATTEMPTED prerequisite; no provisioned caller or
-authenticated caller-to-verifier handoff yet connects it to forwarding.
 
 ## Durable transition originals
 

@@ -65,6 +65,7 @@ from serverware import authority_webauthn_transition_custody_transport as transi
 from serverware import authority_webauthn_transition_custody_read_transport as transition_custody_read_transport
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_transition_policy as transition_policy
+from serverware import authority_webauthn_enrollment_policy as enrollment_policy
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
     verifier_read_privilege_check,
@@ -1144,12 +1145,8 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) not in (
-                required_payload_fields,
-                required_payload_fields | {evidence_policy.FIELD},
-                required_payload_fields | {transition_policy.FIELD},
-                required_payload_fields | {evidence_policy.FIELD, transition_policy.FIELD},
-            )
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD}
+                != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
             or role not in PROCESS_MODES
@@ -1223,6 +1220,13 @@ class MeasuredConfiguration:
             except ValueError as exc:
                 raise AuthorityServiceError(
                     "authority WebAuthn transition policy is invalid"
+                ) from exc
+        if enrollment_policy.FIELD in payload:
+            try:
+                enrollment_policy.validate_policy(payload[enrollment_policy.FIELD], payload=payload)
+            except ValueError as exc:
+                raise AuthorityServiceError(
+                    "authority WebAuthn enrollment authorization policy is invalid"
                 ) from exc
         configuration._verify_runtime_closure()
         configuration._verify_attestation(role=role)
@@ -1629,8 +1633,11 @@ class MeasuredConfiguration:
                     not isinstance(enabled_operations, list)
                     or enabled_operations
                         != sorted(set(enabled_operations))
+                    # This is the configured planning inventory only. Legacy
+                    # planning, execution/SQL/witness and socket dispatch keep
+                    # their separate narrower operation gates unchanged.
                     or set(enabled_operations)
-                        - set(authority_planner.PLANNING_PROGRAMS)
+                        - set(authority_transition_registry.PLANNABLE_OPERATIONS)
                     or _require_digest(
                         role_value["plannerSessionIdentityDigest"],
                         "planner session identity digest",

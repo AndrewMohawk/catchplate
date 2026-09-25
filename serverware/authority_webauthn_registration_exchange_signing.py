@@ -2,9 +2,10 @@
 
 The independent owner supplies an actually admitted configuration, generation,
 runtime cohort, dedicated evidence private key/identity, original browser data,
-enrollment authorization, complete sibling selection and original UTC evaluation
-time. Neither the source exchange nor matching configuration data establishes
-that owner, enrollment, time or prior publication-signature provenance.
+a signed control-plane enrollment grant, its independently provisioned replay
+store, complete sibling selection and original UTC evaluation time. The grant
+authenticates enrollment under the explicit dedicated issuer policy; matching
+configuration data does not establish owner or prior publication provenance.
 
 Both original transport controls and their byte commitments are verified and
 raw memberships/query associations genuinely replayed in this invocation.
@@ -17,8 +18,12 @@ policy/key. Its ordinary envelope/arguments/request/inputs tuple is preserved.
 The supplied evaluation time is never chosen from returned bytes or retimed.
 The original source-read window remains live through signing and return.
 Source-read expiry does not redefine the independently configured evidence
-envelope lifetime: those are distinct controls. There is no SQL, socket, public
-route, role-key fallback, execution, custody action or replacement allowance.
+envelope lifetime: those are distinct controls. The grant's original interval
+also stays live through signing. Its durable one-attempt marker precedes the
+evidence signature; failure after consumption never permits retry or reset.
+There is no SQL, socket, public route, role-key fallback, business execution,
+custody forwarding or replacement allowance. Local replay storage is not an
+independent anti-rollback authority.
 """
 from __future__ import annotations
 
@@ -26,6 +31,9 @@ from datetime import datetime, timezone
 
 from serverware import authority_revocation_configuration as configuration
 from serverware import authority_webauthn_evidence_custody_wire as wire
+from serverware import authority_webauthn_enrollment_authorization as enrollment
+from serverware import authority_webauthn_enrollment_policy as enrollment_policy
+from serverware.authority_webauthn_enrollment_replay import EnrollmentReplayStore
 from serverware import authority_webauthn_registration_signing as signing
 from serverware import authority_webauthn_registration_source_admission as admission
 from serverware import authority_webauthn_registration_source_request as request_wire
@@ -49,20 +57,29 @@ def _fresh(*, timing, window, maximum_age_ns, maximum_clock_skew_ns, verified_ns
 def _produce_on_configuration(*, payload, configuration_digest, generation,
         runtime_role_identities, request_control_bytes, request_context_bytes,
         response_control_bytes, source_bytes, evidence_private_key, evidence_signer_identity,
-        client_data_json, attestation_object, credential_id, transports, user_id, label,
-        expected_authorization, sibling_challenge_ids, verified_at, work):
+        enrollment_authorization_bytes, enrollment_replay_store,
+        client_data_json, attestation_object, credential_id, transports,
+        sibling_challenge_ids, verified_at, work):
     """Return the actual envelope, finalization arguments, request and inputs.
 
     Raw4 means request control/context and response control/source observations.
     This entrypoint accepts no source selector, root, row, proof, clock override
-    or successful admission result. Independent enrollment, dedicated signer
-    provenance and original evaluation-time admission remain caller duties.
+    or successful admission result. User, label and enrollment authorization
+    come only from the genuinely verified grant. The protected, non-rollback
+    replay-store lifetime, dedicated signer provenance and original evaluation
+    time remain owner duties. Grant consumption is irreversible even when the
+    later signer or final freshness check fails.
     """
     ledger = evidence.capture._SharedLedger(work)
     request_originals = request_wire._raw2(request_control_bytes, request_context_bytes)
     response_originals = response_wire._raw2(response_control_bytes, source_bytes)
     original_client, original_attestation = client_data_json, attestation_object
     signer, instant, digest = evidence_private_key, verified_at, configuration_digest
+    original_grant, replay_store = enrollment_authorization_bytes, enrollment_replay_store
+    if type(original_grant) is not bytes or not 2 <= len(original_grant) <= enrollment.MAX_BYTES:
+        raise WebAuthnRegistrationExchangeSigningError("registration requires bounded original enrollment authorization")
+    if type(replay_store) is not EnrollmentReplayStore:
+        raise WebAuthnRegistrationExchangeSigningError("registration requires its real durable enrollment replay store")
     for raw, maximum in ((original_client, production.attestation.MAX_CLIENT_DATA_JSON_BYTES),
             (original_attestation, production.attestation.MAX_ATTESTATION_OBJECT_BYTES)):
         if type(raw) is not bytes or not 1 <= len(raw) <= maximum:
@@ -88,7 +105,6 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
     owned_inputs = evidence.capture._JSONCapture(ledger,
         maximum_bytes=authority.MAX_REQUEST_BYTES).visit({
             "credentialId": credential_id, "transports": list(transports),
-            "userId": user_id, "label": label, "authorization": expected_authorization,
             "siblings": sibling_challenge_ids, "signerIdentity": evidence_signer_identity})
     owned_payload = configuration._ConfigurationCapture(ledger,
         maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)
@@ -98,6 +114,26 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
     evidence._identity(owned_inputs["signerIdentity"])
     work.prepare_copy(owned_inputs["transports"])
     held_transports = tuple(owned_inputs["transports"])
+    configured_grant = enrollment_policy._capture_on_work(payload=owned_payload,
+        configuration_digest=digest, generation=owned_generation,
+        runtime_role_identities=owned_runtime, work=work)
+    grant_policy = configured_grant.policy
+    grant_age, grant_skew = grant_policy["maximumAgeNs"], grant_policy["maximumClockSkewNs"]
+    grant = enrollment._verify_on_work(authorization_bytes=original_grant,
+        configuration_digest=digest, generation_sequence=configured_grant.generation_sequence,
+        generation_digest=configured_grant.generation_digest,
+        issuer_id=grant_policy["issuerId"], issuer_public_key=configured_grant.issuer_public_key,
+        audience_spki_digest=grant_policy["audienceSigningSpkiDigest"],
+        maximum_age_ns=grant_age, maximum_clock_skew_ns=grant_skew, work=work)
+    grant_context = evidence.capture._JSONCapture(ledger,
+        maximum_bytes=enrollment.MAX_BYTES).visit(grant.context)
+    grant_window, grant_digest = grant.window, grant.authorization_digest
+    grant_timing = {"issuedAtEpochNs": grant.issued_at_epoch_ns,
+        "expiresAtEpochNs": grant.expires_at_epoch_ns}
+    enrollment._bind_originals_on_work(context=grant_context,
+        client_data_json=original_client, attestation_object=original_attestation,
+        credential_id=owned_inputs["credentialId"], transports=held_transports,
+        verified_at_epoch_ns=verified_ns, work=work)
     admitted = admission._verify_on_configuration(payload=owned_payload,
         configuration_digest=digest, generation=owned_generation,
         runtime_role_identities=owned_runtime,
@@ -115,6 +151,10 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
     business, authorization = observed.business_before_roots, observed.authorization_before_roots
     selected, proofs, query_reads = observed.selected_rows, observed.before_proofs, observed.query_reads
     database_now = observed.database_now
+    evidence.plan._same((grant_context["registrationChallengeId"], grant_context["oidcSessionId"],
+        grant_context["rpId"], grant_context["origin"]),
+        (challenge, session, owned_payload["webauthn"]["rpId"], owned_payload["webauthn"]["origin"]),
+        work, "enrollment grant differs from authenticated source selectors or configured RP/origin")
     timing = {"issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     cutoff_ns = production.registration._now(database_now)
     if (verified_ns < issued - skew or verified_ns >= expires or verified_ns >= deadline
@@ -122,18 +162,31 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
         raise WebAuthnRegistrationExchangeSigningError("original registration time differs from the authenticated source interval or cutoff")
     _fresh(timing=timing, window=window, maximum_age_ns=maximum_age,
         maximum_clock_skew_ns=skew, verified_ns=verified_ns, work=work)
+    _fresh(timing=grant_timing, window=grant_window, maximum_age_ns=grant_age,
+        maximum_clock_skew_ns=grant_skew, verified_ns=verified_ns, work=work)
+    # Publish and sync the immutable marker before evidence signing. The
+    # concrete owner rejects every duplicate, including an identical retry.
+    # A slow or uncertain publication can consume the grant without a result;
+    # it must never make the signed authority reusable.
+    EnrollmentReplayStore.consume(replay_store, grant_digest)
+    _fresh(timing=timing, window=window, maximum_age_ns=maximum_age,
+        maximum_clock_skew_ns=skew, verified_ns=verified_ns, work=work)
+    _fresh(timing=grant_timing, window=grant_window, maximum_age_ns=grant_age,
+        maximum_clock_skew_ns=grant_skew, verified_ns=verified_ns, work=work)
     result = signing._produce_from_source_proofs_on_configuration(
         payload=owned_payload, configuration_digest=digest, generation=owned_generation,
         runtime_role_identities=owned_runtime, evidence_private_key=signer,
         evidence_signer_identity=owned_inputs["signerIdentity"],
         client_data_json=original_client, attestation_object=original_attestation,
         credential_id=owned_inputs["credentialId"], transports=held_transports,
-        user_id=owned_inputs["userId"], label=owned_inputs["label"],
-        expected_authorization=owned_inputs["authorization"],
+        user_id=grant_context["userId"], label=grant_context["label"],
+        expected_authorization=grant_context["expectedAuthorization"],
         sibling_challenge_ids=owned_inputs["siblings"], verified_at=instant,
         registration_challenge_id=challenge, published_publication_id=publication, oidc_session_id=session,
         business_before_roots=business, authorization_before_roots=authorization,
         selected_rows=selected, before_proofs=proofs, query_reads=query_reads, work=work)
     _fresh(timing=timing, window=window, maximum_age_ns=maximum_age,
         maximum_clock_skew_ns=skew, verified_ns=verified_ns, work=work)
+    _fresh(timing=grant_timing, window=grant_window, maximum_age_ns=grant_age,
+        maximum_clock_skew_ns=grant_skew, verified_ns=verified_ns, work=work)
     return result

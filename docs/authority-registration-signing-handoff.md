@@ -1,20 +1,21 @@
 # Registration source-to-signer handoff
 
-Source-only `.125` implementation; unbuilt and unexecuted. The independent
-registration signer now has a fixed continuation that consumes the four
-original source-exchange byte strings. This closes the source-proof composition,
-not the authenticated enrollment handoff or public registration workflow.
+Source-only `.126` implementation; unbuilt and unexecuted. The independent
+registration signer consumes the four original source-exchange byte strings
+and a dedicated signed enrollment grant. It durably consumes one grant attempt
+before evidence signing. Public enrollment orchestration is still unfinished.
 
 ```text
 implemented source branch:
   original signed request/context + signed response/source
   -> actual configured control authentication + membership/query/cutoff replay
                                                         \
+                                                         -> durable one-attempt marker
                                                          -> genuine evidence signer
                                                         /
-unfinished enrollment branch:
-  actual authenticated actor/session + original browser binding
-  -> enrollment issuer OR independent signer admission (decision pending)
+implemented private grant branch (public caller not yet connected):
+  dedicated configured issuer + original browser/user/session commitments
+  -> signed enrollment grant -> genuine configured grant verification
 ```
 
 ## Original source bytes, not a successful-proof object
@@ -40,8 +41,10 @@ stored trust context, verifies the original browser attestation, signs with the
 explicit registration-purpose evidence key and assembles the typed request and
 original inputs. The verifier/planner source-control keys are not substitutes
 for that independent evidence key or its admitted configuration and identity.
-Prior publication signature/commit provenance and genuine enrollment admission
-remain owner responsibilities.
+Prior publication signature/commit provenance remains an owner responsibility.
+Enrollment admission now uses the original dedicated control-plane grant, not
+separate caller-supplied user/label/authorization values. Original browser/time
+bindings and authenticated source selectors must match that verified grant.
 
 The return remains four ordinary values: the signed evidence envelope,
 finalization arguments, typed evidence-admission request and original-input
@@ -60,25 +63,24 @@ are different contracts, not interchangeable deadlines. No timestamp is
 rewritten to reopen either interval, and a source signature does not create
 independent clock authority.
 
-## Open enrollment trust decision
+## Accepted enrollment trust decision
 
-The current operator and OIDC finish handlers admit actor/session identity
-locally. Their existing original-input capture does not export a signer-verifiable
-enrollment grant binding that admission to the browser originals. The public
-paths still use their existing legacy continuation; this private composition
-does not redirect them.
+The user selected [dedicated control-plane enrollment authorization](enrollment-authorization-decision.md).
+The new closed policy, configured issuer and signed-original verifier implement
+that private handoff. This trusts the issuer's actual user/session admission;
+the independent signer still verifies the grant, browser bindings, source
+proofs and attestation. Generic HTTP response and source-role keys are not
+enrollment keys.
 
-Two alternatives remain under consideration: a dedicated control-plane
-enrollment-authorization handoff, or independent user/session validation by the
-signer. Neither is selected by this implementation. An authenticated Unix peer
-identifies a process, not the current operator or browser session. Likewise,
-source-read signatures and stored challenge authorization cannot by themselves
-supply the missing current actor/session handoff.
+The concrete replay store publishes and syncs an immutable attempt marker before
+evidence signing. Identical retries, reset and automatic expiry cleanup are not
+allowed; uncertain I/O fails closed. Its local storage/locks are not independent
+anti-rollback authority. Production continuity and capacity management remain
+required, as do protected issuer key delivery and authenticated service wiring.
 
-The generic HTTP response-signing key is not reused or implicitly granted an
-enrollment purpose. No secret fallback, new issuer provisioning, public route,
-credential mutation, custody write or execution authority is introduced. The
-chosen enrollment contract must precede public end-to-end integration.
+The existing operator and OIDC finish handlers still use their legacy
+continuation. This private composition does not redirect those routes, consume
+options-time approval again, or authorize successor business execution.
 
 See [the signed source exchange](authority-registration-source-exchange.md) and
 [original-evidence signing](authority-original-evidence-signing.md).

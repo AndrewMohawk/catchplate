@@ -1,6 +1,6 @@
 # WebAuthn public admission and private preparation
 
-Current source checkpoint: `.125`. This is a source-only integration map, not
+Current source checkpoint: `.126`. This is a source-only integration map, not
 a tested import, running endpoint or deployment claim. Private preparation is
 described in [WebAuthn preparation](authority-webauthn-preparation.md); the public
 admission continuation below is still missing.
@@ -101,11 +101,13 @@ The [source-to-signer handoff](authority-registration-signing-handoff.md) now
 authenticates those four original byte strings inside the dedicated signing
 continuation, replays their source proofs and derives its selectors and roots
 from that same exchange. It preserves the original evaluation time and distinct
-source-control/evidence lifetimes. Current actor/session admission still has no
-signer-verifiable enrollment handoff: dedicated control-plane authorization
-versus independent signer user/session validation awaits a trust decision.
-Neither existing source-role signatures nor the generic response key supplies
-that missing authority. The public routes remain on their legacy continuation.
+source-control/evidence lifetimes. The user has selected a
+[dedicated signed control-plane grant](enrollment-authorization-decision.md).
+Its private producer and configured verification now bind original browser
+inputs and user/session/challenge authorization, with a durable one-attempt
+marker before evidence signing. Protected key delivery and public orchestration
+are still missing. Neither source-role signatures nor the generic response key
+supplies enrollment authority. Public routes remain on their legacy continuation.
 
 ## Trust stage and completion have different prerequisites
 

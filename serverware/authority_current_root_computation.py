@@ -172,6 +172,39 @@ def _produce_reserve_on_work(*, operation, originals, expectations, planner_publ
     replayed = replay._replay_on_work(operation=operation, originals=originals,
         expectations=expectations, planner_public_key=planner_public_key,
         operation_public_key=operation_public_key, before_vector_bytes=before_vector_bytes, work=work)
+    return _sign_replayed_on_work(replayed=replayed, enrollment_bytes=held_enrollment,
+        root_public_key=held_root, computation_private_key=held_signer,
+        capability_digest=held_scope[0], predecessor_sequence=held_scope[1],
+        predecessor_head_digest=held_scope[2], fence=held_scope[3],
+        deadline_epoch_ns=held_scope[4], transport_deadline_ns=held_scope[5], work=work)
+
+
+def _sign_replayed_on_work(*, replayed, enrollment_bytes, root_public_key,
+        computation_private_key, capability_digest, predecessor_sequence,
+        predecessor_head_digest, fence, deadline_epoch_ns, work, transport_deadline_ns=None):
+    """Fixed signing suffix for this invocation's actual original-byte replay.
+
+    Only the scope-only producer above and the original-grant preparation path
+    compose this private continuation. It performs no plan replay and must not
+    be exposed as admission of a caller-constructed successful result. Original
+    grant verification remains outside this module to avoid a dependency cycle.
+    """
+    evidence.capture._SharedLedger(work)
+    held_enrollment = authorization._original(enrollment_bytes,
+        authorization.MAX_ENROLLMENT_BYTES, "current-root enrollment")
+    held_root, held_signer = root_public_key, computation_private_key
+    authorization._public(held_root)
+    authorization._private(held_signer)
+    shape = authorization.shape
+    shape._digest(capability_digest)
+    shape._digest(predecessor_head_digest)
+    shape._integer(predecessor_sequence, authorization.MAX_RECORDS)
+    shape._integer(fence, minimum=1)
+    shape._integer(deadline_epoch_ns, minimum=1)
+    if transport_deadline_ns is not None:
+        shape._integer(transport_deadline_ns, minimum=1)
+    held_scope = (capability_digest, predecessor_sequence, predecessor_head_digest,
+        fence, deadline_epoch_ns, transport_deadline_ns)
     material = authorization._admit_enrollment_on_work(enrollment_bytes=held_enrollment,
         root_public_key=held_root, work=work)
     policy = material.payload

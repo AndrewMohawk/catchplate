@@ -60,6 +60,13 @@ never extended. Real clock/window checks bracket signing on the same work.
 The decision owner must still join the exact predecessor and retained current
 vector before it can durably reserve anything.
 
+Source `.135` adds a separate [original-grant preparation and execution
+admission](authority-successor-execution.md) path. It derives the capability
+digest from a genuinely verified pre-decision grant and joins that same grant
+again at final pending/plan admission. The scope-only producer described above
+retains its narrower contract. Protected SQL activation and postcommit ownership
+remain unfinished.
+
 ## Complete SQL observation, not enrollment
 
 [`authority_store.current_root_observation._observe_on_work(connection, *, work)`](../serverware/authority_store/current_root_observation.py)

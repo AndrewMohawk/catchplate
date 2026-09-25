@@ -64,6 +64,9 @@ class _ReplayedPlan:
     plan_digest: str
     signed_snapshot_digest: str | None
     signed_capability_id: str | None
+    selected_rows: tuple
+    mutations: tuple
+    work_units: int
 
 
 def _originals(operation, originals, before_vector_bytes):
@@ -241,7 +244,8 @@ def _revocation(originals, expected, planner_key, operation_key, work):
         actual.kernel.result, (projection["createdAtEpochNs"], projection["expiresAtEpochNs"]),
         measured["authoritySnapshotDigest"], measured["capabilityId"],
         observed["businessBeforeRoots"], observed["authorizationBeforeRoots"],
-        business_after, authorization_after, compact["indexBeforeHeads"], compact["indexAfterHeads"])
+        business_after, authorization_after, compact["indexBeforeHeads"], compact["indexAfterHeads"],
+        payload["selectedBusinessRows"], actual.mutations, actual.work_units)
 
 
 def _evidence(originals, expected, planner_key, operation_key, work):
@@ -261,7 +265,8 @@ def _evidence(originals, expected, planner_key, operation_key, work):
         verification.semantics.kernel.result, (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]),
         None, None, expected["businessBeforeRoots"], expected["authorizationBeforeRoots"],
         _primary_documents(written.primary.business_after_roots, work),
-        _primary_documents(written.primary.authorization_after_roots, work), [], [])
+        _primary_documents(written.primary.authorization_after_roots, work), [], [],
+        payload["selectedRows"], verification.semantics.kernel.mutations, verification.semantics.work_units)
 
 
 def _transition(originals, expected, planner_key, operation_key, work):
@@ -273,6 +278,14 @@ def _transition(originals, expected, planner_key, operation_key, work):
         maximum_bytes=transition.plan.contract.MAX_BYTES, maximum_nodes=transition.plan.contract.MAX_NODES,
         maximum_depth=transition.plan.contract.MAX_DEPTH)
     transition.plan.contract.validate_envelope_shape(envelope)
+    # This immutable original proof has just undergone genuine authentication,
+    # membership/query and semantic replay. Project its verified selected rows,
+    # not caller-supplied parallel metadata or a successful observation token.
+    proof = wire._decode_object(originals[1], work=work,
+        maximum_bytes=transition.plan.proof.contract.MAX_BYTES,
+        maximum_nodes=transition.plan.proof.contract.MAX_NODES,
+        maximum_depth=transition.plan.proof.contract.MAX_DEPTH)
+    transition.plan.proof.contract.validate_payload_shape(proof)
     payload, proof_expected = envelope["payload"], expected["proofExpectations"]
     # Authenticate/replay first, then retain exactly the signed plan interval
     # and require its original historical-policy/cutoff joins. No clock is read.
@@ -286,7 +299,8 @@ def _transition(originals, expected, planner_key, operation_key, work):
         None, None, proof_expected["businessBeforeRoots"], proof_expected["authorizationBeforeRoots"],
         _primary_documents(written.primary.business_after_roots, work),
         _primary_documents(written.primary.authorization_after_roots, work),
-        before_heads, _head_documents(written.after_heads, work))
+        before_heads, _head_documents(written.after_heads, work),
+        proof["selectedRows"], verification.replay.semantics.mutations, verification.replay.semantics.work_units)
 
 
 def _replay_on_work(*, operation, originals, expectations, planner_public_key,
@@ -315,7 +329,7 @@ def _replay_on_work(*, operation, originals, expectations, planner_public_key,
         values = _transition(held_originals, owned, planner_key, operation_key, work)
     (request, record_digest, plan_digest, result, interval, snapshot, capability_id,
         business_before, authorization_before, business_after, authorization_after,
-        heads_before, heads_after) = values
+        heads_before, heads_after, selected_rows, mutations, work_units) = values
     framing._same(request["operation"], held_operation, work, "replayed operation differs from source selection")
     after = _merge(held_operation, before, business_before, authorization_before,
         business_after, authorization_after, heads_before, heads_after, work)
@@ -327,11 +341,16 @@ def _replay_on_work(*, operation, originals, expectations, planner_public_key,
         after_vector_bytes=after_bytes, work=work)
     before_digest = framing._frame(vector.IDENTITY_DOMAIN, (held_before,), work)
     after_digest = framing._frame(vector.IDENTITY_DOMAIN, (after_bytes,), work)
-    output = capture._JSONCapture(capture._SharedLedger(work)).visit({"request": request, "result": result})
+    work.prepare_copy(mutations)
+    output = capture._JSONCapture(capture._SharedLedger(work)).visit({"request": request,
+        "result": result, "selectedRows": selected_rows, "mutations": list(mutations)})
     shape._integer(interval[0], minimum=1)
     shape._integer(interval[1], minimum=1)
+    shape._integer(work_units, authority.operation_spec(held_operation)["maximumWorkUnits"], minimum=1)
     if interval[0] >= interval[1]:
         raise CurrentRootPlanReplayError("replayed original interval is empty")
+    work.prepare_copy(output["selectedRows"])
+    work.prepare_copy(output["mutations"])
     return _ReplayedPlan(held_operation, output["request"], held_originals, record_digest,
         held_before, after_bytes, before_digest, after_digest, output["result"], interval,
-        plan_digest, snapshot, capability_id)
+        plan_digest, snapshot, capability_id, tuple(output["selectedRows"]), tuple(output["mutations"]), work_units)

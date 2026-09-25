@@ -211,19 +211,24 @@ A candidate Python native-PG profile is:
 | `/run` | 64 MiB |
 | `/tmp` | 256 MiB |
 | `/var/lib/serverware-runner` | 2 GiB |
-| Aggregate output | 64 MiB, 4,096 inodes |
+| Aggregate output | 256 MiB, 4,096 inodes |
 
-The listed memory-backed capacities total 2,496 MiB, below the 4,096 MiB
+The listed memory-backed capacities total 2,688 MiB, below the 4,096 MiB
 memory ceiling. The numerical difference is not guaranteed host or cgroup
 headroom for process/kernel overhead. This is a bounded example, not a measured
-sizing result, prepared PG16 image identity or complete native resource profile. PostgreSQL `fsync`
+sizing result, prepared PG16 image identity or complete native resource profile.
+The signed [native opt-in](native-postgres-controller-consumer.md) requires the
+listed owner and memory/storage/PID/open-file minima; CPU remains an admitted
+choice under the general bounds. The 256 MiB output minimum accommodates the
+seventeen bounded 8 MiB logs plus reports. PostgreSQL `fsync`
 on a tmpfs does not establish survival of host power loss or storage loss.
 
 The separate [native cluster manager](native-postgres-verification.md) and its
-bounded local log capture are now source-implemented but unexecuted. Fixed PG16
-toolchain/image closure, verification of actual output-mount enforcement,
-controller report-consumer integration and authenticated cleanup are still required. The fourteen suite deadlines total
-4,800 seconds before startup and
+bounded local log capture and original-report consumer are source-implemented
+but unexecuted. Fixed PG16 toolchain/image closure, admitted invocation/deadlines,
+the original outer execution-evidence producer, verification of actual
+output-mount enforcement and authenticated cleanup are still required. The fifteen suite deadlines total
+5,100 seconds before startup and
 cleanup; the existing Unit deadline is 900 seconds. Adding execution bounds
 does not change that deadline, omit suites to fit it, remove their exclusions,
 waive changed-test coverage, or authorize verification before the complete

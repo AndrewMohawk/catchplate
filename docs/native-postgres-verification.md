@@ -8,10 +8,12 @@ nonroot execution and resource/storage bounds part of the admitted runner
 identity, with fresh byte/inode-capped output tmpfs and exact pre-start
 container/mount checks. These aggregate limits are source-implemented, not
 verified kernel enforcement or durable host-output storage.
-The source now also includes a fixed, cooperative PostgreSQL cluster runner,
-described below. It has not been executed, does not install a PG16 test image,
-and is not wired to the controller's native output consumer. None of these
-source checkpoints provides native execution evidence.
+The source also includes a fixed, cooperative PostgreSQL cluster runner and an
+opt-in [controller consumer](native-postgres-controller-consumer.md) for its
+original reports, logs and pinned sources. Neither has been executed. No PG16
+test image, signed invocation or outer execution-evidence producer was installed
+by this integration. None of these source checkpoints provides native execution
+evidence.
 The current source remains unbuilt and unexecuted. The fifteen suites remain in
 `CODER_EXCLUDED_TEST_SCRIPTS`; their standalone entrypoints and result files do
 not remove that exclusion or satisfy changed-test coverage admission.
@@ -239,8 +241,8 @@ script, selector, DSN or executable. Its fixed profile is:
 - Read-only source: `/opt/serverware/src`.
 - DSN: `host=/run/serverware-native-postgres port=5432 dbname=postgres user=serverware_fixture_admin`.
 - Reports: `/opt/serverware/output/native-postgres/reports/00.json` through
-  `13.json`, supplied with `--prepared-result`.
-- The two inventory-marked scripts receive `--disposable-cluster`; every script
+  `14.json`, supplied with `--prepared-result`.
+- The three inventory-marked scripts receive `--disposable-cluster`; every script
   receives `-v`.
 
 These tuples alone do not execute anything or create the named paths. The
@@ -407,10 +409,11 @@ network service contract, which uses endpoint authorities/ports and HTTP health
 checks, is not a Unix-socket transport for these fixtures. Do not weaken the
 fixture DSN restrictions or expose a host socket to make it fit.
 
-The fixed cluster lifecycle and bounded local log capture are source-implemented
-but unverified. PG16 image construction, admitted deadlines, actual output-mount
-enforcement verification, controller-bound native result consumption and
-authenticated controller cleanup are still incomplete. `RunnerIdentity.executionBounds` requires
+The fixed cluster lifecycle, bounded local log capture and controller-bound
+native result consumer are source-implemented but unverified. PG16 image
+construction, admitted deadlines, actual output-mount enforcement verification,
+the original outer execution-evidence producer and authenticated controller
+cleanup remain prerequisites. `RunnerIdentity.executionBounds` requires
 an admitted nonroot user/group, CPU, memory with no swap, PID, open-file,
 shared-memory, private writable-mount and aggregate output byte/inode bounds.
 It does not choose or run a native-PG profile by itself. The actual Docker create/inspect/start boundary
@@ -420,14 +423,18 @@ and fresh per-lane output ownership are described in
 The fixed private workload-data mount is `/var/lib/serverware-runner`; the
 cluster manager places its fresh `PGDATA` child and WAL there. The native
 example assigns it a 2 GiB tmpfs within a 4 GiB no-swap memory limit, alongside
-64 MiB shared memory, 64 MiB `/run`, 256 MiB `/tmp` and a separate 64 MiB,
+64 MiB shared memory, 64 MiB `/run`, 256 MiB `/tmp` and a separate 256 MiB,
 4,096-inode output tmpfs. All byte capacities participate in the checked
-memory sum; that sum is not a total-RSS, all-kernel-metadata or host-allocation
+memory sum (2,688 MiB); that sum is not a total-RSS, all-kernel-metadata or host-allocation
 guarantee. Its other bounds are
 UID/GID `10001:10001`, 2 CPUs, 128 PIDs and `nofile` 1024. This is not a
 measured capacity result, a host-backed database allocation, or a blanket
 user change for other runner profiles; Rust retains its own `65532:65532`
-identity. There is no host `/tmp` or unbounded private-data fallback. The
+identity. The opt-in native contract requires those memory/storage, PID and
+open-file minima; its CPU allocation remains independently selected under the
+existing bounded CPU contract. The larger output minimum accommodates the
+seventeen separately bounded 8 MiB logs plus reports; it is not permission to
+exceed a per-file limit. There is no host `/tmp` or unbounded private-data fallback. The
 separate writable lane-output bind now exposes a fresh controller-owned tmpfs
 with mandatory signed byte/inode caps and `noswap,nodev,nosuid,noexec`, not an
 unbounded host directory. Actual mount/cap readback and strict unmount before
@@ -442,7 +449,7 @@ durability.
 
 The fifteen fixed per-suite ceilings sum to 5,100 seconds, before
 startup and cleanup, whereas the current Unit deadline profile is 900 seconds.
-The source-only native sub-job proposes a 5,700-second ceiling with 120 seconds
+The source-only native sub-job has a 5,700-second ceiling with 120 seconds
 for initialization, 60 for readiness, 60 for shutdown and additional bounded
 overhead. This explicit 300-second increase from the previous native component's
 5,400 seconds, and one additional direct-child slot,
@@ -454,7 +461,12 @@ reconciliation including its other work and outer cleanup. This inventory neithe
 silently dropping suites to fit it. An installed controller must enforce the
 selected profile and retain source/runtime/artifact/result bindings, then prove all task-owned
 processes, sockets, mounts and storage are gone. A report from a fixture or a
-pure batch consumer cannot manufacture that terminal proof.
+pure batch consumer cannot manufacture that terminal proof. The source consumer
+now rejects an opt-in body with less than 5,700 seconds of signed command time
+or remaining original controller time before start. It clips transport and
+collection to the earlier bound; it never extends that deadline. An admitted
+combined Unit body still needs explicit headroom for its ordinary work, native
+startup/collection, and outer cleanup.
 The existing Docker runner `StopTimeout` is also still 10 seconds; it has not
 been silently widened to the native component's 60-second PostgreSQL shutdown
 budget. Cancellation/deadline admission must reconcile those limits and retain
@@ -462,9 +474,14 @@ forced outer destruction for any incomplete cooperative shutdown.
 
 The actual v12 body is supplied in the externally signed
 `executor-invocation-inputs-v12.json` logical-plan template. Future admission
-must explicitly bind the new image, exact no-argument Python entrypoint,
+must explicitly bind the new image, a fixed approved command retaining ordinary
+Unit coverage and invoking the no-argument Python entrypoint,
 source/artifact destinations, environment, resources, timeout and result
-consumer. A Makefile phase name or a locally authored manifest is not that
+consumer. The signed `nativePostgres` option binds the prepared manifest and
+fifteen script digests; the original outer result must commit the actual
+33-file inventory through `nativePostgresOutputSha256`. The controller checks
+these originals but does not generate missing courier/runtime evidence or
+the outer result. A Makefile phase name or a locally authored manifest is not that
 signed invocation. No such external input was created or reissued here.
 
 Keep all fifteen exclusions and all mandatory prerequisite gates until the real

@@ -182,7 +182,7 @@ fn one_mount(path: &Path) -> Result<Option<Mount>> {
     Ok(found)
 }
 
-fn fd_mount_id(directory: RawFd) -> Result<u64> {
+pub(super) fn fd_mount_id(directory: RawFd) -> Result<u64> {
     if directory < 3 { return Err(rejected("runner output descriptor aliases stdio")); }
     let raw = bounded_read(&PathBuf::from(format!("/proc/self/fdinfo/{directory}")), 16 * 1024)?;
     let text = std::str::from_utf8(&raw)

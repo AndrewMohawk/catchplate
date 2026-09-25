@@ -4,6 +4,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Component, Path};
 
+#[path = "native_postgres_contract_v12.rs"]
+pub mod native_postgres_contract_v12;
+
 pub type Digest = [u8; 32];
 pub type PlanResult<T> = Result<T, PlanProtocolError>;
 
@@ -1072,6 +1075,8 @@ pub struct BodyContract {
     pub artifacts_read_only: bool,
     pub docker_api_visible: bool,
     pub expected_output_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_postgres: Option<native_postgres_contract_v12::NativePostgresContractV12>,
     pub body_sha256: Digest,
 }
 
@@ -1117,6 +1122,18 @@ impl BodyContract {
                 ));
             }
         }
+        if let Some(native) = &self.native_postgres {
+            native.validate()?;
+            if self.lane != LogicalLane::Unit
+                || self.command.timeout_ns < native_postgres_contract_v12::REQUIRED_RUNTIME_NS
+                || native_postgres_contract_v12::expected_output_paths().iter()
+                    .any(|path| !self.expected_output_paths.contains(path))
+            {
+                return Err(PlanProtocolError::Invalid(
+                    "native PostgreSQL body lacks its signed unit, deadline or complete output scope",
+                ));
+            }
+        }
         if canonical_sha256_without_digest(
             self,
             |value| value.body_sha256 = [0; 32],
@@ -1147,6 +1164,27 @@ impl LogicalLaneContract {
         }
         self.prepare.validate()?;
         self.body.validate()?;
+        if self.body.native_postgres.is_some() {
+            let runner = &self.prepare.runner;
+            let bounds = &runner.execution_bounds;
+            let mib = 1024 * 1024;
+            if self.prepare.artifacts.is_none()
+                || runner.image.platform != "linux/amd64"
+                || runner.mount_policy.source_destination != "/opt/serverware/src"
+                || runner.mount_policy.artifact_destination != "/opt/serverware/artifacts"
+                || runner.mount_policy.output_destination != "/opt/serverware/output"
+                || bounds.user_uid != 10001 || bounds.user_gid != 10001
+                || bounds.memory_bytes < 4096 * mib
+                || bounds.pids < 128 || bounds.open_files < 1024
+                || bounds.shm_bytes < 64 * mib || bounds.run_tmpfs_bytes < 64 * mib
+                || bounds.tmp_tmpfs_bytes < 256 * mib || bounds.private_data_bytes < 2048 * mib
+                || bounds.output_bytes < 256 * mib || bounds.output_inodes < 4096
+            {
+                return Err(PlanProtocolError::Invalid(
+                    "native PostgreSQL runner lacks its fixed prepared mount and bounded resource profile",
+                ));
+            }
+        }
         if matches!(
             self.lane,
             LogicalLane::Integration | LogicalLane::E2e

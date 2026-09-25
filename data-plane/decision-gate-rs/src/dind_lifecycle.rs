@@ -6,6 +6,12 @@ mod runner_isolation_v12;
 #[path = "runner_output_storage_v12.rs"]
 mod runner_output_storage_v12;
 
+#[path = "native_postgres_reports_v12.rs"]
+mod native_postgres_reports_v12;
+
+#[path = "native_postgres_output_v12.rs"]
+mod native_postgres_output_v12;
+
 #[cfg(test)]
 #[path = "runner_output_tests_v12.rs"]
 mod runner_output_tests_v12;
@@ -4113,20 +4119,25 @@ impl PrivateDindLifecycleV12 {
                 ))
             }
         };
-        let runner = {
+        body_contract.validate().map_err(|error| {
+            ControllerError::InvalidOwned(error.to_string())
+        })?;
+        let (runner, native_inputs) = {
             let state = self.state.lock().map_err(|_| {
                 ControllerError::Rejected(
                     "private DinD lifecycle mutex is poisoned",
                 )
             })?;
             let handle = require_active_handle_v12(&state, operation)?;
-            handle
-                    .runners
-                    .get(&operation.request.lane)
-                    .cloned()
-                    .ok_or(ControllerError::Rejected(
-                        "repository body runner is absent",
-                    ))?
+            let runner = handle.runners.get(&operation.request.lane).cloned()
+                .ok_or(ControllerError::Rejected("repository body runner is absent"))?;
+            let native_inputs = if body_contract.native_postgres.is_some() {
+                let artifacts = handle.artifact_mount.as_ref().ok_or(
+                    ControllerError::Rejected("native PostgreSQL prepared artifact mount is absent"),
+                )?;
+                Some((open_directory_fd_v12(artifacts)?, open_directory_fd_v12(&handle.source_mount)?))
+            } else { None };
+            (runner, native_inputs)
         };
         if runner.command_sha256 != body_contract.command.command_sha256
             || runner.created_inspect_sha256.is_none()
@@ -4135,6 +4146,14 @@ impl PrivateDindLifecycleV12 {
             return Err(ControllerError::Rejected(
                 "repository body differs from its unconsumed inspected runner",
             ));
+        }
+        if let (Some(native), Some((artifacts, source))) =
+            (&body_contract.native_postgres, &native_inputs)
+        {
+            native_postgres_output_v12::admit_prepared(
+                artifacts.as_raw_fd(), source.as_raw_fd(), native,
+                operation.request.deadline_boottime_ns,
+            )?;
         }
         let output_fd = open_directory_fd_v12(&runner.output_mount)?;
         runner_output_storage_v12::verify(
@@ -4171,17 +4190,32 @@ impl PrivateDindLifecycleV12 {
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
         )?;
+        let body_deadline = if body_contract.native_postgres.is_some() {
+            let now = boottime_now_ns_v11()?;
+            let deadline = now.checked_add(body_contract.command.timeout_ns)
+                .ok_or(ControllerError::Rejected("native body timeout overflows"))?
+                .min(operation.request.deadline_boottime_ns);
+            if deadline.saturating_sub(now)
+                < crate::plan_protocol::native_postgres_contract_v12::REQUIRED_RUNTIME_NS
+            {
+                return Err(ControllerError::Rejected(
+                    "native PostgreSQL body lacks its full original execution window",
+                ));
+            }
+            deadline
+        } else { operation.request.deadline_boottime_ns };
         let id = &runner.id;
-        let start = self.docker_http_v12(
+        let start = self.docker_http_v12_with_deadline(
             operation,
             "POST",
             &format!("/v1.45/containers/{id}/start"),
             Vec::new(),
             DockerRequestBodyV12::Empty,
             DockerStreamModeV11::BoundedHttp,
+            body_deadline,
         )?;
         require_docker_success_v12(&start, &[204])?;
-        let wait = self.docker_http_v12(
+        let wait = self.docker_http_v12_with_deadline(
             operation,
             "POST",
             &format!(
@@ -4190,6 +4224,7 @@ impl PrivateDindLifecycleV12 {
             Vec::new(),
             DockerRequestBodyV12::Empty,
             DockerStreamModeV11::FullDuplex,
+            body_deadline,
         )?;
         let wait_body = require_docker_success_v12(&wait, &[200])?;
         let exit_status = wait_body
@@ -4265,6 +4300,40 @@ impl PrivateDindLifecycleV12 {
             return Err(ControllerError::Rejected(
                 "repository body terminal result differs from observed execution",
             ));
+        }
+        match (&body_contract.native_postgres, &native_inputs) {
+            (Some(native), Some((artifacts, source))) => {
+                if exit_status != 0 {
+                    return Err(ControllerError::Rejected(
+                        "native PostgreSQL body did not exit successfully",
+                    ));
+                }
+                native_postgres_output_v12::admit_prepared(
+                    artifacts.as_raw_fd(), source.as_raw_fd(), native, body_deadline,
+                )?;
+                let observed = native_postgres_output_v12::collect(
+                    output_fd.as_raw_fd(), runner.uid, runner.gid, native, body_deadline,
+                )?;
+                if value.get("nativePostgresOutputSha256")
+                    != Some(&serde_json::to_value(observed).map_err(|error| {
+                        ControllerError::InvalidOwned(error.to_string())
+                    })?)
+                {
+                    return Err(ControllerError::Rejected(
+                        "native PostgreSQL original output differs from the outer terminal commitment",
+                    ));
+                }
+                runner_output_storage_v12::verify(
+                    output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
+                )?;
+                if boottime_now_ns_v11()? >= body_deadline {
+                    return Err(ControllerError::Rejected("native PostgreSQL result deadline expired"));
+                }
+            }
+            (None, None) if value.get("nativePostgresOutputSha256").is_none() => {}
+            _ => return Err(ControllerError::Rejected(
+                "native PostgreSQL result was not selected by its signed body",
+            )),
         }
         Ok(result)
     }
@@ -4943,6 +5012,25 @@ impl PrivateDindLifecycleV12 {
         body: DockerRequestBodyV12,
         stream_mode: DockerStreamModeV11,
     ) -> Result<Vec<u8>> {
+        self.docker_http_v12_with_deadline(operation, method, target, headers, body,
+            stream_mode, operation.request.deadline_boottime_ns)
+    }
+
+    fn docker_http_v12_with_deadline(
+        &self,
+        operation: &DockerLaneOperationV12,
+        method: &str,
+        target: &str,
+        headers: Vec<(String, String)>,
+        body: DockerRequestBodyV12,
+        stream_mode: DockerStreamModeV11,
+        deadline_boottime_ns: u64,
+    ) -> Result<Vec<u8>> {
+        if deadline_boottime_ns > operation.request.deadline_boottime_ns
+            || boottime_now_ns_v11()? >= deadline_boottime_ns
+        {
+            return Err(ControllerError::Rejected("private DinD transport deadline widened or expired"));
+        }
         let socket = {
             let state = self.state.lock().map_err(|_| {
                 ControllerError::Rejected(
@@ -4970,14 +5058,13 @@ impl PrivateDindLifecycleV12 {
             &headers,
             body_bytes,
         )?;
-        let mut daemon = UnixStream::connect(&socket)?;
+        let mut daemon = connect_private_dind_stream_v12(&socket, deadline_boottime_ns)?;
         let contract = DockerHttpExchangeContractV12 {
             stream_mode,
             max_request_bytes: PRIVATE_DIND_MAX_HTTP_BYTES_V12,
             max_response_bytes: PRIVATE_DIND_MAX_HTTP_BYTES_V12,
             max_stream_bytes: PRIVATE_DIND_MAX_HTTP_BYTES_V12,
-            deadline_boottime_ns:
-                operation.request.deadline_boottime_ns,
+            deadline_boottime_ns,
         };
         match execute_bounded_docker_http_v12(
             &mut daemon,
@@ -8788,6 +8875,39 @@ fn wait_pidfd(pidfd: RawFd, deadline: u64) -> Result<()> {
             return Err(std::io::Error::last_os_error().into());
         }
     }
+}
+
+fn connect_private_dind_stream_v12(socket: &Path, deadline: u64) -> Result<UnixStream> {
+    require_absolute_normalized(socket)?;
+    if boottime_now_ns_v11()? >= deadline {
+        return Err(ControllerError::Rejected("private DinD connect deadline expired"));
+    }
+    let path = socket.as_os_str().as_bytes();
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if path.is_empty() || path.len() >= address.sun_path.len() || path.contains(&0) {
+        return Err(ControllerError::Rejected("private DinD socket path is invalid"));
+    }
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (destination, byte) in address.sun_path.iter_mut().zip(path) {
+        *destination = *byte as libc::c_char;
+    }
+    let raw = unsafe { libc::socket(libc::AF_UNIX,
+        libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, 0) };
+    if raw < 0 { return Err(std::io::Error::last_os_error().into()); }
+    let owned = unsafe { OwnedFd::from_raw_fd(raw) };
+    let length = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + path.len() + 1)
+        as libc::socklen_t;
+    // The private local socket must connect immediately. Queue pressure,
+    // interruption or a pending connect is rejected before any HTTP bytes;
+    // neither blocking connect nor a fresh retry can renew the body deadline.
+    if unsafe { libc::connect(owned.as_raw_fd(),
+        (&address as *const libc::sockaddr_un).cast(), length) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if boottime_now_ns_v11()? >= deadline {
+        return Err(ControllerError::Rejected("private DinD connect exceeded its original deadline"));
+    }
+    Ok(unsafe { UnixStream::from_raw_fd(owned.into_raw_fd()) })
 }
 
 fn docker_ping(socket: &Path, deadline: u64) -> Result<()> {

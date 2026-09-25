@@ -229,6 +229,8 @@ struct BodyExecutionResultV12 {
     runner_static_evidence: StaticExecutableEvidenceV12,
     courier_static_evidence: StaticExecutableEvidenceV12,
     runner_evidence: RunnerRuntimeEvidenceV12,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_postgres_output_sha256: Option<Digest>,
     terminal_sha256: Digest,
 }
 
@@ -2664,6 +2666,13 @@ fn validate_body_result(
     artifact: Option<&PublishedArtifactCas>,
     result: &BodyExecutionResultV12,
 ) -> PlanResult<()> {
+    match (&lane.body.native_postgres, &result.native_postgres_output_sha256) {
+        (Some(_), Some(digest)) if *digest != [0; 32] => {}
+        (None, None) => {}
+        _ => return Err(PlanProtocolError::Invalid(
+            "repository body lost its source-selected native PostgreSQL output commitment",
+        )),
+    }
     if result.version != EXECUTOR_RESULT_VERSION
         || result.plan_id != plan.plan_id
         || result.lane != lane.lane

@@ -98,6 +98,14 @@ The body consumer separately recomputes and joins the signed body-claims digest.
 The root lifecycle also retains the admitted runner identity from creation,
 compares the typed result against that identity and the actual Docker exit,
 checks terminal/claims commitments, and preserves the original result bytes.
+Before releasing the fixed supervisor's child gate, it now also holds the actual
+pidfd, process start ticks, executable and namespace descriptors and generation
+cgroup membership. The original result's observer PID/start ticks and runtime
+namespaces must agree with those observations, and the held pidfd must indicate
+termination after Docker wait. The local custody digest is unsigned; an
+independently opened observer pidfd is not asserted to be the same descriptor.
+Independent launch/event/mapping acquisition and an explicit observer custody
+handoff remain required. See [launch custody](controller-body-launch.md).
 The executor still performs independent pinned-key verification and static-role,
 source/artifact/closure checks. Native selection still requires actual collection
 and equality with the [33-file native commitment](native-postgres-controller-consumer.md).
@@ -108,7 +116,7 @@ Neither layer synthesizes absent evidence or bypasses cleanup.
 The create path now invokes a fixed supervisor with a controller-owned read-only
 launch context. The original signed command remains unchanged inside that context;
 no final plan ID is injected into its signed arguments. This supplies real
-supervision code but not independent runtime acquisition/signing or terminal-file
+supervision and unsigned target-custody code but not independent runtime acquisition/signing or terminal-file
 publication. The lifecycle subscribes before start, captures bounded separate
 stdout/stderr, independently reads the signed output tree and publishes its
 manifest under reserved controller filenames. This does not supply the missing

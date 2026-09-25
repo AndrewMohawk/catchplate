@@ -5,13 +5,17 @@
 //! admission belongs to the fixed lifecycle/inspect owner. The host context is
 //! mode 0444 under a mode 0555 root-owned directory, not FS_IMMUTABLE. Clones
 //! share publication state, and partial publication is never adopted/retried.
+//! Release is a second one-use transition after actual host custody. A fixed
+//! pending file is fully written/synced and renamed without replacement so a
+//! waiting supervisor never observes a partial final release. This local
+//! permission is not independently signed runtime-observer approval.
 
 use super::{canonical_json_bytes_v12, sha256, ControllerError, Digest, Result};
 use super::body_output_files_v12::live;
 use super::runner_output_storage_v12::fd_mount_id;
 use crate::plan_protocol::{canonical_bytes, ContainerCommand, LogicalLane, RunnerIdentity};
-use crate::plan_protocol::body_launch_contract_v12::{BodyLaunchContextV12,
-    CONTEXT_NAME, MAX_CONTEXT_BYTES_V12};
+use crate::plan_protocol::body_launch_contract_v12::{BodyLaunchContextV12, BodyLaunchReleaseV12,
+    CONTEXT_NAME, RELEASE_NAME, MAX_CONTEXT_BYTES_V12, MAX_RELEASE_BYTES_V12};
 use serde_json::json;
 use std::ffi::{CStr, CString};
 use std::fmt;
@@ -85,7 +89,7 @@ fn open_directory(path: &Path) -> Result<OwnedFd> {
 struct Scan(*mut libc::DIR);
 impl Drop for Scan { fn drop(&mut self) { unsafe { libc::closedir(self.0); } } }
 
-fn inventory(directory: RawFd, published: bool, deadline: u64) -> Result<()> {
+fn inventory(directory: RawFd, published: bool, released: bool, deadline: u64) -> Result<()> {
     live(deadline)?;
     let fd = open_at(directory, c".", true)?.into_raw_fd();
     let stream = unsafe { libc::fdopendir(fd) };
@@ -95,7 +99,7 @@ fn inventory(directory: RawFd, published: bool, deadline: u64) -> Result<()> {
         return Err(error.into());
     }
     let scan = Scan(stream);
-    let (mut entries, mut found) = (0usize, false);
+    let (mut entries, mut found, mut found_release) = (0usize, false, false);
     loop {
         live(deadline)?;
         unsafe { *libc::__errno_location() = 0; }
@@ -106,17 +110,22 @@ fn inventory(directory: RawFd, published: bool, deadline: u64) -> Result<()> {
             break;
         }
         entries += 1;
-        if entries > if published { 3 } else { 2 } {
+        if entries > 2 + usize::from(published) + usize::from(released) {
             return Err(rejected("body launch directory has an excessive inventory"));
         }
         let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
         if name == b"." || name == b".." { continue; }
-        if !published || found || name != CONTEXT_NAME.as_bytes() {
+        if published && !found && name == CONTEXT_NAME.as_bytes() {
+            found = true;
+        } else if released && !found_release && name == RELEASE_NAME.as_bytes() {
+            found_release = true;
+        } else {
             return Err(rejected("body launch directory contains an unexpected original"));
         }
-        found = true;
     }
-    if found != published { return Err(rejected("body launch original is absent")); }
+    if found != published || found_release != released {
+        return Err(rejected("body launch context or release original is absent"));
+    }
     live(deadline)
 }
 
@@ -126,10 +135,19 @@ struct Published {
     file_identity: Identity,
     bytes: Vec<u8>,
     bytes_sha256: Digest,
+    context_sha256: Digest,
     deadline: u64,
 }
 
-enum Publication { Empty(Identity), Published(Published), Poisoned }
+struct Released {
+    file: File,
+    file_identity: Identity,
+    bytes: Vec<u8>,
+    bytes_sha256: Digest,
+    deadline: u64,
+}
+
+enum Publication { Empty(Identity), Published(Published), Released(Published, Released), Poisoned }
 
 struct Inner {
     generation_path: PathBuf,
@@ -188,29 +206,50 @@ impl Inner {
             Publication::Poisoned => Err(rejected("body launch publication is poisoned")),
             Publication::Empty(expected) => {
                 self.anchors(0o700, deadline)?;
-                inventory(self.directory.as_raw_fd(), false, deadline)?;
+                inventory(self.directory.as_raw_fd(), false, false, deadline)?;
                 if identity(self.directory.as_raw_fd())? != *expected {
                     return Err(rejected("empty body launch custody changed"));
                 }
                 live(deadline)
             }
-            Publication::Published(original) => {
-                let deadline = deadline.min(original.deadline);
-                self.anchors(0o555, deadline)?;
-                inventory(self.directory.as_raw_fd(), true, deadline)?;
-                let named = open_at(self.directory.as_raw_fd(), c"launch.json", false)?;
-                if identity(named.as_raw_fd())? != original.file_identity
-                    || fd_mount_id(named.as_raw_fd())? != self.mount {
-                    return Err(rejected("body launch original name differs from retained custody"));
-                }
-                let bytes = read_original(&original.file, &original.file_identity, self.mount, deadline)?;
-                if bytes != original.bytes || sha256(&bytes) != original.bytes_sha256
-                    || identity(self.directory.as_raw_fd())? != original.directory_identity {
-                    return Err(rejected("body launch original or directory changed after publication"));
-                }
-                self.anchors(0o555, deadline)
+            Publication::Published(original) => self.verify_originals(original, None, deadline),
+            Publication::Released(original, release) => self.verify_originals(original, Some(release), deadline),
+        }
+    }
+
+    fn verify_originals(&self, original: &Published, release: Option<&Released>,
+        deadline: u64) -> Result<()> {
+        let deadline = deadline.min(original.deadline)
+            .min(release.map_or(u64::MAX, |value| value.deadline));
+        self.anchors(0o555, deadline)?;
+        inventory(self.directory.as_raw_fd(), true, release.is_some(), deadline)?;
+        let named = open_at(self.directory.as_raw_fd(), c"launch.json", false)?;
+        if identity(named.as_raw_fd())? != original.file_identity
+            || fd_mount_id(named.as_raw_fd())? != self.mount {
+            return Err(rejected("body launch original name differs from retained custody"));
+        }
+        let bytes = read_original(&original.file, &original.file_identity, self.mount, deadline)?;
+        if bytes != original.bytes || sha256(&bytes) != original.bytes_sha256 {
+            return Err(rejected("body launch original changed after publication"));
+        }
+        if let Some(release) = release {
+            if release.file_identity.bytes as u64 > MAX_RELEASE_BYTES_V12 as u64 {
+                return Err(rejected("body release original exceeds its fixed bound"));
+            }
+            let named = open_at(self.directory.as_raw_fd(), c"release.json", false)?;
+            if identity(named.as_raw_fd())? != release.file_identity
+                || fd_mount_id(named.as_raw_fd())? != self.mount {
+                return Err(rejected("body release original name differs from retained custody"));
+            }
+            let bytes = read_original(&release.file, &release.file_identity, self.mount, deadline)?;
+            if bytes != release.bytes || sha256(&bytes) != release.bytes_sha256 {
+                return Err(rejected("body release original changed after publication"));
             }
         }
+        if identity(self.directory.as_raw_fd())? != original.directory_identity {
+            return Err(rejected("body launch directory changed after publication"));
+        }
+        self.anchors(0o555, deadline)
     }
 }
 
@@ -349,12 +388,84 @@ impl HeldBodyLaunchV12 {
             return Err(std::io::Error::last_os_error().into());
         }
         let published = Published { directory_identity: identity(self.inner.directory.as_raw_fd())?,
-            file, file_identity, bytes_sha256: sha256(&bytes), bytes,
+            file, file_identity, bytes_sha256: sha256(&bytes), bytes, context_sha256: context.context_sha256,
             deadline };
         let proposed = Publication::Published(published);
         self.inner.verify_publication(&proposed, deadline)?;
         *state = proposed;
         live(deadline)?;
         Ok(context.context_sha256)
+    }
+
+    pub(super) fn release(&self, context_digest: Digest, actual_host_pid: u32,
+        actual_start_ticks: u64, deadline: u64) -> Result<Digest> {
+        live(deadline)?;
+        let mut state = self.inner.publication.lock()
+            .map_err(|_| rejected("body launch publication lock is poisoned"))?;
+        let original = match &*state {
+            Publication::Published(original) => original,
+            _ => return Err(rejected("body launch release requires one unreleased original context")),
+        };
+        let deadline = deadline.min(original.deadline);
+        if context_digest != original.context_sha256 {
+            return Err(rejected("body launch release differs from its retained context"));
+        }
+        self.inner.verify_publication(&state, deadline)?;
+        let release = BodyLaunchReleaseV12::new(context_digest, actual_host_pid,
+            actual_start_ticks, deadline)
+            .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
+        let bytes = release.original_bytes()
+            .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
+        live(deadline)?;
+        let mut original = match std::mem::replace(&mut *state, Publication::Poisoned) {
+            Publication::Published(original) => original,
+            _ => return Err(rejected("body launch release state changed")),
+        };
+        // No final-name partial file: the supervisor polls that fixed name.
+        // A failed or interrupted publication retains poisoned root custody.
+        let fd = unsafe { libc::openat(self.inner.directory.as_raw_fd(), c".release.pending".as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW
+                | libc::O_NONBLOCK | libc::O_CLOEXEC, 0o600) };
+        if fd < 0 { return Err(std::io::Error::last_os_error().into()); }
+        let mut writer = unsafe { File::from_raw_fd(fd) };
+        writer.write_all(&bytes)?;
+        live(deadline)?;
+        if unsafe { libc::fchmod(writer.as_raw_fd(), 0o444) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        writer.sync_all()?;
+        live(deadline)?;
+        let pending_identity = identity(writer.as_raw_fd())?;
+        pending_identity.original()?;
+        let file = File::from(open_at(self.inner.directory.as_raw_fd(), c".release.pending", false)?);
+        if read_original(&file, &pending_identity, self.inner.mount, deadline)? != bytes {
+            return Err(rejected("body release pending original differs from its fixed bytes"));
+        }
+        drop(writer);
+        live(deadline)?;
+        if unsafe { libc::syscall(libc::SYS_renameat2, self.inner.directory.as_raw_fd(),
+            c".release.pending".as_ptr(), self.inner.directory.as_raw_fd(), c"release.json".as_ptr(),
+            libc::RENAME_NOREPLACE) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // Rename may update ctime: hold the completed final identity, but do
+        // not admit a different inode or any content/permission transition.
+        let file_identity = identity(file.as_raw_fd())?;
+        file_identity.original()?;
+        if !file_identity.object(&pending_identity) || file_identity.mode != pending_identity.mode
+            || file_identity.links != pending_identity.links || file_identity.bytes != pending_identity.bytes
+            || file_identity.mtime != pending_identity.mtime || file_identity.mtime_ns != pending_identity.mtime_ns {
+            return Err(rejected("body release inode changed across atomic publication"));
+        }
+        if unsafe { libc::fsync(self.inner.directory.as_raw_fd()) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        original.directory_identity = identity(self.inner.directory.as_raw_fd())?;
+        let released = Released { file, file_identity, bytes_sha256: sha256(&bytes), bytes, deadline };
+        let proposed = Publication::Released(original, released);
+        self.inner.verify_publication(&proposed, deadline)?;
+        *state = proposed;
+        live(deadline)?;
+        Ok(release.release_sha256)
     }
 }

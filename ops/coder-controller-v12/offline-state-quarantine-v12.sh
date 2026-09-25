@@ -94,6 +94,22 @@ if test -e "$cgroup_root" || test -L "$cgroup_root"; then
     if IFS= read -r cgroup_pid < "$cgroup_root/cgroup.procs"; then
         fail "private DinD cgroup still has process: $cgroup_pid"
     fi
+    # The delegated service root intentionally has no direct processes.
+    # Include its supervisor/.control descendants in the offline check.
+    test -r "$cgroup_root/cgroup.events" && test ! -L "$cgroup_root/cgroup.events" \
+        || fail "private DinD aggregate cgroup state is unreadable or unsafe"
+    cgroup_empty_seen=no
+    while IFS= read -r cgroup_event
+    do
+        case "$cgroup_event" in
+            'populated 0')
+                test "$cgroup_empty_seen" = no || fail "duplicate cgroup populated state"
+                cgroup_empty_seen=yes
+                ;;
+            'populated '*) fail "private DinD cgroup subtree still has processes" ;;
+        esac
+    done < "$cgroup_root/cgroup.events"
+    test "$cgroup_empty_seen" = yes || fail "private DinD aggregate populated state is absent"
     for child in "$cgroup_root"/serverware-coder-v12-*
     do
         test -e "$child" || test -L "$child" || continue

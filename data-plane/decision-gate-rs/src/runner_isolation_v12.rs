@@ -1,4 +1,4 @@
-//! Closed Linux Engine API 1.45 runner configuration and pre-start readback.
+//! Closed Linux Engine API 1.45 runner configuration and lifecycle readback.
 //!
 //! This checks the daemon's retained configuration, not kernel enforcement or
 //! the sealed image's identity. Those remain independent readiness obligations.
@@ -7,6 +7,7 @@
 //! paths below are the Moby 26 oci/defaults.go profile; drift fails closed.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use serde_json::{json, Map, Value};
 
@@ -34,7 +35,7 @@ const HOST_ZERO_FIELDS: &[&str] = &[
     "CpuPercent", "IOMaximumIOps", "IOMaximumBandwidth",
 ];
 const HOST_EMPTY_STRINGS: &[&str] = &[
-    "ContainerIDFile", "VolumeDriver", "Cgroup", "CgroupParent",
+    "ContainerIDFile", "VolumeDriver", "Cgroup",
     "CpusetCpus", "CpusetMems", "Isolation",
 ];
 const HOST_EMPTY_ARRAYS: &[&str] = &[
@@ -49,7 +50,7 @@ const HOST_OPTIONAL_EMPTY_MAPS: &[&str] = &[
 
 fn rejected(field: &str) -> ControllerError {
     ControllerError::InvalidOwned(format!(
-        "runner pre-start isolation differs: {field}",
+        "runner isolation differs: {field}",
     ))
 }
 
@@ -136,9 +137,15 @@ pub(super) fn execution_host_config_v12(
     bounds: &RunnerExecutionBoundsV12,
     binds: Vec<String>,
     network_mode: &str,
+    cgroup_parent: &str,
 ) -> Result<Value> {
     bounds.validate().map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
     bind_inventory(&binds)?;
+    // The caller owns and admits this cgroupfs hierarchy. A well-formed path
+    // alone neither creates the hierarchy nor establishes resource custody.
+    if !canonical_path(cgroup_parent) {
+        return Err(rejected("cgroup parent"));
+    }
     let private_network = network_mode.strip_prefix("swv12-net-").is_some_and(|suffix| {
         suffix.len() == 20 && suffix.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     });
@@ -154,6 +161,7 @@ pub(super) fn execution_host_config_v12(
         "Binds": binds,
         "CapAdd": [],
         "CapDrop": ["ALL"],
+        "CgroupParent": cgroup_parent,
         "CgroupnsMode": "private",
         "CpuPeriod": bounds.cpu_period_micros,
         "CpuQuota": bounds.cpu_quota_micros,
@@ -164,7 +172,6 @@ pub(super) fn execution_host_config_v12(
         }},
         "Memory": bounds.memory_bytes,
         "MemorySwap": bounds.memory_bytes,
-        "MemorySwappiness": 0,
         "NetworkMode": network_mode,
         "OomKillDisable": false,
         "PidMode": "",
@@ -188,9 +195,16 @@ pub(super) fn execution_host_config_v12(
     }))
 }
 
-fn validate_host(observed: &Value, expected: &Value) -> Result<()> {
+#[derive(Clone, Copy)]
+enum InspectPhase {
+    Created,
+    Running,
+}
+
+fn validate_host(observed: &Value, expected: &Value, phase: InspectPhase) -> Result<()> {
     let actual = object(observed, "HostConfig")?;
     let expected = object(expected, "expected HostConfig")?;
+    exact(expected, "OomKillDisable", &json!(false))?;
     let mut allowed: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
     for (key, value) in expected {
         // Go's nil and empty slice encodings both describe the closed empty
@@ -199,10 +213,25 @@ fn validate_host(observed: &Value, expected: &Value) -> Result<()> {
             if !empty_array(actual.get(key), false) {
                 return Err(rejected(key));
             }
+        } else if key == "OomKillDisable" && matches!(phase, InspectPhase::Running) {
+            // Moby v26.1.4 daemon_unix.go resource verification clears this
+            // unsupported cgroup-v2 pointer. Create adaptation restores false;
+            // start.go re-verifies without adaptation, retaining null instead.
+            // Admit only this running transition, never true or omission.
+            exact(actual, key, &Value::Null)?;
         } else {
             exact(actual, key, value)?;
         }
     }
+    // Moby 26 cgroup-v2 sysinfo marks swappiness unsupported. Supplying even
+    // zero produces a create warning and is discarded; omission must inspect
+    // as the original nil pointer, not as an accepted tuning value. No-swap
+    // remains the separate, exact MemorySwap == Memory request and readback.
+    if expected.contains_key("MemorySwappiness") {
+        return Err(rejected("expected cgroup-v2 swappiness omission"));
+    }
+    allowed.insert("MemorySwappiness");
+    exact(actual, "MemorySwappiness", &Value::Null)?;
     for name in HOST_ZERO_FIELDS {
         allowed.insert(name);
         exact(actual, name, &json!(0))?;
@@ -402,10 +431,11 @@ fn validate_networks(observed: &Value, expected_host: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn validate_runner_inspect_v12(
+fn validate_runner_common(
     observed: &Value,
     expected_create: &Value,
     container_id: &str,
+    phase: InspectPhase,
 ) -> Result<()> {
     if container_id.len() != 64 || !container_id.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
         return Err(rejected("container ID"));
@@ -440,6 +470,23 @@ pub(super) fn validate_runner_inspect_v12(
     if !empty_array(observed.get("ExecIDs"), false) {
         return Err(rejected("ExecIDs"));
     }
+    let expected_host = expected_create.get("HostConfig").ok_or_else(|| rejected("expected HostConfig"))?;
+    if !expected_host.get("CgroupParent").and_then(Value::as_str).is_some_and(canonical_path) {
+        return Err(rejected("expected cgroup parent"));
+    }
+    validate_host(observed.get("HostConfig").ok_or_else(|| rejected("HostConfig"))?, expected_host, phase)?;
+    validate_config(observed.get("Config").ok_or_else(|| rejected("Config"))?, expected_create, container_id)?;
+    validate_mounts(observed.get("Mounts").ok_or_else(|| rejected("Mounts"))?, expected_host)?;
+    Ok(())
+}
+
+pub(super) fn validate_runner_inspect_v12(
+    observed: &Value,
+    expected_create: &Value,
+    container_id: &str,
+) -> Result<()> {
+    validate_runner_common(observed, expected_create, container_id, InspectPhase::Created)?;
+    let observed = object(observed, "inspect document")?;
     let state = object(observed.get("State").ok_or_else(|| rejected("State"))?, "State")?;
     for name in ["Running", "Paused", "Restarting", "Dead", "OOMKilled"] {
         exact(state, name, &json!(false))?;
@@ -458,11 +505,132 @@ pub(super) fn validate_runner_inspect_v12(
         return Err(rejected("unknown State field"));
     }
     let expected_host = expected_create.get("HostConfig").ok_or_else(|| rejected("expected HostConfig"))?;
-    validate_host(observed.get("HostConfig").ok_or_else(|| rejected("HostConfig"))?, expected_host)?;
-    validate_config(observed.get("Config").ok_or_else(|| rejected("Config"))?, expected_create, container_id)?;
-    validate_mounts(observed.get("Mounts").ok_or_else(|| rejected("Mounts"))?, expected_host)?;
     validate_networks(observed.get("NetworkSettings").ok_or_else(|| rejected("NetworkSettings"))?, expected_host)?;
     Ok(())
+}
+
+fn bounded_text(value: Option<&Value>, maximum: usize) -> bool {
+    value.and_then(Value::as_str).is_some_and(|text| {
+        text.len() <= maximum && text.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+    })
+}
+
+fn validate_running_networks(observed: &Value, expected_host: &Value) -> Result<()> {
+    // Allocation changes addresses, endpoint IDs, sandbox paths and generated
+    // DNS names. These are bounded daemon observations, not independent network
+    // provenance. Keep the source-fixed endpoint inventory and closed options.
+    let network = object(observed, "NetworkSettings")?;
+    for name in [
+        "Bridge", "SandboxID", "SandboxKey", "LinkLocalIPv6Address",
+        "EndpointID", "Gateway", "GlobalIPv6Address", "IPAddress",
+        "IPv6Gateway", "MacAddress",
+    ] {
+        if !bounded_text(network.get(name), if name == "SandboxKey" { 4096 } else { 256 }) {
+            return Err(rejected(name));
+        }
+    }
+    for (name, maximum) in [
+        ("LinkLocalIPv6PrefixLen", 128), ("GlobalIPv6PrefixLen", 128), ("IPPrefixLen", 32),
+    ] {
+        if !network.get(name).and_then(Value::as_u64).is_some_and(|value| value <= maximum) {
+            return Err(rejected(name));
+        }
+    }
+    exact(network, "HairpinMode", &json!(false))?;
+    if !empty_map(network.get("Ports"), false)
+        || !empty_array(network.get("SecondaryIPAddresses"), false)
+        || !empty_array(network.get("SecondaryIPv6Addresses"), false)
+        || network.len() != 18
+    {
+        return Err(rejected("running network settings inventory"));
+    }
+    let mode = expected_host.get("NetworkMode").and_then(Value::as_str)
+        .ok_or_else(|| rejected("expected NetworkMode"))?;
+    let endpoints = object(network.get("Networks").ok_or_else(|| rejected("Networks"))?, "Networks")?;
+    if mode == "none" {
+        if !endpoints.is_empty() {
+            return Err(rejected("disabled network inventory"));
+        }
+        return Ok(());
+    }
+    if endpoints.len() != 1 {
+        return Err(rejected("running private network inventory"));
+    }
+    let endpoint = object(endpoints.get(mode).ok_or_else(|| rejected("private network name"))?, "private endpoint")?;
+    exact(endpoint, "IPAMConfig", &Value::Null)?;
+    for name in ["Links", "Aliases"] {
+        if !empty_array(endpoint.get(name), false) {
+            return Err(rejected(name));
+        }
+    }
+    let dns_names = endpoint.get("DNSNames").ok_or_else(|| rejected("DNSNames"))?;
+    if !dns_names.is_null() && !dns_names.as_array().is_some_and(|names| {
+        names.len() <= 16 && names.iter().all(|name| {
+            bounded_text(Some(name), 256) && name.as_str().is_some_and(|value| !value.is_empty())
+        })
+    }) {
+        return Err(rejected("assigned DNS names"));
+    }
+    for name in ["MacAddress", "NetworkID", "EndpointID", "Gateway", "IPAddress", "IPv6Gateway", "GlobalIPv6Address"] {
+        if !bounded_text(endpoint.get(name), 256) {
+            return Err(rejected(name));
+        }
+    }
+    for (name, maximum) in [("IPPrefixLen", 32), ("GlobalIPv6PrefixLen", 128)] {
+        if !endpoint.get(name).and_then(Value::as_u64).is_some_and(|value| value <= maximum) {
+            return Err(rejected(name));
+        }
+    }
+    if !empty_map(endpoint.get("DriverOpts"), false) || endpoint.len() != 14 {
+        return Err(rejected("running private endpoint options"));
+    }
+    Ok(())
+}
+
+/// Admit the daemon's running supervisor before independent host PID/pidfd,
+/// process-start and namespace acquisition. The returned PID is a locator, not
+/// kernel custody or permission to release the workload by itself.
+pub(super) fn validate_runner_running_v12(
+    observed: &Value,
+    expected_create: &Value,
+    container_id: &str,
+    launch_path: &Path,
+) -> Result<u32> {
+    validate_runner_common(observed, expected_create, container_id, InspectPhase::Running)?;
+    let observed = object(observed, "inspect document")?;
+    let expected_host = expected_create.get("HostConfig").ok_or_else(|| rejected("expected HostConfig"))?;
+    let launch_source = launch_path.to_str().filter(|path| canonical_path(path))
+        .ok_or_else(|| rejected("retained launch path"))?;
+    let mounts = observed.get("Mounts").and_then(Value::as_array)
+        .ok_or_else(|| rejected("Mounts"))?;
+    let launch_mount = mounts.iter().find(|mount| mount.get("Destination") == Some(&json!(CONTEXT_DIRECTORY)))
+        .ok_or_else(|| rejected("retained launch mount"))?;
+    if launch_mount.get("Source") != Some(&json!(launch_source)) {
+        return Err(rejected("retained launch source"));
+    }
+    let state = object(observed.get("State").ok_or_else(|| rejected("State"))?, "State")?;
+    exact(state, "Running", &json!(true))?;
+    for name in ["Paused", "Restarting", "Dead", "OOMKilled"] {
+        exact(state, name, &json!(false))?;
+    }
+    exact(state, "Status", &json!("running"))?;
+    exact(state, "ExitCode", &json!(0))?;
+    exact(state, "Error", &json!(""))?;
+    exact(state, "FinishedAt", &json!("0001-01-01T00:00:00Z"))?;
+    if !bounded_text(state.get("StartedAt"), 64)
+        || !state.get("StartedAt").and_then(Value::as_str).is_some_and(|value| {
+            !value.is_empty() && value != "0001-01-01T00:00:00Z"
+        })
+        || state.get("Health").is_some_and(|value| !value.is_null())
+        || state.len() != if state.contains_key("Health") { 12 } else { 11 }
+    {
+        return Err(rejected("running state inventory"));
+    }
+    let pid = state.get("Pid").and_then(Value::as_u64)
+        .filter(|pid| (2..=i32::MAX as u64).contains(pid))
+        .ok_or_else(|| rejected("running supervisor PID"))?;
+    validate_running_networks(observed.get("NetworkSettings").ok_or_else(|| rejected("NetworkSettings"))?, expected_host)?;
+    Ok(pid as u32)
 }
 
 #[cfg(test)]
@@ -470,6 +638,7 @@ mod tests {
     use super::*;
 
     const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const CGROUP_PARENT: &str = "/serverware/generation/containers";
 
     fn bounds() -> RunnerExecutionBoundsV12 {
         RunnerExecutionBoundsV12 {
@@ -487,7 +656,7 @@ mod tests {
             format!("/owned/launch:{CONTEXT_DIRECTORY}:ro"),
             "/owned/output:/opt/results:rw".into(),
             "/owned/source:/opt/serverware/src:ro".into(),
-        ], "none").unwrap();
+        ], "none", CGROUP_PARENT).unwrap();
         let expected = json!({
             "User": "10001:10001", "Image": "sealed@sha256:abcd",
             "Entrypoint": [SUPERVISOR_EXECUTABLE], "Cmd": [CONTEXT_PATH],
@@ -508,6 +677,7 @@ mod tests {
         config_map.insert("OnBuild".into(), Value::Null);
         let mut actual_host = host;
         let host_map = actual_host.as_object_mut().unwrap();
+        host_map.insert("MemorySwappiness".into(), Value::Null);
         for name in HOST_ZERO_FIELDS { host_map.insert((*name).into(), json!(0)); }
         for name in HOST_EMPTY_STRINGS { host_map.insert((*name).into(), json!("")); }
         for name in HOST_EMPTY_ARRAYS { host_map.insert((*name).into(), Value::Null); }
@@ -587,7 +757,7 @@ mod tests {
         assert_eq!(host["LogConfig"]["Config"]["max-size"], json!("8m"));
         let mut bad = bounds();
         bad.pids = 0;
-        assert!(execution_host_config_v12(&bad, vec![], "none").is_err());
+        assert!(execution_host_config_v12(&bad, vec![], "none", CGROUP_PARENT).is_err());
     }
 
     #[test]
@@ -679,15 +849,15 @@ mod tests {
     #[test]
     fn bind_and_network_input_language_is_closed() {
         let (_, observed) = fixture();
-        let valid = vec!["/owned/output:/opt/results:rw".into(), "/owned/source:/opt/serverware/src:ro".into()];
+        let valid = vec![format!("/owned/launch:{CONTEXT_DIRECTORY}:ro"), "/owned/output:/opt/results:rw".into(), "/owned/source:/opt/serverware/src:ro".into()];
         for mode in ["host", "bridge", "container:other", "swv12-net-ABC", ""] {
-            assert!(execution_host_config_v12(&bounds(), valid.clone(), mode).is_err());
+            assert!(execution_host_config_v12(&bounds(), valid.clone(), mode, CGROUP_PARENT).is_err());
         }
-        assert!(execution_host_config_v12(&bounds(), valid, "swv12-net-0123456789abcdef0123").is_ok());
+        assert!(execution_host_config_v12(&bounds(), valid, "swv12-net-0123456789abcdef0123", CGROUP_PARENT).is_ok());
         for bind in ["/owned/source:/run/source:ro", "/owned/source:/opt/results:ro", "volume:/opt/source:ro", "/owned/source:/opt/source:ro,rshared"] {
             let mut invalid = vec!["/owned/output:/opt/results:rw".into(), bind.into()];
             invalid.sort();
-            assert!(execution_host_config_v12(&bounds(), invalid, "none").is_err());
+            assert!(execution_host_config_v12(&bounds(), invalid, "none", CGROUP_PARENT).is_err());
         }
         assert_eq!(observed["HostConfig"]["Tmpfs"].as_object().unwrap().len(), 3);
     }

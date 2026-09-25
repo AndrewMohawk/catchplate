@@ -7,8 +7,8 @@
 //! payload. Failure is communicated solely by a nonzero supervisor exit code.
 
 use crate::plan_protocol::body_launch_contract_v12::{
-    effective_argv, BodyLaunchContextV12, CONTEXT_PATH, MAX_CONTEXT_BYTES_V12,
-    SUPERVISOR_EXECUTABLE,
+    effective_argv, BodyLaunchContextV12, BodyLaunchReleaseV12, CONTEXT_DIRECTORY, CONTEXT_PATH,
+    MAX_CONTEXT_BYTES_V12, MAX_RELEASE_BYTES_V12, RELEASE_PATH, SUPERVISOR_EXECUTABLE,
 };
 use crate::plan_protocol::{Digest, PlanProtocolError, PlanResult};
 use crate::runtime_evidence::{verify_static_executable_fd_bounded, ExecutableRole};
@@ -128,7 +128,8 @@ fn protected_directory(root: RawFd, path: &str) -> PlanResult<OwnedFd> {
     Ok(directory)
 }
 
-fn read_regular(fd: RawFd, maximum: usize) -> PlanResult<Vec<u8>> {
+fn read_regular(fd: RawFd, maximum: usize, deadline: Option<u64>) -> PlanResult<Vec<u8>> {
+    if let Some(deadline) = deadline { live(deadline)?; }
     let before = identity(fd)?;
     root_owned(&before)?;
     readonly(fd)?;
@@ -139,8 +140,10 @@ fn read_regular(fd: RawFd, maximum: usize) -> PlanResult<Vec<u8>> {
     let mut bytes = vec![0u8; before.size as usize];
     let mut offset = 0;
     while offset < bytes.len() {
+        if let Some(deadline) = deadline { live(deadline)?; }
         let count = unsafe { libc::pread(fd, bytes[offset..].as_mut_ptr().cast(),
             (bytes.len() - offset).min(CHUNK_BYTES), offset as libc::off_t) };
+        if let Some(deadline) = deadline { live(deadline)?; }
         if count < 0 {
             let error = std::io::Error::last_os_error();
             if error.kind() == std::io::ErrorKind::Interrupted { continue; }
@@ -150,11 +153,163 @@ fn read_regular(fd: RawFd, maximum: usize) -> PlanResult<Vec<u8>> {
         offset += count as usize;
     }
     let mut extra = 0u8;
+    if let Some(deadline) = deadline { live(deadline)?; }
     if unsafe { libc::pread(fd, (&mut extra as *mut u8).cast(), 1, offset as libc::off_t) } != 0
         || identity(fd)? != before {
         return Err(invalid("body context original changed while read"));
     }
+    if let Some(deadline) = deadline { live(deadline)?; }
     Ok(bytes)
+}
+
+fn require_no_pending_signal(signals: RawFd) -> PlanResult<()> {
+    let mut pending: libc::signalfd_siginfo = unsafe { std::mem::zeroed() };
+    let count = unsafe { libc::read(signals,
+        (&mut pending as *mut libc::signalfd_siginfo).cast(),
+        std::mem::size_of::<libc::signalfd_siginfo>()) };
+    if count >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock
+        || EARLY_SIGNAL.load(Ordering::Relaxed) {
+        return Err(invalid("body launch received a signal before child creation"));
+    }
+    Ok(())
+}
+
+fn own_start_ticks(deadline: u64) -> PlanResult<u64> {
+    live(deadline)?;
+    if unsafe { libc::getpid() } != 1 {
+        return Err(invalid("body release target is not namespace PID1"));
+    }
+    let stat = open_kernel(c"/proc/self/stat", false)?;
+    let mut bytes = [0u8; 16 * 1024];
+    let count = loop {
+        live(deadline)?;
+        let count = unsafe { libc::pread(stat.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len(), 0) };
+        live(deadline)?;
+        if count >= 0 { break count as usize; }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted { return Err(error.into()); }
+    };
+    if count == 0 || count == bytes.len() {
+        return Err(invalid("body release target stat is absent or excessive"));
+    }
+    let text = std::str::from_utf8(&bytes[..count])
+        .map_err(|_| invalid("body release target stat is not UTF8"))?;
+    let opening = text.find('(').ok_or_else(|| invalid("body target stat lacks its command"))?;
+    let closing = text.rfind(')').ok_or_else(|| invalid("body target stat command is unterminated"))?;
+    if opening >= closing || text[..opening].trim() != "1" {
+        return Err(invalid("body target stat does not name namespace PID1"));
+    }
+    // The suffix starts at field3 (state); field22 is therefore index19.
+    // Parentheses and spaces inside comm cannot shift this original position.
+    let field = text[closing + 1..].split_ascii_whitespace().nth(19)
+        .ok_or_else(|| invalid("body target stat lacks original start ticks"))?;
+    if field.is_empty() || field.len() > 20 || field.starts_with('0')
+        || !field.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid("body target start ticks are not canonical and positive"));
+    }
+    let ticks = field.parse::<u64>().map_err(|_| invalid("body target start ticks overflow"))?;
+    live(deadline)?;
+    Ok(ticks)
+}
+
+fn mount_id(fd: RawFd, deadline: u64) -> PlanResult<u64> {
+    live(deadline)?;
+    let path = CString::new(format!("/proc/self/fdinfo/{fd}"))
+        .map_err(|_| invalid("body launch descriptor path is invalid"))?;
+    let info = open_kernel(&path, false)?;
+    let mut bytes = [0u8; 4096];
+    let count = unsafe { libc::pread(info.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len(), 0) };
+    live(deadline)?;
+    if count <= 0 || count as usize == bytes.len() {
+        return Err(invalid("body launch descriptor metadata is absent or excessive"));
+    }
+    let text = std::str::from_utf8(&bytes[..count as usize])
+        .map_err(|_| invalid("body launch descriptor metadata is not UTF8"))?;
+    let mut matches = text.lines().filter_map(|line| line.strip_prefix("mnt_id:"));
+    let value = matches.next().ok_or_else(|| invalid("body launch descriptor lacks mount identity"))?.trim();
+    if matches.next().is_some() || value.is_empty() || value.len() > 20
+        || value.starts_with('0') || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid("body launch mount identity is not canonical and positive"));
+    }
+    value.parse::<u64>().map_err(|_| invalid("body launch mount identity overflows"))
+}
+
+fn verify_launch_anchor(root: RawFd, launch: RawFd, expected: &Identity,
+    expected_mount: u64, deadline: u64) -> PlanResult<()> {
+    live(deadline)?;
+    let named = protected_directory(root, CONTEXT_DIRECTORY)?;
+    for fd in [launch, named.as_raw_fd()] {
+        let actual = identity(fd)?;
+        if actual.device != expected.device || actual.inode != expected.inode
+            || actual.uid != 0 || actual.gid != 0
+            || actual.mode & libc::S_IFMT != libc::S_IFDIR
+            || actual.mode & 0o7777 != 0o555 || actual.links == 0
+            || mount_id(fd, deadline)? != expected_mount {
+            return Err(invalid("body release launch-directory custody changed"));
+        }
+        readonly(fd)?;
+    }
+    // Publishing release.json legitimately changes directory timestamps and
+    // entries. Those are not used as an immutable anchor for this gate.
+    live(deadline)
+}
+
+/// Wait only for root's source-fixed launch permission after target custody.
+/// This is neither independent observer approval nor continuous mapping proof.
+fn wait_for_release(context: &BodyLaunchContextV12, root: RawFd, launch: RawFd, signals: RawFd,
+    deadline: u64) -> PlanResult<u64> {
+    let start_ticks = own_start_ticks(deadline)?;
+    let directory_identity = identity(launch)?;
+    let directory_mount = mount_id(launch, deadline)?;
+    loop {
+        live(deadline)?;
+        require_no_pending_signal(signals)?;
+        verify_launch_anchor(root, launch, &directory_identity, directory_mount, deadline)?;
+        match open_rooted(root, RELEASE_PATH, false, true) {
+            Ok(release_fd) => {
+                live(deadline)?;
+                let before = identity(release_fd.as_raw_fd())?;
+                if before.uid != 0 || before.gid != 0 || before.mode & 0o7777 != 0o444 {
+                    return Err(invalid("body release is not the fixed root-owned readonly original"));
+                }
+                let bytes = read_regular(release_fd.as_raw_fd(), MAX_RELEASE_BYTES_V12, Some(deadline))?;
+                let release = BodyLaunchReleaseV12::parse_original(&bytes)?;
+                release.validate_for(context)?;
+                if release.namespace_target_pid != unsafe { libc::getpid() } as u32
+                    || release.target_start_time_ticks != start_ticks
+                    || own_start_ticks(deadline)? != start_ticks
+                    || identity(release_fd.as_raw_fd())? != before {
+                    return Err(invalid("body release differs from this actual retained supervisor"));
+                }
+                // host_target_pid belongs to root's acquired host view. This
+                // process does not pretend to measure that PID from inside its
+                // namespace. Only the actual local PID/start ticks are joined.
+                let narrowed = deadline.min(release.deadline_boottime_ns);
+                live(narrowed)?;
+                verify_launch_anchor(root, launch, &directory_identity, directory_mount, narrowed)?;
+                require_no_pending_signal(signals)?;
+                return Ok(narrowed);
+            }
+            Err(PlanProtocolError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        // Root atomically publishes the complete final name. Never learn a
+        // path from directory contents or treat an in-progress temporary file
+        // as release authority; only absence of release.json is retryable.
+        let sampled = now()?;
+        if sampled >= deadline { return Err(invalid("body acquisition release deadline expired")); }
+        let timeout = ((deadline - sampled) / 1_000_000).min(10) as i32;
+        let mut descriptor = libc::pollfd { fd: signals, events: libc::POLLIN, revents: 0 };
+        let waited = unsafe { libc::poll(&mut descriptor, 1, timeout.max(1)) };
+        if waited < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted { return Err(error.into()); }
+        }
+        if descriptor.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(invalid("body release signal channel is unavailable"));
+        }
+        live(deadline)?;
+    }
 }
 
 fn measure_command(fd: RawFd, expected: &Digest, deadline: u64) -> PlanResult<Identity> {
@@ -428,8 +583,9 @@ pub fn run_body_supervisor_v12_cli() -> PlanResult<i32> {
     let root = open_kernel(c"/", true)?;
     root_owned(&identity(root.as_raw_fd())?)?;
     readonly(root.as_raw_fd())?;
+    let launch_directory = protected_directory(root.as_raw_fd(), CONTEXT_DIRECTORY)?;
     let context_fd = open_rooted(root.as_raw_fd(), CONTEXT_PATH, false, true)?;
-    let original = read_regular(context_fd.as_raw_fd(), MAX_CONTEXT_BYTES_V12)?;
+    let original = read_regular(context_fd.as_raw_fd(), MAX_CONTEXT_BYTES_V12, None)?;
     let context = BodyLaunchContextV12::parse_original(&original)?;
     process_admission(&context)?;
     let opening = now()?;
@@ -454,6 +610,8 @@ pub fn run_body_supervisor_v12_cli() -> PlanResult<i32> {
     let executable = open_rooted(root.as_raw_fd(), &command.executable, false, false)?;
     let executable_identity = measure_command(executable.as_raw_fd(), &command.executable_sha256, deadline)?;
     let cwd = open_rooted(root.as_raw_fd(), &command.cwd, true, false)?;
+    let deadline = wait_for_release(&context, root.as_raw_fd(), launch_directory.as_raw_fd(),
+        signals.as_raw_fd(), deadline)?;
     let arguments = effective_argv(command).into_iter().map(CString::new)
         .collect::<Result<Vec<_>, _>>().map_err(|_| invalid("body argv contains NUL"))?;
     let environment = command.environment.iter().map(|entry|
@@ -470,14 +628,8 @@ pub fn run_body_supervisor_v12_cli() -> PlanResult<i32> {
     let error_read = unsafe { OwnedFd::from_raw_fd(pipe[0]) };
     let error_write = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
     live(deadline)?;
-    let mut pending: libc::signalfd_siginfo = unsafe { std::mem::zeroed() };
-    let pending_count = unsafe { libc::read(signals.as_raw_fd(),
-        (&mut pending as *mut libc::signalfd_siginfo).cast(),
-        std::mem::size_of::<libc::signalfd_siginfo>()) };
-    if pending_count >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock {
-        return Err(invalid("body launch received a signal before child creation"));
-    }
-    if EARLY_SIGNAL.load(Ordering::Relaxed) || identity(executable.as_raw_fd())? != executable_identity {
+    require_no_pending_signal(signals.as_raw_fd())?;
+    if identity(executable.as_raw_fd())? != executable_identity {
         return Err(invalid("body launch was interrupted or its executable changed"));
     }
     let pid = unsafe { libc::fork() };

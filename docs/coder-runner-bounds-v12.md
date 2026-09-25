@@ -3,7 +3,8 @@
 ## Status and scope
 
 This checkpoint makes execution bounds part of the admitted v12 runner
-identity and checks the created container before repository execution. It is
+identity, checks the created and running container, and holds the actual gated
+supervisor before releasing repository execution. It is
 source implementation, not evidence that a controller, image or workload has
 been built, installed or run. The workflow and independent authority
 requirements in [goal.md](../goal.md) remain unchanged.
@@ -20,7 +21,9 @@ remaining prerequisites.
 ## Mandatory identity, not a launcher default
 
 The container entrypoint is now the [fixed body supervisor](controller-body-launch.md),
-with exactly one additional controller-owned read-only launch-context bind.
+with exactly one additional controller-owned read-only launch-directory bind.
+The original context and subsequent one-use release occupy that same directory;
+neither is an independent observer signature.
 Payload argv/environment/cwd stay in the unchanged signed command; pre-start
 inspect rejects a direct payload entrypoint or an inherited container environment.
 
@@ -39,6 +42,8 @@ CPU period is fixed at 100,000 microseconds. Numeric types, finite source
 limits and checked memory summation are enforced by the
 source validator; unknown fields or omitted required fields are not defaults.
 No-swap is a fixed rendering requirement, not a caller-selected opt-out.
+The cgroup v2 create path omits `MemorySwappiness` and requires `null` in both
+inspect states; the no-swap commitment remains exact `MemorySwap == Memory`.
 Previously serialized v12 runner identities without these fields, including
 identities that predate the aggregate output limits, are rejected
 and must be deliberately reissued; the controller must not fill in bounds on
@@ -110,6 +115,55 @@ capability drop, no-new-privileges, private IPC and lane-specific network
 policy. A future native PostgreSQL runner requires network mode `none`; no
 host Docker or database socket is exposed to repository code.
 
+## Delegated generation cgroup ownership
+
+The source-fixed cgroup v2 root is
+`/sys/fs/cgroup/system.slice/serverware-coder-lifecycle-privileged-v12.service`.
+The unit requests `Delegate=cpu memory pids` and `DelegateSubgroup=supervisor`;
+the privileged controller must actually be in that subgroup. There is no
+fallback to a host-global Docker hierarchy or a different cgroup driver.
+Its cold unit capability set also adds `CAP_SYS_PTRACE` to read the actual
+nonroot supervisor's `/proc` executable and namespace descriptors. This is a
+source unit change, not a live capability change, arbitrary tracing API or
+independent observer implementation.
+The source-owned layout is:
+
+```text
+delegated service                         [no direct processes]
+├─ supervisor                             [privileged controller]
+└─ serverware-coder-v12-<generation>       [no direct processes]
+   ├─ daemon                             [dockerd and inherited daemon children]
+   └─ containers                         [no direct processes]
+      └─ Docker-created container cgroups [gated supervisors and workloads]
+```
+
+Separating populated leaves from domain parents permits domain-controller
+distribution under Linux's [no-internal-process constraint](https://docs.kernel.org/admin-guide/cgroup-v2.html#no-internal-process-constraint).
+Systemd 254 or later is required for `DelegateSubgroup=`; delegation makes
+controllers available but does not itself enable them. See the primary
+[systemd delegation contract](https://systemd.io/CGROUP_DELEGATION/).
+
+The [generation owner](../data-plane/decision-gate-rs/src/generation_cgroup_v12.rs)
+checks the actual hierarchy and availability before enabling only
+`cpu memory pids`. A preopened `daemon/cgroup.procs` descriptor places the
+daemon child there in `pre_exec`, before daemon execution; moving the daemon
+after it could already have forked is not the admission path. Dockerd is
+started with `native.cgroupdriver=cgroupfs` and an explicit absolute
+generation `containers` parent. Every runner create also sets and checks that
+exact `HostConfig.CgroupParent`. Docker's per-container parent takes precedence
+over its daemon default, so both are explicit; see
+[Docker's cgroup-parent contract](https://docs.docker.com/reference/cli/dockerd/#default-cgroup-parent).
+
+The held body target must independently be an actual component-wise descendant
+of this generation, with matching `/proc` cgroup membership and actual
+`cgroup.procs` membership. An inspect string alone does not supply that check.
+Cleanup kills only the owned generation hierarchy, waits for aggregate
+`cgroup.events` population to reach zero, then removes bounded cgroup
+directories. It does not recursively unlink cgroup pseudo-files or treat an
+empty parent `cgroup.procs` as evidence that descendants are gone. Missing
+delegation, controllers, identity or cleanup evidence fails closed; these
+source paths and their host prerequisites remain unverified in execution.
+
 ## Fresh output and pre-start admission
 
 Before a lane starts, its output directory must be fresh, controller-owned
@@ -172,6 +226,20 @@ this path. On failure the ordinary abort and owned-resource cleanup path
 remains responsible for the created resource. The actual source wiring is in
 [dind_lifecycle.rs](../data-plane/decision-gate-rs/src/dind_lifecycle.rs).
 
+After the accepted start, a separate running inspect repeats the exact
+configuration checks and obtains the actual host `State.Pid`. Before the
+payload can execute, the controller acquires a pidfd, process and namespace
+descriptors, checks the expected static supervisor and generation membership,
+rechecks liveness, and publishes the fixed one-use release. Running-inspect,
+held-target custody and release digests enter the generation observation.
+This gate is unsigned controller custody, not independent observer approval.
+After actual wait and capture, the retained pidfd must indicate termination;
+the original result's observer target PID/start ticks and namespace/cgroup
+claims must match the held target. Independently opened pidfd inode numbers
+are not equated without an actual descriptor handoff. The exact sequence and
+remaining observer/terminal-producer boundary are in
+[controller body launch](controller-body-launch.md).
+
 The closed Engine API 1.45 readback rules are in
 [runner_isolation_v12.rs](../data-plane/decision-gate-rs/src/runner_isolation_v12.rs).
 Only explicitly enumerated empty/default serialization forms are equivalent;
@@ -207,7 +275,9 @@ binding, integer-capable v12 lifecycle codec and remaining producer prerequisite
 Inspect equality establishes only the source-level admission rule and, when
 actually exercised, the daemon's reported configuration. It is not independent
 proof of kernel enforcement, complete executable identity, successful work,
-or teardown. The external controller still owns the full resource inventory
+or teardown. The added actual-target acquisition checks do not establish
+continuous executable mappings, observer event completeness or a signed
+terminal publisher. The external controller still owns the full resource inventory
 and terminal `DESTROYED` receipt.
 
 ## Native PostgreSQL example, not an enabled lane

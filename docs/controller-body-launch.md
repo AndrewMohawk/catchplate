@@ -1,10 +1,11 @@
 # Fixed controller body supervisor
 
-Status: source implementation, unbuilt and unexecuted. The lifecycle now selects
-a fixed supervisor and publishes its independently held launch context. This
-does not supply the missing authoritative runtime observer or original terminal
-publisher. Those remain mandatory: ordinary child exit is not an accepted body
-result, a signed runtime observation, or permission to release anything.
+Status: source implementation, unbuilt and unexecuted. The lifecycle selects a
+fixed supervisor, acquires its actual Linux process custody, and publishes a
+one-use release only for that held target and launch context. This unsigned
+controller gate does not supply the missing independent runtime observer or
+original terminal publisher. Ordinary child exit is not an accepted body result
+or independently signed runtime observation.
 
 ## Separate launch authority from workload arguments
 
@@ -35,10 +36,11 @@ are not child-command authority.
 admitted plan + exact runner and command
   -> retained root-owned launch directory
   -> one-use original context publication -> pre-start Docker inspect
-  -> fixed measured PID1 supervisor -> descriptor-pinned workload execution
-  -> actual child exit and descendant cleanup
-  -> controller capture/output joins
-  -> independent runtime observer + terminal publication [still unfinished]
+  -> start fixed gated PID1 supervisor -> running inspect -> actual target custody
+  -> live custody recheck -> atomic root-owned release.json
+  -> descriptor-pinned workload execution -> actual child exit/descendant cleanup
+  -> actual wait + capture -> held pidfd termination
+  -> output/result joins [need independent observer + terminal producer: unfinished]
   -> existing authenticated full-generation destruction
 ```
 
@@ -49,17 +51,74 @@ not merely `commandSha256`, whose existing recipe does not include timeout.
 It also joins the complete runner and body scope. Publication cannot be retried
 after partial I/O or reused through a cloned handle.
 
-The root-owned directory is mode 0700 before publication, then 0555, with one
-root-owned, single-link mode-0444 regular file. Retained descriptors, name/mount
-identity and original-byte hashes are checked before launch and after execution.
+The root-owned directory is mode 0700 before context publication, then 0555.
+The complete published inventory contains `launch.json` and, only after actual
+target acquisition, one `release.json`; both are root-owned, single-link
+mode-0444 regular originals. Retained descriptors, name/mount identity and
+original-byte hashes are checked before launch and after execution.
 The context is controller-write-once and read-only to the container; this is not
 a claim of filesystem immutable-flag enforcement or hostile-root protection.
-Its custody identity and published context digest join the generation record.
+Its custody identity, published context/release digests, running-inspect digest
+and held-target custody digest join the generation observation.
 
 The exact additional read-only bind is mandatory in pre-start inspect. Signed
 source/artifact/output destinations cannot overlap the context or fixed
 supervisor executable. Other existing resource, private-namespace and mount
 restrictions remain unchanged.
+
+## Actual target custody before release
+
+After a successful start, the running validator repeats the complete expected
+configuration/ownership comparison and requires a positive running `State.Pid`.
+That actual PID, the independently admitted static-supervisor digest, the exact
+generation cgroup path and original deadline enter
+[`HeldBodyTargetV12::acquire`](../data-plane/decision-gate-rs/src/body_target_v12.rs).
+No caller-provided process observations or accepted-proof object substitute for
+this acquisition.
+
+The owner retains an actual pidfd, `/proc/PID` directory, five namespace
+descriptors and executable/cgroup descriptors. It checks start ticks, actual
+namespace PID1, the bounded immutable static executable measurement, namespace
+types/inodes, and an exact v2 cgroup descendant plus membership in its held
+`cgroup.procs`. Component boundaries prevent a same-prefix sibling from being
+accepted. A loader or worker PID whose actual executable is not the admitted
+supervisor fails; there is no broad process search or alternate-target fallback.
+The generation is now an explicit delegated cgroup v2 hierarchy with separate
+daemon and container children, not an inferred consequence of the daemon PID's
+location; see [runner cgroup ownership](coder-runner-bounds-v12.md#delegated-generation-cgroup-ownership).
+Kernel PID and namespace views are the observations used here, not caller
+claims; see [`pidfd_open`](https://man7.org/linux/man-pages/man2/pidfd_open.2.html)
+and [`/proc/PID/status`](https://man7.org/linux/man-pages/man5/proc_pid_status.5.html).
+
+Root revalidates the held target, then
+[`HeldBodyLaunchV12::release`](../data-plane/decision-gate-rs/src/body_launch_storage_v12.rs)
+publishes a bounded original binding `contextSha256`, actual host PID, start
+ticks, namespace target PID 1 and the non-extended deadline. Its identity zeros
+only `releaseSha256`. A private pending file is written, synchronized and
+checked before `RENAME_NOREPLACE` exposes the complete `release.json`; publication
+uncertainty poisons the one-use owner, rather than authorizing a retry or reset.
+The gate carries no signature or independent observer approval.
+
+The waiting supervisor validates that original against its retained context,
+own namespace PID and own start ticks before spawning the payload. It does not
+pretend to derive its host PID from the private namespace. Only absence of the
+fixed release name is waitable, within the original deadline and signal policy;
+malformed or substituted state fails. See the closed
+[release contract](../data-plane/decision-gate-rs/src/body_launch_contract_v12.rs)
+and actual [supervisor](../data-plane/decision-gate-rs/src/body_supervisor_v12.rs).
+
+After actual wait and capture completion, held-pidfd termination is required
+without following a possibly reused numeric PID or inventing an exit status.
+The original result's observer target PID/start ticks, namespace identities and
+cgroup digest must match the retained observations. A pidfd inode from a separate
+independent open is **not** treated as the same descriptor handoff. The separate
+observer signature and whole-body commitment checks remain mandatory.
+
+This two-stage gate prevents payload start from preceding root's process
+acquisition. It is not continuous executable-mapping observation, protection
+against a compromised privileged host, or a terminal evidence publisher. The
+held descriptors and repeated identity checks are intentionally distinct from
+the signed observer's still-unimplemented acquisition/event ownership.
 
 ## Supervisor scope
 

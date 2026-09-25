@@ -23,9 +23,11 @@ TimeoutStopSec=120s
 KillMode=control-group
 SendSIGKILL=yes
 FinalKillSignal=SIGKILL
-Delegate=yes
+# Requires systemd254+: keep the delegated domain parent free of processes.
+Delegate=cpu memory pids
+DelegateSubgroup=supervisor
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN CAP_KILL CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETUID CAP_SETGID CAP_MKNOD CAP_SYS_CHROOT
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_KILL CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETUID CAP_SETGID CAP_MKNOD CAP_SYS_CHROOT
 ProtectSystem=strict
 ProtectHome=yes
 ProtectKernelModules=yes

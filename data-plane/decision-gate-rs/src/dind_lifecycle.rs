@@ -24,6 +24,12 @@ mod body_output_v12;
 #[path = "body_launch_storage_v12.rs"]
 mod body_launch_storage_v12;
 
+#[path = "body_target_v12.rs"]
+mod body_target_v12;
+
+#[path = "generation_cgroup_v12.rs"]
+mod generation_cgroup_v12;
+
 #[cfg(test)]
 #[path = "runner_output_tests_v12.rs"]
 mod runner_output_tests_v12;
@@ -31,10 +37,13 @@ mod runner_output_tests_v12;
 use self::dind_json_v12::canonical_json_bytes_v12;
 use self::runner_isolation_v12::{
     execution_host_config_v12, validate_runner_inspect_v12,
+    validate_runner_running_v12,
 };
 use self::runner_output_storage_v12::RunnerOutputStorageV12;
 use self::body_output_v12::CaptureOutputsV12;
 use self::body_launch_storage_v12::HeldBodyLaunchV12;
+use self::body_target_v12::HeldBodyTargetV12;
+use self::generation_cgroup_v12::HeldGenerationCgroupV12;
 use crate::plan_protocol::body_launch_contract_v12::{
     BodyLaunchContextV12, CONTEXT_DIRECTORY, CONTEXT_PATH, SUPERVISOR_EXECUTABLE,
 };
@@ -1762,6 +1771,7 @@ struct PrivateDindHandleV12 {
     exec_root: PathBuf,
     socket: PathBuf,
     cgroup: PathBuf,
+    generation_cgroup: Arc<HeldGenerationCgroupV12>,
     source_mount: PathBuf,
     artifact_mount: Option<PathBuf>,
     output_mount: PathBuf,
@@ -1782,6 +1792,9 @@ struct PrivateRunnerV12 {
     launch: HeldBodyLaunchV12,
     launch_identity_sha256: Digest,
     launch_context_sha256: Option<Digest>,
+    running_inspect_sha256: Option<Digest>,
+    body_target_custody_sha256: Option<Digest>,
+    launch_release_sha256: Option<Digest>,
     uid: u32,
     gid: u32,
     created_inspect_sha256: Option<Digest>,
@@ -2031,7 +2044,7 @@ impl PrivateDindLifecycleV12 {
                 deadline,
             )?;
         }
-        self.reject_unledgered_generation_roots_v12()?;
+        self.reject_unledgered_generation_roots_v12(deadline)?;
         Ok(())
     }
 
@@ -2174,12 +2187,17 @@ impl PrivateDindLifecycleV12 {
     }
 
     pub fn terminal_observation_sha256(&self) -> Result<Digest> {
+        // This bounds a local, read-only final inventory; it does not extend
+        // any run, release, signing or cleanup authorization.
+        let deadline = boottime_now_ns_v11()?
+            .checked_add(DIND_CLEANUP_TIMEOUT_NS_V11)
+            .ok_or(ControllerError::Invalid("terminal inventory deadline overflowed"))?;
         if !self.ledger.nonterminal_generations()?.is_empty() {
             return Err(ControllerError::Rejected(
                 "private DinD terminal observation retained nonterminal generations",
             ));
         }
-        self.reject_unledgered_generation_roots_v12()?;
+        self.reject_unledgered_generation_roots_v12(deadline)?;
         self.ledger.terminal_observation_sha256()
     }
 
@@ -3407,7 +3425,9 @@ impl PrivateDindLifecycleV12 {
             })?,
         )?;
         let cgroup = self.cgroup_path_v12(operation);
-        create_cgroup(&cgroup)?;
+        let generation_cgroup = Arc::new(HeldGenerationCgroupV12::create(
+            &cgroup, operation.request.deadline_boottime_ns,
+        )?);
         let socket = self.socket_path_v12(operation);
         require_socket_absent(&socket)?;
         let pidfile = generation_root.join("dockerd.pid");
@@ -3443,6 +3463,9 @@ impl PrivateDindLifecycleV12 {
             .arg("--live-restore=false")
             .arg("--userland-proxy=false")
             .arg("--log-driver=local")
+            .arg("--exec-opt=native.cgroupdriver=cgroupfs")
+            .arg("--cgroup-parent")
+            .arg(generation_cgroup.container_parent())
             .arg("--label")
             .arg(format!(
                 "{}={}",
@@ -3462,8 +3485,12 @@ impl PrivateDindLifecycleV12 {
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(error_log));
         let netns_raw = netns_fd.as_raw_fd();
+        let child_cgroup = Arc::clone(&generation_cgroup);
         unsafe {
             child_command.pre_exec(move || {
+                // Enter the leaf before dockerd can fork. Moving only its
+                // already-running parent cannot contain earlier descendants.
+                child_cgroup.enter_daemon_before_exec()?;
                 if libc::setns(netns_raw, libc::CLONE_NEWNET) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -3480,7 +3507,9 @@ impl PrivateDindLifecycleV12 {
                 return Err(error);
             }
         };
-        if let Err(error) = attach_cgroup(&cgroup, pid) {
+        if let Err(error) = generation_cgroup.verify_daemon(
+            pid as u32, operation.request.deadline_boottime_ns,
+        ) {
             let _ = child.kill();
             let _ = child.wait();
             return Err(error);
@@ -3563,6 +3592,7 @@ impl PrivateDindLifecycleV12 {
                 exec_root,
                 socket,
                 cgroup,
+                generation_cgroup,
                 source_mount,
                 artifact_mount,
                 output_mount,
@@ -3930,6 +3960,9 @@ impl PrivateDindLifecycleV12 {
                 launch,
                 launch_identity_sha256,
                 launch_context_sha256: None,
+                running_inspect_sha256: None,
+                body_target_custody_sha256: None,
+                launch_release_sha256: None,
                 uid: runner.execution_bounds.user_uid,
                 gid: runner.execution_bounds.user_gid,
                 created_inspect_sha256: None,
@@ -4073,7 +4106,7 @@ impl PrivateDindLifecycleV12 {
         body_contract.validate().map_err(|error| {
             ControllerError::InvalidOwned(error.to_string())
         })?;
-        let (runner, native_inputs) = {
+        let (runner, native_inputs, generation_cgroup) = {
             let state = self.state.lock().map_err(|_| {
                 ControllerError::Rejected(
                     "private DinD lifecycle mutex is poisoned",
@@ -4088,12 +4121,15 @@ impl PrivateDindLifecycleV12 {
                 )?;
                 Some((open_directory_fd_v12(artifacts)?, open_directory_fd_v12(&handle.source_mount)?))
             } else { None };
-            (runner, native_inputs)
+            (runner, native_inputs, handle.cgroup.clone())
         };
         if runner.command_sha256 != body_contract.command.command_sha256
             || runner.created_inspect_sha256.is_none()
             || runner.prestart_inspect_sha256.is_some()
             || runner.launch_context_sha256.is_some()
+            || runner.running_inspect_sha256.is_some()
+            || runner.body_target_custody_sha256.is_some()
+            || runner.launch_release_sha256.is_some()
         {
             return Err(ControllerError::Rejected(
                 "repository body differs from its unconsumed inspected runner",
@@ -4194,6 +4230,52 @@ impl PrivateDindLifecycleV12 {
         )?;
         require_docker_success_v12(&start, &[204])?;
         capture.health()?;
+        // The fixed supervisor waits before fork. Docker's PID is only a
+        // candidate: retain and check the actual kernel target before the
+        // root-owned release becomes visible to the read-only launch bind.
+        let running_response = self.docker_http_v12_with_cancellation(
+            operation, "GET", &format!("/v1.45/containers/{id}/json"),
+            Vec::new(), DockerRequestBodyV12::Empty,
+            DockerStreamModeV11::BoundedHttp, body_deadline,
+            Arc::clone(&cancelled),
+        )?;
+        let running = require_docker_success_v12(&running_response, &[200])?;
+        let host_pid = validate_runner_running_v12(
+            &running, &runner.expected_create, id, runner.launch.path(),
+        )?;
+        let running_inspect_sha256 = sha256(&canonical_json_bytes_v12(&running)?);
+        let target = HeldBodyTargetV12::acquire(
+            host_pid, runner.identity.runtime_executable_sha256,
+            &generation_cgroup, body_deadline,
+        )?;
+        capture.health()?;
+        target.verify_live(body_deadline)?;
+        let release_sha256 = runner.launch.release(
+            launch_context_sha256, target.host_pid(), target.start_ticks(), body_deadline,
+        )?;
+        {
+            let mut state = self.state.lock().map_err(|_| {
+                ControllerError::Rejected("private DinD lifecycle mutex is poisoned")
+            })?;
+            let retained = require_active_handle_mut_v12(&mut state, operation)?
+                .runners.get_mut(&operation.request.lane)
+                .ok_or(ControllerError::Rejected("released body runner was lost"))?;
+            if retained.id != runner.id || retained.identity != runner.identity
+                || retained.expected_create != runner.expected_create
+                || retained.prestart_inspect_sha256 != Some(inspected)
+                || retained.launch_context_sha256 != Some(launch_context_sha256)
+                || retained.running_inspect_sha256.is_some()
+                || retained.body_target_custody_sha256.is_some()
+                || retained.launch_release_sha256.is_some()
+            {
+                // Publication may already have released the child. This is
+                // post-send uncertainty: abort/teardown, never retry release.
+                return Err(ControllerError::Rejected("released body runner identity changed"));
+            }
+            retained.running_inspect_sha256 = Some(running_inspect_sha256);
+            retained.body_target_custody_sha256 = Some(target.custody_sha256());
+            retained.launch_release_sha256 = Some(release_sha256);
+        }
         let wait = self.docker_http_v12_with_cancellation(
             operation,
             "POST",
@@ -4217,6 +4299,7 @@ impl PrivateDindLifecycleV12 {
         // hashes. Any earlier error cancels the HTTP wait and Drop joins the
         // capture worker; the existing outer abort path still owns teardown.
         let captured = capture.finish()?;
+        target.require_terminated(body_deadline)?;
         runner.launch.verify(body_deadline)?;
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
@@ -4265,6 +4348,9 @@ impl PrivateDindLifecycleV12 {
             || parsed.runner_evidence.runner_identity_sha256
                 != plan_sha256_bytes(&canonical_plan_bytes(&runner.identity)
                     .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?)
+            || parsed.runner_evidence.observer.target_pid != target.host_pid()
+            || parsed.runner_evidence.observer.target_start_ticks != target.start_ticks()
+            || &parsed.runner_evidence.namespaces != target.namespaces()
         {
             return Err(ControllerError::Rejected(
                 "repository body terminal result differs from observed execution",
@@ -4272,6 +4358,9 @@ impl PrivateDindLifecycleV12 {
         }
         // This checks original-byte commitments only. The plan executor still
         // independently authenticates the pinned observer and static roles.
+        // A separately opened observer pidfd is not claimed to be the same
+        // descriptor. Its identity needs an explicit future custody handoff;
+        // these local joins cannot manufacture that observer's evidence.
         parsed.validate_terminal()
             .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
         let native_observed = match (&body_contract.native_postgres, &native_inputs) {
@@ -5392,6 +5481,9 @@ impl PrivateDindLifecycleV12 {
                     "outputStorageIdentitySha256": runner.output_storage_identity_sha256,
                     "launchDirectoryIdentitySha256": runner.launch_identity_sha256,
                     "launchContextSha256": runner.launch_context_sha256,
+                    "runningInspectSha256": runner.running_inspect_sha256,
+                    "bodyTargetCustodySha256": runner.body_target_custody_sha256,
+                    "launchReleaseSha256": runner.launch_release_sha256,
                 }))
             }).collect::<Result<Vec<Value>>>()?,
             "socketDevice": socket_metadata.dev(),
@@ -6157,7 +6249,7 @@ impl PrivateDindLifecycleV12 {
         ))
     }
 
-    fn reject_unledgered_generation_roots_v12(&self) -> Result<()> {
+    fn reject_unledgered_generation_roots_v12(&self, deadline: u64) -> Result<()> {
         let mut count = 0usize;
         for owner in std::fs::read_dir(&self.config.dind_root)? {
             let owner = owner?;
@@ -6197,16 +6289,9 @@ impl PrivateDindLifecycleV12 {
                 "private DinD startup retained an unledgered proxy socket",
             ));
         }
-        if self.config.cgroup_root.exists() {
-            for entry in std::fs::read_dir(&self.config.cgroup_root)? {
-                let entry = entry?;
-                if entry.file_type()?.is_dir() {
-                    return Err(ControllerError::Rejected(
-                        "private DinD startup retained an unledgered cgroup",
-                    ));
-                }
-            }
-        }
+        generation_cgroup_v12::require_no_generation_children(
+            &self.config.cgroup_root, deadline,
+        )?;
         for entry in std::fs::read_dir(&self.config.netns_root)? {
             let entry = entry?;
             if entry
@@ -6400,6 +6485,7 @@ fn runner_create_body_v12(
     };
     let host_config = execution_host_config_v12(
         &runner.execution_bounds, binds, &network_mode,
+        handle.generation_cgroup.container_parent(),
     )?;
     Ok(json!({
         "AttachStderr": false,
@@ -7236,8 +7322,7 @@ fn cleanup_private_dind_root_v12(
         "serverware-coder-v12-{}",
         generation.daemon_generation,
     ));
-    kill_cgroup(&cgroup)?;
-    remove_cgroup(&cgroup, deadline)?;
+    generation_cgroup_v12::remove_generation(&cgroup, deadline)?;
     runner_output_storage_v12::teardown(generation_root, deadline)?;
     for mount in [
         generation_root.join("mounts/artifacts"),

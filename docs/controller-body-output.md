@@ -2,8 +2,9 @@
 
 Status: source-implemented, unbuilt and unexecuted. This connects actual Docker
 stream capture and retained-file collection to the existing body-result consumer.
-It does not provide the missing runtime observer, fixed body supervisor, or
-terminal-result publisher, and does not establish production readiness.
+It does not provide the missing runtime observer or terminal-result publisher,
+and does not establish production readiness. The separate
+[fixed supervisor](controller-body-launch.md) is also source-implemented.
 
 ## Decision: capture before start
 

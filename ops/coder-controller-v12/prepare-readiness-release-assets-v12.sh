@@ -59,12 +59,47 @@ require_sha256() {
     test "${#value}" -eq 64 || fail "$label is not exactly 64 characters"
 }
 
+require_upgrade_stream_size() {
+    stream_path=$1
+    minimum_bytes=$2
+    stream_bytes=$(stat -c %s -- "$stream_path") \
+        || fail "cannot measure Docker readiness stream: $stream_path"
+    case "$stream_bytes" in
+        ""|*[!0-9]*) fail "Docker readiness stream size is not an unsigned integer" ;;
+    esac
+    test "$stream_bytes" -ge "$minimum_bytes" \
+        && test "$stream_bytes" -le 16777216 \
+        || fail "Docker readiness stream must contain $minimum_bytes..16777216 bytes: $stream_path"
+}
+
+# These originals are post-upgrade stream payloads, not HTTP request bodies.
+# The independent SignedReadinessFixtureV12 producer must pin SHA-256 of this
+# exact request recipe (CRLF lines and the final empty line), matching
+# docker_readiness_upgrade_v12::request_head; this preparer does not sign it:
+# POST <independently selected /v1.* target> HTTP/1.1\r\n
+# Host: docker\r\nConnection: Upgrade\r\nUpgrade: serverware-readiness\r\n
+# Content-Length: 0\r\n\r\n
+# At least one server byte is observed before the client write half closes,
+# and at least one remaining server byte is observed after that half-close.
 copy_fixture() {
     name=$1
     source=$fixture_input_root/$name
     test -f "$source" && test ! -L "$source" \
         || fail "required readiness fixture is absent, not regular, or a symlink: $name"
+    minimum_stream_bytes=0
+    case "$name" in
+        docker-101.fixture) minimum_stream_bytes=1 ;;
+        docker-half-close.fixture) minimum_stream_bytes=2 ;;
+    esac
+    if test "$minimum_stream_bytes" -ne 0
+    then
+        require_upgrade_stream_size "$source" "$minimum_stream_bytes"
+    fi
     install -m 0444 "$source" "$output_root/fixtures/$name"
+    if test "$minimum_stream_bytes" -ne 0
+    then
+        require_upgrade_stream_size "$output_root/fixtures/$name" "$minimum_stream_bytes"
+    fi
 }
 
 for fixture in \

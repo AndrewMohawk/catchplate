@@ -21,6 +21,9 @@ mod body_output_files_v12;
 #[path = "body_output_v12.rs"]
 mod body_output_v12;
 
+#[path = "body_launch_storage_v12.rs"]
+mod body_launch_storage_v12;
+
 #[cfg(test)]
 #[path = "runner_output_tests_v12.rs"]
 mod runner_output_tests_v12;
@@ -31,6 +34,10 @@ use self::runner_isolation_v12::{
 };
 use self::runner_output_storage_v12::RunnerOutputStorageV12;
 use self::body_output_v12::CaptureOutputsV12;
+use self::body_launch_storage_v12::HeldBodyLaunchV12;
+use crate::plan_protocol::body_launch_contract_v12::{
+    BodyLaunchContextV12, CONTEXT_DIRECTORY, CONTEXT_PATH, SUPERVISOR_EXECUTABLE,
+};
 use crate::plan_protocol::body_output_contract_v12::{
     native_subset_sha256, stream_byte_limit,
 };
@@ -1772,6 +1779,9 @@ struct PrivateRunnerV12 {
     output_identity_sha256: Digest,
     output_storage: RunnerOutputStorageV12,
     output_storage_identity_sha256: Digest,
+    launch: HeldBodyLaunchV12,
+    launch_identity_sha256: Digest,
+    launch_context_sha256: Option<Digest>,
     uid: u32,
     gid: u32,
     created_inspect_sha256: Option<Digest>,
@@ -2757,114 +2767,20 @@ impl PrivateDindLifecycleV12 {
                 "Docker readiness stream bytes differ from root and fixture pins",
             ));
         }
-        let head = canonical_docker_request_head_v12(
-            "POST",
+        let observed = crate::docker_transport::docker_readiness_upgrade_v12::execute(
             &fixture.request_target,
-            &[(
-                "connection".to_owned(),
-                "upgrade".to_owned(),
-            )],
-            client_stream.len() as u64,
+            &fixture.request_headers_sha256,
+            client_stream,
+            server_stream,
+            operation.request.deadline_boottime_ns,
         )?;
-        if sha256(&head) != fixture.request_headers_sha256 {
-            return Err(ControllerError::Rejected(
-                "Docker readiness request header differs from signed fixture",
-            ));
-        }
-        let (mut client, mut server) = UnixStream::pair()?;
-        let now = boottime_now_ns_v11()?;
-        if now >= operation.request.deadline_boottime_ns {
-            return Err(ControllerError::Rejected(
-                "Docker readiness deadline expired before duplex exchange",
-            ));
-        }
-        let timeout = Duration::from_nanos(
-            operation.request.deadline_boottime_ns - now,
-        );
-        for stream in [&client, &server] {
-            stream.set_read_timeout(Some(timeout))?;
-            stream.set_write_timeout(Some(timeout))?;
-        }
-        let expected_client = client_stream.clone();
-        let emitted_server = server_stream.clone();
-        let worker = std::thread::spawn(move || -> std::result::Result<(), String> {
-            let mut header = Vec::new();
-            let mut byte = [0u8; 1];
-            while !header.ends_with(b"\r\n\r\n") {
-                server
-                    .read_exact(&mut byte)
-                    .map_err(|error| error.to_string())?;
-                header.push(byte[0]);
-                if header.len() > 64 * 1024 {
-                    return Err(
-                        "readiness upgrade header exceeded its bound"
-                            .into(),
-                    );
-                }
-            }
-            server
-                .write_all(
-                    b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: serverware-readiness\r\n\r\n",
-                )
-                .map_err(|error| error.to_string())?;
-            let mut observed_client = Vec::new();
-            server
-                .read_to_end(&mut observed_client)
-                .map_err(|error| error.to_string())?;
-            if observed_client != expected_client {
-                return Err(
-                    "readiness upgrade client stream changed in transit"
-                        .into(),
-                );
-            }
-            server
-                .write_all(&emitted_server)
-                .and_then(|_| server.flush())
-                .map_err(|error| error.to_string())
-        });
-        client.write_all(&head)?;
-        let mut response_head = Vec::new();
-        let mut byte = [0u8; 1];
-        while !response_head.ends_with(b"\r\n\r\n") {
-            client.read_exact(&mut byte)?;
-            response_head.push(byte[0]);
-            if response_head.len() > 64 * 1024 {
-                return Err(ControllerError::Rejected(
-                    "readiness upgrade response header exceeded its bound",
-                ));
-            }
-        }
-        if !response_head.starts_with(
-            b"HTTP/1.1 101 Switching Protocols\r\n",
-        ) {
-            return Err(ControllerError::Rejected(
-                "readiness upgrade did not observe HTTP 101",
-            ));
-        }
-        client.write_all(&client_stream)?;
-        client.shutdown(std::net::Shutdown::Write)?;
-        let mut observed_server = Vec::new();
-        client.read_to_end(&mut observed_server)?;
-        worker
-            .join()
-            .map_err(|_| {
-                ControllerError::Rejected(
-                    "readiness duplex fixture worker panicked",
-                )
-            })?
-            .map_err(ControllerError::InvalidOwned)?;
-        if observed_server != server_stream {
-            return Err(ControllerError::Rejected(
-                "readiness upgrade server stream changed in transit",
-            ));
-        }
         Ok(DockerUpgradeResultV12 {
             status: 101,
             full_duplex_observed: true,
             client_half_close_observed: true,
             server_after_half_close_observed: true,
-            client_stream_sha256: sha256(&client_stream),
-            server_stream_sha256: sha256(&observed_server),
+            client_stream_sha256: observed.client_stream_sha256,
+            server_stream_sha256: observed.server_stream_sha256,
         })
     }
 
@@ -3918,6 +3834,10 @@ impl PrivateDindLifecycleV12 {
                 ))
             }
         };
+        let body_sha256 = match &operation.decoded_payload {
+            DockerLaneDecodedPayloadV12::Operation(payload) => payload.body_sha256,
+            _ => None,
+        }.ok_or(ControllerError::Rejected("runner creation lacks its admitted body digest"))?;
         let mut state = self.state.lock().map_err(|_| {
             ControllerError::Rejected(
                 "private DinD lifecycle mutex is poisoned",
@@ -3937,6 +3857,12 @@ impl PrivateDindLifecycleV12 {
         runner.validate().map_err(|error| {
             ControllerError::InvalidOwned(error.to_string())
         })?;
+        let launch = body_launch_storage_v12::create(
+            &handle.generation_root, operation.request.plan_id,
+            operation.request.lane, &runner, &command, body_sha256,
+            operation.request.deadline_boottime_ns,
+        )?;
+        let launch_identity_sha256 = launch.identity_sha256()?;
         // The privileged generation parent is never made worker-writable.
         // Each lane gets a fresh output root, separate from the OCI export
         // directory and from every other lane, even when their UIDs differ.
@@ -3963,8 +3889,8 @@ impl PrivateDindLifecycleV12 {
             operation,
             handle,
             &runner,
-            &command,
             &output_mount,
+            launch.path(),
         )?;
         drop(state);
         let response = self.docker_json_v12(
@@ -4001,6 +3927,9 @@ impl PrivateDindLifecycleV12 {
                 output_identity_sha256,
                 output_storage,
                 output_storage_identity_sha256,
+                launch,
+                launch_identity_sha256,
+                launch_context_sha256: None,
                 uid: runner.execution_bounds.user_uid,
                 gid: runner.execution_bounds.user_gid,
                 created_inspect_sha256: None,
@@ -4029,6 +3958,7 @@ impl PrivateDindLifecycleV12 {
         if retained.id != id || retained.expected_create != body
             || retained.created_inspect_sha256.is_some()
             || retained.prestart_inspect_sha256.is_some()
+            || retained.launch_context_sha256.is_some()
         {
             return Err(ControllerError::Rejected("created runner identity changed during inspection"));
         }
@@ -4163,6 +4093,7 @@ impl PrivateDindLifecycleV12 {
         if runner.command_sha256 != body_contract.command.command_sha256
             || runner.created_inspect_sha256.is_none()
             || runner.prestart_inspect_sha256.is_some()
+            || runner.launch_context_sha256.is_some()
         {
             return Err(ControllerError::Rejected(
                 "repository body differs from its unconsumed inspected runner",
@@ -4187,6 +4118,27 @@ impl PrivateDindLifecycleV12 {
                 "repository runner output identity changed before start",
             ));
         }
+        let body_deadline = {
+            let now = boottime_now_ns_v11()?;
+            let deadline = now.checked_add(body_contract.command.timeout_ns)
+                .ok_or(ControllerError::Rejected("repository body timeout overflows"))?
+                .min(operation.request.deadline_boottime_ns);
+            if body_contract.native_postgres.is_some()
+                && deadline.saturating_sub(now)
+                    < crate::plan_protocol::native_postgres_contract_v12::REQUIRED_RUNTIME_NS
+            {
+                return Err(ControllerError::Rejected(
+                    "native PostgreSQL body lacks its full original execution window",
+                ));
+            }
+            deadline
+        };
+        let launch_context = BodyLaunchContextV12::new(
+            operation.request.plan_id, operation.request.lane, runner.identity.clone(),
+            body_contract.clone(), body_deadline,
+        ).map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
+        let launch_context_sha256 = runner.launch.publish(&launch_context, body_deadline)?;
+        runner.launch.verify(body_deadline)?;
         let inspected = self.inspect_runner_before_start_v12(
             operation, &runner.id, &runner.expected_create,
         )?;
@@ -4201,10 +4153,13 @@ impl PrivateDindLifecycleV12 {
                 || retained.expected_create != runner.expected_create
                 || retained.created_inspect_sha256 != runner.created_inspect_sha256
                 || retained.prestart_inspect_sha256.is_some()
+                || retained.launch_identity_sha256 != runner.launch_identity_sha256
+                || retained.launch_context_sha256.is_some()
             {
                 return Err(ControllerError::Rejected("body runner identity changed during inspection"));
             }
             retained.prestart_inspect_sha256 = Some(inspected);
+            retained.launch_context_sha256 = Some(launch_context_sha256);
         }
         // Inspect and state publication must not hide storage drift before
         // repository code starts. The mount and kernel caps are independent
@@ -4212,21 +4167,6 @@ impl PrivateDindLifecycleV12 {
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
         )?;
-        let body_deadline = {
-            let now = boottime_now_ns_v11()?;
-            let deadline = now.checked_add(body_contract.command.timeout_ns)
-                .ok_or(ControllerError::Rejected("repository body timeout overflows"))?
-                .min(operation.request.deadline_boottime_ns);
-            if body_contract.native_postgres.is_some()
-                && deadline.saturating_sub(now)
-                < crate::plan_protocol::native_postgres_contract_v12::REQUIRED_RUNTIME_NS
-            {
-                return Err(ControllerError::Rejected(
-                    "native PostgreSQL body lacks its full original execution window",
-                ));
-            }
-            deadline
-        };
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut captured_outputs = CaptureOutputsV12::create(
             output_fd.as_raw_fd(), runner.uid, runner.gid, body_deadline,
@@ -4240,6 +4180,7 @@ impl PrivateDindLifecycleV12 {
             body_deadline, Arc::clone(&cancelled),
         )?;
         capture.require_pending()?;
+        runner.launch.verify(body_deadline)?;
         let id = &runner.id;
         let start = self.docker_http_v12_with_cancellation(
             operation,
@@ -4276,6 +4217,7 @@ impl PrivateDindLifecycleV12 {
         // hashes. Any earlier error cancels the HTTP wait and Drop joins the
         // capture worker; the existing outer abort path still owns teardown.
         let captured = capture.finish()?;
+        runner.launch.verify(body_deadline)?;
         runner_output_storage_v12::verify(
             output_fd.as_raw_fd(), &runner.output_mount, &runner.output_storage,
         )?;
@@ -4395,6 +4337,7 @@ impl PrivateDindLifecycleV12 {
         if boottime_now_ns_v11()? >= body_deadline {
             return Err(ControllerError::Rejected("body output collection exceeded its original deadline"));
         }
+        runner.launch.verify(body_deadline)?;
         Ok(result)
     }
 
@@ -5447,6 +5390,8 @@ impl PrivateDindLifecycleV12 {
                     "prestartInspectSha256": runner.prestart_inspect_sha256,
                     "outputDirectoryIdentitySha256": runner.output_identity_sha256,
                     "outputStorageIdentitySha256": runner.output_storage_identity_sha256,
+                    "launchDirectoryIdentitySha256": runner.launch_identity_sha256,
+                    "launchContextSha256": runner.launch_context_sha256,
                 }))
             }).collect::<Result<Vec<Value>>>()?,
             "socketDevice": socket_metadata.dev(),
@@ -6420,11 +6365,12 @@ fn runner_create_body_v12(
     operation: &DockerLaneOperationV12,
     handle: &PrivateDindHandleV12,
     runner: &RunnerIdentity,
-    command: &ContainerCommand,
     output_mount: &Path,
+    launch_mount: &Path,
 ) -> Result<Value> {
     let mounts = &runner.mount_policy;
     let mut binds = vec![
+        format!("{}:{}:ro", launch_mount.display(), CONTEXT_DIRECTORY),
         format!(
             "{}:{}:ro",
             handle.source_mount.display(),
@@ -6444,18 +6390,6 @@ fn runner_create_body_v12(
         ));
     }
     binds.sort();
-    let environment = command
-        .environment
-        .iter()
-        .map(|entry| format!("{}={}", entry.name, entry.value))
-        .collect::<Vec<_>>();
-    let command_tail = if command.argv.first().map(String::as_str)
-        == Some(command.executable.as_str())
-    {
-        command.argv[1..].to_vec()
-    } else {
-        command.argv.clone()
-    };
     let network_mode = if matches!(
         operation.request.lane,
         LogicalLane::Integration | LogicalLane::E2e
@@ -6471,9 +6405,9 @@ fn runner_create_body_v12(
         "AttachStderr": false,
         "AttachStdin": false,
         "AttachStdout": false,
-        "Cmd": command_tail,
-        "Entrypoint": [command.executable.clone()],
-        "Env": environment,
+        "Cmd": [CONTEXT_PATH],
+        "Entrypoint": [SUPERVISOR_EXECUTABLE],
+        "Env": [],
         "HostConfig": host_config,
         "Healthcheck": {"Test": ["NONE"]},
         "Image": exact_image_reference_v12(&runner.image),
@@ -6486,7 +6420,7 @@ fn runner_create_body_v12(
         "Tty": false,
         "User": format!("{}:{}", runner.execution_bounds.user_uid,
             runner.execution_bounds.user_gid),
-        "WorkingDir": command.cwd,
+        "WorkingDir": "/",
     }))
 }
 

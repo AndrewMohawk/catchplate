@@ -10,6 +10,9 @@ pub mod native_postgres_contract_v12;
 #[path = "body_output_contract_v12.rs"]
 pub mod body_output_contract_v12;
 
+#[path = "body_launch_contract_v12.rs"]
+pub mod body_launch_contract_v12;
+
 pub type Digest = [u8; 32];
 pub type PlanResult<T> = Result<T, PlanProtocolError>;
 
@@ -911,6 +914,10 @@ impl RunnerMountPolicy {
                 .any(|path| matches!(*path, "/run" | "/tmp" | "/"))
             || destinations.iter().any(|path| {
                 paths_overlap(path, RUNNER_PRIVATE_DATA_PATH_V12)
+            })
+            || destinations.iter().any(|path| {
+                paths_overlap(path, body_launch_contract_v12::CONTEXT_DIRECTORY)
+                    || paths_overlap(path, body_launch_contract_v12::SUPERVISOR_EXECUTABLE)
             })
             || !self.source_read_only
             || !self.artifacts_read_only

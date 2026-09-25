@@ -8,6 +8,10 @@ rust-version = "1.88"
 name = "serverware_decision_gate"
 path = "src/custody_protocol.rs"
 
+[[bin]]
+name = "serverware-coder-body-supervisor-v12"
+path = "src/bin/serverware-coder-body-supervisor-v12.rs"
+
 [dependencies]
 base64 = "0.22"
 csv = "1.3"

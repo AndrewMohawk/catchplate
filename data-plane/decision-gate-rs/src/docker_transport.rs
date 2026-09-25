@@ -2,6 +2,8 @@
 
 #[path = "docker_body_capture_v12.rs"]
 pub(crate) mod docker_body_capture_v12;
+#[path = "docker_readiness_upgrade_v12.rs"]
+pub(crate) mod docker_readiness_upgrade_v12;
 
 use crate::coder_controller_v11::{
     constant_time_eq, sha256, ControllerError, Digest, Result,

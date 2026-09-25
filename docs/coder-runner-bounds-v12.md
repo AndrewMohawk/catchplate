@@ -19,6 +19,11 @@ remaining prerequisites.
 
 ## Mandatory identity, not a launcher default
 
+The container entrypoint is now the [fixed body supervisor](controller-body-launch.md),
+with exactly one additional controller-owned read-only launch-context bind.
+Payload argv/environment/cwd stay in the unchanged signed command; pre-start
+inspect rejects a direct payload entrypoint or an inherited container environment.
+
 `RunnerIdentity.executionBounds` is required source-owned plan data. Its
 nonroot user and group, CPU limit, memory limit with no swap, PID limit,
 open-file limit, shared-memory size, private writable-mount limits and aggregate

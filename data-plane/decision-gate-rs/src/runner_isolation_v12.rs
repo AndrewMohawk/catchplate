@@ -14,6 +14,9 @@ use crate::coder_controller_v11::{ControllerError, Result};
 use crate::plan_protocol::{
     RunnerExecutionBoundsV12, RUNNER_PRIVATE_DATA_PATH_V12,
 };
+use crate::plan_protocol::body_launch_contract_v12::{
+    CONTEXT_DIRECTORY, CONTEXT_PATH, SUPERVISOR_EXECUTABLE,
+};
 
 const MASKED_PATHS: &[&str] = &[
     "/proc/asound", "/proc/acpi", "/proc/kcore", "/proc/keys",
@@ -97,7 +100,7 @@ fn overlap(left: &str, right: &str) -> bool {
 /// general volume/mount option language. Authority over the sources is retained
 /// by the caller; this helper does not authorize arbitrary host paths.
 fn bind_inventory(binds: &[String]) -> Result<BTreeMap<String, (String, bool)>> {
-    if !(2..=3).contains(&binds.len()) {
+    if !(3..=4).contains(&binds.len()) {
         return Err(rejected("bind count"));
     }
     let mut result = BTreeMap::new();
@@ -120,6 +123,11 @@ fn bind_inventory(binds: &[String]) -> Result<BTreeMap<String, (String, bool)>> 
     }
     if result.values().filter(|(_, writable)| *writable).count() != 1 {
         return Err(rejected("bind writable inventory"));
+    }
+    if !result.get(CONTEXT_DIRECTORY).is_some_and(|(_, writable)| !writable)
+        || result.keys().any(|path| overlap(path, SUPERVISOR_EXECUTABLE))
+    {
+        return Err(rejected("fixed read-only launch context or sealed supervisor mount"));
     }
     Ok(result)
 }
@@ -413,6 +421,13 @@ pub(super) fn validate_runner_inspect_v12(
     let arguments = expected_create.get("Cmd").and_then(Value::as_array)
         .filter(|values| values.iter().all(Value::is_string))
         .ok_or_else(|| rejected("expected executable arguments"))?;
+    if entrypoint[0] != json!(SUPERVISOR_EXECUTABLE)
+        || arguments != &vec![json!(CONTEXT_PATH)]
+        || expected_create.get("Env") != Some(&json!([]))
+        || expected_create.get("WorkingDir") != Some(&json!("/"))
+    {
+        return Err(rejected("fixed supervisor launch"));
+    }
     exact(observed, "Path", &entrypoint[0])?;
     if arguments.is_empty() {
         if !empty_array(observed.get("Args"), false) {
@@ -469,13 +484,14 @@ mod tests {
 
     fn fixture() -> (Value, Value) {
         let host = execution_host_config_v12(&bounds(), vec![
+            format!("/owned/launch:{CONTEXT_DIRECTORY}:ro"),
             "/owned/output:/opt/results:rw".into(),
             "/owned/source:/opt/serverware/src:ro".into(),
         ], "none").unwrap();
         let expected = json!({
             "User": "10001:10001", "Image": "sealed@sha256:abcd",
-            "Entrypoint": ["/usr/local/bin/python3.11"], "Cmd": ["-V"],
-            "Env": ["LANG=C.UTF-8"], "WorkingDir": "/opt/serverware/src",
+            "Entrypoint": [SUPERVISOR_EXECUTABLE], "Cmd": [CONTEXT_PATH],
+            "Env": [], "WorkingDir": "/",
             "Labels": {"owner": "source-bound"},
             "AttachStdin": false, "AttachStdout": false, "AttachStderr": false,
             "OpenStdin": false, "StdinOnce": false, "Tty": false,
@@ -500,7 +516,7 @@ mod tests {
         host_map.insert("ReadonlyPaths".into(), json!(READONLY_PATHS));
         let observed = json!({
             "Id": ID, "Platform": "linux", "RestartCount": 0, "ExecIDs": null,
-            "Path": "/usr/local/bin/python3.11", "Args": ["-V"],
+            "Path": SUPERVISOR_EXECUTABLE, "Args": [CONTEXT_PATH],
             "State": {"Status": "created", "Running": false, "Paused": false,
                 "Restarting": false, "Dead": false, "OOMKilled": false, "Pid": 0,
                 "ExitCode": 0, "Error": "", "StartedAt": "0001-01-01T00:00:00Z",
@@ -514,6 +530,7 @@ mod tests {
                 "IPAddress":"", "IPPrefixLen":0, "IPv6Gateway":"", "MacAddress":"", "Networks":{}
             },
             "Mounts": [
+                {"Type": "bind", "Source": "/owned/launch", "Destination": CONTEXT_DIRECTORY, "Mode": "ro", "RW": false, "Propagation": "rprivate"},
                 {"Type": "bind", "Source": "/owned/source", "Destination": "/opt/serverware/src", "Mode": "ro", "RW": false, "Propagation": "rprivate"},
                 {"Type": "bind", "Source": "/owned/output", "Destination": "/opt/results", "Mode": "rw", "RW": true, "Propagation": "rprivate"}
             ]
@@ -533,13 +550,9 @@ mod tests {
     }
 
     #[test]
-    fn explicit_empty_command_and_environment_accept_only_nil_or_empty_slices() {
+    fn fixed_supervisor_command_and_empty_environment_reject_inherited_authority() {
         let (mut expected, mut observed) = fixture();
-        expected["Cmd"] = json!([]);
-        expected["Env"] = json!([]);
-        observed["Config"]["Cmd"] = Value::Null;
         observed["Config"]["Env"] = Value::Null;
-        observed["Args"] = Value::Null;
         validate_runner_inspect_v12(&observed, &expected, ID).unwrap();
         for name in ["Cmd", "Env"] {
             let mut missing = observed.clone();
@@ -548,7 +561,6 @@ mod tests {
             let mut extra = observed.clone();
             extra["Config"][name] = json!(["unexpected"]);
             assert!(validate_runner_inspect_v12(&extra, &expected, ID).is_err(), "{name}");
-            observed["Config"][name] = json!([]);
         }
         let mut missing = observed.clone();
         missing.as_object_mut().unwrap().remove("Args");
@@ -556,11 +568,10 @@ mod tests {
         let mut extra = observed.clone();
         extra["Args"] = json!(["unexpected"]);
         assert!(validate_runner_inspect_v12(&extra, &expected, ID).is_err());
+        expected["Cmd"] = json!([]);
+        observed["Config"]["Cmd"] = json!([]);
         observed["Args"] = json!([]);
-        validate_runner_inspect_v12(&observed, &expected, ID).unwrap();
-        let (nonempty_expected, mut nonempty_observed) = fixture();
-        nonempty_observed["Config"]["Env"] = Value::Null;
-        assert!(validate_runner_inspect_v12(&nonempty_observed, &nonempty_expected, ID).is_err());
+        assert!(validate_runner_inspect_v12(&observed, &expected, ID).is_err());
     }
 
     #[test]

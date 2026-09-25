@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as ShaDigest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::mem;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
@@ -808,41 +808,78 @@ pub fn verify_static_executable_fd(
     fd: RawFd,
     role: ExecutableRole,
 ) -> PlanResult<StaticExecutableEvidenceV12> {
+    verify_static_executable_fd_inner(fd, role, None, None)
+}
+
+/// Measure the actual immutable executable under the caller's independent
+/// size ceiling and original absolute deadline. Positional reads leave the
+/// borrowed descriptor's shared offset unchanged. This is file measurement,
+/// not target-process acquisition or runtime-observer authority.
+pub fn verify_static_executable_fd_bounded(
+    fd: RawFd,
+    role: ExecutableRole,
+    maximum_bytes: u64,
+    deadline_boottime_ns: u64,
+) -> PlanResult<StaticExecutableEvidenceV12> {
+    if maximum_bytes == 0 {
+        return Err(PlanProtocolError::Invalid(
+            "static executable measurement has no independent byte ceiling",
+        ));
+    }
+    verify_static_executable_fd_inner(
+        fd, role, Some(maximum_bytes), Some(deadline_boottime_ns),
+    )
+}
+
+fn verify_static_executable_fd_inner(
+    fd: RawFd,
+    role: ExecutableRole,
+    maximum_bytes: Option<u64>,
+    deadline: Option<u64>,
+) -> PlanResult<StaticExecutableEvidenceV12> {
+    require_measurement_deadline(deadline)?;
     let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
     if duplicate < 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    let mut file = unsafe { File::from_raw_fd(duplicate) };
+    let file = unsafe { File::from_raw_fd(duplicate) };
+    require_measurement_deadline(deadline)?;
     let identity = executable_identity(file.as_raw_fd())?;
-    let elf = parse_static_elf(&mut file, identity.size)?;
-    file.seek(SeekFrom::Start(0))?;
+    require_measurement_deadline(deadline)?;
+    if maximum_bytes.is_some_and(|maximum| identity.size > maximum) {
+        return Err(PlanProtocolError::Invalid(
+            "static executable exceeds its independent byte ceiling",
+        ));
+    }
+    let elf = parse_static_elf(file.as_raw_fd(), identity.size, deadline)?;
     let mut hasher = Sha256::new();
     let mut read_total = 0u64;
-    let mut buffer = vec![0u8; 1024 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        read_total = read_total.checked_add(count as u64).ok_or(
-            PlanProtocolError::Invalid(
-                "static executable byte count overflow",
-            ),
+    let mut buffer = [0u8; 64 * 1024];
+    while read_total < identity.size {
+        require_measurement_deadline(deadline)?;
+        let wanted = (identity.size - read_total).min(buffer.len() as u64) as usize;
+        pread_exact(
+            file.as_raw_fd(), &mut buffer[..wanted], read_total, deadline,
         )?;
-        hasher.update(&buffer[..count]);
+        hasher.update(&buffer[..wanted]);
+        read_total += wanted as u64;
+        require_measurement_deadline(deadline)?;
     }
-    if read_total != identity.size {
+    let mut surplus = [0u8; 1];
+    if pread_chunk(file.as_raw_fd(), &mut surplus, identity.size, deadline)? != 0 {
         return Err(PlanProtocolError::Invalid(
             "static executable changed while measured",
         ));
     }
+    require_measurement_deadline(deadline)?;
     let after = executable_identity(file.as_raw_fd())?;
+    require_measurement_deadline(deadline)?;
     if identity != after {
         return Err(PlanProtocolError::Invalid(
             "static executable identity changed while measured",
         ));
     }
-    Ok(StaticExecutableEvidenceV12 {
+    let evidence = StaticExecutableEvidenceV12 {
         role,
         content_sha256: hasher.finalize().into(),
         size: identity.size,
@@ -852,7 +889,9 @@ pub fn verify_static_executable_fd(
         no_interpreter: true,
         no_needed_libraries: true,
         no_writable_executable_segment: true,
-    })
+    };
+    require_measurement_deadline(deadline)?;
+    Ok(evidence)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -861,6 +900,8 @@ struct ExecutableIdentity {
     inode: u64,
     mode: u32,
     owner: u32,
+    group: u32,
+    links: u64,
     size: u64,
     modified_sec: i64,
     modified_nsec: i64,
@@ -897,6 +938,8 @@ fn executable_identity(fd: RawFd) -> PlanResult<ExecutableIdentity> {
         inode: stat.st_ino,
         mode: stat.st_mode,
         owner: stat.st_uid,
+        group: stat.st_gid,
+        links: stat.st_nlink as u64,
         size: stat.st_size as u64,
         modified_sec: stat.st_mtime,
         modified_nsec: stat.st_mtime_nsec,
@@ -1029,7 +1072,7 @@ pub fn validate_executable_file_v12(path: &Path) -> Result<(), EvidenceError> {
             "ELF entrypoint is not inside an executable PT_LOAD segment".into(),
         ));
     }
-    parse_static_elf(&mut file, metadata.len()).map(|_| ())
+    parse_static_elf(file.as_raw_fd(), metadata.len(), None).map(|_| ())
 }
 
 fn canonical_digest<T: Serialize>(value: &T) -> PlanResult<Digest> {
@@ -1037,12 +1080,18 @@ fn canonical_digest<T: Serialize>(value: &T) -> PlanResult<Digest> {
 }
 
 fn parse_static_elf(
-    file: &mut File,
+    fd: RawFd,
     file_size: u64,
+    deadline: Option<u64>,
 ) -> PlanResult<ParsedElf> {
+    require_measurement_deadline(deadline)?;
+    if file_size < 64 {
+        return Err(PlanProtocolError::Invalid(
+            "static ELF file is shorter than its header",
+        ));
+    }
     let mut header = [0u8; 64];
-    file.seek(SeekFrom::Start(0))?;
-    file.read_exact(&mut header)?;
+    pread_exact(fd, &mut header, 0, deadline)?;
     if header[0..4] != *b"\x7fELF"
         || header[4] != 2
         || header[5] != 1
@@ -1090,9 +1139,10 @@ fn parse_static_elf(
     let mut has_executable_load = false;
     let mut dynamic_segments = Vec::new();
     for index in 0..entry_count {
+        require_measurement_deadline(deadline)?;
         let offset = table_offset + index * entry_size;
         let mut entry = [0u8; 56];
-        pread_exact(file.as_raw_fd(), &mut entry, offset)?;
+        pread_exact(fd, &mut entry, offset, deadline)?;
         let kind = read_u32(&entry[0..4])?;
         let flags = read_u32(&entry[4..8])?;
         let file_offset = read_u64(&entry[8..16])?;
@@ -1130,6 +1180,7 @@ fn parse_static_elf(
         ));
     }
     for (offset, bytes) in dynamic_segments {
+        require_measurement_deadline(deadline)?;
         if bytes % 16 != 0 || bytes > 16 * 1024 * 1024 {
             return Err(PlanProtocolError::Invalid(
                 "static ELF dynamic segment is invalid",
@@ -1137,11 +1188,13 @@ fn parse_static_elf(
         }
         let mut saw_null = false;
         for index in 0..(bytes / 16) {
+            require_measurement_deadline(deadline)?;
             let mut entry = [0u8; 16];
             pread_exact(
-                file.as_raw_fd(),
+                fd,
                 &mut entry,
                 offset + index * 16,
+                deadline,
             )?;
             let tag = i64::from_le_bytes(
                 entry[0..8].try_into().map_err(|_| {
@@ -1166,41 +1219,74 @@ fn parse_static_elf(
             ));
         }
     }
+    require_measurement_deadline(deadline)?;
     Ok(ParsedElf { machine })
 }
 
-fn pread_exact(fd: RawFd, bytes: &mut [u8], offset: u64) -> PlanResult<()> {
+fn pread_exact(
+    fd: RawFd,
+    bytes: &mut [u8],
+    offset: u64,
+    deadline: Option<u64>,
+) -> PlanResult<()> {
     let mut read = 0usize;
     while read < bytes.len() {
-        let position: libc::off_t = offset
+        let position = offset
             .checked_add(read as u64)
             .ok_or(PlanProtocolError::Invalid(
                 "ELF read offset overflow",
-            ))?
-            .try_into()
-            .map_err(|_| {
-                PlanProtocolError::Invalid(
-                    "ELF read offset exceeds off_t",
-                )
-            })?;
+            ))?;
+        let count = pread_chunk(fd, &mut bytes[read..], position, deadline)?;
+        if count == 0 {
+            return Err(PlanProtocolError::Invalid(
+                "ELF read ended before expected length",
+            ));
+        }
+        read += count;
+    }
+    require_measurement_deadline(deadline)
+}
+
+fn pread_chunk(
+    fd: RawFd,
+    bytes: &mut [u8],
+    offset: u64,
+    deadline: Option<u64>,
+) -> PlanResult<usize> {
+    let position: libc::off_t = offset.try_into().map_err(|_| {
+        PlanProtocolError::Invalid("ELF read offset exceeds off_t")
+    })?;
+    loop {
+        require_measurement_deadline(deadline)?;
         let count = unsafe {
             libc::pread(
                 fd,
-                bytes[read..].as_mut_ptr() as *mut libc::c_void,
-                bytes.len() - read,
+                bytes.as_mut_ptr() as *mut libc::c_void,
+                bytes.len(),
                 position,
             )
         };
-        if count <= 0 {
-            return Err(if count < 0 {
-                std::io::Error::last_os_error().into()
-            } else {
-                PlanProtocolError::Invalid(
-                    "ELF read ended before expected length",
-                )
-            });
+        let error = (count < 0).then(std::io::Error::last_os_error);
+        // A synchronous regular-file syscall cannot itself be interrupted by
+        // this deadline; reject late completion before using any returned data.
+        require_measurement_deadline(deadline)?;
+        if let Some(error) = error {
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
         }
-        read += count as usize;
+        return Ok(count as usize);
+    }
+}
+
+fn require_measurement_deadline(deadline: Option<u64>) -> PlanResult<()> {
+    if let Some(deadline) = deadline {
+        if boottime_ns()? >= deadline {
+            return Err(PlanProtocolError::Invalid(
+                "static executable measurement original deadline expired",
+            ));
+        }
     }
     Ok(())
 }

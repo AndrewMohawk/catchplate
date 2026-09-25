@@ -1,9 +1,10 @@
 # Controller body result and observer binding
 
-Status: source-implemented admission repairs, unbuilt and unexecuted. A real
-controller-owned body runner, live runtime observer and terminal publisher
-remain unfinished. [Controller-side stream/output collection](controller-body-output.md)
-is now source-implemented but unexecuted. This document does not
+Status: source-implemented admission repairs, unbuilt and unexecuted. The live
+runtime observer and terminal publisher remain unfinished. A
+[fixed supervisor and launch owner](controller-body-launch.md) and
+[controller-side stream/output collection](controller-body-output.md)
+are now source-implemented but unexecuted. This document does not
 authorize verification or provide passing execution evidence.
 
 ## Why this contract changed
@@ -104,12 +105,11 @@ Neither layer synthesizes absent evidence or bypasses cleanup.
 
 ## Still required for a genuine producer
 
-The actual create path still invokes the signed payload executable directly.
-It does not yet install a controller-owned runner, hand off an independently
-held launch context, observe runtime events or publish the terminal file.
-The future body owner must preserve the original command rather than injecting a
-final plan ID into its signed arguments, which could introduce a commitment
-cycle. The lifecycle now subscribes before start, captures bounded separate
+The create path now invokes a fixed supervisor with a controller-owned read-only
+launch context. The original signed command remains unchanged inside that context;
+no final plan ID is injected into its signed arguments. This supplies real
+supervision code but not independent runtime acquisition/signing or terminal-file
+publication. The lifecycle subscribes before start, captures bounded separate
 stdout/stderr, independently reads the signed output tree and publishes its
 manifest under reserved controller filenames. This does not supply the missing
 original terminal publisher or observer.

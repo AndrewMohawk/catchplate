@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.102`, implementation only. All six WebAuthn successor operations
+Status: source `.103`, implementation only. All six WebAuthn successor operations
 now have genuine configured programs in a separate `typed-successor-planning`
 registry. This closes the source program inventory, not verified import/runtime
 startup or public operation admission. Legacy kernel/planning inventories and
@@ -15,7 +15,8 @@ An optional signed policy now maps these three operations to their real read,
 signed-production and configured raw-four verification owners through private
 service factories. Authenticated invocation/transport, custody and
 successor-execution integration remain unfinished; independent authority and
-release gates remain.
+release gates remain. The three transition operations now also have genuine
+configured verifier root observation, not continuing root-currentness authority.
 
 ## Genuine successor program selection
 
@@ -44,6 +45,32 @@ Their separate fixed `plan_factory` entries construct the actual
 public invocation, successor reservation, one-use capability, authorized atomic
 execution, recovery or independent production infrastructure. Earlier revision
 sections below describe their respective source checkpoints, not later closure.
+
+## Independent successor root observations
+
+Source `.103` adds `TransitionRootReader` and its measured-configuration mapper.
+Before connection callbacks, the reader owns and commitment-validates the typed
+request. Its actual source operation/mode selects all primary tables and full
+potential counted heads. Primary SQL uses one globally sorted table union;
+returned observations preserve the business and authorization classes.
+
+Exactly two root SELECTs, separate from connection/identity/ACL admission SQL,
+run inside one actual PostgreSQL 16 SERIALIZABLE READ ONLY DEFERRABLE snapshot.
+They use the existing source-exact verifier privilege surface and original
+cumulative work/physical ledger. Counted reads share the actual private
+head-reader validation and math, with no fabricated complete query or cutoff.
+Normal cursor and transaction/connection exit plus a closed-handle check precede
+return. The source contract separately revalidates and owns root/head JSON
+projections; neither records nor projections are authority tokens.
+
+The service owns the request before measured callbacks, holds protected verifier
+database settings, captures generation last and rechecks active generation after
+the closed read. This supplies root observations without admitting request
+provenance, holding roots current for a later action, or changing ACLs, network
+routes or execution. Authenticated invocation/transport, durable custody,
+reservation/capability/atomic execution and recovery remain unfinished, as do
+independent infrastructure and consolidated frozen-build verification. Source
+remains unbuilt and unexecuted.
 
 ## Signed transition policy and configured handoff
 

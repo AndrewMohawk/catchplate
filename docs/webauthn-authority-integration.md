@@ -1,6 +1,6 @@
 # Completing the WebAuthn authority transitions
 
-Status: source `.102`, implementation only, not an enabled public protocol or
+Status: source `.103`, implementation only, not an enabled public protocol or
 migration. All six WebAuthn successor operations now have genuine configured
 programs in the separate `typed-successor-planning` registry. Legacy `KERNELS` and
 `PLANNING_PROGRAMS`, service routing, SQL execution and witness admission exclude
@@ -16,6 +16,25 @@ They share the existing guarded transaction scope and work allowance.
 None of these registrations supplies public invocation, successor
 reservation/capability/atomic execution, physical readback or production
 readiness. All source is unbuilt and unexecuted.
+
+Source `.103` supplies the independent root-observation prerequisite for these
+three transitions. The actual verifier reader owns the typed request and checks
+its commitments before callbacks; source operation/mode selects the full primary
+and potential counted-head inventory. Two root SELECTs, apart from admission
+catalog SQL, share one PostgreSQL 16 SERIALIZABLE READ ONLY DEFERRABLE snapshot
+and the unchanged exact verifier ACL. Primary rows are globally sorted for SQL
+and split by business/authorization class afterward. Counted heads use the real
+shared private reader math without a fabricated query declaration or cutoff.
+
+The measured mapper holds verifier descriptor/database settings before policy
+callbacks. Service integration captures the request before measured admission,
+captures generation last and rechecks active generation after normal read
+closure. Source-validated owned root/head projections remain observations, not
+request provenance, continuing currentness, reservation or execution authority.
+No ACL, network, routing or execution surface changes. Authenticated invocation/
+transport, durable custody, reservation/capability/atomic execution and recovery,
+independent infrastructure and consolidated frozen-build verification remain
+unfinished. The revision-specific records below retain their historical gaps.
 
 Source `.102` connects optional signed `webauthnTransitions` policy to the three
 real read/plan registry factories and a configured raw-four verifier. Its closed

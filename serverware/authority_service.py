@@ -3993,6 +3993,18 @@ class AuthorityProcess:
             envelope_bytes=envelope_bytes, proof_bytes=proof_bytes, inputs_bytes=inputs_bytes,
             context_bytes=context_bytes, expectations=expectations, work=work)
 
+    def _webauthn_transition_root_reader(self, *, operation, work):
+        """Construct a verifier-only root reader from protected configuration."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._root_reader_on_work(self, operation=operation, work=work)
+
+    def _read_webauthn_transition_root_observations(self, *, operation, request, work):
+        """Read primary and counted-root metadata without reserving its state."""
+        from serverware import authority_webauthn_transition_service as transitions
+
+        return transitions._read_roots_on_work(self, operation=operation, request=request, work=work)
+
     def _webauthn_evidence_planner(self, *, purpose, work):
         """Construct one private purpose-pinned read owner, without opening SQL.
 

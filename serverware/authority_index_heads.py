@@ -203,34 +203,62 @@ def read_operation_index_heads(
     with acquisition.scope(cursor, trace, work):
         identities = required_index_ids(operation, arguments=arguments, queries=queries,
                                         include_write_heads=include_write_heads)
-        if type(getattr(trace, "operation", None)) is not str or trace.operation != operation:
-            raise IndexHeadReadError("counted head trace operation changed")
-        profiles, empty, manifest = _source_context(identities, work)
         key = {"profile": READ_PROFILE, "indexIds": list(identities), "rowLimit": len(identities) + 1}
         validate_head_trace_key(operation, key, arguments=arguments, queries=queries,
                                 include_write_heads=include_write_heads)
-        placeholders = ", ".join("%s" for _ in identities)
-        rows = acquisition.read(HEAD_TABLE, key,
-            f"SELECT {_HEAD_SELECT} FROM serverware_metadata.{HEAD_TABLE} AS head "
-            f"WHERE head.index_id IN ({placeholders}) "
-            'ORDER BY head.index_id COLLATE "C" LIMIT %s',
-            (*identities, len(identities) + 1), len(identities))
-        if len(rows) != len(identities):
-            raise IndexHeadReadError("counted head inventory is missing required rows")
-        owned = tuple(_owned_row(row, acquisition, work) for row in rows)
-        result = []
-        for identity, row in zip(identities, owned):
-            profile = profiles[identity]
-            if (row["index_id"] != identity or row["table_name"] != profile.table
-                    or row["counted_profile"] != counted.PROFILE
-                    or row["projection_digest"] != profile.projection_digest
-                    or row["projection_manifest_digest"] != manifest):
-                raise IndexHeadReadError("counted head order or source commitments changed")
-            revision, count, digest = row["index_revision"], row["leaf_count"], row["root_digest"]
-            if ((revision == 0 and count != 0)
-                    or (count == 0) != (digest == empty[identity])):
-                raise IndexHeadReadError("counted head revision or canonical empty root is invalid")
-            result.append(CapturedIndexHead(identity, profile.table, counted.PROFILE,
-                profile.projection_digest, manifest, revision, counted.CountedNode(digest, count)))
-        acquisition.require_active()
-        return tuple(result)
+        return _read_index_heads_on_scope(cursor, operation=operation, identities=identities,
+            trace=trace, work=work, acquisition=acquisition)
+
+
+def _read_index_heads_on_scope(cursor, *, operation, identities, trace, work, acquisition):
+    """Read real head rows inside an already admitted source acquisition scope.
+
+    The fixed caller derives its entire source inventory and admits the exact
+    physical marker through its own trace. This private mathematical/physical
+    seam does not choose an operation family or confer head provenance. It
+    allows an independent root observer to read full potential heads without
+    inventing complete-query declarations or a historical database cutoff.
+    The public planner entry above retains its actual query/family checks.
+    """
+    if type(acquisition) is not reader._ReadAcquisitionBudget:
+        raise IndexHeadReadError("counted heads require the actual shared acquisition ledger")
+    acquisition.require_active()
+    if (acquisition.cursor is not cursor or acquisition.trace is not trace or acquisition.work is not work
+            or type(operation) is not str or operation not in (complete.OPERATION,
+                complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION, COMPLETION_OPERATION)
+            or type(getattr(trace, "operation", None)) is not str or trace.operation != operation
+            or type(identities) is not tuple or not 1 <= len(identities) <= MAX_HEADS):
+        raise IndexHeadReadError("counted head source scope changed")
+    previous = None
+    for identity in identities:
+        if (type(identity) is not str or identity not in projection.INDEX_IDS
+                or previous is not None and previous >= identity):
+            raise IndexHeadReadError("counted head source inventory is not exact, sorted and unique")
+        previous = identity
+    profiles, empty, manifest = _source_context(identities, work)
+    key = {"profile": READ_PROFILE, "indexIds": list(identities), "rowLimit": len(identities) + 1}
+    placeholders = ", ".join("%s" for _ in identities)
+    rows = acquisition.read(HEAD_TABLE, key,
+        f"SELECT {_HEAD_SELECT} FROM serverware_metadata.{HEAD_TABLE} AS head "
+        f"WHERE head.index_id IN ({placeholders}) "
+        'ORDER BY head.index_id COLLATE "C" LIMIT %s',
+        (*identities, len(identities) + 1), len(identities))
+    if len(rows) != len(identities):
+        raise IndexHeadReadError("counted head inventory is missing required rows")
+    owned = tuple(_owned_row(row, acquisition, work) for row in rows)
+    result = []
+    for identity, row in zip(identities, owned):
+        profile = profiles[identity]
+        if (row["index_id"] != identity or row["table_name"] != profile.table
+                or row["counted_profile"] != counted.PROFILE
+                or row["projection_digest"] != profile.projection_digest
+                or row["projection_manifest_digest"] != manifest):
+            raise IndexHeadReadError("counted head order or source commitments changed")
+        revision, count, digest = row["index_revision"], row["leaf_count"], row["root_digest"]
+        if ((revision == 0 and count != 0)
+                or (count == 0) != (digest == empty[identity])):
+            raise IndexHeadReadError("counted head revision or canonical empty root is invalid")
+        result.append(CapturedIndexHead(identity, profile.table, counted.PROFILE,
+            profile.projection_digest, manifest, revision, counted.CountedNode(digest, count)))
+    acquisition.require_active()
+    return tuple(result)

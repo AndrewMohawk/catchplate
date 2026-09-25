@@ -2,11 +2,13 @@
 
 The actual service configuration loader, protected descriptors and active
 launch guard supply admission. A caller-created configuration or returned
-owner does not. Fixed factory callers select only a reader, signed producer
-or verifier for one of the three source operations; no request chooses keys,
+owner does not. Fixed factory callers select only a planner reader, signed
+producer, verifier or verifier-root reader for one of three source operations;
+no request chooses keys,
 policy, descriptor names, callbacks or a replacement work allowance.
 
-These factories do not open SQL or enable public operations. Historical
+The factories do not open SQL or enable public operations. The explicit root
+read performs only its separately admitted read-only acquisition. Historical
 handoff expectations are owned before all launch/key callbacks and must be
 independently admitted upstream, never adopted from received context bytes.
 """
@@ -17,6 +19,9 @@ from serverware import authority_revocation_configuration as configuration
 from serverware import authority_webauthn_transition_plan as plan
 from serverware import authority_webauthn_transition_configuration as mapping
 from serverware import authority_webauthn_transition_plan_verifier as verifying
+from serverware import authority_webauthn_transition_root_configuration as root_mapping
+from serverware import authority_webauthn_transition_root_reader as root_reader
+from serverware import authority_webauthn_transition_roots_contract as root_contract
 
 
 def _operation(value):
@@ -25,16 +30,16 @@ def _operation(value):
     return value
 
 
-def _configured_on_work(process, *, operation, kind, work):
+def _context_on_work(process, *, operation, kind, work):
     """Own one actual measured configuration before real admission callbacks."""
     # The service imports these private boundaries lazily after its genuine
     # classes exist; this fixed reverse import does not create a startup cycle.
     from serverware import authority_service as service
 
     operation = _operation(operation)
-    if type(kind) is not str or kind not in ("reader", "producer", "verifier"):
+    if type(kind) is not str or kind not in ("reader", "producer", "verifier", "roots"):
         raise service.AuthorityServiceError("transition service factory is not source fixed")
-    role = "verifier" if kind == "verifier" else "planner"
+    role = "verifier" if kind in ("verifier", "roots") else "planner"
     if (type(process) is not service.AuthorityProcess or process.role_name != role
             or process.process_mode != "policy-authority-" + role):
         raise service.AuthorityServiceError("transition service process is not configured")
@@ -49,6 +54,7 @@ def _configured_on_work(process, *, operation, kind, work):
         "reader": mapping._planner_from_configuration_on_work,
         "producer": mapping._producer_from_configuration_on_work,
         "verifier": mapping._verifier_from_configuration_on_work,
+        "roots": root_mapping._reader_from_configuration_on_work,
     }[kind]
     ledger = configuration.capability.capture._SharedLedger(work)
     configuration.capability.shape._digest(digest)
@@ -59,14 +65,21 @@ def _configured_on_work(process, *, operation, kind, work):
     configuration.production._callback(work, lambda: service.authority_launch_guard.require_active(role))
     arguments = {"operation": operation, "payload": owned, "configuration_digest": digest, "work": work}
     if kind != "verifier":
+        descriptor = ("SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN" if kind == "roots"
+            else "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN")
         arguments["read_dsn"] = configuration.production._callback(work,
-            lambda: service._read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"))
+            lambda: service._read_dsn_descriptor(descriptor))
     if kind == "producer":
         arguments["planner_private_key"] = private
     # No process/configuration/descriptor lookup follows this final snapshot.
     # The fixed selected mapper immediately owns and checks its seven bindings.
     arguments["generation"] = configuration.production._callback(
         work, lambda: dict(service.authority_launch_guard.generation()))
+    return mapper, arguments
+
+
+def _configured_on_work(process, *, operation, kind, work):
+    mapper, arguments = _context_on_work(process, operation=operation, kind=kind, work=work)
     return mapper(**arguments)
 
 
@@ -80,6 +93,39 @@ def _producer_on_work(process, *, operation, work):
 
 def _verifier_on_work(process, *, operation, work):
     return _configured_on_work(process, operation=operation, kind="verifier", work=work)
+
+
+def _root_reader_on_work(process, *, operation, work):
+    return _configured_on_work(process, operation=operation, kind="roots", work=work)
+
+
+def _generation_on_work(value, work):
+    ledger = configuration.capability.capture._SharedLedger(work)
+    configuration.capability.shape._bounded_object(value, 20, "transition root launch context")
+    return configuration.capability.capture._JSONCapture(ledger).visit(
+        {name: value[name] for name in configuration._GENERATION_FIELDS})
+
+
+def _read_roots_on_work(process, *, operation, request, work):
+    """Read independent primary/count roots, then check the held generation.
+
+    No received plan/context supplies the roots. Completion of the read and
+    generation checks neither reserves those roots nor holds them current for
+    a later planner or writer. The inventory remains an ordinary observation.
+    """
+    from serverware import authority_service as service
+
+    operation = _operation(operation)
+    owned = root_contract._capture_request_on_work(request=request, operation=operation, work=work)
+    mapper, arguments = _context_on_work(process, operation=operation, kind="roots", work=work)
+    generation = _generation_on_work(arguments["generation"], work)
+    reader = mapper(**arguments)
+    inventory = root_reader.TransitionRootReader.read(reader, request=owned, work=work)
+    configuration.production._callback(work, lambda: service.authority_launch_guard.require_active("verifier"))
+    final = configuration.production._callback(work, lambda: dict(service.authority_launch_guard.generation()))
+    configuration.capability.plan._same(generation, _generation_on_work(final, work), work,
+        "transition verifier root read generation changed")
+    return inventory
 
 
 def _verify_handoff_on_work(process, *, operation, envelope_bytes, proof_bytes,

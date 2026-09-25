@@ -2711,6 +2711,10 @@ def startup() -> None:
     if control_plane_startup_required():
         validate_control_plane_startup()
     _drain_setup_session_audit_outbox()
+    # Lock waits, database reconciliation and audit delivery can consume the
+    # original admitted receipt interval. Recheck the same cold owner before
+    # starting workers; never reload or renew trust during application startup.
+    control_plane_custody_startup.require_started()
     runtime.start_runtime_workers()
     runtime.start_audit_anchor_worker()
     runtime.start_decision_gate_ca_publisher()

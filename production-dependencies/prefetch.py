@@ -120,7 +120,9 @@ def _validate_tar_archive(descriptor: int, archive_bytes: int, relative: str) ->
 
 def _verify_regular_input(path: Path, relative: str, expected_sha256: str) -> None:
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # Reject non-regular inputs using fstat without first blocking on a
+        # FIFO open. Regular-file reads retain their existing semantics.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
         raise RuntimeError(f"missing regular pinned dependency input: {relative}") from exc
     try:

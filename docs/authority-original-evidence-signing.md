@@ -7,6 +7,12 @@ has a separate fixed-purpose signing mapper. Neither is a provisioned signer
 process or a public successor workflow, and neither accepts a successful-proof
 object as authority.
 
+The later [signed registration-source exchange](authority-registration-source-exchange.md)
+connects this private read owner to actual verifier root observations over the
+existing verifier/planner peer boundary. It preserves the original request,
+response and source proofs for independent authentication/replay, not as a
+transferable successful result or an evidence-signing grant.
+
 ## Registration: source proofs before an envelope exists
 
 `authority_webauthn_registration_signing._produce_from_source_proofs_on_configuration`

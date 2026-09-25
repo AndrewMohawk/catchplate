@@ -1,6 +1,6 @@
 # WebAuthn public admission and private preparation
 
-Current source checkpoint: `.123`. This is a source-only integration map, not
+Current source checkpoint: `.124`. This is a source-only integration map, not
 a tested import, running endpoint or deployment claim. Private preparation is
 described in [WebAuthn preparation](authority-webauthn-preparation.md); the public
 admission continuation below is still missing.
@@ -89,6 +89,13 @@ query/address associations can feed the configured evidence producer before a
 signed envelope exists. Root, enrollment, time and signer provenance still need
 independent admission and an authenticated cross-service handoff; no public
 browser route calls this private preparation chain yet.
+
+The [signed registration-source exchange](authority-registration-source-exchange.md)
+now connects actual verifier root reads to authenticated planner source
+acquisition and verifier-side membership/query/cutoff replay. Its planner-only
+private transport authenticates the original request and complete returned
+source bytes; it does not admit enrollment selectors from a browser, provision
+the independent evidence signer or expose successor business execution.
 
 ## Trust stage and completion have different prerequisites
 

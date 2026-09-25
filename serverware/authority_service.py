@@ -59,6 +59,7 @@ from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_webauthn_evidence_custody_transport as evidence_custody_transport
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
 from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
+from serverware import authority_webauthn_registration_source_transport as registration_source_transport
 from serverware import authority_webauthn_transition_transport as transition_plan_transport
 from serverware import authority_webauthn_transition_custody_transport as transition_custody_transport
 from serverware import authority_webauthn_transition_custody_read_transport as transition_custody_read_transport
@@ -4376,6 +4377,111 @@ class AuthorityProcess:
             tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
             "registration source read launch generation changed")
         return result
+
+    def _produce_webauthn_registration_source_request(self, *, registration_challenge_id,
+            published_publication_id, oidc_session_id, deadline_epoch_ns, work):
+        """Bind admitted enrollment selectors to actual independent verifier roots.
+
+        This private read request neither accepts caller roots nor establishes
+        the user's enrollment/selector authority. Actual live root observations
+        do not reserve state or grant registration-evidence signing authority.
+        """
+        from serverware import authority_query_reads as reads
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_evidence_root_configuration as root_configuration
+        from serverware import authority_webauthn_evidence_root_reader as root_reader
+        from serverware import authority_webauthn_evidence_roots as roots
+        from serverware import authority_webauthn_registration_source_actions as actions
+
+        owned = reads._CopyBudget(work).copy({"challenge": registration_challenge_id,
+            "publication": published_publication_id, "session": oidc_session_id,
+            "deadline": deadline_epoch_ns})
+        payload, digest, generation, read_dsn, signer, runtime = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=True, read_roots=True, work=work)
+        reader = root_configuration._reader_from_configuration_on_work(purpose="registration",
+            payload=payload, configuration_digest=digest, generation=generation,
+            runtime_role_identities=runtime, read_dsn=read_dsn, work=work)
+        inventory = root_reader.EvidenceRootReader.read(reader, work=work)
+        business, authorization = roots._project_on_work(inventory,
+            operation="webauthn.registration.evidence.admit", work=work)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        configuration.capability.plan._same(
+            tuple(generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "registration source request root-read generation changed")
+        return actions._produce_request_on_configuration(payload=payload,
+            configuration_digest=digest, generation=final_generation, runtime_role_identities=runtime,
+            registration_challenge_id=owned["challenge"], published_publication_id=owned["publication"],
+            oidc_session_id=owned["session"], business_before_roots=business,
+            authorization_before_roots=authorization, deadline_epoch_ns=owned["deadline"],
+            verifier_private_key=signer, work=work)
+
+    def _produce_webauthn_registration_source_response(self, *, control_bytes, context_bytes, work):
+        """Authenticate, acquire and sign one original read-only source response."""
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_registration_source_actions as actions
+
+        originals = registration_source_transport._validate_request(
+            control_bytes=control_bytes, context_bytes=context_bytes)
+        payload, digest, generation, read_dsn, signer, runtime = _webauthn_evidence_custody_context(
+            self, role_name="planner", signing=True, planning=True, work=work)
+        result = actions._produce_response_on_configuration(payload=payload,
+            configuration_digest=digest, generation=generation, runtime_role_identities=runtime,
+            control_bytes=originals[0], context_bytes=originals[1], read_dsn=read_dsn,
+            planner_private_key=signer, work=work)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner"))
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        configuration.capability.plan._same(
+            tuple(generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "registration source response generation changed")
+        return result
+
+    def _request_webauthn_registration_source(self, *, control_bytes, context_bytes, work):
+        """Authenticate the exact response before decoding and replaying its proofs.
+
+        The supplied request must be the verifier's genuinely admitted live
+        invocation. Raw response originals remain data, not an evidence-signing
+        grant, durable receipt or transferable successful-proof carrier.
+        """
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_registration_source_actions as actions
+
+        originals = registration_source_transport._validate_request(
+            control_bytes=control_bytes, context_bytes=context_bytes)
+        payload, digest, generation, _dsn, _signer, runtime = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=False, work=work)
+        result = actions._request_on_configuration(payload=payload,
+            configuration_digest=digest, generation=generation, runtime_role_identities=runtime,
+            control_bytes=originals[0], context_bytes=originals[1], work=work)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        configuration.capability.plan._same(
+            tuple(generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "registration source exchange generation changed")
+        return result
+
+    def _acquire_webauthn_registration_source(self, *, registration_challenge_id,
+            published_publication_id, oidc_session_id, deadline_epoch_ns, work):
+        """Preserve raw4 from actual root observation through authenticated replay.
+
+        No browser route or independent evidence signer is activated here.
+        Enrollment/selector provenance remains upstream. All four originals
+        must be retained for any later independent authentication and replay;
+        this tuple is not a substitute for that work or for current roots.
+        """
+        request = AuthorityProcess._produce_webauthn_registration_source_request(self,
+            registration_challenge_id=registration_challenge_id,
+            published_publication_id=published_publication_id, oidc_session_id=oidc_session_id,
+            deadline_epoch_ns=deadline_epoch_ns, work=work)
+        response = AuthorityProcess._request_webauthn_registration_source(self,
+            control_bytes=request.control_bytes, context_bytes=request.context_bytes, work=work)
+        return request.control_bytes, request.context_bytes, response[0], response[1]
 
     def _webauthn_evidence_plan_producer(self, *, purpose, work):
         """Construct one private configured producer without opening SQL.
@@ -9290,6 +9396,26 @@ class AuthorityServer:
         evidence_custody_read_transport._check_deadline(deadline_ns)
         evidence_custody_read_transport._send_response(connection, response, deadline_ns=deadline_ns)
 
+    def _serve_webauthn_registration_source(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Serve one verifier-peer source read without custody or evidence signing."""
+        process = self.process
+        if (type(process) is not AuthorityProcess or process.role_name != "planner"
+                or process.process_mode != "policy-authority-planner"):
+            raise AuthorityServiceError("registration source request has the wrong service role")
+        originals = registration_source_transport._recv_request(
+            connection, prefix=prefix, deadline_ns=deadline_ns)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        # The sole router already checked the configured verifier peer.
+        # Both bounded original bodies and EOF precede this single allowance.
+        work = _ValidationWork(QueryReadValidationLimits())
+        registration_source_transport._check_deadline(deadline_ns)
+        response = AuthorityProcess._produce_webauthn_registration_source_response(
+            process, control_bytes=originals[0], context_bytes=originals[1], work=work)
+        registration_source_transport._check_deadline(deadline_ns)
+        registration_source_transport._send_response(connection, response, deadline_ns=deadline_ns)
+
     def _serve_webauthn_evidence_plan(self, connection: socket.socket, *,
             deadline_ns: int, prefix: bytes) -> None:
         """Serve one peer-checked, signed planning request without custody."""
@@ -9452,6 +9578,7 @@ class AuthorityServer:
                 evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC,
                 evidence_plan_transport.REGISTRATION_REQUEST_MAGIC,
                 evidence_plan_transport.INSTALLATION_REQUEST_MAGIC,
+                registration_source_transport.REQUEST_MAGIC,
                 *transition_plan_transport.REQUEST_MAGICS,
                 *transition_custody_transport.REQUEST_MAGICS,
                 *transition_custody_transport.RELAY_REQUEST_MAGICS,
@@ -9491,6 +9618,9 @@ class AuthorityServer:
                     evidence_custody_read_transport.REGISTRATION_FORWARD_MAGIC,
                     evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC):
                 self._serve_webauthn_evidence_custody_read(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix == registration_source_transport.REQUEST_MAGIC:
+                self._serve_webauthn_registration_source(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             if prefix in (evidence_plan_transport.REGISTRATION_REQUEST_MAGIC,
                     evidence_plan_transport.INSTALLATION_REQUEST_MAGIC):

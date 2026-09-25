@@ -56,6 +56,7 @@ from serverware import authority_revocation_planning_transport as planning_trans
 from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_webauthn_evidence_custody_transport as evidence_custody_transport
 from serverware import authority_webauthn_evidence_custody_read_transport as evidence_custody_read_transport
+from serverware import authority_webauthn_evidence_plan_transport as evidence_plan_transport
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
@@ -348,7 +349,8 @@ def _webauthn_evidence_custody_purpose(purpose):
         else "webauthn.trust.installation.admit")
 
 
-def _webauthn_evidence_custody_context(process, *, role_name, signing, work, read_roots=False):
+def _webauthn_evidence_custody_context(process, *, role_name, signing, work,
+        read_roots=False, planning=False):
     """Hold measured settings and any real signer before native callbacks.
 
     Invocation originals/history must already be owned. The fixed callers
@@ -362,7 +364,8 @@ def _webauthn_evidence_custody_context(process, *, role_name, signing, work, rea
             or process.role_name != role_name
             or process.process_mode != "policy-authority-" + role_name
             or type(signing) is not bool or signing and role_name == "planner-writer"
-            or type(read_roots) is not bool or read_roots and role_name != "verifier"):
+            or type(read_roots) is not bool or read_roots and role_name != "verifier"
+            or type(planning) is not bool or planning and (role_name != "planner" or not signing)):
         raise AuthorityServiceError("WebAuthn evidence custody process is not configured")
     measured = process.configuration
     if type(measured) is not MeasuredConfiguration:
@@ -387,6 +390,9 @@ def _webauthn_evidence_custody_context(process, *, role_name, signing, work, rea
     elif read_roots:
         database_dsn = configuration.production._callback(work,
             lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"))
+    elif planning:
+        database_dsn = configuration.production._callback(work,
+            lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"))
     # Capture the actual generation last; no later process/descriptor/signer
     # lookup can interpose before the fixed configured action owns it.
     generation = configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))
@@ -4155,6 +4161,105 @@ class AuthorityProcess:
         verifier = AuthorityProcess._webauthn_evidence_plan_verifier(self, purpose=purpose, work=work)
         return verifying.EvidencePlanVerifier.verify(verifier, envelope_bytes=originals[0],
             inputs_bytes=originals[1], evaluation_context_bytes=originals[2], expectations=owned, work=work)
+
+    def _produce_webauthn_evidence_plan_request(self, *, purpose, request, inputs_bytes,
+            deadline_epoch_ns, work):
+        """Sign a planning request with an actual independent root snapshot.
+
+        Upstream must admit the typed request and original ceremony or committed
+        installation inputs. This private method does not infer that authority
+        from supplied JSON. It prepares original controls without sending them.
+        """
+        operation = _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_evidence_plan_actions as actions
+        from serverware import authority_webauthn_evidence_plan_request as request_wire
+        from serverware import authority_webauthn_evidence_root_configuration as root_configuration
+        from serverware import authority_webauthn_evidence_root_reader as root_reader
+        from serverware import authority_webauthn_evidence_roots as roots
+
+        request_wire.inputs_wire._raw(inputs_bytes, 2, request_wire.MAX_INPUT_BYTES)
+        original_inputs = inputs_bytes
+        request_wire.evidence.plan.contract._integer(deadline_epoch_ns, minimum=1)
+        deadline = deadline_epoch_ns
+        owned = request_wire.evidence.capture._JSONCapture(
+            request_wire.evidence.capture._SharedLedger(work),
+            maximum_bytes=request_wire.MAX_CONTEXT_BYTES).visit(request)
+        request_wire.plan.contract._request(owned, operation, request_wire.plan.contract._SPECS[operation])
+        payload, digest, generation, read_dsn, signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=True, read_roots=True, work=work)
+        reader = root_configuration._reader_from_configuration_on_work(purpose=purpose,
+            payload=payload, configuration_digest=digest, generation=generation,
+            read_dsn=read_dsn, work=work)
+        inventory = root_reader.EvidenceRootReader.read(reader, work=work)
+        business, authorization = roots._project_on_work(inventory, operation=operation, work=work)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        configuration.capability.plan._same(
+            tuple(generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "WebAuthn evidence planning root read generation changed")
+        return actions._produce_request_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=final_generation, request=owned,
+            business_before_roots=business, authorization_before_roots=authorization,
+            inputs_bytes=original_inputs, deadline_epoch_ns=deadline,
+            verifier_private_key=signer, work=work)
+
+    def _request_webauthn_evidence_plan(self, *, purpose, control_bytes,
+            context_bytes, inputs_bytes, work):
+        """Send original planning inputs; authenticate and replay the response.
+
+        The returned response control and raw3 are observations, not retained
+        history admission, business execution authority or a durable receipt.
+        """
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_evidence_plan_actions as actions
+
+        originals = evidence_plan_transport._validate_request(control_bytes=control_bytes,
+            context_bytes=context_bytes, inputs_bytes=inputs_bytes)
+        payload, digest, generation, _dsn, _signer = _webauthn_evidence_custody_context(
+            self, role_name="verifier", signing=False, work=work)
+        result = actions._request_plan_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            context_bytes=originals[1], inputs_bytes=originals[2], work=work)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("verifier"))
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        configuration.capability.plan._same(
+            tuple(generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "WebAuthn evidence planning response generation changed")
+        return result
+
+    def _produce_webauthn_evidence_plan(self, *, purpose, control_bytes,
+            context_bytes, inputs_bytes, work):
+        """Authenticate the request before actual read/acquire/replay/sign.
+
+        Normal producer connection exit precedes the signed raw3 response.
+        No retained-record or business mutation, reservation or retry follows.
+        """
+        _webauthn_evidence_custody_purpose(purpose)
+        from serverware import authority_revocation_configuration as configuration
+        from serverware import authority_webauthn_evidence_plan_actions as actions
+
+        originals = evidence_plan_transport._validate_request(control_bytes=control_bytes,
+            context_bytes=context_bytes, inputs_bytes=inputs_bytes)
+        payload, digest, generation, read_dsn, signer = _webauthn_evidence_custody_context(
+            self, role_name="planner", signing=True, planning=True, work=work)
+        result = actions._produce_plan_on_configuration(purpose=purpose, payload=payload,
+            configuration_digest=digest, generation=generation, control_bytes=originals[0],
+            context_bytes=originals[1], inputs_bytes=originals[2], read_dsn=read_dsn,
+            planner_private_key=signer, work=work)
+        configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner"))
+        final_generation = configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        configuration.capability.plan._same(
+            tuple(generation[name] for name in configuration._GENERATION_FIELDS),
+            tuple(final_generation[name] for name in configuration._GENERATION_FIELDS), work,
+            "WebAuthn evidence plan production generation changed")
+        return result
 
     def _read_webauthn_evidence_root_observations(self, *, purpose, work):
         """Read actual verifier root metadata, not historical or execution proof.
@@ -8648,6 +8753,27 @@ class AuthorityServer:
         evidence_custody_read_transport._check_deadline(deadline_ns)
         evidence_custody_read_transport._send_response(connection, response, deadline_ns=deadline_ns)
 
+    def _serve_webauthn_evidence_plan(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Serve one peer-checked, signed planning request without custody."""
+        process = self.process
+        if (type(process) is not AuthorityProcess or process.role_name != "planner"
+                or process.process_mode != "policy-authority-planner"):
+            raise AuthorityServiceError("evidence planning request has the wrong service role")
+        purpose, originals = evidence_plan_transport._recv_request(
+            connection, prefix=prefix, deadline_ns=deadline_ns)
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        # The complete bounded request and EOF precede the one source work
+        # allocation. Every authentication/acquisition/replay step shares it.
+        work = _ValidationWork(QueryReadValidationLimits())
+        evidence_plan_transport._check_deadline(deadline_ns)
+        response = AuthorityProcess._produce_webauthn_evidence_plan(process,
+            purpose=purpose, control_bytes=originals[0], context_bytes=originals[1],
+            inputs_bytes=originals[2], work=work)
+        evidence_plan_transport._check_deadline(deadline_ns)
+        evidence_plan_transport._send_response(connection, response, deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -8670,7 +8796,9 @@ class AuthorityServer:
                 evidence_custody_read_transport.REGISTRATION_REQUEST_MAGIC,
                 evidence_custody_read_transport.INSTALLATION_REQUEST_MAGIC,
                 evidence_custody_read_transport.REGISTRATION_FORWARD_MAGIC,
-                evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC)
+                evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC,
+                evidence_plan_transport.REGISTRATION_REQUEST_MAGIC,
+                evidence_plan_transport.INSTALLATION_REQUEST_MAGIC)
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
@@ -8696,6 +8824,10 @@ class AuthorityServer:
                     evidence_custody_read_transport.REGISTRATION_FORWARD_MAGIC,
                     evidence_custody_read_transport.INSTALLATION_FORWARD_MAGIC):
                 self._serve_webauthn_evidence_custody_read(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix in (evidence_plan_transport.REGISTRATION_REQUEST_MAGIC,
+                    evidence_plan_transport.INSTALLATION_REQUEST_MAGIC):
+                self._serve_webauthn_evidence_plan(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

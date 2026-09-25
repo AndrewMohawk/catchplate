@@ -1,10 +1,12 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.96`, implementation only. Configured verifier-to-planner relay
-preparation is now separate from explicit forwarding of original controls and
-evidence plans through the planner to the writer. Fixed detached socket branches
-connect genuine replay to the actual writer transaction; responses are unsigned
-peer observations, not execution permission or signed durability receipts.
+Status: source `.97`, implementation only. A signed verifier-to-planner production
+request now follows an independent verifier root snapshot. The planner returns
+a signed response control plus the original plan, inputs and evaluation context;
+the client verifies that binding and genuinely replays the plan before return.
+Relay preparation remains separate from explicit custody forwarding through the
+planner to the writer. Custody digest/time responses remain unsigned peer
+observations, not execution permission or signed durability receipts.
 A separate verifier-signed lookup now retrieves retained originals through the
 same peer chain for genuine historical replay. This recovery-material path
 does not establish historical provenance, key rollover or execution recovery.
@@ -680,6 +682,37 @@ remain current through signing, later custody or execution. It supplies neither
 historical request/time provenance nor successor execution authority. The six
 missing registry entries and independent production infrastructure remain
 unfinished. The implementation is unbuilt and unexecuted.
+
+## Authenticated evidence-plan production exchange
+
+Source `.97` connects three private service methods and a fixed detached planner
+branch. The verifier acquires its genuine independent root snapshot before
+signing a closed 14-field request control over the original 8-field production
+context and canonical input bytes. Held measured configuration, explicit purpose
+policy and launch generation bind the exchange. The planner authenticates this
+request before invoking the actual configured original-input production owner;
+no received success observation substitutes for proof acquisition or semantics.
+
+The planner's separate 18-field response control binds the original request
+control and all three returned originals: signed plan, inputs and evaluation
+context. The plan signature alone does not cover that raw context. Response
+control expiry equals the original request expiry; the context deadline cannot
+exceed it. Signed plan expiry is exactly the minimum of the context deadline
+and context issuance time plus configured plan age. Permitted clock skew can
+leave that plan expiry earlier than the context deadline. The client separately
+enforces current plan freshness and repeats actual live proof and semantic
+replay under the original request window; the response control cannot extend
+the plan lifetime. It returns all four original byte strings, preserving the response signature;
+it does not return independently admitted historical expectations.
+
+Both directions admit every length and the aggregate 64 MiB bound before body
+allocation, with 4 MiB control limits, exact peer checks, one absolute connection
+deadline and complete EOF. Server work is allocated only after request EOF;
+the existing shared allowance covers authentication and production/replay.
+This exchange does not automatically retain the result, admit historical
+authority or execute it. All six registry gaps, public invocation and successor
+reservation/capability/atomic execution requirements remain, as does independent
+production infrastructure. No build or execution has validated this source.
 
 ## Authenticated retained-original lookup
 

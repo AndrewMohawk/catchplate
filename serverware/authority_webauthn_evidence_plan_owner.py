@@ -27,6 +27,8 @@ from serverware import authority_query_reads as reads
 from serverware import authority_webauthn_evidence_plan_clock as clock
 from serverware import authority_webauthn_evidence_plan_production as producing
 from serverware import authority_webauthn_evidence_planning as planning
+from serverware import authority_webauthn_installation_inputs as installation_inputs
+from serverware import authority_webauthn_registration_inputs as registration_inputs
 
 
 evidence, authority = planning.evidence, planning.authority
@@ -185,6 +187,48 @@ class EvidenceAdmissionPlanOwner:
         return retention._verify_record_on_work(envelope_bytes=envelope_bytes,
             inputs_bytes=inputs_bytes, evaluation_context_bytes=evaluation_context_bytes,
             expectations=expected, planner_public_key=public, evidence_public_key=read_config[4], work=work)
+
+    def produce_originals(self, *, request, business_before_roots, authorization_before_roots,
+            inputs_bytes, deadline_epoch_ns, work):
+        """Produce through the real purpose owner without changing input originals.
+
+        Decoded ceremony roots and stage descriptors are still caller inputs,
+        not admission or proof. The fixed producer repeats genuine acquisition
+        and replay; its re-encoded input record must match this exact original.
+        """
+        if type(self) is not EvidenceAdmissionPlanOwner:
+            raise WebAuthnEvidencePlanOwnerError("evidence plan owner type changed")
+        configured = _configuration(self._configured)
+        original = planning._raw(inputs_bytes, 2, producing.plan.inputs_wire.MAX_BYTES)
+        owned = _capture(configured, request=request, business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots, deadline_epoch_ns=deadline_epoch_ns,
+            inputs={}, work=work)
+        # Only this private owner is used after decoding. Native constructors
+        # cannot cause a later reread of the caller's owner or request graphs.
+        producer = EvidenceAdmissionPlanOwner(read_planner=_read_owner(configured[0]),
+            planner_private_key=configured[1], planner_public_key=configured[2],
+            expected_planner_identity=dict(zip(_IDENTITY_FIELDS, configured[3])),
+            expected_planner_spki_digest=configured[4], configuration_digest=configured[5])
+        if configured[0][3] == planning.registration.OPERATION:
+            decode = registration_inputs._decode_on_work
+            produce = EvidenceAdmissionPlanOwner.produce_registration
+        else:
+            decode = installation_inputs._decode_on_work
+            produce = EvidenceAdmissionPlanOwner.produce_installation
+        arguments = decode(original, work=work)
+        result = produce(producer, request=owned["request"],
+            business_before_roots=owned["businessBeforeRoots"],
+            authorization_before_roots=owned["authorizationBeforeRoots"],
+            deadline_epoch_ns=owned["deadlineEpochNs"], work=work, **arguments)
+        if type(result) is not producing._ProducedEvidencePlan:
+            raise WebAuthnEvidencePlanOwnerError("evidence plan producer returned an unexpected result")
+        emitted = planning._raw(result.inputs_bytes, 2, producing.plan.inputs_wire.MAX_BYTES)
+        # Reserve both entire byte operands before equality can short-circuit;
+        # no replacement work allowance or newly normalized commitment is used.
+        work.charge(input_bytes=len(original) + len(emitted))
+        if emitted != original:
+            raise WebAuthnEvidencePlanOwnerError("evidence plan production changed original input bytes")
+        return result
 
     def produce_registration(self, *, request, business_before_roots, authorization_before_roots,
             envelope_bytes, client_data_json, attestation_object, credential_id, transports,

@@ -1024,6 +1024,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_webauthn_evidence_input_wire.py \
 	serverware/authority_webauthn_evidence_replay.py \
 	serverware/authority_webauthn_evidence_plan.py \
+	serverware/authority_webauthn_evidence_plan_request.py \
+	serverware/authority_webauthn_evidence_plan_response.py \
+	serverware/authority_webauthn_evidence_plan_transport.py \
+	serverware/authority_webauthn_evidence_plan_live.py \
+	serverware/authority_webauthn_evidence_plan_actions.py \
 	serverware/authority_webauthn_evidence_plan_admission.py \
 	serverware/authority_webauthn_evidence_plan_clock.py \
 	serverware/authority_webauthn_evidence_plan_configuration.py \
@@ -2807,6 +2812,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_webauthn_evidence_input_wire.py \
 				serverware/authority_webauthn_evidence_replay.py \
 				serverware/authority_webauthn_evidence_plan.py \
+				serverware/authority_webauthn_evidence_plan_request.py \
+				serverware/authority_webauthn_evidence_plan_response.py \
+				serverware/authority_webauthn_evidence_plan_transport.py \
+				serverware/authority_webauthn_evidence_plan_live.py \
+				serverware/authority_webauthn_evidence_plan_actions.py \
 				serverware/authority_webauthn_evidence_plan_admission.py \
 				serverware/authority_webauthn_evidence_plan_clock.py \
 				serverware/authority_webauthn_evidence_plan_configuration.py \

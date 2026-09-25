@@ -79,6 +79,14 @@ local metadata; `close()` releases the owner.
 A deadline failure after publication does not roll the durable decision back
 and is not evidence that nothing was recorded.
 
+Source `.137` adds [purpose-bound Unix-socket serving and durable completion
+delivery](authority-current-root-delivery.md). The serving core passes its
+peer-admitted action to the actual owner's `expected_action` restriction;
+the owner joins the genuinely authenticated request before replay or new
+publication, without a second parser allowance. The separate delivery journal
+retains exact request/acknowledgment originals and cannot declare its own latest
+checkpoint or refresh an expired, never-accepted request.
+
 An exact historical replay returns the original recorded decision/receipt; it
 does not obtain a new fence or renew a lifetime. Pending state survives expiry.
 There is no abort, reset, generation rollover or fresh-currentness endpoint in

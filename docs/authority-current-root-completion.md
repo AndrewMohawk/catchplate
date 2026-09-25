@@ -89,8 +89,12 @@ The already enrolled completion key signs the full purpose-bound complete
 control, including those bytes and the original pending/snapshot/result/vector
 joins. There is no second receipt-signing key or new enrollment. A raw record,
 matching digest or standalone dictionary is not a completion proof token.
-Delivery to the [durable decision owner](authority-current-root-decisions.md)
-and receipt/uncertain-outcome handling remain separate operations.
+Source `.137` adds the separate [fixed decision exchange and durable local
+completion delivery](authority-current-root-delivery.md). It persists the exact
+signed complete request before an explicit send and records a genuinely joined
+state acknowledgment durably before reporting delivery. Local delivery and
+state pending checkpoints remain independently admitted, distinct identities;
+ambiguous outcomes do not authorize re-execution or renew the signed control.
 
 ## Failure and remaining boundary
 

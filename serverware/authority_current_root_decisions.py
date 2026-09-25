@@ -251,7 +251,7 @@ class CurrentRootDecisionOwner:
         receipt_digest = authorization._receipt_digest_on_work(receipt_bytes, work)
         self._accept(request, request_digest, request_bytes, receipt_bytes, receipt_digest, receipt, after)
 
-    def apply(self, request_bytes, *, transport_deadline_ns=None):
+    def apply(self, request_bytes, *, transport_deadline_ns=None, expected_action=None):
         """Durably reserve/complete once, or return the exact historical receipt.
 
         An exception after publication can leave a pending or completed record.
@@ -261,7 +261,11 @@ class CurrentRootDecisionOwner:
             raise CurrentRootDecisionError("current-root request is not bounded original bytes")
         if os.getpid() != self._pid:
             raise CurrentRootDecisionError("forked process cannot use current-root decisions")
-        original, inherited = request_bytes, transport_deadline_ns
+        # A purpose-admitted serving edge may only restrict the signed action;
+        # it cannot choose a parser verdict or add authority to the request.
+        if expected_action is not None:
+            authorization._action(expected_action)
+        original, inherited, purpose = request_bytes, transport_deadline_ns, expected_action
         work = _work()
         if inherited is not None:
             evidence.plan.contract._integer(inherited, minimum=1)
@@ -289,6 +293,8 @@ class CurrentRootDecisionOwner:
                 root_public_key=self._root_public_key, work=work)
             if material.enrollment_digest != self._material.enrollment_digest:
                 raise CurrentRootDecisionError("current-root request enrollment changed")
+            if purpose is not None and request["action"] != purpose:
+                raise CurrentRootDecisionError("current-root signed action differs from its admitted transport purpose")
             prior = self._history.get(request_digest)
             if prior is not None:
                 work.charge(input_bytes=len(original) + len(prior[0]))

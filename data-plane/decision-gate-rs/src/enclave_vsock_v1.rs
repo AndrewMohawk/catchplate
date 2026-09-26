@@ -2,7 +2,9 @@
 //!
 //! Linux assigns CID 2 to VMADDR_CID_HOST; AWS Nitro uses CID 3 for the parent
 //! instance. Inbound peers use the independently supplied expected CID; the
-//! outbound connector permits only Nitro parent CID 3. Neither routing choice
+//! enclave outbound connector permits only Nitro parent CID 3. The separate
+//! parent-ingress connector accepts one configured enclave CID greater than 3.
+//! Neither routing choice
 //! supplies TLS identity, secret authority or attestation.
 //! See https://man7.org/linux/man-pages/man7/vsock.7.html and
 //! https://docs.aws.amazon.com/enclaves/latest/user/enclave-networking.html.
@@ -10,7 +12,7 @@
 //! All data sockets are nonblocking. ppoll waits use remaining CLOCK_BOOTTIME
 //! time in bounded slices; interruption, spurious readiness and partial IO do
 //! not renew an operation deadline. Scheduling/kernel delays are not hard
-//! realtime cancellation. There is no arbitrary-CID connector, raw-FD export,
+//! realtime cancellation. There is no on-wire target selector, raw-FD export,
 //! stream clone or generic forwarding authorization.
 
 use std::io::{self, Read, Write};
@@ -325,19 +327,42 @@ impl VsockStreamV1 {
         if !valid_port(port) {
             return Err(error(io::ErrorKind::InvalidInput, "vsock parent port is invalid"));
         }
+        Self::connect_fixed(NITRO_PARENT_CID, port, deadline, None)
+    }
+
+    /// Parent ingress uses one separately configured enclave CID/port, never a
+    /// target selected by TCP payloads. CID is routing, not enclave admission.
+    /// The caller owns that assignment and the cancellation flag; the stream
+    /// retains the original parent-local session deadline, not enclave time.
+    pub fn connect_enclave(enclave_cid: u32, port: u32, deadline: u64,
+        cancel: &AtomicBool) -> io::Result<Self> {
+        if enclave_cid <= NITRO_PARENT_CID || enclave_cid == CID_ANY || !valid_port(port) {
+            return Err(error(io::ErrorKind::InvalidInput, "vsock enclave destination is invalid"));
+        }
+        Self::connect_fixed(enclave_cid, port, deadline, Some(cancel))
+    }
+
+    fn connect_fixed(cid: u32, port: u32, deadline: u64,
+        cancel: Option<&AtomicBool>) -> io::Result<Self> {
         let session_deadline = deadline;
         let deadline = session_deadline.min(now()?.saturating_add(CONNECT_TIMEOUT_NS));
-        remaining(deadline)?;
+        let live = || -> io::Result<()> {
+            if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+                return Err(error(io::ErrorKind::ConnectionAborted, "vsock connection was cancelled"));
+            }
+            remaining(deadline).map(|_| ())
+        };
+        live()?;
         let pid = unsafe { libc::getpid() };
         let fd = unsafe { libc::socket(libc::AF_VSOCK,
             libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, 0) };
         if fd < 0 { return Err(io::Error::last_os_error()); }
         let socket = SocketOwner::acquire(unsafe { OwnedFd::from_raw_fd(fd) }, pid)?;
         let peer = Address { family: libc::AF_VSOCK as _, reserved: 0,
-            port, cid: NITRO_PARENT_CID, flags: 0, zero: [0; 3] };
+            port, cid, flags: 0, zero: [0; 3] };
         let connected = (|| {
             socket.check()?;
-            remaining(deadline)?;
+            live()?;
             let status = unsafe { libc::connect(socket.fd.as_raw_fd(),
                 (&peer as *const Address).cast(),
                 std::mem::size_of::<Address>() as libc::socklen_t) };
@@ -346,28 +371,28 @@ impl VsockStreamV1 {
                 if failure.raw_os_error() != Some(libc::EINPROGRESS) { return Err(failure); }
                 // A pending connect is not repeated. Writability plus SO_ERROR
                 // determines completion under the same original deadline.
-                let events = socket.poll(libc::POLLOUT, deadline, None)?;
+                let events = socket.poll(libc::POLLOUT, deadline, cancel)?;
                 let failure = socket_option(socket.fd.as_raw_fd(), libc::SO_ERROR)?;
                 if failure != 0 { return Err(io::Error::from_raw_os_error(failure)); }
                 if events & libc::POLLOUT == 0 || events & (libc::POLLERR | libc::POLLHUP) != 0 {
-                    return Err(error(io::ErrorKind::ConnectionAborted, "vsock parent connect did not complete"));
+                    return Err(error(io::ErrorKind::ConnectionAborted, "vsock fixed connect did not complete"));
                 }
             } else {
                 let failure = socket_option(socket.fd.as_raw_fd(), libc::SO_ERROR)?;
                 if failure != 0 { return Err(io::Error::from_raw_os_error(failure)); }
             }
             socket.check()?;
-            remaining(deadline)?;
+            live()?;
             let local = address(socket.fd.as_raw_fd(), false)?;
             // Linux autobind retains CID_ANY in the local socket address.
             // Retain that actual value rather than inventing a concrete CID.
             if address(socket.fd.as_raw_fd(), true)? != peer
                 || (!valid_peer_cid(local.cid) && local.cid != CID_ANY)
                 || socket_option(socket.fd.as_raw_fd(), libc::SO_ACCEPTCONN)? != 0 {
-                return Err(error(io::ErrorKind::PermissionDenied, "vsock parent connection scope was denied"));
+                return Err(error(io::ErrorKind::PermissionDenied, "vsock fixed connection scope was denied"));
             }
             socket.check()?;
-            remaining(deadline)?;
+            live()?;
             Ok(local)
         })();
         let local = match connected {
@@ -382,7 +407,7 @@ impl VsockStreamV1 {
         let stream = Self { socket, peer, connected_local: Some(local), deadline: session_deadline,
             read_timeout_ns: AtomicU64::new(0), write_timeout_ns: AtomicU64::new(0),
             closed: Arc::new(AtomicBool::new(false)) };
-        if let Err(failure) = stream.check(deadline) {
+        if let Err(failure) = stream.check(deadline).and_then(|_| live()) {
             let _ = stream.shutdown();
             return Err(failure);
         }
@@ -407,7 +432,7 @@ impl VsockStreamV1 {
                 || socket_option(self.socket.fd.as_raw_fd(), libc::SO_TYPE)? != libc::SOCK_STREAM
                 || socket_option(self.socket.fd.as_raw_fd(), libc::SO_DOMAIN)? != libc::AF_VSOCK
                 || socket_option(self.socket.fd.as_raw_fd(), libc::SO_ACCEPTCONN)? != 0 {
-                return Err(error(io::ErrorKind::InvalidData, "vsock parent connection identity changed"));
+                return Err(error(io::ErrorKind::InvalidData, "vsock outbound connection identity changed"));
             }
             remaining(deadline)?;
         }

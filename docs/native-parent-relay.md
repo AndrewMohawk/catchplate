@@ -5,6 +5,9 @@ Status: source-only, unbuilt and unexecuted.
 provides a parent-side CLI for the existing bounded relay owner. It forwards
 opaque bytes to one configured literal TCP endpoint; it does not terminate TLS,
 obtain credentials, verify Nitro evidence or provision an admitted service.
+The separate [parent ingress bridge](native-parent-ingress.md) handles the
+opposite direction: fixed TCP listener to fixed enclave CID/port, without TLS
+termination or authenticated original-client-IP forwarding.
 
 ## Exact CLI and configuration
 

@@ -1,7 +1,9 @@
-//! Fixed-destination localhost CONNECT adapter for the real HTTPS client.
+//! Fixed-route localhost CONNECT adapter for the real HTTPS client.
 //!
 //! CONNECT and its fresh local password terminate here; neither is sent to
 //! the parent. Only opaque TLS bytes cross a preassigned parent-CID-3 port.
+//! A CONNECT authority can select only one of at most 32 retained assignments;
+//! it cannot add a destination or change an assignment.
 //! Reqwest retains origin-host TLS verification. A CID/port, this password,
 //! or successful tunnelling is not attestation or destination admission.
 //!
@@ -28,6 +30,7 @@ use zeroize::Zeroizing;
 const WORKERS: usize = 4;
 const QUEUE: usize = 16;
 const MAX_SESSIONS: usize = WORKERS + QUEUE + 1;
+const MAX_ROUTES: usize = 32;
 const MAX_AUTHORITY_BYTES: usize = 512;
 const MAX_HEAD_BYTES: usize = 8192;
 const IDLE_NS: u64 = 5_000_000;
@@ -203,8 +206,8 @@ fn equal_secret(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
-fn admit_connect(stream: &mut TcpStream, authority: &str, authorization: &str,
-    control: &Control, deadline: u64) -> io::Result<()> {
+fn admit_connect(stream: &mut TcpStream, routes: &[(String, u32)], authorization: &str,
+    control: &Control, deadline: u64) -> io::Result<u32> {
     let mut original = Zeroizing::new(Vec::with_capacity(MAX_HEAD_BYTES));
     while !original.ends_with(b"\r\n\r\n") {
         control.check(deadline)?;
@@ -229,10 +232,13 @@ fn admit_connect(stream: &mut TcpStream, authority: &str, authorization: &str,
     let text = std::str::from_utf8(&original[..original.len() - 4])
         .map_err(|_| error(io::ErrorKind::InvalidData, "loopback CONNECT header is malformed"))?;
     let mut lines = text.split("\r\n");
-    let request_line = format!("CONNECT {authority} HTTP/1.1");
-    if lines.next() != Some(request_line.as_str()) {
-        return Err(error(io::ErrorKind::PermissionDenied, "loopback CONNECT authority or method denied"));
-    }
+    let requested = lines.next().and_then(|line| line.strip_prefix("CONNECT "))
+        .and_then(|line| line.strip_suffix(" HTTP/1.1"))
+        .ok_or_else(|| error(io::ErrorKind::PermissionDenied,
+            "loopback CONNECT authority or method denied"))?;
+    let (authority, relay_port) = routes.iter().find(|(authority, _)| authority.as_str() == requested)
+        .ok_or_else(|| error(io::ErrorKind::PermissionDenied,
+            "loopback CONNECT authority is not configured"))?;
     let mut host_seen = false;
     let mut authorization_seen = false;
     let mut agent_seen = false;
@@ -243,7 +249,7 @@ fn admit_connect(stream: &mut TcpStream, authority: &str, authorization: &str,
         if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
             return Err(error(io::ErrorKind::InvalidData, "loopback CONNECT header value is malformed"));
         }
-        if name.eq_ignore_ascii_case("host") && !host_seen && value == authority {
+        if name.eq_ignore_ascii_case("host") && !host_seen && value == authority.as_str() {
             host_seen = true;
         } else if name.eq_ignore_ascii_case("proxy-authorization") && !authorization_seen
             && equal_secret(value.as_bytes(), authorization.as_bytes()) {
@@ -259,12 +265,13 @@ fn admit_connect(stream: &mut TcpStream, authority: &str, authorization: &str,
     if !host_seen || !authorization_seen {
         return Err(error(io::ErrorKind::PermissionDenied, "loopback CONNECT authentication missing"));
     }
-    control.check(deadline)
+    control.check(deadline)?;
+    Ok(*relay_port)
 }
 
-fn handle(work: &mut Work, authority: &str, authorization: &str, relay_port: u32,
+fn handle(work: &mut Work, routes: &[(String, u32)], authorization: &str,
     control: &Control, deadline: u64) -> io::Result<()> {
-    admit_connect(&mut work.stream, authority, authorization, control, deadline)?;
+    let relay_port = admit_connect(&mut work.stream, routes, authorization, control, deadline)?;
     let mut remote = VsockStreamV1::connect_parent(relay_port, deadline)?;
     work.session.install_vsock(&remote, control, deadline)?;
     let mut sent = 0;
@@ -282,8 +289,8 @@ fn handle(work: &mut Work, authority: &str, authorization: &str, relay_port: u32
     relay_tls_bytes(&mut work.stream, &mut remote, deadline, &control.stopped)
 }
 
-fn serve(listener: TcpListener, address: SocketAddr, authority: String,
-    authorization: Arc<Zeroizing<String>>, relay_port: u32, deadline: u64,
+fn serve(listener: TcpListener, address: SocketAddr, routes: Vec<(String, u32)>,
+    authorization: Arc<Zeroizing<String>>, deadline: u64,
     control: Arc<Control>, ready: mpsc::SyncSender<()>) -> io::Result<()> {
     thread::scope(|scope| {
         let (sender, receiver) = mpsc::sync_channel::<Work>(QUEUE);
@@ -295,7 +302,7 @@ fn serve(listener: TcpListener, address: SocketAddr, authority: String,
             for index in 0..WORKERS {
                 let receiver = Arc::clone(&receiver);
                 let control = Arc::clone(&control);
-                let authority = &authority;
+                let routes = &routes;
                 let authorization = Arc::clone(&authorization);
                 workers.push(thread::Builder::new().name(format!("native-loopback-relay-{index}"))
                     .spawn_scoped(scope, move || {
@@ -307,8 +314,8 @@ fn serve(listener: TcpListener, address: SocketAddr, authority: String,
                                 if control.check(deadline).is_err() { continue; }
                                 // Individual denied/incomplete sessions close; they
                                 // neither authenticate later sessions nor stop peers.
-                                let _ = handle(&mut work, authority, authorization.as_str(),
-                                    relay_port, &control, deadline);
+                                let _ = handle(&mut work, routes, authorization.as_str(),
+                                    &control, deadline);
                             }
                         }));
                         match result {
@@ -379,9 +386,27 @@ impl LoopbackTlsTunnelV1 {
     pub fn open(authority: &str, relay_port: u32, deadline: u64) -> io::Result<Self> {
         remaining(deadline)?;
         validate_authority(authority)?;
-        if relay_port <= 1023 || relay_port == u32::MAX {
-            return Err(error(io::ErrorKind::InvalidInput, "loopback parent relay port is invalid"));
+        Self::open_routes(&[(authority.to_owned(), relay_port)], deadline)
+    }
+
+    /// Immutable local selection among independently configured assignments.
+    /// No authority/destination information is sent over the parent stream.
+    pub fn open_routes(routes: &[(String, u32)], deadline: u64) -> io::Result<Self> {
+        remaining(deadline)?;
+        if routes.is_empty() || routes.len() > MAX_ROUTES {
+            return Err(error(io::ErrorKind::InvalidInput, "loopback route inventory exceeds bound"));
         }
+        for (index, (authority, port)) in routes.iter().enumerate() {
+            validate_authority(authority)?;
+            if *port <= 1023 || *port == u32::MAX {
+                return Err(error(io::ErrorKind::InvalidInput, "loopback parent relay port is invalid"));
+            }
+            if routes[..index].iter().any(|(previous, _)| previous == authority) {
+                return Err(error(io::ErrorKind::InvalidInput, "loopback route authority repeats"));
+            }
+        }
+        // Bound and validate every entry before creating the owned inventory.
+        let routes = routes.to_vec();
         let mut random = Zeroizing::new([0u8; 32]);
         SystemRandom::new().fill(random.as_mut())
             .map_err(|_| error(io::ErrorKind::Other, "loopback proxy randomness unavailable"))?;
@@ -402,12 +427,11 @@ impl LoopbackTlsTunnelV1 {
             sessions: Mutex::new(Vec::with_capacity(MAX_SESSIONS)) });
         control.check(deadline)?;
         let worker_control = Arc::clone(&control);
-        let authority = authority.to_owned();
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
         let server = thread::Builder::new().name("native-loopback-listener".to_owned())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    serve(listener, address, authority, Arc::new(authorization), relay_port,
+                    serve(listener, address, routes, Arc::new(authorization),
                         deadline, Arc::clone(&worker_control), ready_sender)
                 }));
                 worker_control.failed.store(true, Ordering::Release);

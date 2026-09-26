@@ -209,9 +209,36 @@ impl VsockListenerV1 {
         remaining(deadline).map(|_| ())
     }
 
+    pub(crate) fn deadline(&self) -> u64 { self.deadline }
+
+    pub(crate) fn verify_peer_scope(&self, expected_peer_cid: u32, deadline: u64) -> io::Result<()> {
+        self.check(self.deadline.min(deadline))?;
+        if expected_peer_cid != self.expected_peer_cid {
+            return Err(error(io::ErrorKind::PermissionDenied, "vsock listener expected peer scope differs"));
+        }
+        Ok(())
+    }
+
     /// The returned session retains the clipped accept/session deadline.
     /// A denied peer is closed immediately and is never returned as a stream.
     pub fn accept(&self, deadline: u64) -> io::Result<VsockStreamV1> {
+        let deadline = self.deadline.min(deadline);
+        loop {
+            match self.try_accept(deadline) {
+                Ok(stream) => return Ok(stream),
+                Err(failure) if failure.kind() == io::ErrorKind::WouldBlock => {}
+                Err(failure) => return Err(failure),
+            }
+            let events = self.socket.poll(libc::POLLIN, deadline, None)?;
+            if events & (libc::POLLERR | libc::POLLHUP) != 0 {
+                return Err(error(io::ErrorKind::ConnectionAborted, "vsock listener failed"));
+            }
+        }
+    }
+
+    /// One nonblocking accept (retrying only interruptions). WouldBlock does
+    /// not substitute a polling deadline for the returned session's lifetime.
+    pub fn try_accept(&self, deadline: u64) -> io::Result<VsockStreamV1> {
         let deadline = self.deadline.min(deadline);
         loop {
             self.check(deadline)?;
@@ -220,12 +247,7 @@ impl VsockListenerV1 {
             if fd < 0 {
                 let failure = io::Error::last_os_error();
                 if failure.kind() == io::ErrorKind::Interrupted { continue; }
-                if failure.kind() != io::ErrorKind::WouldBlock { return Err(failure); }
-                let events = self.socket.poll(libc::POLLIN, deadline, None)?;
-                if events & (libc::POLLERR | libc::POLLHUP) != 0 {
-                    return Err(error(io::ErrorKind::ConnectionAborted, "vsock listener failed"));
-                }
-                continue;
+                return Err(failure);
             }
             let socket = SocketOwner::acquire(unsafe { OwnedFd::from_raw_fd(fd) }, self.socket.pid)?;
             let admitted = (|| {

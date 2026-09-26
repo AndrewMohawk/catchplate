@@ -27,6 +27,7 @@ pub mod enclave_runtime_identity_v1;
 pub mod enclave_vsock_v1;
 pub mod enclave_loopback_tunnel_v1;
 pub mod enclave_tls_relay_io_v1;
+pub mod enclave_parent_relay_v1;
 pub mod native_upstream_relays_v1;
 #[path = "response_v2/http11.rs"]
 mod response_v2_http11;

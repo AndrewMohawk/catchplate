@@ -156,7 +156,7 @@ pub(crate) fn relay_tls_bytes(tcp: &mut TcpStream, vsock: &mut VsockStreamV1,
     }
 }
 
-fn validate_target(target: SocketAddr) -> io::Result<()> {
+pub(crate) fn validate_target(target: SocketAddr) -> io::Result<()> {
     let valid = target.port() != 0 && match target {
         SocketAddr::V4(address) => {
             let octets = address.ip().octets();
@@ -189,19 +189,26 @@ impl Drop for AcceptedStream {
 /// Validation below checks transport shape only. No target is read from bytes.
 pub fn relay_fixed_upstream_v1(stream: VsockStreamV1, target: SocketAddr,
     deadline: u64) -> io::Result<()> {
-    let mut accepted = AcceptedStream(stream);
     let stopped = AtomicBool::new(false);
+    relay_fixed_upstream_with_cancel_v1(stream, target, deadline, &stopped)
+}
+
+/// The serving owner supplies its actual retained cancellation flag. Checking
+/// that flag also aborts when pending TCP output prevents another VSOCK read.
+pub(crate) fn relay_fixed_upstream_with_cancel_v1(stream: VsockStreamV1, target: SocketAddr,
+    deadline: u64, stopped: &AtomicBool) -> io::Result<()> {
+    let mut accepted = AcceptedStream(stream);
     let deadline = deadline.min(accepted.0.deadline());
     validate_target(target)?;
-    let remaining = live(deadline, &stopped)?;
+    let remaining = live(deadline, stopped)?;
     let mut tcp = TcpStream::connect_timeout(&target,
         Duration::from_nanos(remaining.min(CONNECT_LIMIT_NS)))?;
     let result = (|| -> io::Result<()> {
-        live(deadline, &stopped)?;
+        live(deadline, stopped)?;
         if tcp.peer_addr()? != target {
             return Err(failure(io::ErrorKind::InvalidData, "TLS-byte relay upstream endpoint changed"));
         }
-        relay_tls_bytes(&mut tcp, &mut accepted.0, deadline, &stopped)
+        relay_tls_bytes(&mut tcp, &mut accepted.0, deadline, stopped)
     })();
     let closed = shutdown_tcp(&tcp);
     match result { Err(error) => Err(error), Ok(()) => closed }

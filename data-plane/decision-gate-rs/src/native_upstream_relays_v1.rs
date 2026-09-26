@@ -20,11 +20,17 @@ pub struct NativeRelayAssignmentV1 {
 
 type EndpointKey = (String, SocketAddr);
 
+struct ServiceTunnel {
+    routes: Vec<(String, u32)>,
+    tunnel: LoopbackTlsTunnelV1,
+}
+
 /// Retain lazy tunnel owners for the whole gate lifetime, including responses
 /// and client clones. No assignment mutation or deadline extension is exposed.
 pub struct NativeUpstreamRelaysV1 {
     assignments: HashMap<EndpointKey, u32>,
     tunnels: Mutex<HashMap<EndpointKey, Arc<LoopbackTlsTunnelV1>>>,
+    service_tunnel: Mutex<Option<ServiceTunnel>>,
     deadline: u64,
     owner_pid: libc::pid_t,
 }
@@ -77,6 +83,7 @@ impl NativeUpstreamRelaysV1 {
             }
         }
         let owner = Self { assignments: endpoints, tunnels: Mutex::new(HashMap::new()),
+            service_tunnel: Mutex::new(None),
             deadline, owner_pid: unsafe { libc::getpid() } };
         owner.remaining()?;
         Ok(owner)
@@ -139,6 +146,15 @@ impl NativeUpstreamRelaysV1 {
     /// Broker origins have independently configured literal endpoints; they
     /// cannot choose a destination from their request URL or ambient DNS.
     pub fn broker_proxy(&self, raw_url: &str) -> Result<reqwest::Proxy, String> {
+        let (host, endpoint, _) = self.unique_service_origin(raw_url)?;
+        self.proxy_for(&host, endpoint)
+    }
+
+    fn unique_service_origin(&self, raw_url: &str) -> Result<(String, SocketAddr, u32), String> {
+        self.remaining()?;
+        if raw_url.len() > 4096 {
+            return Err("native service URL exceeds its bound".to_owned());
+        }
         let url = Url::parse(raw_url).map_err(|_| "native broker URL is invalid".to_owned())?;
         if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some()
             || url.fragment().is_some() {
@@ -146,11 +162,51 @@ impl NativeUpstreamRelaysV1 {
         }
         let host = url.host_str().ok_or("native broker URL has no host")?;
         let port = url.port_or_known_default().ok_or("native broker URL has no port")?;
-        let mut selected = self.assignments.keys().filter(|(name, address)| name == host && address.port() == port);
-        let (_, endpoint) = selected.next().ok_or("native broker has no fixed relay assignment")?;
+        let mut selected = self.assignments.keys().filter(|(name, address)|
+            name.trim_matches(['[', ']']) == host.trim_matches(['[', ']']) && address.port() == port);
+        let (configured_host, endpoint) = selected.next().ok_or("native broker has no fixed relay assignment")?;
         if selected.next().is_some() {
             return Err("native broker origin has ambiguous fixed relay assignments".to_owned());
         }
-        self.proxy_for(host, *endpoint)
+        let parent_port = *self.assignments.get(&(configured_host.clone(), *endpoint))
+            .ok_or("native service assignment disappeared")?;
+        self.remaining()?;
+        Ok((configured_host.clone(), *endpoint, parent_port))
+    }
+
+    /// One immutable service-origin table for the shared control-plane client.
+    /// All HTTPS URLs go through this bridge; unknown authorities are rejected
+    /// there rather than letting Reqwest fall back to direct networking.
+    /// This admits transport shape only, not service roles or application paths.
+    pub fn service_proxy(&self, urls: &[&str]) -> Result<reqwest::Proxy, String> {
+        self.remaining()?;
+        if urls.is_empty() || urls.len() > 32 {
+            return Err("native service transport requires 1..32 configured URLs".to_owned());
+        }
+        let mut routes = Vec::with_capacity(urls.len());
+        for url in urls {
+            let (host, endpoint, parent_port) = self.unique_service_origin(url)?;
+            routes.push((authority(&host, endpoint.port()), parent_port));
+        }
+        routes.sort_unstable();
+        routes.dedup();
+        let mut held = self.service_tunnel.lock()
+            .map_err(|_| "native service tunnel is poisoned".to_owned())?;
+        if let Some(service) = held.as_ref() {
+            if service.routes != routes {
+                return Err("native service route table cannot change".to_owned());
+            }
+        } else {
+            let tunnel = LoopbackTlsTunnelV1::open_routes(&routes, self.deadline)
+                .map_err(|_| "open fixed native service tunnel".to_owned())?;
+            *held = Some(ServiceTunnel { routes, tunnel });
+        }
+        let service = held.as_ref().ok_or("native service tunnel disappeared")?;
+        service.tunnel.verify_live().map_err(|_| "native service tunnel is not live".to_owned())?;
+        let proxy = reqwest::Proxy::https(format!("http://{}", service.tunnel.proxy_addr()))
+            .map_err(|_| "construct fixed native service HTTPS proxy".to_owned())?
+            .basic_auth("serverware-relay", service.tunnel.proxy_password());
+        self.remaining()?;
+        Ok(proxy)
     }
 }

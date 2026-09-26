@@ -2,8 +2,9 @@
 
 Status: source-only, unbuilt and unexecuted. This is a fixed-route transport
 composition, not enclave deployment, production activation or independent
-admission of the supplied endpoints, policy or trust roots. The parent listener
-daemon and its provisioning are not implemented by this slice.
+admission of the supplied endpoints, policy or trust roots. The later
+[service transport integration](enclave-service-transport.md) adds a bounded
+parent serving owner, not a provisioned listener daemon.
 
 ## Preserve the real TLS endpoint
 
@@ -72,8 +73,9 @@ is clipped to the remaining original bound.
 
 When a credential-broker URL is configured, preparation builds its HTTPS proxy
 client from the same existing control-plane root-trust builder and the unique
-fixed broker assignment. This does not activate the other control-plane, audit
-or proof clients, or independently admit those roots. Both providers and broker
+fixed broker assignment. The [service transport integration](enclave-service-transport.md)
+also routes the shared control-plane and trust clients; neither integration
+activates native startup or independently admits those roots. Both providers and broker
 keep TLS processing and plaintext request construction at the original client.
 
 The static assignment and parent-side connected-peer check are transport
@@ -117,8 +119,10 @@ assignments; no arbitrary forwarding service is activated here. Static endpoint
 and address provenance, independently admitted inventory updates, lifecycle
 provisioning and end-to-end runtime verification remain necessary. Native
 provider/broker routing does not use ambient DNS; this is not blanket admission
-of other resolver paths. The remaining control-plane, audit and proof transports
-are not made native merely by this adapter.
+of other resolver paths. Shared control-plane/audit/trust client routing and a
+bounded parent serving owner are now composed in the
+[service transport source](enclave-service-transport.md); admitted native
+bootstrap and proof transports are not supplied by these adapters.
 
 The complete gate's policy, credential acquisition, decryption/injection,
 upstream TLS, response checks and proof authority must still execute within the

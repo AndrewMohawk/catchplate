@@ -4291,12 +4291,19 @@ enum ControlPlaneAttestationVerifier {
 }
 
 #[derive(Clone)]
+struct NativeControlPlaneTransport {
+    client: Client,
+    relays: Arc<NativeUpstreamRelaysV1>,
+}
+
+#[derive(Clone)]
 enum PolicyTrustRootSource {
     File(String),
     AttestedControlPlane {
         url: String,
         expected_quote_key_id: Option<String>,
         verifier: Option<ControlPlaneAttestationVerifier>,
+        native_transport: Option<NativeControlPlaneTransport>,
     },
 }
 
@@ -7576,6 +7583,7 @@ fn fetch_attested_policy_trust_root(
     url: &str,
     expected_quote_key_id: &Option<String>,
     verifier: &Option<ControlPlaneAttestationVerifier>,
+    native_transport: Option<&NativeControlPlaneTransport>,
 ) -> Result<PolicyTrustRoot, String> {
     let nonce = format!(
         "decision-gate-policy-trust-{}-{}",
@@ -7583,10 +7591,17 @@ fn fetch_attested_policy_trust_root(
         now_epoch_ms()
     );
     let request_url = append_nonce_query(url, &nonce)?;
-    let client = build_control_plane_client(Duration::from_secs(5))?;
+    let client = match native_transport {
+        Some(transport) => { transport.relays.remaining()?; transport.client.clone() }
+        None => build_control_plane_client(Duration::from_secs(5))?,
+    };
     let deadline = Instant::now() + Duration::from_secs(15);
     let (attestation_bytes, peer_spki_sha256) = loop {
-        let attempt_error = match client.get(&request_url).send() {
+        let mut request = client.get(&request_url);
+        if let Some(transport) = native_transport {
+            request = request.timeout(transport.relays.remaining()?.min(Duration::from_secs(5)));
+        }
+        let attempt_error = match request.send() {
             Ok(response) => match response.error_for_status() {
                 Ok(mut response) => {
                     let peer_spki_sha256 = response_peer_spki_sha256(&response)?;
@@ -7610,6 +7625,7 @@ fn fetch_attested_policy_trust_root(
         }
         thread::sleep(Duration::from_millis(250));
     };
+    if let Some(transport) = native_transport { transport.relays.remaining()?; }
     let attestation = strict_json_value_from_slice(&attestation_bytes)
         .map_err(|_| "parse_control_plane_attestation".to_string())?;
     if attestation.get("nonce").and_then(Value::as_str) != Some(nonce.as_str()) {
@@ -7779,6 +7795,7 @@ fn fetch_attested_policy_trust_root(
         )?,
         source_tree_digest: optional_attested_digest(&claims, &attestation, "source_tree_digest")?,
     };
+    if let Some(transport) = native_transport { transport.relays.remaining()?; }
     Ok(PolicyTrustRoot {
         verifying_key,
         key_id,
@@ -7808,7 +7825,8 @@ fn load_policy_trust_root(source: &PolicyTrustRootSource) -> Result<PolicyTrustR
             url,
             expected_quote_key_id,
             verifier,
-        } => fetch_attested_policy_trust_root(url, expected_quote_key_id, verifier),
+            native_transport,
+        } => fetch_attested_policy_trust_root(url, expected_quote_key_id, verifier, native_transport.as_ref()),
     }
 }
 
@@ -20215,6 +20233,29 @@ fn native_upstream_remaining(state: &GateState, policy_hash: &str) -> Result<Opt
     relays.remaining().map(Some)
 }
 
+// Service requests may settle an earlier policy operation, so this checks the
+// retained native lifetime rather than relabeling the operation's policy hash.
+fn native_service_remaining(state: &GateState) -> Result<Option<Duration>, String> {
+    let Some(relays) = state.native_upstream_relays.as_ref() else { return Ok(None); };
+    let mut authority = state.mitm_authority.as_ref()
+        .ok_or("native service transport requires its runtime authority")?
+        .lock().map_err(|_| "native service runtime authority is poisoned".to_owned())?;
+    let MitmAuthority::Native(identity) = &mut *authority else {
+        return Err("native service transport cannot use a PEM authority".to_owned());
+    };
+    let deadline = identity.deadline();
+    identity.verify_live(deadline)?;
+    relays.remaining().map(Some)
+}
+
+fn bounded_service_request(state: &GateState, request: reqwest::blocking::RequestBuilder)
+    -> Result<reqwest::blocking::RequestBuilder, String> {
+    match native_service_remaining(state)? {
+        Some(remaining) => Ok(request.timeout(remaining.min(Duration::from_secs(2)))),
+        None => Ok(request),
+    }
+}
+
 fn fetch_scoped_credential_lease(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -23124,13 +23165,15 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
         ));
     }
     let response_nonce = fresh_control_plane_response_nonce().map_err(AuditPostError::other)?;
-    let mut response = state
+    let request = state
         .audit_client
         .post(url)
         .header("X-Serverware-Data-Plane-Token", token.as_str())
         .header("X-Serverware-Response-Nonce", response_nonce.as_str())
         .header("Content-Type", "application/json")
-        .body(std::mem::take(&mut *body))
+        .body(std::mem::take(&mut *body));
+    let mut response = bounded_service_request(state, request)
+        .map_err(AuditPostError::other)?
         .send()
         .map_err(|err| AuditPostError::other(format!("send audit batch: {err}")))?;
     let status = response.status();
@@ -23140,6 +23183,7 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
         "audit acknowledgement",
     )
     .map_err(AuditPostError::other)?);
+    native_service_remaining(state).map_err(AuditPostError::other)?;
     if !snapshot_is_active(state, &snapshot) {
         return Err(AuditPostError::other(
             "policy snapshot changed while audit acknowledgement was fetched",
@@ -23854,13 +23898,13 @@ fn consume_shared_grant(
     let (status, response_body) = {
         let mut attempt = 0;
         loop {
-            let response = state
+            let request = state
                 .audit_client
                 .post(grant_consume_url)
                 .header("X-Serverware-Data-Plane-Token", token.as_str())
                 .header("Content-Type", "application/json")
-                .body(body.as_slice().to_vec())
-                .send();
+                .body(body.as_slice().to_vec());
+            let response = bounded_service_request(state, request)?.send();
             match response {
                 Ok(mut response) => {
                     let status = response.status();
@@ -23869,6 +23913,7 @@ fn consume_shared_grant(
                         MAX_CONTROL_PLANE_GRANT_RESPONSE_BYTES,
                         "shared grant consume response",
                     )?);
+                    native_service_remaining(state)?;
                     if consume && status == StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
                         attempt += 1;
                         thread::sleep(Duration::from_millis(50));
@@ -24053,7 +24098,7 @@ where
             .header("Content-Type", "application/json")
             .body(body.as_slice().to_vec());
         before_send();
-        let response = request.send();
+        let response = bounded_service_request(state, request)?.send();
         let mut response = match response {
             Ok(response) => response,
             Err(_) => {
@@ -24072,6 +24117,7 @@ where
             &format!("release authorization {operation} response"),
         )
         .map_err(|_| format!("release_authorization_{operation}_response_read_failed"))?);
+        native_service_remaining(state)?;
         let signed = verify_control_plane_signed_response_with_context(
             authentication,
             &url,
@@ -30292,13 +30338,14 @@ fn enforce_shared_rate_limit(
             extra,
         )
     })?);
-    let mut response = state
+    let request = state
         .audit_client
         .post(url)
         .header("X-Serverware-Data-Plane-Token", token.as_str())
         .header("Content-Type", "application/json")
-        .body(std::mem::take(&mut *body))
-        .send()
+        .body(std::mem::take(&mut *body));
+    let mut response = bounded_service_request(state, request)
+        .and_then(|request| request.send().map_err(|_| "shared rate-limit transport failed".to_owned()))
         .map_err(|_| {
             let mut extra = Map::new();
             extra.insert("status_code".to_string(), json!(503));
@@ -30327,7 +30374,7 @@ fn enforce_shared_rate_limit(
             extra,
         )
     })?);
-    if !status.is_success() {
+    if native_service_remaining(state).is_err() || !status.is_success() {
         let mut extra = Map::new();
         extra.insert("status_code".to_string(), json!(503));
         extra.insert("store".to_string(), Value::String("shared".to_string()));
@@ -49149,7 +49196,31 @@ fn prepare_native_tls_gate_state(
     identity.restrict_deadline(deadline)?;
     identity.verify_quoted_ingress(&ingress, deadline)?;
     identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+    let initial_policy_hash = state.snapshot.get_mut()
+        .map_err(|_| "native setup found a poisoned policy snapshot".to_owned())?.hash.clone();
+    identity.verify_policy_commitment(native_lease_digest_bytes(&initial_policy_hash)?, deadline)?;
     let relays = Arc::new(NativeUpstreamRelaysV1::new(relay_assignments, deadline)?);
+    let trust_url = match &state.policy_trust_root_source {
+        PolicyTrustRootSource::AttestedControlPlane { url, native_transport: None, .. } => url.as_str(),
+        _ => return Err("native setup requires an unused attested control-plane trust source".to_owned()),
+    };
+    let mut service_urls = vec![trust_url];
+    service_urls.extend([
+        state.audit_url.as_deref(), state.grant_consume_url.as_deref(),
+        state.rate_limit_consume_url.as_deref(), state.release_authorization_base_url.as_deref(),
+    ].into_iter().flatten());
+    let service_proxy = relays.service_proxy(&service_urls)?;
+    // The bridge has four synchronous relay workers shared across origins.
+    // Idle pooled TLS connections must not reserve them between requests.
+    state.audit_client = control_plane_client_builder(Duration::from_secs(2))?
+        .https_only(true).pool_max_idle_per_host(0).proxy(service_proxy.clone()).build()
+        .map_err(|_| "build fixed native control-plane TLS client".to_owned())?;
+    let trust_client = control_plane_client_builder(Duration::from_secs(5))?
+        .https_only(true).pool_max_idle_per_host(0).proxy(service_proxy).build()
+        .map_err(|_| "build fixed native policy trust TLS client".to_owned())?;
+    if let PolicyTrustRootSource::AttestedControlPlane { native_transport, .. } = &mut state.policy_trust_root_source {
+        *native_transport = Some(NativeControlPlaneTransport { client: trust_client, relays: Arc::clone(&relays) });
+    }
     if let Some(url) = state.credential_lease_url.as_deref() {
         state.credential_lease_client = control_plane_client_builder(Duration::from_secs(3))?
             .https_only(true).proxy(relays.broker_proxy(url)?).build()
@@ -49842,6 +49913,7 @@ fn main() -> Result<(), String> {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
             verifier,
+            native_transport: None,
         }
     } else {
         PolicyTrustRootSource::File(
@@ -69257,6 +69329,7 @@ mod tests {
             url: "https://control.invalid/attestation".to_string(),
             expected_quote_key_id: None,
             verifier: None,
+            native_transport: None,
         };
         *state
             .policy_trust_last_success
@@ -74724,6 +74797,7 @@ mod tests {
             url: "https://control.invalid/trust-root".to_string(),
             expected_quote_key_id: Some("sha256:quote".to_string()),
             verifier: None,
+            native_transport: None,
         };
         state.response_proof_signer =
             test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
@@ -74922,6 +74996,7 @@ mod tests {
             url: "https://control.invalid/trust-root".to_string(),
             expected_quote_key_id: Some("sha256:quote".to_string()),
             verifier: None,
+            native_transport: None,
         };
         let state = Arc::new(state);
         let binding =
@@ -75389,6 +75464,7 @@ mod tests {
             url: "https://control.invalid/trust-root".to_string(),
             expected_quote_key_id: Some("sha256:quote".to_string()),
             verifier: None,
+            native_transport: None,
         };
         *state
             .policy_trust_last_success

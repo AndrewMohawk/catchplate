@@ -278,8 +278,10 @@ fixed-authority loopback CONNECT owners and preassigned parent vsock ports.
 The existing Reqwest client keeps genuine upstream TLS/hostname verification;
 local CONNECT headers and authentication are not sent to the parent. Static
 endpoint assignments and their address inventory are not independently admitted
-merely by constructing these owners. This does not activate native startup or
-convert remaining audit, proof or control-plane transports into enclave paths.
+merely by constructing these owners. The [service transport integration](enclave-service-transport.md)
+now covers shared audit/grant/rate/release clients, retained trust refresh and
+bounded parent serving. Neither integration activates native startup or
+supplies proof custody transport.
 
 ## Deferred verification
 
@@ -315,9 +317,9 @@ and [AWS request/response types](https://github.com/aws/aws-nitro-enclaves-nsm-a
 The full Rust TLS, policy, credential acquisition, injection, upstream TLS,
 response-validation and proof path must execute inside the admitted enclave.
 The parent must handle ciphertext and public evidence only. The provider/broker
-transport source above is implemented, but full native startup, independently
-admitted endpoint/CID assignments, parent service provisioning, remaining
-audit/proof/control-plane transport and complete enclave serving admission are
+and shared control-plane transport source above is implemented, but full native
+startup, independently admitted endpoint/CID assignments, parent service
+provisioning, proof transport and complete enclave serving admission are
 still required. Real KMS RSA/`CiphertextForRecipient`/CMS integration and removal
 of the host control-plane `keyB64`/plaintext-key paths also remain open. Native
 NSM access or a local tunnel by itself does not close those gaps.

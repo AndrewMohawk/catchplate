@@ -12,12 +12,30 @@ This is for ordinary application authentication as well as agentic workflows.
 The application asks to use an API; it does not need possession of that API's
 long-lived credential.
 
-> **Status: pre-production.** The current source is unbuilt and unexecuted, and
-> successful startup and production flows have not been verified. The six
-> WebAuthn successor programs now exist in source, but public integration and
-> production deployment remain unfinished. See the [current implementation status](docs/webauthn-successor-transitions.md).
-> The architecture below describes the intended system, not a deployed or
-> verified production service.
+## Production status
+
+Checkpoint: **2026-09-26 — pre-production, source-only.**
+
+`Implementation: IN PROGRESS | Verification: NOT RUN | Production: BLOCKED`
+
+Release-evidence gates: **`[░░░░░░] 0/6 verified`**
+
+| Acceptance gate | Current status |
+| --- | --- |
+| Ordinary application/service and native-path integration | Implementation in progress; end-to-end verification pending. |
+| Immutable dependencies and frozen consolidated build/verification | Prerequisites unresolved; execution pending. |
+| Independent release, signing and reproducibility | Independent release evidence not established. |
+| Real Nitro execution and KMS Recipient custody | Production deployment and custody evidence absent. |
+| Off-host witness, revocation and finalization | Independent services and evidence not provisioned. |
+| Live end-to-end operator, hardware and provider acceptance | Execution pending on the real deployment. |
+
+The current source is unbuilt and unexecuted. Source presence does not pass a
+gate; the architecture below is not a verified production deployment. These
+six groups track release evidence, not percentage of code written or equal
+amounts of effort. See [goal.md](goal.md#immediate-next-engineering-tasks) for the
+full backlog and the [production acceptance criteria](docs/security-review.md#production-acceptance-gates).
+
+<!-- Refresh this checkpoint/status at coherent milestones. Increment the bar/count only when linked, release-bound evidence passes an entire gate. -->
 
 ## Why Serverware?
 

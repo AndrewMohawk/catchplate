@@ -109,9 +109,30 @@ credential-lease and MITM-CA seams. Its existing optional external recipient
 attestation command remains unchanged; that path does not automatically select
 the native composition or put these new quotes into a lease request. That reuse
 does not relocate the gate into an enclave, authenticate NSM claims, change the
-credential-lease KDF, or replace
-the existing proof signer and rollback policy. This batch generates no new
-proof-signing identity and supplies no caller-dictionary signing API.
+credential-lease KDF, or replace the existing proof signer and rollback policy.
+This batch generates no new proof-signing identity and supplies no
+caller-dictionary signing API.
+
+### Retained native inner TLS authority
+
+The gate now distinguishes `MitmAuthority::Pem` from `MitmAuthority::Native`;
+the latter retains the actual `EnclaveRuntimeIdentityV1`, not just its public
+CA bytes. Leaf-cache entries carry both the variant and SHA-256 of the actual
+CA DER. `mitm_server_config` holds that authority while selecting a matching
+entry and checks native process/poison/deadline and CA-time scope before
+returning any cache hit and after new issuance. Native
+`runtime_leaf_server_config` uses the exact retained original CA validity
+interval, not a sliding `now + 24 hours` interval. Existing PEM behavior stays
+separate. A local UTC sample is an observation, not independent trusted-time
+or rollback admission.
+
+`prepare_native_tls_gate_state` consumes unshared `GateState`, the actual native
+identity and its quoted outer ingress. It rejects an existing MITM authority
+or nonempty leaf cache, joins the actual CA identities, and installs native
+custody before sharing state through `Arc`. Its opaque `NativeTlsGateV1`
+retains the minimum caller/identity/quote deadline. `restrict_deadline` also
+permanently narrows the native owner to that bound, so subsequent inner-leaf
+cache checks cannot fall back to a longer original identity lifetime.
 
 A generated `Arc<rustls::ServerConfig>` can outlive the identity owner. The
 private serving join below retains the quoted owner through its workers;
@@ -136,9 +157,10 @@ accepted environment mode or external-verifier profile. The chain commitment
 uses SHA-256 over `serverware/native-tls-server-chain/v1` plus NUL, a `u32BE`
 count and each `u64BE` length plus original DER, in chain order. Leaf/SPKI hashes
 remain raw SHA-256; the client-root commitment is the framed digest above.
-`serve_native_vsock_proxy` consumes the quoted owner, requires exact state
-metadata equality, clips the serving deadline to the original quote deadline,
-and retains the owner until all scoped handlers join. It does not admit the
+`serve_native_vsock_proxy` consumes the prepared `NativeTlsGateV1`, rechecks
+the retained native authority/outer-quote join and time scope, requires exact
+state metadata equality, and retains the owners until all scoped handlers
+join. Accepted streams inherit the prepared deadline. It does not admit the
 other supplied gate state as enclave-owned.
 
 The private gate serving composition requires actual mutual TLS before HTTP
@@ -160,12 +182,21 @@ validity bounds; exact CBOR field/framing/size rejection and permanent poison;
 pending-key substitution, deadline clipping and request/public-key joins;
 mandatory outer client authentication, TLS-version/root-bundle rejection and
 exact role `3` joins; unknown-IP handling, bounded queues and session shutdown.
+Native inner-TLS coverage must also reject authority/cache substitution and
+deadline extension, including cache hits after the prepared bound expires.
 
 Actual Nitro checks then need a fresh independent challenge, the original COSE
 document and genuine certificate/PCR/nonce/public-key/user-data verification
 against independently accepted releases. Existing production quote consumers
 are unchanged: this new internal binding is not a compatibility path into their
 acceptance. Device access or a locally parsed document cannot replace that work.
+In particular, the existing
+[Nitro verifier](../scripts/verify_nitro_tee.py) requires an RSA DER recipient for
+its KMS profile, while native role `2` carries a raw 32-byte X25519 key and the
+binary binding above. Connecting native credential leases needs a distinct
+genuine verifier profile and original-request/nonce/key joins, without
+relaxing RSA/KMS verification or treating a raw NSM response as accepted
+evidence. The existing external recipient-verifier gate remains mandatory.
 The fixed transport follows the [Linux NSM UAPI](https://github.com/torvalds/linux/blob/v6.12/include/uapi/linux/nsm.h)
 and [AWS request/response types](https://github.com/aws/aws-nitro-enclaves-nsm-api/blob/main/src/api/mod.rs).
 

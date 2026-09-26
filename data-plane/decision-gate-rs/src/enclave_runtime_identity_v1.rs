@@ -130,6 +130,8 @@ pub struct EnclaveRuntimeIdentityV1 {
     nsm: NsmDeviceV1,
     authority: TlsAuthorityV1,
     scope: RuntimeScopeCommitmentsV1,
+    ca_not_before: OffsetDateTime,
+    ca_not_after: OffsetDateTime,
     deadline: u64,
     owner_pid: libc::pid_t,
     poisoned: bool,
@@ -159,8 +161,8 @@ impl EnclaveRuntimeIdentityV1 {
         let nsm = NsmDeviceV1::open(deadline)?;
         let authority = TlsAuthorityV1::generate_in_memory(not_before, not_after)?;
         live(deadline)?;
-        Ok(Self { nsm, authority, scope, deadline, owner_pid: unsafe { libc::getpid() },
-            poisoned: false })
+        Ok(Self { nsm, authority, scope, ca_not_before: not_before, ca_not_after: not_after,
+            deadline, owner_pid: unsafe { libc::getpid() }, poisoned: false })
     }
 
     fn begin(&mut self, deadline: u64) -> Result<u64, String> {
@@ -182,6 +184,52 @@ impl EnclaveRuntimeIdentityV1 {
         }
         self.poisoned = false;
         Ok(())
+    }
+
+    /// Retained nonrenewing owner bound; inspecting it does not admit the runtime.
+    pub fn deadline(&self) -> u64 { self.deadline }
+
+    /// Permanently narrow the owner to its prepared serving scope. Previously
+    /// issued Arc configurations still require actual session cancellation.
+    pub fn restrict_deadline(&mut self, deadline: u64) -> Result<(), String> {
+        let deadline = self.begin(deadline)?;
+        self.deadline = deadline;
+        self.finish(deadline)
+    }
+
+    /// Local poison, creator-process and original-boottime checks only.
+    pub fn verify_live(&mut self, deadline: u64) -> Result<(), String> {
+        let deadline = self.begin(deadline)?;
+        self.finish(deadline)
+    }
+
+    fn require_tls_time(&self, now: OffsetDateTime) -> Result<(), String> {
+        if now < self.ca_not_before || now >= self.ca_not_after {
+            return Err("native TLS scope is outside its original CA validity interval".to_owned());
+        }
+        Ok(())
+    }
+
+    /// The supplied wall-clock sample is not independently admitted time.
+    /// Failure poisons this owner; neither the CA interval nor deadline renews.
+    pub fn verify_tls_scope(&mut self, now: OffsetDateTime, deadline: u64) -> Result<(), String> {
+        let deadline = self.begin(deadline)?;
+        self.require_tls_time(now)?;
+        self.finish(deadline)
+    }
+
+    /// Join the actual generated leaf-plus-CA chain to this held owner. This
+    /// does not verify the NSM quote, PCRs, enrollment or peer authorization.
+    pub fn verify_quoted_ingress(&mut self, ingress: &QuotedMutualTlsIngressV1,
+        deadline: u64) -> Result<(), String> {
+        let deadline = self.begin(deadline.min(ingress.deadline()))?;
+        ingress.verify_live(deadline)?;
+        let chain = ingress.tls().certificate_chain();
+        if chain.len() != 2 || chain[1].as_slice() != self.authority.certificate_der() {
+            return Err("native TLS ingress belongs to another runtime CA".to_owned());
+        }
+        ingress.verify_live(deadline)?;
+        self.finish(deadline)
     }
 
     fn binding(&self, role: u8, public_key: &[u8], request_binding: [u8; 32]) -> Vec<u8> {
@@ -270,6 +318,20 @@ impl EnclaveRuntimeIdentityV1 {
         -> Result<Arc<ServerConfig>, String> {
         let deadline = self.begin(deadline)?;
         let config = self.authority.leaf_server_config(host, spiffe, not_before, not_after)?;
+        self.finish(deadline)?;
+        Ok(config)
+    }
+
+    /// Issue within the EXACT original generated CA interval, never a sliding
+    /// now-plus-duration interval. Serving must check this scope for cache hits
+    /// too and close sessions at its deadline; Arc configs do not self-revoke.
+    /// The supplied wall-clock sample is a caller observation, not time proof.
+    pub fn runtime_leaf_server_config(&mut self, host: &str, spiffe: Option<&str>,
+        now: OffsetDateTime, deadline: u64) -> Result<Arc<ServerConfig>, String> {
+        let deadline = self.begin(deadline)?;
+        self.require_tls_time(now)?;
+        let config = self.authority.leaf_server_config(host, spiffe,
+            self.ca_not_before, self.ca_not_after)?;
         self.finish(deadline)?;
         Ok(config)
     }

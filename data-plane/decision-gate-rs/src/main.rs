@@ -153,7 +153,7 @@ use serverware_decision_gate::{
     response_observation_v2_lifecycle_state_sha256,
 };
 use serverware_decision_gate::enclave_runtime_identity_v1::{
-    CredentialRecipientV1, QuotedMutualTlsIngressV1, TlsAuthorityV1,
+    CredentialRecipientV1, EnclaveRuntimeIdentityV1, QuotedMutualTlsIngressV1, TlsAuthorityV1,
 };
 use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
 use sha2::{Digest, Sha256, Sha512};
@@ -2427,6 +2427,43 @@ impl UpstreamDispatchAuthority {
     }
 }
 
+// Native custody retains its live NSM-backed owner. A public certificate or a
+// previously generated TLS configuration cannot replace that owner.
+enum MitmAuthority {
+    Pem(TlsAuthorityV1),
+    Native(EnclaveRuntimeIdentityV1),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MitmAuthorityIdentity {
+    Pem([u8; 32]),
+    Native([u8; 32]),
+}
+
+struct LeafConfigEntry {
+    authority: MitmAuthorityIdentity,
+    config: Arc<ServerConfig>,
+}
+
+impl MitmAuthority {
+    fn cache_identity(&self) -> MitmAuthorityIdentity {
+        match self {
+            Self::Pem(authority) => MitmAuthorityIdentity::Pem(
+                Sha256::digest(authority.certificate_der()).into()),
+            Self::Native(authority) => MitmAuthorityIdentity::Native(
+                Sha256::digest(authority.ca_certificate_der()).into()),
+        }
+    }
+
+    fn verify_current_tls_scope(&mut self) -> Result<(), String> {
+        if let Self::Native(authority) = self {
+            let deadline = authority.deadline();
+            authority.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+        }
+        Ok(())
+    }
+}
+
 struct GateState {
     upstream_dispatch_authority: UpstreamDispatchAuthority,
     #[cfg(test)]
@@ -2495,8 +2532,8 @@ struct GateState {
     request_body_deadline: Duration,
     response_write_deadline: Duration,
     proxy_ingress_attestation: ProxyIngressAttestation,
-    mitm_authority: Option<Mutex<TlsAuthorityV1>>,
-    leaf_configs: Mutex<HashMap<String, Arc<ServerConfig>>>,
+    mitm_authority: Option<Mutex<MitmAuthority>>,
+    leaf_configs: Mutex<HashMap<String, LeafConfigEntry>>,
     binary_digest: String,
     release_provenance_path: Option<String>,
     image_signatures_path: Option<String>,
@@ -23131,7 +23168,7 @@ fn audit_status(state: &GateState) -> Value {
     })
 }
 
-fn build_mitm_authority() -> Result<Option<TlsAuthorityV1>, String> {
+fn build_mitm_authority() -> Result<Option<MitmAuthority>, String> {
     let cert_path = env::var("SERVERWARE_MITM_CA_CERT")
         .ok()
         .filter(|value| !value.trim().is_empty());
@@ -23154,7 +23191,8 @@ fn build_mitm_authority() -> Result<Option<TlsAuthorityV1>, String> {
         .map_err(|err| format!("read MITM CA private key {key_path}: {err}"))?);
     // This is still the existing file-backed compatibility startup, not an
     // enclave admission path. Native generated custody has no PEM importer.
-    TlsAuthorityV1::from_development_pem(&cert_pem, &key_pem).map(Some)
+    TlsAuthorityV1::from_development_pem(&cert_pem, &key_pem)
+        .map(|authority| Some(MitmAuthority::Pem(authority)))
 }
 
 fn authority_string(host: &str, port: u16) -> String {
@@ -23167,29 +23205,44 @@ fn authority_string(host: &str, port: u16) -> String {
 
 fn mitm_server_config(state: &GateState, host: &str) -> Result<Arc<ServerConfig>, String> {
     let cache_key = host.trim_end_matches('.').to_ascii_lowercase();
-    if let Some(config) = state
-        .leaf_configs
-        .lock()
-        .expect("leaf config cache mutex poisoned")
-        .get(&cache_key)
-        .cloned()
-    {
-        return Ok(config);
-    }
-    let authority = state
+    // Always hold the actual owner before consulting the cache. A cached leaf
+    // neither extends native validity nor survives an authority/source change.
+    let mut authority = state
         .mitm_authority
         .as_ref()
         .ok_or("MITM CA authority is not loaded")?
         .lock()
-        .expect("MITM authority mutex poisoned");
+        .map_err(|_| "MITM authority mutex poisoned".to_owned())?;
+    let identity = authority.cache_identity();
+    let cached = state.leaf_configs.lock()
+        .map_err(|_| "leaf config cache mutex poisoned".to_owned())?
+        .get(&cache_key)
+        .filter(|entry| entry.authority == identity)
+        .map(|entry| Arc::clone(&entry.config));
+    if let Some(config) = cached {
+        authority.verify_current_tls_scope()?;
+        return Ok(config);
+    }
     let now = OffsetDateTime::now_utc();
-    let config = authority.leaf_server_config(&cache_key, state.server_instance_id.as_deref(),
-        now - TimeDuration::minutes(5), now + TimeDuration::hours(24))?;
+    let config = match &mut *authority {
+        MitmAuthority::Pem(authority) => authority.leaf_server_config(
+            &cache_key, state.server_instance_id.as_deref(),
+            now - TimeDuration::minutes(5), now + TimeDuration::hours(24))?,
+        MitmAuthority::Native(authority) => {
+            let deadline = authority.deadline();
+            authority.runtime_leaf_server_config(&cache_key,
+                state.server_instance_id.as_deref(), now, deadline)?
+        }
+    };
     state
         .leaf_configs
         .lock()
-        .expect("leaf config cache mutex poisoned")
-        .insert(cache_key, Arc::clone(&config));
+        .map_err(|_| "leaf config cache mutex poisoned".to_owned())?
+        .insert(cache_key, LeafConfigEntry { authority: identity, config: Arc::clone(&config) });
+    // Recheck after issuance and cache publication, still under owner custody.
+    // A late failure can leave a cache entry, but no later native hit bypasses
+    // this same original scope/lifetime check.
+    authority.verify_current_tls_scope()?;
     Ok(config)
 }
 
@@ -48861,18 +48914,62 @@ fn materialize_native_proxy_ingress(
     Ok((config, attestation))
 }
 
-/// Source-level ingress composition, not a complete enclave startup. The
-/// caller must separately construct/admit enclave-owned policy, inner TLS,
-/// broker, proof and egress state. No host state is promoted by this function.
-fn serve_native_vsock_proxy(
-    listener: VsockListenerV1,
+/// A single retained native TLS cohort, not independently admitted gate state.
+/// It has no Clone or renewal operation; preparation and serving share one bound.
+struct NativeTlsGateV1 {
     state: Arc<GateState>,
     ingress: QuotedMutualTlsIngressV1,
+    deadline: u64,
+}
+
+/// Install both TLS layers before state can be shared with serving workers.
+/// This consumes an actual NSM/native-CA owner, not a supplied key or proof DTO.
+/// Other gate dependencies still need enclave-owned startup and admission.
+fn prepare_native_tls_gate_state(
+    mut state: GateState,
+    mut identity: EnclaveRuntimeIdentityV1,
+    ingress: QuotedMutualTlsIngressV1,
+    deadline: u64,
+) -> Result<NativeTlsGateV1, String> {
+    if state.mitm_authority.is_some() {
+        return Err("native TLS setup cannot replace an existing MITM authority".to_owned());
+    }
+    if !state.leaf_configs.get_mut()
+        .map_err(|_| "native TLS setup found a poisoned leaf cache".to_owned())?.is_empty() {
+        return Err("native TLS setup requires an unused leaf cache".to_owned());
+    }
+    let deadline = deadline.min(identity.deadline()).min(ingress.deadline());
+    // Inner issuance and cache checks must inherit this same nonrenewing bound,
+    // not merely the potentially later deadline from native key generation.
+    identity.restrict_deadline(deadline)?;
+    identity.verify_quoted_ingress(&ingress, deadline)?;
+    identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+    let (_, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
+    state.proxy_ingress_attestation = attestation;
+    state.mitm_authority = Some(Mutex::new(MitmAuthority::Native(identity)));
+    Ok(NativeTlsGateV1 { state: Arc::new(state), ingress, deadline })
+}
+
+/// Source-level TLS/ingress composition, not a complete enclave startup. The
+/// caller must separately construct/admit enclave-owned policy, broker, proof
+/// and egress state. No host state is promoted by this function.
+fn serve_native_vsock_proxy(
+    listener: VsockListenerV1,
+    prepared: NativeTlsGateV1,
     worker_count: usize,
     queue_capacity: usize,
-    deadline: u64,
 ) -> Result<(), String> {
-    let deadline = deadline.min(ingress.deadline());
+    let NativeTlsGateV1 { state, ingress, deadline } = prepared;
+    {
+        let mut authority = state.mitm_authority.as_ref()
+            .ok_or("native serving requires the held runtime authority")?
+            .lock().map_err(|_| "native serving runtime authority is poisoned".to_owned())?;
+        let MitmAuthority::Native(identity) = &mut *authority else {
+            return Err("native serving cannot use a PEM-backed MITM authority".to_owned());
+        };
+        identity.verify_quoted_ingress(&ingress, deadline)?;
+        identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+    }
     let (config, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
     if state.proxy_ingress_attestation.value() != attestation.value() {
         return Err("native ingress state does not describe the held TLS configuration".to_owned());

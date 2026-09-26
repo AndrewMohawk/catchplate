@@ -95,17 +95,21 @@ echoes is not a substitute for independently retained client observations.
 
 ## Actual-client verification API
 
-The crate-internal source [verifier entrypoint](../data-plane/decision-gate-rs/src/native_verifier/mod.rs)
-is:
+The crate-internal source [verifier entrypoints](../data-plane/decision-gate-rs/src/native_verifier/mod.rs)
+keep the pinned-challenge v1 API and add an explicit-challenge v2 API:
 
 ```text
 verify_ingress_session(raw, expectations_raw, trust_roots_raw,
                        client: &rustls::ClientConnection)
     -> Result<Vec<u8>, String>
+
+verify_ingress_session_with_challenge(raw, scope_raw, trust_roots_raw,
+                       challenge: [u8; 32], client: &rustls::ClientConnection)
+    -> Result<Vec<u8>, String>
 ```
 
-It requires the actual completed, full outer TLS 1.3 handshake, with or without
-HelloRetryRequest; resumed handshakes are rejected. It derives that
+Both require the actual completed, full outer TLS 1.3 handshake, with or without
+HelloRetryRequest; resumed handshakes are rejected. Each derives that
 connection's exporter with the fixed label and raw independently expected
 challenge, derives the quote nonce, and checks both response echoes only for
 equality. It verifies the fresh-scope nested original and joins its leaf/CA
@@ -113,12 +117,18 @@ exactly to the actual peer chain, alongside the independent certificate,
 role-3 and Nitro checks. There is no session CLI taking an asserted exporter
 or accepting the server's echo as its own expectation.
 
-The same independently pinned expectation format has two explicit entrypoints:
+Challenge ownership is explicit; the verifier does not generate randomness:
 
-| Entrypoint | Meaning of `nonceBase64url` |
+| Entrypoint | Independently held challenge input |
 | --- | --- |
 | [Startup offline verifier CLI](native-ingress-verifier.md) | The original startup quote nonce. |
-| `verify_ingress_session` with the actual client connection | The raw caller challenge; the function derives the quote nonce from this and the actual exporter. |
+| V1 `verify_ingress_session` | `nonceBase64url` in the pinned expectations is the raw caller challenge. |
+| V2 `verify_ingress_session_with_challenge` | The explicit raw challenge is separate from pinned `serverware.nativeIngressSessionScope/v1`, which has no nonce field. |
+
+Both session APIs derive the quote nonce from that challenge and the actual
+exporter. The nonce-free [scope schema](../schemas/native-ingress-session-scope.v1.schema.json)
+retains the existing 11 static scope fields plus its own version, with no
+peer-derived expectations or synthetic insertion of a nonce into the original.
 
 Startup and session evidence scopes are not interchangeable. The session API
 does not rewrite the expectation original or learn a replacement challenge from
@@ -135,27 +145,35 @@ joins quote/exporter/certificate observations on the supplied connection,
 not blanket approval of its handshake policy. The separate
 [bounded native ingress client](native-ingress-client.md) now supplies a fixed
 network owner and standard private-CA TLS configuration for this API. It still
-requires independently pinned, fresh startup/session inputs and does not
-install a CA or complete production enrollment.
+requires independently pinned, still-fresh startup inputs and matching static
+session scope. Its v1 retains the supplied challenge; its v2 makes one raw
+32-byte `SystemRandom` draw before private-key/network use, aborting on failure,
+zero or startup-nonce equality. It never regenerates that challenge at final
+recheck. Neither version installs a CA or completes production enrollment.
 
 The returned compact JSON is fewer than 4096 bytes, without a framing LF, and
 has exactly eight fields:
 
 | Field | Meaning |
 | --- | --- |
-| `apiVersion` | `serverware.nativeIngressSessionVerification/v1` |
+| `apiVersion` | `serverware.nativeIngressSessionVerification/v1` or `serverware.nativeIngressSessionVerification/v2`, matching the API. |
 | `resultScope` | `local-ingress-session-and-quote-only` |
 | `okForAction` | `false` |
 | `evidenceSha256` | SHA-256 of the exact outer evidence original, including its LF. |
-| `clientChallengeBase64url` | The independently expected raw client challenge. |
+| `clientChallengeBase64url` | The actual caller-owned raw client challenge. |
 | `tlsExporterSha256` | SHA-256 of the actual 32 exported bytes. |
 | `peerCertificateSha256` | SHA-256 of the actual peer leaf DER. |
 | `quoteVerification` | The existing 18-field local quote-only result for the nested original. |
 
-In `quoteVerification`, `nonceBase64url` is the derived quote nonce, while
-`expectationsSha256` still hashes the exact supplied expectation original whose
-nonce field contains the raw client challenge. Neither result is a transferable
-session-admission or action token.
+In both nested results, `nonceBase64url` is the derived quote nonce. V1 preserves
+`serverware.nativeIngressAttestationVerification/v1` and `expectationsSha256`,
+hashing the exact original that contains the raw caller challenge. V2 uses
+`serverware.nativeIngressAttestationVerification/v2` with the same 18 fields
+except `sessionScopeSha256` replaces that hash field: it hashes the exact pinned
+nonce-free scope, not a reconstructed expectation containing the challenge.
+Neither result is a transferable session-admission or action token. The server's
+six-field session evidence and nested public-identity wire versions stay v1;
+the new versions distinguish client configuration and local verification only.
 
 ## Acceptance boundary
 
@@ -166,6 +184,9 @@ trusted time, current off-host witness/CAS/revocation state, one-use challenge
 handling and the complete required TLS/request/response proof. There is no
 principal, provider-operation or action authorization claim in this response.
 Verifier-mediated, agent-scoped CA installation remains a separate gate.
+In-process randomness does not provide durable one-use reservation/consumption.
+This GET/header protocol is still not the goal's full public-evidence flow or
+its final external nonce authority, signed request/response and action gates.
 
 Local lifetime checks cannot interrupt a blocked NSM ioctl, filesystem access
 or kernel I/O. Quotation can fail or expire without producing usable evidence;

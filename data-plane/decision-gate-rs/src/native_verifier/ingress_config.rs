@@ -1,15 +1,22 @@
-//! Closed independently pinned expectations for the original role-3 quote.
+//! Closed independently pinned role-3 expectations and nonce-free session scope.
 //!
 //! These ordinary configuration values confer no release, enrollment or live
 //! serving authority. No expectation is learned from the evidence being read.
 
 use super::{config::parse_pcr_inventory, ensure, exact, fixed_b64, json, parse_digest, text, uint};
 use rustls::pki_types::ServerName;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use url::Url;
 
 pub(super) struct Expectations {
+    pub(super) scope: SessionScope,
+    pub(super) nonce: [u8; 32],
+}
+
+#[derive(Eq, PartialEq)]
+pub(super) struct SessionScope {
     pub(super) release_record: [u8; 32],
     pub(super) policy: [u8; 32],
     pub(super) configuration: [u8; 32],
@@ -18,7 +25,6 @@ pub(super) struct Expectations {
     pub(super) module_id: String,
     pub(super) max_age: u64,
     pub(super) future_skew: u64,
-    pub(super) nonce: [u8; 32],
     pub(super) host: String,
     pub(super) instance: String,
 }
@@ -33,6 +39,29 @@ impl Expectations {
         ])?;
         ensure(text(&value, "apiVersion")? == "serverware.nativeIngressAttestationExpectations/v1",
             "native ingress expectations version differs")?;
+        let scope = SessionScope::parse_fields(&value)?;
+        let nonce = fixed_b64::<32>(text(&value, "nonceBase64url")?)?;
+        ensure(nonce != [0; 32], "native ingress expected nonce must be nonzero")?;
+        Ok(Self { scope, nonce })
+    }
+}
+
+impl SessionScope {
+    pub(super) fn parse(raw: &[u8]) -> Result<Self, String> {
+        let value = json::parse(raw, 16 * 1024)?;
+        exact(&value, &[
+            "apiVersion", "releaseRecordSha256", "policyHash", "configurationSha256",
+            "clientTrustBundleSha256", "expectedPcrs", "expectedEif", "expectedModuleId",
+            "maxAgeSeconds", "futureSkewSeconds", "ingressHost", "serverInstanceId",
+        ])?;
+        ensure(text(&value, "apiVersion")? == "serverware.nativeIngressSessionScope/v1",
+            "native ingress session scope version differs")?;
+        Self::parse_fields(&value)
+    }
+
+    // Both closed originals use these identical typed field checks. The
+    // caller-owned challenge is never inserted into or re-encoded as a pin.
+    fn parse_fields(value: &Value) -> Result<Self, String> {
         let pin = |field| parse_digest::<32>(text(&value, field)?, "sha256:", true);
         let pcrs = parse_pcr_inventory(&value["expectedPcrs"])?;
         let eif = parse_digest::<48>(text(&value, "expectedEif")?, "sha384:", true)?;
@@ -44,8 +73,6 @@ impl Expectations {
         let max_age = uint(&value, "maxAgeSeconds")?;
         let future_skew = uint(&value, "futureSkewSeconds")?;
         ensure((1..=300).contains(&max_age) && future_skew <= 30, "native age limits differ")?;
-        let nonce = fixed_b64::<32>(text(&value, "nonceBase64url")?)?;
-        ensure(nonce != [0; 32], "native ingress expected nonce must be nonzero")?;
         let host = text(&value, "ingressHost")?;
         ensure(canonical_host(host), "native ingress host is not canonical bounded DNS or IP")?;
         let instance = text(&value, "serverInstanceId")?;
@@ -55,7 +82,7 @@ impl Expectations {
             policy: pin("policyHash")?,
             configuration: pin("configurationSha256")?,
             client_trust: pin("clientTrustBundleSha256")?,
-            pcrs, module_id: module_id.to_owned(), max_age, future_skew, nonce,
+            pcrs, module_id: module_id.to_owned(), max_age, future_skew,
             host: host.to_owned(), instance: instance.to_owned(),
         })
     }

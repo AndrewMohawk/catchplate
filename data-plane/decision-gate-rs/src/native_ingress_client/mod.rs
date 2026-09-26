@@ -17,8 +17,9 @@ mod json;
 mod originals;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use config::{ConfigurationV1, MAX_CONFIGURATION_BYTES};
+use config::{Configuration, SessionInput, MAX_CONFIGURATION_BYTES};
 use originals::{ArtifactV1, HeldOriginal};
+use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
 use serde_json::json;
 use std::io::Write;
@@ -87,17 +88,38 @@ pub(super) fn run() -> Result<(), String> {
     let pid = std::process::id();
     let (mut configuration_original, configuration_raw) =
         HeldOriginal::read(arguments()?, MAX_CONFIGURATION_BYTES)?;
-    let config = ConfigurationV1::parse_original(&configuration_raw)?;
+    let config = Configuration::parse_original(&configuration_raw)?;
     let deadline = started.checked_add(config.timeout).ok_or("native client deadline overflow")?;
     live(deadline, pid)?;
     let (mut startup_original, startup) = read(config.startup_evidence, 64 * 1024, deadline, pid)?;
     let (mut startup_expectations_original, startup_expectations) =
         read(config.startup_expectations, 16 * 1024, deadline, pid)?;
-    let (mut session_expectations_original, session_expectations) =
-        read(config.session_expectations, 16 * 1024, deadline, pid)?;
+    let (session_artifact, generate_challenge) = match config.session {
+        SessionInput::PinnedChallenge(artifact) => (artifact, false),
+        SessionInput::GeneratedChallenge(artifact) => (artifact, true),
+    };
+    let (mut session_original, session_input) = read(session_artifact, 16 * 1024, deadline, pid)?;
     let (mut roots_original, roots) = read(config.trust_roots, 1024 * 1024, deadline, pid)?;
-    let bootstrap = native_verifier::prepare_ingress_client(
-        &startup, &startup_expectations, &session_expectations, &roots)?;
+    // V2 pins a nonce-free scope original and owns exactly one CSPRNG challenge
+    // for this invocation. Never patch the original, learn the challenge from
+    // the response, or regenerate it for the closing startup check. A failed,
+    // zero or startup-equal draw aborts; it is not retried or persisted.
+    live(deadline, pid)?;
+    let generated_challenge = if generate_challenge {
+        let mut challenge = [0u8; 32];
+        SystemRandom::new().fill(&mut challenge)
+            .map_err(|_| "native client challenge generation failed")?;
+        ensure(challenge != [0; 32], "native client generated challenge is zero")?;
+        Some(challenge)
+    } else { None };
+    live(deadline, pid)?;
+    let prepare = || match generated_challenge {
+        Some(challenge) => native_verifier::prepare_ingress_client_with_challenge(
+            &startup, &startup_expectations, &session_input, &roots, challenge),
+        None => native_verifier::prepare_ingress_client(
+            &startup, &startup_expectations, &session_input, &roots),
+    };
+    let bootstrap = prepare()?;
     live(deadline, pid)?;
 
     // No client private key is loaded or network contacted before the actual
@@ -116,7 +138,7 @@ pub(super) fn run() -> Result<(), String> {
         format!("[{}]:{}", bootstrap.host, config.endpoint.port())
     } else { format!("{}:{}", bootstrap.host, config.endpoint.port()) };
     recheck(&mut [&mut configuration_original, &mut startup_original,
-        &mut startup_expectations_original, &mut session_expectations_original,
+        &mut startup_expectations_original, &mut session_original,
         &mut roots_original, &mut certificate_original, &mut key_original], deadline, pid)?;
     key_original.require_private()?;
     let mut connection = transport::connect(config.endpoint, tls_config, name, deadline)?;
@@ -127,17 +149,22 @@ pub(super) fn run() -> Result<(), String> {
         && peers[1].as_ref() == bootstrap.ca.as_slice(),
         "native client connected peer differs from verified startup originals")?;
     let evidence = http::exchange(&mut connection, &authority, bootstrap.challenge)?;
-    let verified = native_verifier::verify_ingress_session(
-        &evidence, &session_expectations, &roots, connection.client())?;
+    let verified = match generated_challenge {
+        Some(challenge) => native_verifier::verify_ingress_session_with_challenge(
+            &evidence, &session_input, &roots, challenge, connection.client())?,
+        None => native_verifier::verify_ingress_session(
+            &evidence, &session_input, &roots, connection.client())?,
+    };
     connection.check()?;
     // Recheck startup freshness after the exchange. This initial bootstrap
     // does not silently extend the pinned 1..300 second age. Verdict timestamps
     // record these checks, not a transferable future admission window.
-    let final_bootstrap = native_verifier::prepare_ingress_client(
-        &startup, &startup_expectations, &session_expectations, &roots)?;
+    let final_bootstrap = prepare()?;
     connection.check()?;
-    let result = json!({
-        "apiVersion":"serverware.nativeIngressClientCapture/v1",
+    let mut result = json!({
+        "apiVersion":if generated_challenge.is_some() {
+            "serverware.nativeIngressClientCapture/v2"
+        } else { "serverware.nativeIngressClientCapture/v1" },
         "resultScope":"local-fixed-endpoint-session-and-quote-only", "okForAction":false,
         "configurationSha256":super::sha256_prefixed(&configuration_raw),
         "endpoint":config.endpoint.to_string(),
@@ -146,13 +173,20 @@ pub(super) fn run() -> Result<(), String> {
         "startupVerification":final_bootstrap.verification,
         "sessionVerification":json::parse(&verified, 4095)?,
     });
+    if generated_challenge.is_some() {
+        // This source claim belongs to the actual client owner, not a verifier
+        // API that merely receives a caller-held challenge. It grants no replay
+        // protection or independently authenticated result authorship.
+        result.as_object_mut().ok_or("native client capture is not an object")?
+            .insert("challengeSource".to_owned(), json!("client-csprng"));
+    }
     let mut encoded = serde_json::to_vec(&result).map_err(|_| "encode native client capture")?;
     ensure(!encoded.is_empty() && encoded.len() < MAX_CAPTURE
         && !encoded.contains(&b'\n') && !encoded.contains(&b'\r'),
         "native client capture exceeds its single-line bound")?;
     encoded.push(b'\n');
     recheck(&mut [&mut configuration_original, &mut startup_original,
-        &mut startup_expectations_original, &mut session_expectations_original,
+        &mut startup_expectations_original, &mut session_original,
         &mut roots_original, &mut certificate_original, &mut key_original], deadline, pid)?;
     key_original.require_private()?;
     connection.check()?;

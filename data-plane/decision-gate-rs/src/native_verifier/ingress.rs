@@ -5,7 +5,7 @@
 //! No returned label, hash or verdict substitutes for those cryptographic joins.
 
 use super::{b64, config::TrustRoots, decode_b64, digest, digest_text, ensure, exact,
-    fixed_b64, ingress_certificates, ingress_config::Expectations, json, nitro,
+    fixed_b64, ingress_certificates, ingress_config::{Expectations, SessionScope}, json, nitro,
     now_seconds, parse_digest, text};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -18,6 +18,7 @@ const KEY_BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0"
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
 
 pub(super) enum EvidenceProfile { Startup, Session }
+enum SummaryProfile { Expectations, SessionScope }
 
 pub(super) struct VerifiedIngress {
     pub(super) leaf: Vec<u8>,
@@ -34,13 +35,13 @@ pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8]
     -> Result<Value, String> {
     let expected = Expectations::parse(expectations_raw)?;
     let roots = TrustRoots::parse(trust_roots_raw)?;
-    let checked = verify_original(raw, &expected, &roots, EvidenceProfile::Startup, &expected.nonce)?;
+    let checked = verify_original(raw, &expected.scope, &roots, EvidenceProfile::Startup, &expected.nonce)?;
     Ok(checked.summary(raw, expectations_raw, trust_roots_raw, &expected))
 }
 
 /// Session callers supply a nonce derived from their actual TLS connection;
-/// it must not replace the raw independently held challenge in expectations.
-pub(super) fn verify_original(raw: &[u8], expected: &Expectations, roots: &TrustRoots,
+/// it remains separate from the unchanged original pinned static scope.
+pub(super) fn verify_original(raw: &[u8], expected: &SessionScope, roots: &TrustRoots,
     profile: EvidenceProfile, quote_nonce: &[u8; 32]) -> Result<VerifiedIngress, String> {
     ensure(*quote_nonce != [0; 32], "native ingress quote nonce must be nonzero")?;
     let scope = match profile {
@@ -126,11 +127,28 @@ impl VerifiedIngress {
     // This result never supplies a trust-store mutation or action permission.
     pub(super) fn summary(&self, raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8],
         expected: &Expectations) -> Value {
+        self.summary_for_scope(raw, expectations_raw, trust_roots_raw, &expected.scope,
+            SummaryProfile::Expectations)
+    }
+
+    pub(super) fn summary_for_session_scope(&self, raw: &[u8], scope_raw: &[u8],
+        trust_roots_raw: &[u8], scope: &SessionScope) -> Value {
+        self.summary_for_scope(raw, scope_raw, trust_roots_raw, scope, SummaryProfile::SessionScope)
+    }
+
+    fn summary_for_scope(&self, raw: &[u8], scope_raw: &[u8], trust_roots_raw: &[u8],
+        expected: &SessionScope, profile: SummaryProfile) -> Value {
+        let (version, pin_field) = match profile {
+            SummaryProfile::Expectations =>
+                ("serverware.nativeIngressAttestationVerification/v1", "expectationsSha256"),
+            SummaryProfile::SessionScope =>
+                ("serverware.nativeIngressAttestationVerification/v2", "sessionScopeSha256"),
+        };
         json!({
-            "apiVersion":"serverware.nativeIngressAttestationVerification/v1",
+            "apiVersion":version,
             "resultScope":"local-ingress-quote-only", "okForAction":false,
             "evidenceSha256":digest_text(&digest(raw)),
-            "expectationsSha256":digest_text(&digest(expectations_raw)),
+            (pin_field):digest_text(&digest(scope_raw)),
             "trustRootsSha256":digest_text(&digest(trust_roots_raw)),
             "releaseRecordSha256":digest_text(&expected.release_record),
             "policyHash":digest_text(&expected.policy),

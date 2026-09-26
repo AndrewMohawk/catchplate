@@ -1,11 +1,12 @@
 //! Fresh startup originals for a private single-connection trust store.
 //!
 //! This is not an installed CA or an independently admitted production release.
-//! Both original expectation sets are closed and must name the same scope;
-//! only their separately held startup/session challenges may differ.
+//! Startup expectations and the session's pinned static scope must agree. V1
+//! pins the session challenge too; the additive path accepts a caller-owned
+//! challenge without changing or re-encoding the pinned scope original.
 
 use super::{config::TrustRoots, ensure, ingress::{self, EvidenceProfile},
-    ingress_config::Expectations};
+    ingress_config::{Expectations, SessionScope}};
 use serde_json::Value;
 
 pub(crate) struct IngressClientBootstrap {
@@ -20,17 +21,27 @@ pub(super) fn prepare(raw: &[u8], startup_raw: &[u8], session_raw: &[u8], roots_
     -> Result<IngressClientBootstrap, String> {
     let startup = Expectations::parse(startup_raw)?;
     let session = Expectations::parse(session_raw)?;
-    ensure(startup.release_record == session.release_record
-        && startup.policy == session.policy && startup.configuration == session.configuration
-        && startup.client_trust == session.client_trust && startup.pcrs == session.pcrs
-        && startup.module_id == session.module_id && startup.max_age == session.max_age
-        && startup.future_skew == session.future_skew && startup.host == session.host
-        && startup.instance == session.instance && startup.nonce != session.nonce,
+    ensure(startup.scope == session.scope && startup.nonce != session.nonce,
         "native client startup/session scopes differ or challenges were reused")?;
+    prepare_checked(raw, startup_raw, roots_raw, &startup, session.scope, session.nonce)
+}
+
+pub(super) fn prepare_with_challenge(raw: &[u8], startup_raw: &[u8], scope_raw: &[u8],
+    roots_raw: &[u8], challenge: [u8; 32]) -> Result<IngressClientBootstrap, String> {
+    let startup = Expectations::parse(startup_raw)?;
+    let scope = SessionScope::parse(scope_raw)?;
+    ensure(challenge != [0; 32] && challenge != startup.nonce && startup.scope == scope,
+        "native client startup/session scopes differ or challenge is zero or reused")?;
+    prepare_checked(raw, startup_raw, roots_raw, &startup, scope, challenge)
+}
+
+fn prepare_checked(raw: &[u8], startup_raw: &[u8], roots_raw: &[u8],
+    startup: &Expectations, scope: SessionScope, challenge: [u8; 32])
+    -> Result<IngressClientBootstrap, String> {
     let roots = TrustRoots::parse(roots_raw)?;
-    let checked = ingress::verify_original(raw, &startup, &roots,
+    let checked = ingress::verify_original(raw, &startup.scope, &roots,
         EvidenceProfile::Startup, &startup.nonce)?;
-    let verification = checked.summary(raw, startup_raw, roots_raw, &startup);
-    Ok(IngressClientBootstrap { leaf: checked.leaf, ca: checked.ca, host: session.host,
-        challenge: session.nonce, verification })
+    let verification = checked.summary(raw, startup_raw, roots_raw, startup);
+    Ok(IngressClientBootstrap { leaf: checked.leaf, ca: checked.ca, host: scope.host,
+        challenge, verification })
 }

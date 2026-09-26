@@ -2,6 +2,8 @@
 //!
 //! Parsing establishes local shape only. The parent retains and rechecks each
 //! actual original, and separately verifies quotes before using the private CA.
+//! V1 pins complete session expectations, including a caller-supplied challenge.
+//! V2 pins a nonce-free session scope; the controller owns challenge generation.
 
 use super::{ensure, json, originals::ArtifactV1};
 use serde::Deserialize;
@@ -12,29 +14,47 @@ use std::time::Duration;
 
 pub(super) const MAX_CONFIGURATION_BYTES: usize = 16 * 1024;
 
-pub(super) struct ConfigurationV1 {
+pub(super) struct Configuration {
     pub(super) endpoint: SocketAddr,
     pub(super) timeout: Duration,
     pub(super) startup_evidence: ArtifactV1,
     pub(super) startup_expectations: ArtifactV1,
-    pub(super) session_expectations: ArtifactV1,
+    pub(super) session: SessionInput,
     pub(super) trust_roots: ArtifactV1,
     pub(super) client_certificate: ArtifactV1,
     pub(super) client_private_key: ArtifactV1,
 }
 
+pub(super) enum SessionInput {
+    PinnedChallenge(ArtifactV1),
+    GeneratedChallenge(ArtifactV1),
+}
+
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WireConfigurationV1 {
-    api_version: String,
-    endpoint: String,
-    timeout_milliseconds: u64,
-    startup_evidence: ArtifactV1,
-    startup_expectations: ArtifactV1,
-    session_expectations: ArtifactV1,
-    trust_roots: ArtifactV1,
-    client_certificate: ArtifactV1,
-    client_private_key: ArtifactV1,
+#[serde(tag = "apiVersion", deny_unknown_fields)]
+enum WireConfiguration {
+    #[serde(rename = "serverware.nativeIngressClient/v1", rename_all = "camelCase")]
+    V1 {
+        endpoint: String,
+        timeout_milliseconds: u64,
+        startup_evidence: ArtifactV1,
+        startup_expectations: ArtifactV1,
+        session_expectations: ArtifactV1,
+        trust_roots: ArtifactV1,
+        client_certificate: ArtifactV1,
+        client_private_key: ArtifactV1,
+    },
+    #[serde(rename = "serverware.nativeIngressClient/v2", rename_all = "camelCase")]
+    V2 {
+        endpoint: String,
+        timeout_milliseconds: u64,
+        startup_evidence: ArtifactV1,
+        startup_expectations: ArtifactV1,
+        session_scope: ArtifactV1,
+        trust_roots: ArtifactV1,
+        client_certificate: ArtifactV1,
+        client_private_key: ArtifactV1,
+    },
 }
 
 fn check_artifact(artifact: &ArtifactV1) -> Result<(), String> {
@@ -78,31 +98,46 @@ fn endpoint(original: &str) -> Result<SocketAddr, String> {
     Ok(endpoint)
 }
 
-impl ConfigurationV1 {
+impl Configuration {
     pub(super) fn parse_original(original: &[u8]) -> Result<Self, String> {
         let value = json::parse(original, MAX_CONFIGURATION_BYTES)?;
-        let config: WireConfigurationV1 = serde_json::from_value(value)
+        let config: WireConfiguration = serde_json::from_value(value)
             .map_err(|_| "native ingress client configuration violates its closed contract")?;
-        ensure(config.api_version == "serverware.nativeIngressClient/v1",
-            "native ingress client configuration version is invalid")?;
-        ensure((100..=30_000).contains(&config.timeout_milliseconds),
-            "native ingress client timeout is outside its fixed bounds")?;
-        let endpoint = endpoint(&config.endpoint)?;
-        for artifact in [&config.startup_evidence, &config.startup_expectations,
-            &config.session_expectations, &config.trust_roots,
-            &config.client_certificate, &config.client_private_key]
-        {
-            check_artifact(artifact)?;
+        let generated = matches!(&config, WireConfiguration::V2 { .. });
+        match config {
+            WireConfiguration::V1 {
+                endpoint: address, timeout_milliseconds, startup_evidence,
+                startup_expectations, session_expectations: session_artifact,
+                trust_roots, client_certificate, client_private_key,
+            }
+            | WireConfiguration::V2 {
+                endpoint: address, timeout_milliseconds, startup_evidence,
+                startup_expectations, session_scope: session_artifact,
+                trust_roots, client_certificate, client_private_key,
+            } => {
+                ensure((100..=30_000).contains(&timeout_milliseconds),
+                    "native ingress client timeout is outside its fixed bounds")?;
+                let endpoint = endpoint(&address)?;
+                for artifact in [&startup_evidence, &startup_expectations,
+                    &session_artifact, &trust_roots, &client_certificate, &client_private_key]
+                {
+                    check_artifact(artifact)?;
+                }
+                Ok(Self {
+                    endpoint,
+                    timeout: Duration::from_millis(timeout_milliseconds),
+                    startup_evidence,
+                    startup_expectations,
+                    session: if generated {
+                        SessionInput::GeneratedChallenge(session_artifact)
+                    } else {
+                        SessionInput::PinnedChallenge(session_artifact)
+                    },
+                    trust_roots,
+                    client_certificate,
+                    client_private_key,
+                })
+            }
         }
-        Ok(Self {
-            endpoint,
-            timeout: Duration::from_millis(config.timeout_milliseconds),
-            startup_evidence: config.startup_evidence,
-            startup_expectations: config.startup_expectations,
-            session_expectations: config.session_expectations,
-            trust_roots: config.trust_roots,
-            client_certificate: config.client_certificate,
-            client_private_key: config.client_private_key,
-        })
     }
 }

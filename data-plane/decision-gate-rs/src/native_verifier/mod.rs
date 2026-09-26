@@ -33,6 +33,15 @@ pub(crate) fn prepare_ingress_client(raw: &[u8], startup_raw: &[u8], session_raw
     ingress_client::prepare(raw, startup_raw, session_raw, roots_raw)
 }
 
+/// Verify still-fresh startup originals against the independently pinned static
+/// session scope and a nonzero, separately caller-owned challenge. No RNG or
+/// challenge-use/replay authority is supplied by the verifier.
+pub(crate) fn prepare_ingress_client_with_challenge(raw: &[u8], startup_raw: &[u8],
+    scope_raw: &[u8], roots_raw: &[u8], challenge: [u8; 32])
+    -> Result<IngressClientBootstrap, String> {
+    ingress_client::prepare_with_challenge(raw, startup_raw, scope_raw, roots_raw, challenge)
+}
+
 /// Verify fresh ingress originals against the actual retained outer client TLS
 /// connection. The independently held expectation nonce is the raw client
 /// challenge here. No network owner, HTTP framing or TLS-policy admission is
@@ -40,6 +49,18 @@ pub(crate) fn prepare_ingress_client(raw: &[u8], startup_raw: &[u8], session_raw
 pub(crate) fn verify_ingress_session(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8],
     client: &rustls::ClientConnection) -> Result<Vec<u8>, String> {
     let result = ingress_session::verify(raw, expectations_raw, trust_roots_raw, client)?;
+    let bytes = serde_json::to_vec(&result).map_err(|_| "encode native ingress session verdict")?;
+    ensure(!bytes.is_empty() && bytes.len() < 4096, "native ingress session verdict exceeds its bound")?;
+    Ok(bytes)
+}
+
+/// The challenge is caller-owned, not a field in the pinned scope original.
+/// Retains the same actual TLS/exporter/peer joins and caller obligations as
+/// v1, returning only a bounded v2 local verdict over those exact originals.
+pub(crate) fn verify_ingress_session_with_challenge(raw: &[u8], scope_raw: &[u8],
+    roots_raw: &[u8], challenge: [u8; 32], client: &rustls::ClientConnection)
+    -> Result<Vec<u8>, String> {
+    let result = ingress_session::verify_with_challenge(raw, scope_raw, roots_raw, challenge, client)?;
     let bytes = serde_json::to_vec(&result).map_err(|_| "encode native ingress session verdict")?;
     ensure(!bytes.is_empty() && bytes.len() < 4096, "native ingress session verdict exceeds its bound")?;
     Ok(bytes)

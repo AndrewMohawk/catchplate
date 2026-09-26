@@ -1,4 +1,4 @@
-//! Offline role-3 original verification, not a live TLS or enrollment decision.
+//! Shared role-3 original verification, not an enrollment decision.
 //!
 //! Public certificates are authenticated through the original Nitro document's
 //! exact binary binding, under independently pinned scope/nonce/PCR/root inputs.
@@ -17,10 +17,36 @@ const MAX_SPKI: usize = 1024;
 const KEY_BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
 
+pub(super) enum EvidenceProfile { Startup, Session }
+
+pub(super) struct VerifiedIngress {
+    pub(super) leaf: Vec<u8>,
+    pub(super) ca: Vec<u8>,
+    leaf_spki_sha: [u8; 32],
+    ca_spki_sha: [u8; 32],
+    document_sha: [u8; 32],
+    nonce: [u8; 32],
+    issued: u64,
+    verified_at: u64,
+}
+
 pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])
     -> Result<Value, String> {
     let expected = Expectations::parse(expectations_raw)?;
     let roots = TrustRoots::parse(trust_roots_raw)?;
+    let checked = verify_original(raw, &expected, &roots, EvidenceProfile::Startup, &expected.nonce)?;
+    Ok(checked.summary(raw, expectations_raw, trust_roots_raw, &expected))
+}
+
+/// Session callers supply a nonce derived from their actual TLS connection;
+/// it must not replace the raw independently held challenge in expectations.
+pub(super) fn verify_original(raw: &[u8], expected: &Expectations, roots: &TrustRoots,
+    profile: EvidenceProfile, quote_nonce: &[u8; 32]) -> Result<VerifiedIngress, String> {
+    ensure(*quote_nonce != [0; 32], "native ingress quote nonce must be nonzero")?;
+    let scope = match profile {
+        EvidenceProfile::Startup => "unverified-startup-public-material",
+        EvidenceProfile::Session => "unverified-session-public-material",
+    };
     ensure(raw.len() > 1 && raw.len() <= MAX_INPUT && raw.last() == Some(&b'\n'),
         "native ingress evidence requires one bounded original JSON line")?;
     let body = &raw[..raw.len() - 1];
@@ -29,7 +55,7 @@ pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8]
     let evidence = json::parse(body, MAX_INPUT - 1)?;
     exact(&evidence, &["apiVersion", "evidenceScope", "okForAction", "ingress", "quote"])?;
     ensure(text(&evidence, "apiVersion")? == "serverware.nativeIngressPublicEvidence/v1"
-        && text(&evidence, "evidenceScope")? == "unverified-startup-public-material"
+        && text(&evidence, "evidenceScope")? == scope
         && evidence.get("okForAction").and_then(Value::as_bool) == Some(false),
         "native ingress public evidence version or scope differs")?;
     let ingress = evidence.get("ingress").ok_or("native ingress public TLS object is absent")?;
@@ -52,7 +78,7 @@ pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8]
     let supplied_binding = decode_b64(text(quote, "userDataBase64url")?,
         KEY_BINDING_DOMAIN.len() + 1 + 7 * 32)?;
     let nonce: [u8; 32] = fixed_b64(text(quote, "nonceBase64url")?)?;
-    ensure(nonce == expected.nonce, "native ingress quote nonce differs from independent expectations")?;
+    ensure(&nonce == quote_nonce, "native ingress quote nonce differs from independent expectations")?;
 
     let opening = now_seconds()?;
     let certificates = ingress_certificates::verify(&leaf, &ca, &expected.host, &expected.instance, opening)?;
@@ -83,32 +109,40 @@ pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8]
     };
     // This verifies the original COSE signature, certificate chain and signed
     // fields. Matching the exported quote-input copies above is insufficient.
-    let issued = nitro::verify_ingress(&document, &scope, &roots, &certificates.leaf_spki,
-        &expected_binding, &expected.nonce, opening)?;
+    let issued = nitro::verify_ingress(&document, &scope, roots, &certificates.leaf_spki,
+        &expected_binding, quote_nonce, opening)?;
     let closing = now_seconds()?;
     ensure(closing >= opening && closing < certificates.valid_until_unix_seconds
         && issued <= closing.checked_add(expected.future_skew).ok_or("native ingress age overflow")?
         && closing.saturating_sub(issued) <= expected.max_age,
         "native ingress verification crossed its certificate/quote validity or reversed clock")?;
 
+    Ok(VerifiedIngress { leaf, ca, leaf_spki_sha, ca_spki_sha,
+        document_sha: digest(&document), nonce, issued, verified_at: opening })
+}
+
+impl VerifiedIngress {
     // Hash the complete input originals, including the public evidence's LF.
     // This result never supplies a trust-store mutation or action permission.
-    Ok(json!({
-        "apiVersion":"serverware.nativeIngressAttestationVerification/v1",
-        "resultScope":"local-ingress-quote-only", "okForAction":false,
-        "evidenceSha256":digest_text(&digest(raw)),
-        "expectationsSha256":digest_text(&digest(expectations_raw)),
-        "trustRootsSha256":digest_text(&digest(trust_roots_raw)),
-        "releaseRecordSha256":digest_text(&expected.release_record),
-        "policyHash":digest_text(&expected.policy),
-        "configurationSha256":digest_text(&expected.configuration),
-        "clientTrustBundleSha256":digest_text(&expected.client_trust),
-        "caCertificateSha256":digest_text(&ca_sha),
-        "caPublicKeySpkiSha256":digest_text(&ca_spki_sha),
-        "ingressLeafCertificateSha256":digest_text(&leaf_sha),
-        "ingressLeafPublicKeySpkiSha256":digest_text(&leaf_spki_sha),
-        "nitroAttestationDocumentSha256":digest_text(&digest(&document)),
-        "nonceBase64url":b64(&nonce),
-        "quoteIssuedAtUnixSeconds":issued, "verifiedAtUnixSeconds":opening,
-    }))
+    pub(super) fn summary(&self, raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8],
+        expected: &Expectations) -> Value {
+        json!({
+            "apiVersion":"serverware.nativeIngressAttestationVerification/v1",
+            "resultScope":"local-ingress-quote-only", "okForAction":false,
+            "evidenceSha256":digest_text(&digest(raw)),
+            "expectationsSha256":digest_text(&digest(expectations_raw)),
+            "trustRootsSha256":digest_text(&digest(trust_roots_raw)),
+            "releaseRecordSha256":digest_text(&expected.release_record),
+            "policyHash":digest_text(&expected.policy),
+            "configurationSha256":digest_text(&expected.configuration),
+            "clientTrustBundleSha256":digest_text(&expected.client_trust),
+            "caCertificateSha256":digest_text(&digest(&self.ca)),
+            "caPublicKeySpkiSha256":digest_text(&self.ca_spki_sha),
+            "ingressLeafCertificateSha256":digest_text(&digest(&self.leaf)),
+            "ingressLeafPublicKeySpkiSha256":digest_text(&self.leaf_spki_sha),
+            "nitroAttestationDocumentSha256":digest_text(&self.document_sha),
+            "nonceBase64url":b64(&self.nonce),
+            "quoteIssuedAtUnixSeconds":self.issued, "verifiedAtUnixSeconds":self.verified_at,
+        })
+    }
 }

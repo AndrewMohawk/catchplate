@@ -1,12 +1,15 @@
-//! Bounded export of actual public startup originals, never an admission token.
+//! Bounded export of actual public ingress originals, never an admission token.
 //!
-//! This uses the retained generated ingress and its unchanged role-3 NSM
-//! document. It neither requests a quote nor verifies Nitro/COSE/PCRs or an
+//! This uses the retained generated ingress and either its unchanged startup
+//! quote or a supplied original role-3 quote for that same key and scope.
+//! It neither requests a quote nor verifies Nitro/COSE/PCRs or an
 //! independent release, nonce, clock or configuration. No private key, client
 //! root DER, configuration original or trusted-verifier verdict is exported.
 //! Local owner/time/scope joins are not proof of current remote serving.
 
-use crate::enclave_runtime_identity_v1::{EnclaveRuntimeIdentityV1, QuotedMutualTlsIngressV1};
+use crate::enclave_runtime_identity_v1::{
+    EnclaveRuntimeIdentityV1, QuotedMutualTlsIngressV1, RuntimeKeyQuoteV1,
+};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde::Serialize;
@@ -22,6 +25,8 @@ const MAX_SPKI_BYTES: usize = 1024;
 const KEY_BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
 const INGRESS_ROLE: u8 = 3;
+
+enum EvidenceKind { Startup, Session }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +83,20 @@ fn certificate_live(certificate: &X509Certificate<'_>, now: OffsetDateTime) -> R
 /// independent enrollment/verification gates and owns any eventual output IO.
 pub fn encode_native_ingress_public_evidence_v1(identity: &mut EnclaveRuntimeIdentityV1,
     ingress: &QuotedMutualTlsIngressV1, deadline: u64) -> Result<Vec<u8>, String> {
+    encode(identity, ingress, ingress.quote(), EvidenceKind::Startup, deadline)
+}
+
+/// Export an actual same-key role-3 quote without replacing the startup quote.
+/// The distinct scope is not proof of freshness or TLS session binding: those
+/// require the caller's actual exporter/challenge and independent verifier.
+pub fn encode_native_ingress_quote_public_evidence_v1(identity: &mut EnclaveRuntimeIdentityV1,
+    ingress: &QuotedMutualTlsIngressV1, quote: &RuntimeKeyQuoteV1, deadline: u64)
+    -> Result<Vec<u8>, String> {
+    encode(identity, ingress, quote, EvidenceKind::Session, deadline)
+}
+
+fn encode(identity: &mut EnclaveRuntimeIdentityV1, ingress: &QuotedMutualTlsIngressV1,
+    quote: &RuntimeKeyQuoteV1, kind: EvidenceKind, deadline: u64) -> Result<Vec<u8>, String> {
     let deadline = deadline.min(identity.deadline()).min(ingress.deadline());
     let opening = OffsetDateTime::now_utc();
     identity.verify_quoted_ingress(ingress, deadline)?;
@@ -86,9 +105,17 @@ pub fn encode_native_ingress_public_evidence_v1(identity: &mut EnclaveRuntimeIde
 
     let tls = ingress.tls();
     let chain = tls.certificate_chain();
-    let quote = ingress.quote();
     let leaf_spki = tls.leaf_public_key_spki_der();
     let user_data = quote.user_data();
+    let evidence_scope = match kind {
+        EvidenceKind::Startup => "unverified-startup-public-material",
+        EvidenceKind::Session => {
+            if quote.nonce() == &[0; 32] {
+                return Err("native ingress session quote nonce must be nonzero".to_owned());
+            }
+            "unverified-session-public-material"
+        }
+    };
     if chain.len() != 2 || chain.iter().any(|item| !bounded(item, MAX_CERTIFICATE_BYTES))
         || !bounded(quote.document(), MAX_DOCUMENT_BYTES)
         || !bounded(leaf_spki, MAX_SPKI_BYTES)
@@ -99,6 +126,7 @@ pub fn encode_native_ingress_public_evidence_v1(identity: &mut EnclaveRuntimeIde
         || user_data.len() != KEY_BINDING_DOMAIN.len() + 1 + 7 * 32
         || !user_data.starts_with(KEY_BINDING_DOMAIN)
         || user_data[KEY_BINDING_DOMAIN.len()] != INGRESS_ROLE
+        || user_data != ingress.quote().user_data()
     {
         return Err("native ingress public originals exceed their bounds or owner profile".to_owned());
     }
@@ -135,7 +163,7 @@ pub fn encode_native_ingress_public_evidence_v1(identity: &mut EnclaveRuntimeIde
     // from, or claimed verified against, the opaque signed NSM document.
     let evidence = PublicEvidence {
         api_version: "serverware.nativeIngressPublicEvidence/v1",
-        evidence_scope: "unverified-startup-public-material",
+        evidence_scope,
         ok_for_action: false,
         ingress: PublicIngress {
             tls_protocol: "TLSv1.3",

@@ -23,6 +23,7 @@ use rustls::ServerConfig;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
+use x509_parser::{certificate::X509Certificate, prelude::FromDer};
 use zeroize::Zeroizing;
 
 const BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
@@ -31,6 +32,8 @@ const LEASE_RECIPIENT: u8 = 2;
 const MUTUAL_TLS_INGRESS: u8 = 3;
 const RESPONSE_PROOF: u8 = 4;
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
+const MAX_INGRESS_CERTIFICATE_BYTES: usize = 16 * 1024;
+const MAX_INGRESS_SPKI_BYTES: usize = 1024;
 
 /// Ordinary independently expected commitments must be admitted by the caller.
 /// Nonzero hashes alone establish neither signed release nor policy authority.
@@ -333,6 +336,82 @@ impl EnclaveRuntimeIdentityV1 {
         Ok(QuotedMutualTlsIngressV1 { tls,
             quote: RuntimeKeyQuoteV1 { document, user_data, public_key, nonce },
             owner_pid: self.owner_pid, deadline })
+    }
+
+    /// Quote only the same retained generated ingress key and original scope.
+    /// The caller derives the nonce from its actual session; a device response
+    /// authenticates no client, exporter, release or admission by itself.
+    /// Neither the original startup quote nor TLS configuration is replaced.
+    pub fn quote_retained_ingress(&mut self, ingress: &QuotedMutualTlsIngressV1,
+        nonce: [u8; 32], deadline: u64) -> Result<RuntimeKeyQuoteV1, String> {
+        let deadline = self.begin(deadline.min(ingress.deadline()))?;
+        if nonce == [0; 32] {
+            return Err("native retained ingress requires a nonzero session nonce".to_owned());
+        }
+        let opening = OffsetDateTime::now_utc();
+        ingress.verify_live(deadline)?;
+        let user_data = self.retained_ingress_binding(ingress, opening)?;
+        let public_key = ingress.tls().leaf_public_key_spki_der().to_vec();
+        ingress.verify_live(deadline)?;
+        let document = self.nsm.attest(&public_key, &nonce, &user_data, deadline)?;
+        let closing = OffsetDateTime::now_utc();
+        if closing < opening {
+            return Err("native retained ingress quote observed a reversed wall clock".to_owned());
+        }
+        ingress.verify_live(deadline)?;
+        if self.retained_ingress_binding(ingress, closing)? != user_data {
+            return Err("native retained ingress original binding changed during quotation".to_owned());
+        }
+        self.finish(deadline)?;
+        Ok(RuntimeKeyQuoteV1 { document, user_data, public_key, nonce })
+    }
+
+    fn retained_ingress_binding(&self, ingress: &QuotedMutualTlsIngressV1,
+        now: OffsetDateTime) -> Result<Vec<u8>, String> {
+        self.require_tls_time(now)?;
+        let tls = ingress.tls();
+        let chain = tls.certificate_chain();
+        let public_key = tls.leaf_public_key_spki_der();
+        if chain.len() != 2
+            || chain.iter().any(|der| der.is_empty() || der.len() > MAX_INGRESS_CERTIFICATE_BYTES)
+            || chain[0].as_slice() != tls.leaf_certificate_der()
+            || chain[1].as_slice() != self.authority.certificate_der()
+            || public_key.is_empty() || public_key.len() > MAX_INGRESS_SPKI_BYTES
+            || ingress.quote().public_key() != public_key
+        {
+            return Err("native retained ingress differs from its actual bounded CA/key owner".to_owned());
+        }
+        let (leaf_remaining, leaf) = X509Certificate::from_der(&chain[0])
+            .map_err(|_| "native retained ingress leaf is malformed".to_owned())?;
+        let (ca_remaining, ca) = X509Certificate::from_der(&chain[1])
+            .map_err(|_| "native retained ingress CA is malformed".to_owned())?;
+        let authority_spki = self.authority.public_key_spki_der();
+        let authority_spki: &[u8] = authority_spki.as_ref();
+        if !leaf_remaining.is_empty() || !ca_remaining.is_empty()
+            || leaf.public_key().subject_public_key.unused_bits != 0
+            || ca.public_key().subject_public_key.unused_bits != 0
+            || leaf.tbs_certificate.subject_pki.raw != public_key
+            || ca.tbs_certificate.subject_pki.raw != authority_spki
+            || authority_spki.is_empty() || authority_spki.len() > MAX_INGRESS_SPKI_BYTES
+            || leaf.issuer() != ca.subject()
+        {
+            return Err("native retained ingress original certificate/SPKI chain differs".to_owned());
+        }
+        for certificate in [&leaf, &ca] {
+            let validity = certificate.validity();
+            if now < validity.not_before.to_datetime() || now >= validity.not_after.to_datetime() {
+                return Err("native retained ingress certificate is outside its original validity".to_owned());
+            }
+        }
+        let mut request = Sha256::new();
+        request.update(INGRESS_BINDING_DOMAIN);
+        request.update(Sha256::digest(tls.leaf_certificate_der()));
+        request.update(tls.client_trust_sha256());
+        let user_data = self.binding(MUTUAL_TLS_INGRESS, public_key, request.finalize().into());
+        if user_data.as_slice() != ingress.quote().user_data() {
+            return Err("native retained ingress role-3 scope differs from its original owner".to_owned());
+        }
+        Ok(user_data)
     }
 
     /// Creates only a TLS config. It authenticates no workload or route and

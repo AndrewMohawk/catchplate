@@ -34,6 +34,7 @@ pub(super) fn run(listener: VsockListenerV1, prepared: NativeTlsGateV1,
     settings: NativeRuntimeSettingsV1) -> Result<(), String>
 {
     let NativeTlsGateV1 { mut state, ingress, deadline } = prepared;
+    let ingress = Arc::new(ingress);
     let lifetime = NativeRuntimeLifetimeV1::new(deadline)?;
     // The cold constructor creates a fresh unshared Arc. Install cancellation
     // before any background or serving clone can acquire this state.
@@ -60,7 +61,13 @@ pub(super) fn run(listener: VsockListenerV1, prepared: NativeTlsGateV1,
         identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
         signer.transport.verify_native_identity(identity, deadline)?;
     }
-    let (config, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
+    let (mut config, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
+    let ProxyIngressConfig::MutualTls(tls_config) = &mut config else {
+        return Err("native runtime lost its materialized mutual TLS configuration".to_owned());
+    };
+    let tls_config = Arc::get_mut(tls_config)
+        .ok_or("native runtime TLS configuration was shared before owner retention")?;
+    tls_config.native_owner = Some(Arc::clone(&ingress));
     if state.proxy_ingress_attestation.value() != attestation.value() {
         return Err("native runtime ingress metadata differs from its held TLS configuration".to_owned());
     }

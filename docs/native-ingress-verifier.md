@@ -130,6 +130,13 @@ The [public-identity enrollment boundary](native-public-identity.md#verification
 and all production acceptance gates remain unchanged. A successful local
 verification result is not a transferable action or CA-installation token.
 
+The separate [session verification API](native-ingress-session.md#actual-client-verification-api)
+accepts an actual completed outer `rustls::ClientConnection` and requires the
+fresh session scope. There, `nonceBase64url` is the raw caller challenge and
+the quote nonce is derived from the actual exporter; this startup CLI keeps
+its original quote-nonce meaning. No standalone session CLI or automatic
+network bootstrap client is supplied by that API.
+
 ## Packaging and deferred validation
 
 The existing pinned offline Alpine build in

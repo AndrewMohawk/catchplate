@@ -18,6 +18,7 @@ mod native_runtime;
 mod native_startup;
 mod native_startup_config;
 mod native_public_identity;
+mod native_ingress_attestation;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};
@@ -950,6 +951,7 @@ struct TrustedMtlsEvidence {
 struct ProxyIngressTlsConfig {
     server_config: Arc<ServerConfig>,
     client_trust_certificates: Arc<Vec<CertificateDer<'static>>>,
+    native_owner: Option<Arc<QuotedMutualTlsIngressV1>>,
 }
 
 #[derive(Clone)]
@@ -48203,6 +48205,17 @@ fn handle_gate_connection(
     let (origin_path, _) = request_target_parts(&head.target);
     let public_read =
         head.method == "GET" && matches!(origin_path.as_str(), "/healthz" | "/attestation");
+    // Native requests cannot fall through to the legacy none-dev document,
+    // including when a required native owner/configuration has been lost.
+    let native_ingress = state.native_runtime_lifetime.is_some()
+        || state.proxy_ingress_attestation.mode == "native-mtls-v1"
+        || matches!(&proxy_ingress, ProxyIngressConfig::MutualTls(config)
+            if config.native_owner.is_some());
+    if native_ingress && head.method == "GET" && origin_path == "/attestation" {
+        native_ingress_attestation::handle(&state, &head, &mut stream,
+            trusted_mtls_evidence.as_ref(), management_listener, &proxy_ingress);
+        return;
+    }
     let policy_shadow_install_post =
         head.method == "POST"
             && head.target == POLICY_SHADOW_INSTALL_PATH;
@@ -49240,6 +49253,7 @@ fn materialize_native_proxy_ingress(
         server_config: tls.server_config(),
         client_trust_certificates: Arc::new(tls.client_trust_certificates().iter()
             .cloned().map(CertificateDer::from).collect()),
+        native_owner: None,
     }));
     ingress.verify_live(deadline)?;
     Ok((config, attestation))
@@ -49386,6 +49400,7 @@ fn load_proxy_ingress_config(
         ProxyIngressConfig::MutualTls(Arc::new(ProxyIngressTlsConfig {
             server_config: Arc::new(server_config),
             client_trust_certificates: Arc::new(client_trust_certificates),
+            native_owner: None,
         })),
         attestation,
     ))

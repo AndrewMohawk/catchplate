@@ -1,4 +1,4 @@
-//! Standalone, offline verification of the original native response envelope.
+//! Original native response/ingress verification and an in-process TLS join.
 //!
 //! No network, subprocess, environment configuration, private key or copied
 //! verifier result participates. Successful output proves only the fixed local
@@ -15,6 +15,7 @@ mod ingress;
 mod ingress_certificates;
 mod ingress_cli;
 mod ingress_config;
+mod ingress_session;
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
@@ -23,6 +24,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run() -> Result<(), String> { cli::run() }
 pub(crate) fn run_ingress() -> Result<(), String> { ingress_cli::run() }
+
+/// Verify fresh ingress originals against the actual retained outer client TLS
+/// connection. The independently held expectation nonce is the raw client
+/// challenge here. No network owner, HTTP framing or TLS-policy admission is
+/// supplied; see ingress_session's caller obligations.
+pub(crate) fn verify_ingress_session(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8],
+    client: &rustls::ClientConnection) -> Result<Vec<u8>, String> {
+    let result = ingress_session::verify(raw, expectations_raw, trust_roots_raw, client)?;
+    let bytes = serde_json::to_vec(&result).map_err(|_| "encode native ingress session verdict")?;
+    ensure(!bytes.is_empty() && bytes.len() < 4096, "native ingress session verdict exceeds its bound")?;
+    Ok(bytes)
+}
 
 pub(super) fn verify_ingress(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])
     -> Result<Vec<u8>, String> {

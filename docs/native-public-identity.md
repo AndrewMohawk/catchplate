@@ -92,6 +92,12 @@ this exact object against independent pins, actual certificate signatures and
 the original Nitro quote. Its result remains local-only and `okForAction=false`;
 it does not add a fresh client/session exchange or authorize CA installation.
 
+A separate [native outer-TLS session quotation](native-ingress-session.md)
+now binds a caller challenge to the actual connection's exporter and the same
+retained ingress key. Its fresh session scope and client-connection verifier
+are distinct from this startup export; neither automatically installs a CA or
+completes production enrollment.
+
 The [production trust flow](../goal.md#attestation-goal) requires a fresh
 client-held 32-byte challenge over the actual enclave-owned TLS session,
 exporter/request/signed-scope binding, genuine Nitro verification against

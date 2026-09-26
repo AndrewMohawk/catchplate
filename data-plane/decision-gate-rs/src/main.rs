@@ -12,17 +12,17 @@ use base64::{engine::general_purpose, Engine as _};
 use csv::{ByteRecord, ReaderBuilder, WriterBuilder};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use ipnet::IpNet;
-use rcgen::{
-    Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, Ia5String, KeyPair,
-    KeyUsagePurpose, SanType,
-};
+#[cfg(test)]
+use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair};
 use reqwest::blocking::{Body, Client};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH};
 use reqwest::{Method, StatusCode};
 use ring::{aead, hkdf, rand as ring_rand};
 use ring_rand::SecureRandom;
 use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+#[cfg(test)]
+use rustls::pki_types::PrivatePkcs8KeyDer;
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
@@ -152,6 +152,7 @@ use serverware_decision_gate::{
     RESPONSE_OBSERVATION_V2_MAX_OPERATION_MS,
     response_observation_v2_lifecycle_state_sha256,
 };
+use serverware_decision_gate::enclave_runtime_identity_v1::{CredentialRecipientV1, TlsAuthorityV1};
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
@@ -178,6 +179,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, Duration as TimeDuration, Month, OffsetDateTime, Weekday};
 use url::{form_urlencoded, Url};
+#[cfg(test)]
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -2490,7 +2492,7 @@ struct GateState {
     request_body_deadline: Duration,
     response_write_deadline: Duration,
     proxy_ingress_attestation: ProxyIngressAttestation,
-    mitm_authority: Option<Mutex<MitmAuthority>>,
+    mitm_authority: Option<Mutex<TlsAuthorityV1>>,
     leaf_configs: Mutex<HashMap<String, Arc<ServerConfig>>>,
     binary_digest: String,
     release_provenance_path: Option<String>,
@@ -4350,12 +4352,6 @@ impl Drop for AuditReservation<'_> {
             self.active = false;
         }
     }
-}
-
-struct MitmAuthority {
-    ca_cert: Certificate,
-    ca_key: KeyPair,
-    ca_cert_der: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -19242,7 +19238,7 @@ fn decrypt_credential_lease_envelope(
     request_binding_sha256: &str,
     request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
-    recipient_private_key: X25519StaticSecret,
+    recipient_private_key: CredentialRecipientV1,
     recipient_key_id: &str,
     recipient_nonce: &str,
     recipient_nonce_bytes: &[u8; 32],
@@ -19407,13 +19403,9 @@ fn decrypt_credential_lease_envelope(
     let server_public_key: [u8; 32] = server_public_key
         .try_into()
         .map_err(|_| "credential lease server public key must be 32 bytes".to_string())?;
-    let peer_public_key = X25519PublicKey::from(server_public_key);
-    let shared_secret = recipient_private_key.diffie_hellman(&peer_public_key);
-    if !shared_secret.was_contributory() {
-        return Err("credential lease server public key is non-contributory".to_string());
-    }
+    let shared_secret = recipient_private_key.derive_shared_key(server_public_key)?;
     let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, recipient_nonce_bytes);
-    let prk = salt.extract(shared_secret.as_bytes());
+    let prk = salt.extract(shared_secret.as_ref());
     let info = [hkdf_info.as_slice()];
     let mut key_bytes = Zeroizing::new([0u8; 32]);
     prk.expand(&info, Aes256KeyLength)
@@ -20080,13 +20072,9 @@ fn fetch_scoped_credential_lease(
         return Err("attested control-plane trust root is stale".to_string());
     }
     let rng = ring_rand::SystemRandom::new();
-    let mut recipient_private_key_bytes = [0u8; 32];
-    rng.fill(&mut recipient_private_key_bytes)
-        .map_err(|_| "generate credential lease recipient key failed".to_string())?;
-    let recipient_private_key = X25519StaticSecret::from(recipient_private_key_bytes);
-    recipient_private_key_bytes.zeroize();
-    let recipient_public_key = X25519PublicKey::from(&recipient_private_key);
-    let recipient_key_id = sha256_prefixed(recipient_public_key.as_bytes());
+    let recipient_private_key = CredentialRecipientV1::generate()?;
+    let recipient_public_key = recipient_private_key.public_key_bytes()?;
+    let recipient_key_id = sha256_prefixed(&recipient_public_key);
     let mut recipient_nonce_bytes = Zeroizing::new([0u8; 32]);
     rng.fill(recipient_nonce_bytes.as_mut())
         .map_err(|_| "generate credential lease nonce failed".to_string())?;
@@ -20109,7 +20097,7 @@ fn fetch_scoped_credential_lease(
         request_authority: request_authority.cloned(),
         release_authorization: release_authorization.cloned(),
         recipient_public_key: general_purpose::URL_SAFE_NO_PAD
-            .encode(recipient_public_key.as_bytes()),
+            .encode(recipient_public_key),
         recipient_key_id: recipient_key_id.clone(),
         recipient_nonce: recipient_nonce.clone(),
         policy_hash: snapshot.hash.clone(),
@@ -20133,7 +20121,7 @@ fn fetch_scoped_credential_lease(
             "purpose":purpose,
             "requestBindingSha256":request_binding_sha256,
             "requestAuthoritySha256":request_authority_sha256,
-            "recipientPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(recipient_public_key.as_bytes()),
+            "recipientPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(recipient_public_key),
             "recipientKeyId":recipient_key_id,
             "recipientNonce":recipient_nonce,
             "policyHash":snapshot.hash,
@@ -23084,13 +23072,7 @@ fn audit_status(state: &GateState) -> Value {
     })
 }
 
-fn first_certificate_der(pem_text: &str, path: &str) -> Result<Vec<u8>, String> {
-    CertificateDer::from_pem_slice(pem_text.as_bytes())
-        .map(|der| der.to_vec())
-        .map_err(|err| format!("parse CA certificate {path}: {err}"))
-}
-
-fn build_mitm_authority() -> Result<Option<MitmAuthority>, String> {
+fn build_mitm_authority() -> Result<Option<TlsAuthorityV1>, String> {
     let cert_path = env::var("SERVERWARE_MITM_CA_CERT")
         .ok()
         .filter(|value| !value.trim().is_empty());
@@ -23109,21 +23091,11 @@ fn build_mitm_authority() -> Result<Option<MitmAuthority>, String> {
     };
     let cert_pem = fs::read_to_string(&cert_path)
         .map_err(|err| format!("read MITM CA certificate {cert_path}: {err}"))?;
-    let key_pem = fs::read_to_string(&key_path)
-        .map_err(|err| format!("read MITM CA private key {key_path}: {err}"))?;
-    let ca_cert_der = first_certificate_der(&cert_pem, &cert_path)?;
-    let ca_key =
-        KeyPair::from_pem(&key_pem).map_err(|err| format!("parse MITM CA private key: {err}"))?;
-    let ca_params = CertificateParams::from_ca_cert_pem(&cert_pem)
-        .map_err(|err| format!("parse MITM CA certificate params: {err}"))?;
-    let ca_cert = ca_params
-        .self_signed(&ca_key)
-        .map_err(|err| format!("materialize MITM CA issuer: {err}"))?;
-    Ok(Some(MitmAuthority {
-        ca_cert,
-        ca_key,
-        ca_cert_der,
-    }))
+    let key_pem = Zeroizing::new(fs::read_to_string(&key_path)
+        .map_err(|err| format!("read MITM CA private key {key_path}: {err}"))?);
+    // This is still the existing file-backed compatibility startup, not an
+    // enclave admission path. Native generated custody has no PEM importer.
+    TlsAuthorityV1::from_development_pem(&cert_pem, &key_pem).map(Some)
 }
 
 fn authority_string(host: &str, port: u16) -> String {
@@ -23151,41 +23123,9 @@ fn mitm_server_config(state: &GateState, host: &str) -> Result<Arc<ServerConfig>
         .ok_or("MITM CA authority is not loaded")?
         .lock()
         .expect("MITM authority mutex poisoned");
-    let leaf_key = KeyPair::generate().map_err(|err| format!("generate leaf key: {err}"))?;
-    let mut params =
-        CertificateParams::new(vec![cache_key.clone()]).map_err(|err| err.to_string())?;
-    if let Some(instance_id) = state.server_instance_id.as_deref() {
-        params
-            .subject_alt_names
-            .push(SanType::URI(Ia5String::try_from(instance_id).map_err(
-                |err| format!("invalid data-plane SPIFFE URI SAN: {err}"),
-            )?));
-    }
     let now = OffsetDateTime::now_utc();
-    params.not_before = now - TimeDuration::minutes(5);
-    params.not_after = now + TimeDuration::hours(24);
-    params
-        .distinguished_name
-        .push(DnType::CommonName, cache_key.clone());
-    params.use_authority_key_identifier_extension = true;
-    params.key_usages.push(KeyUsagePurpose::DigitalSignature);
-    params.key_usages.push(KeyUsagePurpose::KeyEncipherment);
-    params
-        .extended_key_usages
-        .push(ExtendedKeyUsagePurpose::ServerAuth);
-    let leaf = params
-        .signed_by(&leaf_key, &authority.ca_cert, &authority.ca_key)
-        .map_err(|err| format!("sign intercepted leaf certificate: {err}"))?;
-    let chain = vec![
-        CertificateDer::from(leaf.der().to_vec()),
-        CertificateDer::from(authority.ca_cert_der.clone()),
-    ];
-    let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(chain, key)
-        .map_err(|err| format!("build intercepted TLS server config: {err}"))?;
-    let config = Arc::new(config);
+    let config = authority.leaf_server_config(&cache_key, state.server_instance_id.as_deref(),
+        now - TimeDuration::minutes(5), now + TimeDuration::hours(24))?;
     state
         .leaf_configs
         .lock()

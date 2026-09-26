@@ -377,7 +377,7 @@ fn process_admission(context: &BodyLaunchContextV12) -> PlanResult<()> {
     let proc = open_kernel(c"/proc", true)?;
     let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(proc.as_raw_fd(), &mut filesystem) } != 0
-        || filesystem.f_type != PROC_SUPER_MAGIC {
+        || filesystem.f_type != PROC_SUPER_MAGIC as _ {
         return Err(invalid("body supervisor process view is not procfs"));
     }
     let own_ns = open_kernel(c"/proc/self/ns/pid", false)?;

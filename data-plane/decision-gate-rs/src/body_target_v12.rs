@@ -322,7 +322,7 @@ fn require_filesystem(fd: RawFd, expected: libc::c_long, deadline: u64) -> Resul
         return Err(std::io::Error::last_os_error().into());
     }
     live(deadline)?;
-    if filesystem.f_type != expected { return Err(rejected("body target filesystem is not the required kernel view")); }
+    if filesystem.f_type != expected as _ { return Err(rejected("body target filesystem is not the required kernel view")); }
     Ok(())
 }
 

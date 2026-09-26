@@ -50,7 +50,7 @@ fn filesystem(fd: RawFd, expected: libc::c_long) -> Result<()> {
     if unsafe { libc::fstatfs(fd, &mut value) } != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    if value.f_type != expected { return Err(rejected("generation control has an unexpected filesystem")); }
+    if value.f_type != expected as _ { return Err(rejected("generation control has an unexpected filesystem")); }
     Ok(())
 }
 

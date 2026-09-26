@@ -300,7 +300,7 @@ fn verify_mount(directory: RawFd, path: &Path, record: &Custody) -> Result<(u64,
     if unsafe { libc::fstatfs(directory, &mut filesystem) } != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    if filesystem.f_type != TMPFS_MAGIC || filesystem.f_bsize <= 0
+    if filesystem.f_type != TMPFS_MAGIC as _ || filesystem.f_bsize <= 0
         || filesystem.f_blocks.checked_mul(filesystem.f_bsize as u64) != Some(record.output_bytes)
         || filesystem.f_files != record.output_inodes || filesystem.f_bfree > filesystem.f_blocks
         || filesystem.f_bavail > filesystem.f_bfree || filesystem.f_ffree > filesystem.f_files {

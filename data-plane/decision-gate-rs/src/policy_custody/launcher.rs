@@ -3169,7 +3169,7 @@ fn verify_read_only_mount_root(
             "verified root filesystem is not mounted read-only",
         ));
     }
-    Ok((identity, filesystem.f_type))
+    Ok((identity, filesystem.f_type as libc::c_long))
 }
 
 fn verify_read_only_block_device(fd: RawFd) -> Result<BlockIdentity, LauncherError> {
@@ -4647,7 +4647,7 @@ fn verify_cgroup2_descriptor(fd: RawFd) -> Result<(), LauncherError> {
     if unsafe { libc::fstatfs(fd, &mut filesystem) } != 0 {
         return Err(io::Error::last_os_error().into());
     }
-    if filesystem.f_type != CGROUP2_SUPER_MAGIC
+    if filesystem.f_type != CGROUP2_SUPER_MAGIC as _
         || identity.uid != 0
         || identity.mode & 0o022 != 0
     {

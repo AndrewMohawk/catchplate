@@ -4470,7 +4470,7 @@ fn verify_execution_descriptors(
     if unsafe {
         libc::fstatfs(cgroup_fd.as_raw_fd(), &mut filesystem)
     } != 0
-        || filesystem.f_type != CGROUP2_SUPER_MAGIC
+        || filesystem.f_type != CGROUP2_SUPER_MAGIC as _
         || cgroup.mode & libc::S_IFMT as u32
             != libc::S_IFDIR as u32
         || cgroup.uid != 0

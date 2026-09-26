@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-response-capture.v1.schema.json",
+  "title": "Serverware native response capture v1",
+  "description": "Closed local capture artifact retaining the original native runtime-proof envelope and the local native quote verifier result. Shape validation does not verify collector/server signatures, Nitro evidence, actual response capture, current witness state or production/action admission. The collector signs the canonical whole artifact with collector_signature omitted; capture_digest is SHA256 of those same canonical bytes. Those cryptographic and cross-field joins are runtime duties, not established by this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "kind", "resultScope", "okForAction", "environment",
+    "captureMode", "external_capture", "runtime_proof", "native_verification",
+    "collector_signature"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeResponseCapture/v1"},
+    "kind": {"const": "ServerwareNativeResponseCapture"},
+    "resultScope": {"const": "local-capture-and-native-quote-only"},
+    "okForAction": {"const": false},
+    "environment": {"const": "native-unadmitted"},
+    "captureMode": {"enum": ["buffered", "streaming", "observation"]},
+    "external_capture": {
+      "description": "Capture-family observations checked by the actual client against its request, TLS session and complete response. An object here is not itself proof that those observations occurred.",
+      "type": "object"
+    },
+    "runtime_proof": {"$ref": "native-response-runtime-proof.v1.schema.json"},
+    "native_verification": {"$ref": "#/$defs/nativeVerification"},
+    "collector_signature": {"$ref": "#/$defs/collectorSignature"}
+  },
+  "$defs": {
+    "nativeVerification": {
+      "description": "Exact successful local output of verify_native_response_attestation.py. Claimed fields matching this shape do not replace invoking the configured verifier with independently pinned expectations and trust roots.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion", "ok", "debug", "resultScope", "okForAction",
+        "statementApiVersion", "serverStatementSha256", "signatureSha256",
+        "clientNonce", "quoteChallenge", "bootId", "keyId",
+        "controlPlaneResponseSigningKeyId", "policyHash", "dataPlaneBinaryDigest",
+        "requestBindingSha256", "attestationDocumentSha256", "issuedAtUnix",
+        "statementIssuedAtUnix"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeResponseAttestationVerification/v1"},
+        "ok": {"const": true},
+        "debug": {"const": false},
+        "resultScope": {"const": "local-signature-and-native-quote-only"},
+        "okForAction": {"const": false},
+        "statementApiVersion": {
+          "enum": [
+            "serverware.proxyResponseStatement/v2",
+            "serverware.streamingResponseStatement/v1",
+            "serverware.responseObservationStatement/v1"
+          ]
+        },
+        "serverStatementSha256": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "signatureSha256": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "clientNonce": {"$ref": "native-response-runtime-proof.v1.schema.json#/$defs/bufferedNonce"},
+        "quoteChallenge": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/nonce"},
+        "bootId": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/nonce"},
+        "keyId": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "controlPlaneResponseSigningKeyId": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "policyHash": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "dataPlaneBinaryDigest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "requestBindingSha256": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "attestationDocumentSha256": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "issuedAtUnix": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"},
+        "statementIssuedAtUnix": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"}
+      }
+    },
+    "collectorSignature": {
+      "description": "Ed25519 signature over canonical artifact bytes with the entire collector_signature member omitted. capture_digest is the sha256-prefixed lowercase SHA256 of exactly those bytes; key_id identifies the actual collector public-key SPKI. The schema does not establish collector authorization or verify either commitment.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "public_key_pem", "signature", "capture_digest"],
+      "properties": {
+        "algorithm": {"const": "Ed25519"},
+        "key_id": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "public_key_pem": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/ed25519Pem"},
+        "signature": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/ed25519SignatureText"},
+        "capture_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"}
+      }
+    }
+  }
+}

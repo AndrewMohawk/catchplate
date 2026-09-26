@@ -21,11 +21,18 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::{Date, Duration as TimeDuration, Month, OffsetDateTime};
 use url::Url;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::{FromDer, X509Certificate};
+
+#[path = "../proof_client_native_verifier_v1.rs"]
+mod proof_client_native_verifier_v1;
+#[path = "../proof_client_native_session_v1.rs"]
+mod proof_client_native_session_v1;
+use proof_client_native_session_v1::NativeCaptureSessionV1;
+use proof_client_native_verifier_v1::NativeVerifierConfigV1;
 
 const EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
 const STREAM_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Stream-v1";
@@ -81,6 +88,7 @@ struct Args {
     request_body: Option<PathBuf>,
     collector_key: PathBuf,
     verifier_key: Option<PathBuf>,
+    native_verifier: Option<NativeVerifierConfigV1>,
     control_plane_response_key: PathBuf,
     expected_server_instance_id: Option<String>,
     client_nonce: Option<[u8; 32]>,
@@ -342,6 +350,7 @@ where
     let mut request_body = None;
     let mut collector_key = None;
     let mut verifier_key = None;
+    let mut native_options = BTreeMap::new();
     let mut control_plane_response_key = None;
     let mut expected_server_instance_id = None;
     let mut expected_principal_id = None;
@@ -394,6 +403,13 @@ where
             "--request-body" => request_body = Some(PathBuf::from(value)),
             "--collector-key" => collector_key = Some(PathBuf::from(value)),
             "--verifier-key" => verifier_key = Some(PathBuf::from(value)),
+            "--native-verifier" | "--native-verifier-sha256"
+            | "--native-expectations" | "--native-expectations-sha256"
+            | "--native-trust-roots" | "--native-trust-roots-sha256" => {
+                if value.is_empty() || native_options.insert(flag.clone(), value).is_some() {
+                    return Err(format!("{flag} requires one nonempty value and cannot repeat"));
+                }
+            }
             "--control-plane-response-key" => {
                 control_plane_response_key = Some(PathBuf::from(value))
             }
@@ -590,6 +606,26 @@ where
         );
     }
     parse_proxy_endpoint(&proxy, proxy_raw_development, proxy_server_name.as_deref())?;
+    let native_verifier = if native_options.is_empty() {
+        None
+    } else {
+        if native_options.len() != 6 {
+            return Err("native capture requires all six --native-* verifier path and SHA-256 options".to_string());
+        }
+        if verifier_key.is_some() || proxy_raw_development
+            || client_nonce.is_none() || expected_server_instance_id.is_none()
+        {
+            return Err("native capture requires mTLS, explicit --nonce and --expected-server-instance-id, and forbids --verifier-key".to_string());
+        }
+        Some(NativeVerifierConfigV1 {
+            executable: PathBuf::from(native_options.remove("--native-verifier").expect("six native options")),
+            executable_sha256: native_options.remove("--native-verifier-sha256").expect("six native options"),
+            expectations: PathBuf::from(native_options.remove("--native-expectations").expect("six native options")),
+            expectations_sha256: native_options.remove("--native-expectations-sha256").expect("six native options"),
+            trust_roots: PathBuf::from(native_options.remove("--native-trust-roots").expect("six native options")),
+            trust_roots_sha256: native_options.remove("--native-trust-roots-sha256").expect("six native options"),
+        })
+    };
     Ok(Args {
         stream,
         observation,
@@ -607,6 +643,7 @@ where
         request_body,
         collector_key: collector_key.ok_or("--collector-key is required")?,
         verifier_key,
+        native_verifier,
         control_plane_response_key: control_plane_response_key
             .ok_or("--control-plane-response-key is required")?,
         expected_server_instance_id,
@@ -5303,8 +5340,144 @@ fn verify_vendor_tee(
     )
 }
 
+/// Native evidence shape and public-key consistency only. The configured
+/// independently pinned verifier must separately verify the original quote.
+/// No caller flag can turn this into legacy vendor-verifier admission.
+fn validate_native_runtime_proof_shape(proof: &Value) -> Result<(), String> {
+    const PROOF_FIELDS: [&str; 6] = [
+        "apiVersion", "kind", "server_statement", "server_statement_sha256",
+        "server_signature", "native_attestation",
+    ];
+    const SIGNATURE_FIELDS: [&str; 4] = ["algorithm", "key_id", "public_key_pem", "signature"];
+    const EVIDENCE_FIELDS: [&str; 3] = ["apiVersion", "attestationDocumentB64", "responseProofPublicKey"];
+    require_exact_fields(proof.as_object().ok_or("native runtime proof is not an object")?,
+        &PROOF_FIELDS, "native runtime proof")?;
+    if canonical_json(proof).len() > 128 * 1024
+        || required_string(proof, "apiVersion")? != "serverware.nativeResponseRuntimeProof/v1"
+        || required_string(proof, "kind")? != "ServerwareNativeResponseRuntimeProof" {
+        return Err("native runtime proof has the wrong type or exceeds its bound".to_owned());
+    }
+    required_object(proof, "server_statement")?;
+    required_digest(proof, "server_statement_sha256")?;
+    let signature = required_object(proof, "server_signature")?;
+    require_exact_fields(signature, &SIGNATURE_FIELDS, "native server signature")?;
+    if signature.get("algorithm").and_then(Value::as_str) != Some("Ed25519") {
+        return Err("native server signature algorithm is not Ed25519".to_owned());
+    }
+    let pem = signature.get("public_key_pem").and_then(Value::as_str)
+        .filter(|value| value.len() <= 4096).ok_or("native server public key is invalid")?;
+    let (key, key_id) = decode_public_key_pem(pem)?;
+    if signature.get("key_id").and_then(Value::as_str) != Some(key_id.as_str()) {
+        return Err("native server SPKI identity mismatch".to_owned());
+    }
+    let encoded_signature = signature.get("signature").and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("ed25519:"))
+        .filter(|value| value.len() == 86).ok_or("native server signature is invalid")?;
+    let signature_bytes = decode_base64url(encoded_signature, "native server signature", 64)?;
+    if signature_bytes.len() != 64
+        || general_purpose::URL_SAFE_NO_PAD.encode(&signature_bytes) != encoded_signature {
+        return Err("native server signature is not canonical raw64 base64url".to_owned());
+    }
+    let evidence = required_object(proof, "native_attestation")?;
+    require_exact_fields(evidence, &EVIDENCE_FIELDS, "native key evidence")?;
+    if evidence.get("apiVersion").and_then(Value::as_str)
+        != Some("serverware.nativeResponseProofKeyEvidence/v1") {
+        return Err("native key evidence has the wrong type".to_owned());
+    }
+    let encoded_key = evidence.get("responseProofPublicKey").and_then(Value::as_str)
+        .filter(|value| value.len() == 43).ok_or("native raw public key is invalid")?;
+    let raw_key = decode_base64url(encoded_key, "native raw public key", 32)?;
+    if raw_key.len() != 32 || raw_key.iter().all(|byte| *byte == 0)
+        || raw_key.as_slice() != key.as_bytes()
+        || general_purpose::URL_SAFE_NO_PAD.encode(&raw_key) != encoded_key {
+        return Err("native raw key does not match the actual server signature key".to_owned());
+    }
+    let encoded_document = evidence.get("attestationDocumentB64").and_then(Value::as_str)
+        .filter(|value| (2..=16384).contains(&value.len()))
+        .ok_or("native original document exceeds its bound")?;
+    let document = decode_base64url(encoded_document, "native original document", 1)?;
+    if document.len() > 12288
+        || general_purpose::URL_SAFE_NO_PAD.encode(&document) != encoded_document {
+        return Err("native original document is oversized or noncanonical base64url".to_owned());
+    }
+    Ok(())
+}
+
+/// Ordinary capture checks must never become production/action authority just
+/// because a native evidence object was supplied. Root's separate configured
+/// verifier and final admission orchestration remain mandatory.
+fn native_capture_only(mut capture: Value) -> Result<Value, String> {
+    let fields = capture.as_object_mut().ok_or("native capture result is not an object")?;
+    fields.insert("environment".to_owned(), Value::String("native-unadmitted".to_owned()));
+    fields.insert("classification".to_owned(), Value::String("client-capture-verified".to_owned()));
+    fields.insert("okForAction".to_owned(), Value::Bool(false));
+    Ok(capture)
+}
+
+fn verify_native_runtime_proof(
+    proof: &Value,
+    response: &HttpResponse,
+    expectations: &RuntimeProofExpectations<'_>,
+) -> Result<Value, String> {
+    validate_native_runtime_proof_shape(proof)?;
+    let statement = proof.get("server_statement").ok_or("native server statement is missing")?;
+    native_capture_only(verify_buffered_capture(
+        statement, required_digest(proof, "server_statement_sha256")?,
+        required_object(proof, "server_signature")?, response, expectations,
+    )?)
+}
+
+fn verify_native_stream_runtime_proof(
+    proof: &Value,
+    response: &StreamResponse,
+    expectations: &RuntimeProofExpectations<'_>,
+) -> Result<Value, String> {
+    validate_native_runtime_proof_shape(proof)?;
+    let statement = proof.get("server_statement").ok_or("native streaming statement is missing")?;
+    native_capture_only(verify_stream_capture(
+        statement, required_digest(proof, "server_statement_sha256")?,
+        required_object(proof, "server_signature")?, response, expectations,
+    )?)
+}
+
+fn verify_native_observation_runtime_proof(
+    proof: &Value,
+    response: &StreamResponse,
+    expectations: &ObservationExpectations<'_>,
+) -> Result<Value, String> {
+    validate_native_runtime_proof_shape(proof)?;
+    let statement = proof.get("server_statement").ok_or("native observation statement is missing")?;
+    let signature = required_object(proof, "server_signature")?;
+    validate_observation_statement_signature_shape(statement, signature)?;
+    native_capture_only(verify_observation_capture(
+        statement, required_digest(proof, "server_statement_sha256")?,
+        signature, response, expectations,
+    )?)
+}
+
 fn verify_runtime_proof(
     proof: &Value,
+    response: &HttpResponse,
+    expectations: &RuntimeProofExpectations<'_>,
+) -> Result<Value, String> {
+    if proof.get("apiVersion").and_then(Value::as_str)
+        != Some("serverware.proxyResponseRuntimeProof/v2")
+        || proof.get("kind").and_then(Value::as_str) != Some("ServerwareProxyResponseRuntimeProof")
+    {
+        return Err("runtime response proof has the wrong type".to_string());
+    }
+    let statement = proof.get("server_statement").filter(|value| value.is_object())
+        .ok_or("runtime proof is missing server_statement")?;
+    verify_buffered_capture(
+        statement, required_string(proof, "server_statement_sha256")?,
+        required_object(proof, "server_signature")?, response, expectations,
+    )
+}
+
+fn verify_buffered_capture(
+    statement: &Value,
+    declared_statement_digest: &str,
+    signature: &Map<String, Value>,
     response: &HttpResponse,
     expectations: &RuntimeProofExpectations<'_>,
 ) -> Result<Value, String> {
@@ -5315,16 +5488,6 @@ fn verify_runtime_proof(
     let expected_client_request_digest = expectations.client_request_digest;
     let expected_principal_id = expectations.principal_id;
     let max_age_seconds = expectations.max_age_seconds;
-    if proof.get("apiVersion").and_then(Value::as_str)
-        != Some("serverware.proxyResponseRuntimeProof/v2")
-        || proof.get("kind").and_then(Value::as_str) != Some("ServerwareProxyResponseRuntimeProof")
-    {
-        return Err("runtime response proof has the wrong type".to_string());
-    }
-    let statement = proof
-        .get("server_statement")
-        .filter(|value| value.is_object())
-        .ok_or("runtime proof is missing server_statement")?;
     if statement.get("apiVersion").and_then(Value::as_str)
         != Some("serverware.proxyResponseStatement/v2")
     {
@@ -5333,10 +5496,9 @@ fn verify_runtime_proof(
     let typed_statement = decode_response_statement_schema(statement)?;
     let canonical_statement = canonical_json(statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
-    if required_string(proof, "server_statement_sha256")? != statement_digest {
+    if declared_statement_digest != statement_digest {
         return Err("server response statement digest mismatch".to_string());
     }
-    let signature = required_object(proof, "server_signature")?;
     if signature.get("algorithm").and_then(Value::as_str) != Some("Ed25519") {
         return Err("server response signature algorithm is not Ed25519".to_string());
     }
@@ -5617,15 +5779,10 @@ fn decode_observation_runtime_proof(response: &StreamResponse) -> Result<(Value,
     Ok((proof, digest))
 }
 
-fn validate_observation_runtime_proof_shape(proof: &Value) -> Result<(), String> {
-    const PROOF_FIELDS: [&str; 6] = [
-        "apiVersion",
-        "kind",
-        "server_statement",
-        "server_statement_sha256",
-        "server_signature",
-        "vendor_tee",
-    ];
+fn validate_observation_statement_signature_shape(
+    statement: &Value,
+    signature: &Map<String, Value>,
+) -> Result<(), String> {
     const STATEMENT_FIELDS: [&str; 22] = [
         "apiVersion",
         "issued_at_unix",
@@ -5697,6 +5854,37 @@ fn validate_observation_runtime_proof_shape(proof: &Value) -> Result<(), String>
     const TLS_FIELDS: [&str; 3] = ["type", "label", "value"];
     const AUTHORITY_FIELDS: [&str; 3] = ["source", "upstream_truth", "downstream_delivery"];
     const SIGNATURE_FIELDS: [&str; 4] = ["algorithm", "key_id", "public_key_pem", "signature"];
+    let statement = statement.as_object().ok_or("observation statement is not an object")?;
+    require_exact_fields(statement, &STATEMENT_FIELDS, "observation statement")?;
+    for (field, fields, label) in [
+        ("request", REQUEST_FIELDS.as_slice(), "observation request"),
+        ("policy", POLICY_FIELDS.as_slice(), "observation policy"),
+        ("credential", CREDENTIAL_FIELDS.as_slice(), "observation credential"),
+        ("authorization", AUTHORIZATION_FIELDS.as_slice(), "observation authorization"),
+        ("emitted_response", RESPONSE_FIELDS.as_slice(), "observation emitted response"),
+        ("server_instance", SERVER_FIELDS.as_slice(), "observation server instance"),
+        ("tls_channel_binding", TLS_FIELDS.as_slice(), "observation TLS binding"),
+        ("observation_authority", AUTHORITY_FIELDS.as_slice(), "observation authority"),
+    ] {
+        require_exact_fields(
+            statement.get(field).and_then(Value::as_object)
+                .ok_or_else(|| format!("{label} is not an object"))?,
+            fields, label,
+        )?;
+    }
+    if let Some(upstream) = statement.get("upstream_observation").and_then(Value::as_object) {
+        require_exact_fields(upstream, &UPSTREAM_FIELDS, "upstream observation")?;
+    } else if statement.get("upstream_observation") != Some(&Value::Null) {
+        return Err("upstream observation must be an object or null".to_string());
+    }
+    require_exact_fields(signature, &SIGNATURE_FIELDS, "observation server signature")
+}
+
+fn validate_observation_runtime_proof_shape(proof: &Value) -> Result<(), String> {
+    const PROOF_FIELDS: [&str; 6] = [
+        "apiVersion", "kind", "server_statement", "server_statement_sha256",
+        "server_signature", "vendor_tee",
+    ];
     const VENDOR_FIELDS: [&str; 5] = [
         "platform",
         "provider",
@@ -5759,61 +5947,10 @@ fn validate_observation_runtime_proof_shape(proof: &Value) -> Result<(), String>
         .as_object()
         .ok_or("observation runtime proof is not an object")?;
     require_exact_fields(proof_object, &PROOF_FIELDS, "observation runtime proof")?;
-    let statement = required_object(proof, "server_statement")?;
-    require_exact_fields(statement, &STATEMENT_FIELDS, "observation statement")?;
-    for (field, fields, label) in [
-        ("request", REQUEST_FIELDS.as_slice(), "observation request"),
-        ("policy", POLICY_FIELDS.as_slice(), "observation policy"),
-        (
-            "credential",
-            CREDENTIAL_FIELDS.as_slice(),
-            "observation credential",
-        ),
-        (
-            "authorization",
-            AUTHORIZATION_FIELDS.as_slice(),
-            "observation authorization",
-        ),
-        (
-            "emitted_response",
-            RESPONSE_FIELDS.as_slice(),
-            "observation emitted response",
-        ),
-        (
-            "server_instance",
-            SERVER_FIELDS.as_slice(),
-            "observation server instance",
-        ),
-        (
-            "tls_channel_binding",
-            TLS_FIELDS.as_slice(),
-            "observation TLS binding",
-        ),
-        (
-            "observation_authority",
-            AUTHORITY_FIELDS.as_slice(),
-            "observation authority",
-        ),
-    ] {
-        require_exact_fields(
-            statement
-                .get(field)
-                .and_then(Value::as_object)
-                .ok_or_else(|| format!("{label} is not an object"))?,
-            fields,
-            label,
-        )?;
-    }
-    if let Some(upstream) = statement
-        .get("upstream_observation")
-        .and_then(Value::as_object)
-    {
-        require_exact_fields(upstream, &UPSTREAM_FIELDS, "upstream observation")?;
-    } else if statement.get("upstream_observation") != Some(&Value::Null) {
-        return Err("upstream observation must be an object or null".to_string());
-    }
-    let signature = required_object(proof, "server_signature")?;
-    require_exact_fields(signature, &SIGNATURE_FIELDS, "observation server signature")?;
+    validate_observation_statement_signature_shape(
+        proof.get("server_statement").ok_or("observation statement is missing")?,
+        required_object(proof, "server_signature")?,
+    )?;
     let vendor = required_object(proof, "vendor_tee")?;
     require_exact_fields(vendor, &VENDOR_FIELDS, "observation vendor TEE evidence")?;
     let quote = vendor
@@ -6009,16 +6146,28 @@ fn verify_stream_runtime_proof(
         .get("streaming_response_statement")
         .filter(|value| value.is_object())
         .ok_or("stream runtime proof is missing streaming_response_statement")?;
+    verify_stream_capture(
+        statement, required_digest(proof, "streaming_response_statement_sha256")?,
+        required_object(proof, "server_signature")?, response, expectations,
+    )
+}
+
+fn verify_stream_capture(
+    statement: &Value,
+    declared_statement_digest: &str,
+    signature: &Map<String, Value>,
+    response: &StreamResponse,
+    expectations: &RuntimeProofExpectations<'_>,
+) -> Result<Value, String> {
     validate_streaming_statement_with_shared_contract(
         statement,
         expectations.control_plane_response_key,
     )?;
     let canonical_statement = canonical_json(statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
-    if required_digest(proof, "streaming_response_statement_sha256")? != statement_digest {
+    if declared_statement_digest != statement_digest {
         return Err("streaming response statement digest mismatch".to_string());
     }
-    let signature = required_object(proof, "server_signature")?;
     if signature.get("algorithm").and_then(Value::as_str) != Some("Ed25519") {
         return Err("stream server response signature algorithm is not Ed25519".to_string());
     }
@@ -6851,6 +7000,19 @@ fn verify_observation_runtime_proof(
         .get("server_statement")
         .filter(|value| value.is_object())
         .ok_or("observation runtime proof is missing server_statement")?;
+    verify_observation_capture(
+        statement, required_digest(proof, "server_statement_sha256")?,
+        required_object(proof, "server_signature")?, response, expectations,
+    )
+}
+
+fn verify_observation_capture(
+    statement: &Value,
+    declared_statement_digest: &str,
+    signature: &Map<String, Value>,
+    response: &StreamResponse,
+    expectations: &ObservationExpectations<'_>,
+) -> Result<Value, String> {
     if statement.get("apiVersion").and_then(Value::as_str)
         != Some("serverware.responseObservationStatement/v1")
     {
@@ -6858,10 +7020,9 @@ fn verify_observation_runtime_proof(
     }
     let canonical_statement = canonical_json(statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
-    if required_digest(proof, "server_statement_sha256")? != statement_digest {
+    if declared_statement_digest != statement_digest {
         return Err("observation statement digest mismatch".to_string());
     }
-    let signature = required_object(proof, "server_signature")?;
     if signature.get("algorithm").and_then(Value::as_str) != Some("Ed25519") {
         return Err("observation server signature algorithm is not Ed25519".to_string());
     }
@@ -7014,6 +7175,7 @@ fn finish_stream_collection<T: Read + Write>(
     args: &Args,
     mut tls: StreamOwned<ClientConnection, T>,
     pending: PendingStreamCollection,
+    native: Option<&NativeCaptureSessionV1>,
 ) -> Result<Value, String> {
     let PendingStreamCollection {
         mut staged_body,
@@ -7032,6 +7194,39 @@ fn finish_stream_collection<T: Read + Write>(
     let tls_exporter = general_purpose::URL_SAFE_NO_PAD.encode(exporter);
     let (peer_spiffe_id, peer_leaf_digest) = peer_identity(&tls)?;
     let (runtime_proof, runtime_proof_digest) = decode_stream_runtime_proof(&response)?;
+    if let Some(native) = native {
+        native.require_original(&runtime_proof,
+            response.trailers.get(STREAM_PROOF_B64_TRAILER).ok_or("native stream proof missing")?,
+            &runtime_proof_digest, MAX_RUNTIME_PROOF_BYTES)?;
+        let capture = verify_native_stream_runtime_proof(&runtime_proof, &response,
+            &RuntimeProofExpectations {
+                nonce: &nonce, tls_exporter: &tls_exporter,
+                peer_spiffe_id: &peer_spiffe_id, peer_leaf_digest: &peer_leaf_digest,
+                client_request_digest: &expected_client_request_digest,
+                principal_id: &args.expected_principal_id,
+                control_plane_response_key: &native.control_plane_key,
+                max_age_seconds: args.max_age_seconds,
+            })?;
+        let (payload, mut summary) = native.verify_and_sign("streaming", &runtime_proof,
+            capture, &runtime_proof_digest, &nonce_bytes, &peer_spiffe_id)?;
+        native.protect_target(&proof_target)?;
+        let body_target = ResolvedOutputTarget {
+            display_path: staged_body.target.clone(), name: staged_body.target_name.clone(),
+            directory: Arc::clone(&staged_body.directory),
+        };
+        native.protect_target(&body_target)?;
+        let body_path = publish_verified_stream_outputs_resolved_with_precommit(
+            staged_body, proof_target, &payload, &response.body_digest, response.body_bytes,
+            || { native.recheck()?; native.protect_target(&body_target) })?;
+        summary["proof_path"] = json!(proof_path);
+        summary["body_path"] = json!(body_path);
+        summary["body_sha256"] = json!(response.body_digest);
+        summary["body_bytes"] = json!(response.body_bytes);
+        summary["response_status"] = json!(response.status);
+        summary["tls_peer_leaf_certificate_sha256"] = json!(peer_leaf_digest);
+        summary["tls_channel_binding"] = json!(tls_exporter);
+        return Ok(summary);
+    }
     let (control_plane_response_key, _) =
         load_control_plane_response_key(&args.control_plane_response_key)?;
     let mut external_capture = verify_stream_runtime_proof(
@@ -7132,6 +7327,7 @@ fn finish_observation_collection<T: Read + Write>(
     request: ObservationRequestCommitment,
     nonce: String,
     nonce_bytes: [u8; 32],
+    native: Option<&NativeCaptureSessionV1>,
 ) -> Result<Value, String> {
     let proof_path = proof_target.display_path.clone();
     let response = read_observation_response(
@@ -7156,6 +7352,48 @@ fn finish_observation_collection<T: Read + Write>(
     let tls_exporter = general_purpose::URL_SAFE_NO_PAD.encode(exporter);
     let (peer_spiffe_id, peer_leaf_digest) = peer_identity(&tls)?;
     let (runtime_proof, runtime_proof_digest) = decode_observation_runtime_proof(&response)?;
+    if let Some(native) = native {
+        native.require_original(&runtime_proof,
+            response.trailers.get(OBSERVATION_PROOF_B64_TRAILER).ok_or("native observation proof missing")?,
+            &runtime_proof_digest, MAX_OBSERVATION_RUNTIME_PROOF_BYTES)?;
+        let mut capture = verify_native_observation_runtime_proof(&runtime_proof, &response,
+            &ObservationExpectations {
+                nonce: &nonce, nonce_bytes: &nonce_bytes, tls_exporter: &tls_exporter,
+                peer_spiffe_id: &peer_spiffe_id, peer_leaf_digest: &peer_leaf_digest,
+                expected_server_instance_id: args.expected_server_instance_id.as_deref(),
+                expected_principal_id: &args.expected_principal_id,
+                control_plane_response_key: &native.control_plane_key,
+                request: &request, max_age_seconds: args.max_age_seconds,
+            })?;
+        capture["captured_at_unix"] = json!(now_unix());
+        capture["client_nonce"] = json!(nonce);
+        capture["tls_channel_binding"] = json!({
+            "type":"tls-exporter", "label":"EXPORTER-Serverware-Response-Observation-v1",
+            "value":tls_exporter,
+        });
+        capture["server_instance_id"] = json!(peer_spiffe_id);
+        capture["tls_peer_leaf_certificate_sha256"] = json!(peer_leaf_digest);
+        let (payload, mut summary) = native.verify_and_sign("observation", &runtime_proof,
+            capture, &runtime_proof_digest, &nonce_bytes, &peer_spiffe_id)?;
+        native.protect_target(&proof_target)?;
+        let body_target = ResolvedOutputTarget {
+            display_path: staged_body.target.clone(), name: staged_body.target_name.clone(),
+            directory: Arc::clone(&staged_body.directory),
+        };
+        native.protect_target(&body_target)?;
+        let body_path = publish_verified_stream_outputs_resolved_with_precommit(
+            staged_body, proof_target, &payload, &response.body_digest, response.body_bytes,
+            || { native.recheck()?; native.protect_target(&body_target) })?;
+        summary["proof_path"] = json!(proof_path);
+        summary["body_path"] = json!(body_path);
+        summary["body_sha256"] = json!(response.body_digest);
+        summary["body_bytes"] = json!(response.body_bytes);
+        summary["request_aggregate_digest"] = json!(request.aggregate_digest);
+        summary["response_status"] = json!(response.status);
+        summary["tls_peer_leaf_certificate_sha256"] = json!(peer_leaf_digest);
+        summary["tls_channel_binding"] = json!(tls_exporter);
+        return Ok(summary);
+    }
     let (control_plane_response_key, _) =
         load_control_plane_response_key(&args.control_plane_response_key)?;
     let verified = verify_observation_runtime_proof(
@@ -7248,7 +7486,11 @@ fn finish_observation_collection<T: Read + Write>(
     }))
 }
 
-fn collect(args: Args) -> Result<Value, String> {
+fn collect(mut args: Args) -> Result<Value, String> {
+    // Opt-in trust inputs are admitted before any network connection or output
+    // staging. A native failure never falls back to the vendor/dev profile.
+    let native = args.native_verifier.take()
+        .map(|config| NativeCaptureSessionV1::open(&args, config)).transpose()?;
     let method = if args.observation {
         validate_observation_method(&args.method)?
     } else {
@@ -7269,10 +7511,19 @@ fn collect(args: Args) -> Result<Value, String> {
     };
     let stream_outputs = if args.stream || args.observation {
         let (body_target, proof_target) = validate_stream_output_paths(&args)?;
+        if let Some(native) = native.as_ref() {
+            native.protect_target(&body_target)?;
+            native.protect_target(&proof_target)?;
+        }
         Some((StagedBody::create_resolved(body_target)?, proof_target))
     } else {
         None
     };
+    let native_buffered_output = if native.is_some() && !args.stream && !args.observation {
+        let target = ResolvedOutputTarget::resolve(&args.out, "native buffered proof output", true, true)?;
+        native.as_ref().expect("native session").protect_target(&target)?;
+        Some(target)
+    } else { None };
     let host = args.url.host_str().ok_or("--url has no host")?.to_string();
     let port = args
         .url
@@ -7284,6 +7535,7 @@ fn collect(args: Args) -> Result<Value, String> {
         format!("{host}:{port}")
     };
     let timeout = Duration::from_secs(args.timeout_seconds);
+    if let Some(native) = native.as_ref() { native.recheck()?; }
     let mut proxy = connect_proxy(&args, timeout)?;
     let mut connect = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");
     for (name, value) in &args.proxy_headers {
@@ -7300,8 +7552,16 @@ fn collect(args: Args) -> Result<Value, String> {
         return Err(format!("proxy CONNECT failed with status {connect_status}"));
     }
 
-    let roots = load_roots(&args.ca)?;
-    let config = ClientConfig::builder()
+    let roots = match native.as_ref() {
+        Some(native) => native.roots(),
+        None => load_roots(&args.ca)?,
+    };
+    let builder = if native.is_some() {
+        ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+    } else {
+        ClientConfig::builder()
+    };
+    let config = builder
         .with_root_certificates(roots)
         .with_no_client_auth();
     let server_name = ServerName::try_from(host.clone())
@@ -7349,6 +7609,7 @@ fn collect(args: Args) -> Result<Value, String> {
             &args.request_headers,
             args.request_body.as_deref(),
         )?;
+        if let Some(native) = native.as_ref() { native.recheck()?; }
         tls.write_all(&prepared.head)
             .and_then(|_| tls.write_all(&prepared.body))
             .map_err(|err| format!("write observation request: {err}"))?;
@@ -7364,6 +7625,7 @@ fn collect(args: Args) -> Result<Value, String> {
             prepared.commitment,
             nonce,
             nonce_bytes,
+            native.as_ref(),
         );
     }
     let proof_nonce_header = if args.stream {
@@ -7378,6 +7640,7 @@ fn collect(args: Args) -> Result<Value, String> {
         request.push_str(&format!("{name}: {value}\r\n"));
     }
     request.push_str("Connection: close\r\n\r\n");
+    if let Some(native) = native.as_ref() { native.recheck()?; }
     tls.write_all(request.as_bytes())
         .map_err(|err| format!("write proof request: {err}"))?;
     tls.flush()
@@ -7394,6 +7657,7 @@ fn collect(args: Args) -> Result<Value, String> {
                 nonce,
                 nonce_bytes,
             },
+            native.as_ref(),
         );
     }
     let response = read_response(&mut tls)?;
@@ -7407,6 +7671,9 @@ fn collect(args: Args) -> Result<Value, String> {
         .headers
         .get("x-serverware-response-proof-b64")
         .ok_or("captured response is missing X-Serverware-Response-Proof-B64")?;
+    if native.is_some() && runtime_proof_b64.len() > MAX_RUNTIME_PROOF_BYTES * 4 / 3 + 4 {
+        return Err("native buffered proof exceeds its bound".to_string());
+    }
     let runtime_proof_bytes = general_purpose::URL_SAFE_NO_PAD
         .decode(runtime_proof_b64.as_bytes())
         .map_err(|_| "runtime response proof is invalid base64url")?;
@@ -7419,6 +7686,34 @@ fn collect(args: Args) -> Result<Value, String> {
     }
     let runtime_proof: Value = serde_json::from_slice(&runtime_proof_bytes)
         .map_err(|err| format!("parse runtime response proof: {err}"))?;
+    if let Some(native) = native.as_ref() {
+        native.require_original(&runtime_proof, runtime_proof_b64, declared_runtime_digest,
+            MAX_RUNTIME_PROOF_BYTES)?;
+        let capture = verify_native_runtime_proof(&runtime_proof, &response,
+            &RuntimeProofExpectations {
+                nonce: &nonce, tls_exporter: &tls_exporter,
+                peer_spiffe_id: &peer_spiffe_id, peer_leaf_digest: &peer_leaf_digest,
+                client_request_digest: expected_client_request_digest.as_deref()
+                    .ok_or("native buffered request digest missing")?,
+                principal_id: &args.expected_principal_id,
+                control_plane_response_key: &native.control_plane_key,
+                max_age_seconds: args.max_age_seconds,
+            })?;
+        let (payload, mut summary) = native.verify_and_sign("buffered", &runtime_proof,
+            capture, declared_runtime_digest, &nonce_bytes, &peer_spiffe_id)?;
+        let target = native_buffered_output.ok_or("native buffered output not admitted")?;
+        atomic_write_private_noreplace_in_directory_with_precommit(&target.directory,
+            &target.name, &payload, || { native.recheck()?; native.protect_target(&target) })
+            .map_err(|err| if err.destination_published {
+                format!("{}; native proof retained because destination was published", err.message)
+            } else { err.message })?;
+        summary["proof_path"] = json!(target.display_path);
+        summary["response_status"] = json!(response.status);
+        summary["response_body_digest"] = json!(sha256_prefixed(&response.body));
+        summary["tls_peer_leaf_certificate_sha256"] = json!(peer_leaf_digest);
+        summary["tls_channel_binding"] = json!(tls_exporter);
+        return Ok(summary);
+    }
     let (control_plane_response_key, _) =
         load_control_plane_response_key(&args.control_plane_response_key)?;
     let external_capture = verify_runtime_proof(

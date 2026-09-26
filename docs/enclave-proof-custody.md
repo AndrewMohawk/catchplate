@@ -2,10 +2,11 @@
 
 Status: source-only, unbuilt and unexecuted. This adds actual generated Ed25519
 key custody, fresh original NSM response quotation and a separate local native
-verification path behind the existing response-proof protocol. The existing
-proof-client CLI does not accept the new native envelope. This is not independent
-admission of hardware, a production key-release or rollback service, or completed
-native startup.
+verification path behind the existing response-proof protocol. An explicit
+[native proof-client profile](native-proof-client.md) joins real client capture
+to separately pinned quote verification; the legacy profile remains separate.
+This is not independent admission of hardware, a production key-release or
+rollback service, or completed native startup.
 
 ## Keep authorization in the existing operation owner
 
@@ -203,7 +204,7 @@ and [native response-envelope schema](../schemas/native-response-runtime-proof.v
 Schema conformance alone is not cryptographic verification, independent response
 observation, current-witness evidence or action admission.
 
-### Separate response verifier; existing client remains closed
+### Separate response verifier and explicit client profile
 
 [verify_native_response_attestation.py](../scripts/verify_native_response_attestation.py)
 accepts the exact six-field native envelope. It checks the closed outer and
@@ -235,14 +236,17 @@ fresh quote does not prove that the attested key's signed network claims happene
 Nonce freshness/reservation, expectation provenance/currentness, trusted time
 and watchdogs remain caller responsibilities.
 
-The existing `serverware-proof-client` production path requires its separately
+The legacy `serverware-proof-client` production path requires its separately
 signed `serverware.vendorTeeVerification/v1` envelope, exact verified claims and
 the existing HTTP/TLS/request/body joins before capture publication. It does
-**not** accept this distinct native proof. In particular, the local result is
-not a substitute for that verifier signature, and the native PKI profile cannot
-truthfully manufacture its legacy `revocation_checked=true` assertion. Native
-client trust-profile admission and full HTTP/TLS capture integration remain
-missing; neither parser fallback nor a copied success verdict is introduced.
+not accept this distinct native proof through that profile. In particular, the
+local result is not a substitute for that verifier signature, and the native PKI profile cannot
+truthfully manufacture its legacy `revocation_checked=true` assertion. The
+[explicit native capture profile](native-proof-client.md) instead combines the
+shared full HTTP/TLS capture checks and a pinned invocation of this verifier,
+then signs a distinct `native-unadmitted`, `okForAction=false` artifact. Its
+independently admitted executable packaging and configuration remain required;
+neither parser fallback nor a copied success verdict is introduced.
 
 ## Gate integration and remaining boundary
 

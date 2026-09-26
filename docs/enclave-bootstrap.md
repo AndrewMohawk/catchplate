@@ -79,9 +79,10 @@ original deadline, permanently narrowing key use. The actual native backend
 supplies fresh original response quotation; it has no command fallback. A
 canonical SPIFFE instance ID and the existing response-observation v2 client
 remain required. The distinct native envelope still requires its own admitted
-client verification profile; the existing proof-client CLI does not accept it.
-These are checks of
-actual held material and configuration, not independent proof-key provenance;
+client verification profile. The [explicit native proof-client profile](native-proof-client.md)
+combines actual capture checks with separately pinned quote verification and
+labels its result `native-unadmitted`, not production admission.
+These are checks of actual held material and configuration, not independent proof-key provenance;
 in particular, v2 client presence is not evidence that it was production-created
 or that its authority is native.
 

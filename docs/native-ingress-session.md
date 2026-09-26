@@ -132,8 +132,11 @@ object is not evidence of their provenance. This API cannot inspect whether
 the caller installed a dangerous custom certificate/handshake verifier. The
 caller must use a reviewed verifier that checks `CertificateVerify`; the result
 joins quote/exporter/certificate observations on the supplied connection,
-not blanket approval of its handshake policy. An automatic network bootstrap
-client is not supplied in this slice.
+not blanket approval of its handshake policy. The separate
+[bounded native ingress client](native-ingress-client.md) now supplies a fixed
+network owner and standard private-CA TLS configuration for this API. It still
+requires independently pinned, fresh startup/session inputs and does not
+install a CA or complete production enrollment.
 
 The returned compact JSON is fewer than 4096 bytes, without a framing LF, and
 has exactly eight fields:
@@ -156,7 +159,7 @@ session-admission or action token.
 
 ## Acceptance boundary
 
-This slice does not supply an automatically bootstrapped client or CA installer.
+The session API itself does not supply network bootstrap or a CA installer.
 The [production trust flow](../goal.md#attestation-goal) still requires independent
 release/source/EIF/policy/configuration mapping, key/KMS Recipient custody,
 trusted time, current off-host witness/CAS/revocation state, one-use challenge

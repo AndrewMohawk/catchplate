@@ -128,7 +128,7 @@ RUN --network=none set -eu; \
     cp -R /source/schemas /schemas
 RUN --network=none cargo build --release --frozen \
         --bin serverware-production-launcher --bin serverware-native-response-verifier \
-        --bin serverware-native-ingress-verifier \
+        --bin serverware-native-ingress-verifier --bin serverware-native-ingress-client \
         --bin serverware-native-parent-relay --bin serverware-native-parent-ingress \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
@@ -138,6 +138,9 @@ RUN --network=none cargo build --release --frozen \
     && test "$(readelf -l /src/target/release/serverware-native-ingress-verifier | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-ingress-verifier | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-ingress-verifier)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-ingress-client | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-ingress-client | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-ingress-client)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-parent-relay | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-parent-relay | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-parent-relay)" -le 67108864 \
@@ -153,6 +156,9 @@ COPY --from=launcher-build /src/target/release/serverware-native-response-verifi
 
 FROM scratch AS native-ingress-verifier-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-ingress-verifier /serverware-native-ingress-verifier
+
+FROM scratch AS native-ingress-client-artifact
+COPY --from=launcher-build /src/target/release/serverware-native-ingress-client /serverware-native-ingress-client
 
 FROM scratch AS native-parent-relay-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-parent-relay /serverware-native-parent-relay
@@ -197,6 +203,7 @@ COPY --from=build /src/target/release/serverware-policy-custody-bounded-cleanup-
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-response-verifier /usr/local/libexec/serverware-native-response-verifier
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-ingress-verifier /usr/local/libexec/serverware-native-ingress-verifier
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-ingress-client /usr/local/libexec/serverware-native-ingress-client
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-parent-relay /usr/local/libexec/serverware-native-parent-relay
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-parent-ingress /usr/local/libexec/serverware-native-parent-ingress
 COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/serverware/policy-custody

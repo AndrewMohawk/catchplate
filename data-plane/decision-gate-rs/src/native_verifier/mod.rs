@@ -16,6 +16,9 @@ mod ingress_certificates;
 mod ingress_cli;
 mod ingress_config;
 mod ingress_session;
+mod ingress_client;
+
+pub(crate) use ingress_client::IngressClientBootstrap;
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
@@ -24,6 +27,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run() -> Result<(), String> { cli::run() }
 pub(crate) fn run_ingress() -> Result<(), String> { ingress_cli::run() }
+
+pub(crate) fn prepare_ingress_client(raw: &[u8], startup_raw: &[u8], session_raw: &[u8], roots_raw: &[u8])
+    -> Result<IngressClientBootstrap, String> {
+    ingress_client::prepare(raw, startup_raw, session_raw, roots_raw)
+}
 
 /// Verify fresh ingress originals against the actual retained outer client TLS
 /// connection. The independently held expectation nonce is the raw client

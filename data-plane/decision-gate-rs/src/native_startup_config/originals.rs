@@ -9,11 +9,12 @@ use super::super::{is_sha256_digest, sha256_prefixed};
 use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
+use zeroize::Zeroizing;
 
 const MAX_ORIGINAL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4096;
@@ -101,16 +102,34 @@ fn read_original(file: &mut File, expected: Fingerprint, pin: &str, maximum: usi
         return Err("native startup original identity changed".to_owned());
     }
     file.seek(SeekFrom::Start(0)).map_err(|_| "seek native startup original")?;
-    let mut bytes = Vec::with_capacity(expected.6 as usize);
-    Read::by_ref(file).take(maximum as u64 + 1).read_to_end(&mut bytes)
-        .map_err(|_| "read bounded native startup original")?;
-    if bytes.len() as u64 != expected.6 || bytes.len() > maximum
-        || sha256_prefixed(&bytes) != pin
+    let expected_length = usize::try_from(expected.6)
+        .map_err(|_| "native startup original length overflows")?;
+    if expected_length == 0 || expected_length > maximum {
+        return Err("native startup original length exceeds its bound".to_owned());
+    }
+    let capacity = expected_length.checked_add(1)
+        .ok_or("native startup original read bound overflows")?;
+    // One fixed allocation covers the admitted bytes and an EOF probe. A
+    // growing file must not cause a secret-bearing Vec reallocation, and every
+    // error path zeroizes whatever bytes were already obtained.
+    let mut bytes = Zeroizing::new(vec![0u8; capacity]);
+    let mut length = 0usize;
+    while length < bytes.len() {
+        match file.read(&mut bytes[length..]) {
+            Ok(0) => break,
+            Ok(read) => length += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err("read bounded native startup original".to_owned()),
+        }
+    }
+    if length != expected_length
+        || sha256_prefixed(&bytes[..length]) != pin
         || fingerprint(&file.metadata().map_err(|_| "reinspect native startup original")?) != expected
     {
         return Err("native startup original bytes or metadata differ from its pin".to_owned());
     }
-    Ok(bytes)
+    bytes.truncate(length);
+    Ok(std::mem::take(&mut *bytes))
 }
 
 /// No Clone, public file accessor or successful-admission conversion. Keep this
@@ -143,14 +162,33 @@ impl HeldOriginal {
     pub(super) fn read(artifact: ArtifactV1, maximum: usize)
         -> Result<(Self, Vec<u8>), String>
     {
+        let mut held = Self::open(artifact, maximum)?;
+        let mut bytes = Zeroizing::new(read_original(&mut held.file,
+            held.fingerprint, &held.artifact.sha256, held.maximum)?);
+        held.recheck_name()?;
+        Ok((held, std::mem::take(&mut *bytes)))
+    }
+
+    /// Check the same private metadata predicate before obtaining any private
+    /// bytes, then retain zeroizing storage through all post-read checks.
+    pub(super) fn read_private(artifact: ArtifactV1, maximum: usize)
+        -> Result<(Self, Zeroizing<Vec<u8>>), String>
+    {
+        let mut held = Self::open(artifact, maximum)?;
+        held.require_private()?;
+        let bytes = Zeroizing::new(read_original(&mut held.file,
+            held.fingerprint, &held.artifact.sha256, held.maximum)?);
+        held.recheck_name()?;
+        held.require_private()?;
+        Ok((held, bytes))
+    }
+
+    fn open(artifact: ArtifactV1, maximum: usize) -> Result<Self, String> {
         if maximum == 0 || maximum > MAX_ORIGINAL_BYTES || !is_sha256_digest(&artifact.sha256) {
             return Err("native startup original bound or SHA-256 pin is invalid".to_owned());
         }
-        let (mut file, fingerprint) = open_named(&artifact.path, maximum)?;
-        let bytes = read_original(&mut file, fingerprint, &artifact.sha256, maximum)?;
-        let held = Self { artifact, file, fingerprint, maximum, poisoned: false };
-        held.recheck_name()?;
-        Ok((held, bytes))
+        let (file, fingerprint) = open_named(&artifact.path, maximum)?;
+        Ok(Self { artifact, file, fingerprint, maximum, poisoned: false })
     }
 
     fn recheck_name(&self) -> Result<(), String> {
@@ -168,7 +206,8 @@ impl HeldOriginal {
         if std::mem::replace(&mut self.poisoned, true) {
             return Err("native startup original owner is poisoned".to_owned());
         }
-        read_original(&mut self.file, self.fingerprint, &self.artifact.sha256, self.maximum)?;
+        let _original = Zeroizing::new(read_original(
+            &mut self.file, self.fingerprint, &self.artifact.sha256, self.maximum)?);
         self.recheck_name()?;
         self.poisoned = false;
         Ok(())

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-ingress-client.v1.schema.json",
+  "title": "Serverware native ingress client configuration v1",
+  "description": "Closed configuration original, at most 16384 bytes, for one fixed native-ingress quotation exchange. Shape does not establish pin provenance, nonce freshness or one-use reservation, release admission, private-key isolation, CA installation permission or action authority. Runtime validates canonical endpoint/path spelling, actual held files, signatures and the actual TLS session.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence",
+    "startupExpectations", "sessionExpectations", "trustRoots",
+    "clientCertificate", "clientPrivateKey"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeIngressClient/v1"},
+    "endpoint": {
+      "description": "Canonical literal SocketAddr with nonzero port, not a hostname. Runtime rejects unspecified, multicast, broadcast and scoped IPv6 destinations, including mapped IPv4 exclusions; private and loopback literals remain permitted. This spelling pattern is not an IP parser or route-admission rule.",
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64,
+      "pattern": "^(?:[0-9.]+|\\[[0-9a-f:.]+\\]):[0-9]+(?![\\s\\S])"
+    },
+    "timeoutMilliseconds": {"type": "integer", "minimum": 100, "maximum": 30000},
+    "startupEvidence": {"$ref": "#/$defs/artifact"},
+    "startupExpectations": {"$ref": "#/$defs/artifact"},
+    "sessionExpectations": {"$ref": "#/$defs/artifact"},
+    "trustRoots": {"$ref": "#/$defs/artifact"},
+    "clientCertificate": {"$ref": "#/$defs/artifact"},
+    "clientPrivateKey": {
+      "description": "Independently pinned private-key original. Runtime additionally requires a bounded canonical PKCS8 PEM and owner-only, single-link regular file owned by root or the effective caller. A hash is not secret storage or hardware custody.",
+      "$ref": "#/$defs/artifact"
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "description": "Exact absolute path without traversal, repeated separators, trailing separators or dot components. Runtime enforces a 4096-byte path cap, canonical filesystem equality and no-follow acquisition of every component; schema shape alone cannot establish those properties.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 4096,
+          "pattern": "^/[^\\u0000]+(?![\\s\\S])"
+        },
+        "sha256": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])"
+        }
+      }
+    }
+  }
+}

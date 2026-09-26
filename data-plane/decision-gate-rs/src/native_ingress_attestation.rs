@@ -48,7 +48,15 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
     }
     // The helper adds no body LF. The successful original already carries its
     // sole LF, counted in Content-Length. This connection is always closed.
-    let _ = stream.write_all(&response);
+    if stream.write_all(&response).is_err() || stream.flush().is_err() {
+        return;
+    }
+    // The client requires authenticated TLS EOF after the exact body. Queue
+    // close_notify only after the original response completed; never attempt
+    // a second response after a partial write or deadline failure.
+    if let DirectProxyStream::MutualTls(tls) = stream {
+        tls.conn.send_close_notify();
+    }
     let _ = stream.flush();
 }
 

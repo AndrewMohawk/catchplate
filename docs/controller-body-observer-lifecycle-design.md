@@ -4,6 +4,9 @@ Status: design for the remaining producer, not implemented release authority.
 The current source is unbuilt and unexecuted. This document proposes a complete
 session owner instead of treating more record decoders as a working observer.
 It authorizes no provisioning, workload release, tests or production use.
+The [initial persistence composition](controller-body-observer-persistence.md)
+implements only the held, gated starting slice; continuous acquisition and the
+release dependencies below remain unfinished.
 
 ## Starting point and hard boundaries
 
@@ -36,7 +39,10 @@ acceptable bridge. See [history](controller-body-observer-history.md) and
 
 ## Ownership and proposed interfaces
 
-Names in this section are proposed interfaces, not existing callable APIs.
+The full responsibilities in this section are proposed. `BodyObservationSessionV14`
+and `HistoryOriginalStoreV14` currently implement only initial gated custody and
+local original publication, not the policy, continuation or terminal authority
+described in this table.
 
 | Owner | Exclusive responsibility | Must not accept |
 | --- | --- | --- |
@@ -251,8 +257,9 @@ enrollment of its signer/configuration remains an external prerequisite.
 
 ## Cohesive implementation sequence
 
-1. **One session owner and release gates.** Consume existing actual initial
-   custody into one state machine, with fixed policy/store/terminal-source
+1. **One session owner and release gates.** The initial persisted gated session
+   now consumes actual initial custody and local storage together. Complete its
+   fixed policy, independently admitted storage and actual terminal-source
    dependencies. Integrate worker-channel state and fail-closed cleanup. Until
    dependencies are genuinely admitted, preserve abort-only behavior.
 2. **Acquisition through durable acknowledgment.** Implement the bounded real

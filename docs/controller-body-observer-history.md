@@ -180,6 +180,13 @@ delegates to the existing exact-pidfd cleanup path. Read-only record bytes and
 chain hashes can be copied for inspection, but those copies do not transfer
 process custody, freshness or action authority.
 
+The owner can now be consumed by `HeldInitialBodyHistoryV14::persist_initial`
+into a [persisted initial gated session](controller-body-observer-persistence.md).
+That composition retains actual process custody while publishing the exact maps,
+snapshot and event originals and a fixed local commit record into a consumed
+preprovisioned directory. It supplies neither continuous history transport nor
+independently admitted storage/execution policy, readiness or continuation.
+
 ## What is still missing
 
 Structural consistency does not establish that all tasks/events were observed,
@@ -194,10 +201,11 @@ decoded event variants alone do not close these dependencies.
 
 Release also requires independently retained output custody and a host-surviving
 actual terminal-status source: the namespace-local worker cannot supply its own
-post-init-death completion. None of that session lifecycle, monitored resume,
-durable store, kernel-policy admission or terminal reconciliation/signing is
-implemented by this history model. The separately versioned signed consumer and
-serving owner remain required; v14 records cannot weaken or replace existing v13
+post-init-death completion. The initial persistence composition does not supply
+that continuous session lifecycle, monitored resume, admitted durable history
+transport, kernel-policy admission or terminal reconciliation/signing. The
+separately versioned signed consumer and serving owner remain required;
+v14 records cannot weaken or replace existing v13
 admission. Neither a closed replay nor `End` proves cgroup destruction or release
 readiness. The lifecycle design records the staged implementation and authority
 boundaries without activating them.

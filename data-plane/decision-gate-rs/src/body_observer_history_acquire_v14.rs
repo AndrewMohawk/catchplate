@@ -267,6 +267,10 @@ impl HeldInitialBodyHistoryV14 {
 
     pub(crate) fn initial_snapshot_original(&self) -> &[u8] { &self.snapshot_original }
     pub(crate) fn initial_event_original(&self) -> &[u8] { &self.event_original }
+    pub(super) fn history_scope(&self) -> &HistoryScopeV14 { &self.scope }
+    pub(super) fn original_maps(&self) -> &[u8] { self.snapshot.original_maps() }
+    pub(super) fn maps_original_sha256(&self) -> Digest { self.maps_original_sha256 }
+    pub(super) fn initial_snapshot_sha256(&self) -> Digest { self.snapshot_sha256 }
     pub(crate) fn head_sha256(&self) -> Digest { self.replay.head_sha256() }
     pub(crate) fn event_count(&self) -> u64 { self.replay.event_count() }
     pub(crate) fn deadline(&self) -> u64 { self.snapshot.deadline() }

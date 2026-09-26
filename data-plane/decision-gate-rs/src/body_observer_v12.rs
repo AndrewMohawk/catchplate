@@ -41,6 +41,12 @@ mod body_observer_syscall_info_v14;
 mod body_observer_task_proc_v14;
 #[path = "body_observer_task_acquire_v14.rs"]
 mod body_observer_task_acquire_v14;
+#[path = "body_observer_history_files_v14.rs"]
+mod body_observer_history_files_v14;
+#[path = "body_observer_history_store_v14.rs"]
+mod body_observer_history_store_v14;
+#[path = "body_observer_session_v14.rs"]
+mod body_observer_session_v14;
 
 use crate::plan_protocol::{Digest, PlanProtocolError, PlanResult};
 use crate::plan_protocol::body_observer_contract_v12::BodyObserverLaunchV12;
@@ -51,6 +57,7 @@ use body_observer_process_v12::HeldNamespaceWorkerV12;
 use body_observer_worker_contract_v12::{receive_stop, NamespaceWorkerStopV12};
 pub(crate) use body_observer_snapshot_v12::StoppedBodyMappingSnapshotV12;
 pub(crate) use body_observer_history_acquire_v14::HeldInitialBodyHistoryV14;
+pub(crate) use body_observer_session_v14::BodyObservationSessionV14;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 /// Non-cloneable custody of a received, independently remeasured, still-gated
@@ -165,6 +172,15 @@ impl StoppedBodyMappingSnapshotV12 {
     /// continuous execution, and structural replay does not grant authority.
     pub(crate) fn begin_history(self) -> PlanResult<HeldInitialBodyHistoryV14> {
         HeldInitialBodyHistoryV14::acquire(self)
+    }
+}
+
+impl HeldInitialBodyHistoryV14 {
+    /// Retain actual gated custody while publishing the exact initial originals
+    /// into a consumed, preprovisioned directory. This does not admit storage
+    /// isolation or execution policy, acknowledge readiness, or resume a task.
+    pub(crate) fn persist_initial(self, directory: OwnedFd) -> PlanResult<BodyObservationSessionV14> {
+        BodyObservationSessionV14::persist_initial(self, directory)
     }
 }
 

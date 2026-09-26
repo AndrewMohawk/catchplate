@@ -108,13 +108,7 @@ impl QuotedResponseProofKeyV1 {
         self.key.finish(deadline)
     }
 
-    /// Rejoin the actual CA and all original role-4 scope bytes, then retain the
-    /// minimum owner/identity/caller deadline. This is not quote verification.
-    pub fn verify_identity(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
-        deadline: u64) -> Result<(), String> {
-        let deadline = self.key.begin(deadline.min(identity.deadline()))?;
-        self.key.deadline = deadline;
-        let deadline = identity.begin(deadline)?;
+    fn require_identity(&self, identity: &EnclaveRuntimeIdentityV1) -> Result<(), String> {
         let actual_ca: [u8; 32] = Sha256::digest(identity.authority.certificate_der()).into();
         let public_key = self.key.signing_key.verifying_key().to_bytes();
         if self.owner_ca_sha256 != actual_ca || self.policy != identity.scope.policy
@@ -123,8 +117,39 @@ impl QuotedResponseProofKeyV1 {
                 self.request_binding).as_slice() {
             return Err("native response-proof key belongs to another runtime identity".to_owned());
         }
+        Ok(())
+    }
+
+    /// Rejoin the actual CA and all original role-4 scope bytes, then retain the
+    /// minimum owner/identity/caller deadline. This is not quote verification.
+    pub fn verify_identity(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
+        deadline: u64) -> Result<(), String> {
+        let deadline = self.key.begin(deadline.min(identity.deadline()))?;
+        self.key.deadline = deadline;
+        let deadline = identity.begin(deadline)?;
+        self.require_identity(identity)?;
         identity.finish(deadline)?;
         self.key.finish(deadline)
+    }
+
+    /// Acquire a fresh original quote for this exact held key and boot binding.
+    /// The custody runtime must first admit its actual statement/signature and
+    /// client nonce. Neither this method nor the returned public original is
+    /// signature authorization, independent quote verification or admission.
+    /// The operation only clips its local deadline; it does not replace the
+    /// constructor quote, regenerate a key or renew either owner's lifetime.
+    pub(crate) fn quote_fresh(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
+        nonce: [u8; 32], deadline: u64) -> Result<RuntimeKeyQuoteV1, String> {
+        let deadline = self.key.begin(deadline.min(identity.deadline()))?;
+        let deadline = identity.begin(deadline)?;
+        self.require_identity(identity)?;
+        let public_key = self.key.signing_key.verifying_key().to_bytes().to_vec();
+        let user_data = identity.binding(RESPONSE_PROOF, &public_key, self.request_binding);
+        let document = identity.nsm.attest(&public_key, &nonce, &user_data, deadline)?;
+        self.require_identity(identity)?;
+        identity.finish(deadline)?;
+        self.key.finish(deadline)?;
+        Ok(RuntimeKeyQuoteV1 { document, user_data, public_key, nonce })
     }
 
     /// Exact authorized canonical statement bytes only. No domain, message or

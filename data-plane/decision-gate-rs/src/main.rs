@@ -10,12 +10,14 @@ mod control_plane_client_config;
 mod native_gate_bootstrap;
 mod native_gate_inputs;
 mod native_proof_signer;
+mod native_response_attestation;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};
 use control_plane_client_config::ControlPlaneClientConfig;
 use native_gate_bootstrap::prepare_native_tls_gate_state;
 use native_proof_signer::CustodySignerTransport;
+use native_response_attestation::{native_response_runtime_proof, response_attestation_available};
 
 use base64::{engine::general_purpose, Engine as _};
 use csv::{ByteRecord, ReaderBuilder, WriterBuilder};
@@ -16748,7 +16750,7 @@ fn response_proof_context(
     let Some(client_nonce) = lowered.get(RESPONSE_PROOF_NONCE_HEADER) else {
         return Ok(None);
     };
-    if state.response_proof_attestation_command.is_none() || state.server_instance_id.is_none() {
+    if !response_attestation_available(state) || state.server_instance_id.is_none() {
         return Err("response proof service is not configured".to_string());
     }
     if client_nonce.contains('=') {
@@ -16832,7 +16834,7 @@ fn response_observation_context(
         return Ok(None);
     };
     let v1_configured =
-        state.response_proof_attestation_command.is_some()
+        response_attestation_available(state)
             && state.server_instance_id.is_some();
     if !v1_configured
         && state.response_observation_v2_client.is_none()
@@ -16903,7 +16905,7 @@ fn streaming_response_proof_context(
     let Some(client_nonce) = lowered.get(STREAM_RESPONSE_PROOF_NONCE_HEADER) else {
         return Ok(None);
     };
-    if state.response_proof_attestation_command.is_none() || state.server_instance_id.is_none() {
+    if !response_attestation_available(state) || state.server_instance_id.is_none() {
         return Err("streaming response proof service is not configured".to_string());
     }
     let client_nonce_bytes = decode_streaming_response_proof_nonce(client_nonce)?;
@@ -17581,6 +17583,11 @@ fn attach_response_proof_inner(
     let signature = state
         .response_proof_signer
         .sign_buffered(&statement, &authorization_context.authorization_binding)?;
+    let runtime_proof = if let Some(proof) = native_response_runtime_proof(
+        state, &statement, &signature, &context.client_nonce_bytes,
+    )? {
+        proof
+    } else {
     let attested_claims = SensitiveJsonValue::new(json!({
         "server_statement_sha256":statement_digest,
         "server_statement_api_version":"serverware.proxyResponseStatement/v2",
@@ -17629,7 +17636,7 @@ fn attach_response_proof_inner(
         .filter(|value| value.is_object())
         .cloned()
         .ok_or("response proof attestation output is missing vendor_tee")?;
-    let runtime_proof = SensitiveJsonValue::new(json!({
+    SensitiveJsonValue::new(json!({
         "apiVersion":"serverware.proxyResponseRuntimeProof/v2",
         "kind":"ServerwareProxyResponseRuntimeProof",
         "server_statement":&*statement,
@@ -17641,7 +17648,8 @@ fn attach_response_proof_inner(
             "signature":signature,
         },
         "vendor_tee":vendor_tee,
-    }));
+    }))
+    };
     let runtime_proof_bytes =
         SensitiveResponseBytes::new(canonical_json(&runtime_proof).into_bytes());
     let runtime_proof_digest = sha256_prefixed(&runtime_proof_bytes);
@@ -17999,6 +18007,11 @@ fn build_response_observation_runtime_proof(
             .as_ref()
             .map(|context| &context.authorization_binding),
     )?;
+    let runtime_proof = if let Some(proof) = native_response_runtime_proof(
+        state, &statement, &signature, &context.client_nonce_bytes,
+    )? {
+        proof
+    } else {
     let attested_claims = SensitiveJsonValue::new(json!({
         "server_statement_sha256":statement_digest,
         "server_statement_api_version":"serverware.responseObservationStatement/v1",
@@ -18043,7 +18056,7 @@ fn build_response_observation_runtime_proof(
         .filter(|value| value.is_object())
         .cloned()
         .ok_or("response observation proof attestation output is missing vendor_tee")?;
-    let runtime_proof = SensitiveJsonValue::new(json!({
+    SensitiveJsonValue::new(json!({
         "apiVersion":"serverware.responseObservationRuntimeProof/v1",
         "kind":"ServerwareResponseObservationRuntimeProof",
         "server_statement":&*statement,
@@ -18055,7 +18068,8 @@ fn build_response_observation_runtime_proof(
             "signature":signature,
         },
         "vendor_tee":vendor_tee,
-    }));
+    }))
+    };
     let runtime_proof_bytes =
         SensitiveResponseBytes::new(canonical_json(&runtime_proof).into_bytes());
     if runtime_proof_bytes.len() > MAX_RESPONSE_OBSERVATION_RUNTIME_PROOF_BYTES {
@@ -18440,6 +18454,11 @@ fn build_streaming_response_runtime_proof(
     let signature = state
         .response_proof_signer
         .sign_streaming(&statement, &authorization_context.authorization_binding)?;
+    let runtime_proof = if let Some(proof) = native_response_runtime_proof(
+        state, &statement, &signature, &context.client_nonce_bytes,
+    )? {
+        proof
+    } else {
     let raw_headers_value = SensitiveJsonValue::new(
         serde_json::to_value(&upstream_response.selected_raw_policy_headers_b64)
             .map_err(|_| "serialize_streaming_raw_response_headers".to_string())?,
@@ -18505,7 +18524,7 @@ fn build_streaming_response_runtime_proof(
         .filter(|value| value.is_object())
         .cloned()
         .ok_or("streaming response proof attestation output is missing vendor_tee")?;
-    let runtime_proof = SensitiveJsonValue::new(json!({
+    SensitiveJsonValue::new(json!({
         "apiVersion":"serverware.streamingResponseRuntimeProof/v1",
         "kind":"ServerwareStreamingResponseRuntimeProof",
         "streaming_response_statement":&*statement,
@@ -18517,7 +18536,8 @@ fn build_streaming_response_runtime_proof(
             "signature":signature,
         },
         "vendor_tee":vendor_tee,
-    }));
+    }))
+    };
     encode_streaming_response_runtime_proof(&runtime_proof)
 }
 

@@ -1,9 +1,11 @@
 # Native response-proof key custody
 
 Status: source-only, unbuilt and unexecuted. This adds actual generated Ed25519
-key custody and original NSM quotation behind the existing response-proof
-protocol. It is not independent admission of hardware, a production key-release
-or rollback service, or completed native startup.
+key custody, fresh original NSM response quotation and a separate local native
+verification path behind the existing response-proof protocol. The existing
+proof-client CLI does not accept the new native envelope. This is not independent
+admission of hardware, a production key-release or rollback service, or completed
+native startup.
 
 ## Keep authorization in the existing operation owner
 
@@ -153,6 +155,95 @@ provenance/currentness, fresh one-use challenge reservation, trusted time and
 watchdog enforcement. No default verifier activation or runtime readiness is
 enabled by adding this script.
 
+## Fresh quotation of an actually signed response
+
+The [native response producer](../data-plane/decision-gate-rs/src/native_response_attestation.rs)
+is called by the actual buffered, streaming and v1 observation producers immediately
+after their existing authorization/ledger-gated signatures. For an actual native
+signer it obtains fresh original evidence from the retained runtime identity;
+failure cannot fall back to an external command. Non-native and UDS paths retain
+their existing command-produced `vendor_tee` format. Native context readiness
+uses the actual live backend, and native bootstrap rejects an external
+proof-attestation command rather than requiring one.
+
+`CustodyRuntime::quote_native_signed_statement` accepts the exact canonical
+statement, its existing signature and the actual client nonce. It admits only
+the existing three typed statement families, rejoins canonical bytes, nonce,
+policy and statement age, and verifies the signature under its own held key.
+It neither signs again nor reclaims an attempt or observation reservation. The
+fresh NSM challenge is:
+
+```text
+SHA256("serverware/native-response-attestation-challenge/v1\0"
+       || u8(length(raw_client_nonce)) || raw_client_nonce
+       || SHA256(canonical_statement) || raw_Ed25519_signature_64)
+```
+
+Buffered nonces retain their existing 32–64-byte range; streaming and observation
+nonces remain exactly 32 bytes. This challenge is distinct from the client's
+nonce. `QuotedResponseProofKeyV1::quote_fresh` quotes the same actual role-4 key
+and boot/scope binding with that challenge. It does not replace the constructor
+quote, regenerate a key, renew either owner's lifetime, extend statement age or
+renew authorization. Checks discard late originals, but a deadline alone cannot
+interrupt a blocked NSM ioctl or mutex wait.
+
+The distinct envelope is `serverware.nativeResponseRuntimeProof/v1`, kind
+`ServerwareNativeResponseRuntimeProof`, with exactly `apiVersion`, `kind`,
+`server_statement`, `server_statement_sha256`, `server_signature` and
+`native_attestation`. All three families use these outer names while preserving
+their original signed statement versions and canonical bytes. `server_signature`
+keeps its existing algorithm/key-ID/public-PEM/signature fields;
+`native_attestation` contains only the existing three original role-4 evidence
+fields. No successful verifier claims or `trusted_verifier` signature are
+invented. Producer output is capped at 128 KiB; the existing streaming encoder's
+96 KiB bound remains narrower.
+
+Closed shapes are recorded in the [native key-evidence schema](../schemas/native-response-proof-key-evidence.v1.schema.json)
+and [native response-envelope schema](../schemas/native-response-runtime-proof.v1.schema.json).
+Schema conformance alone is not cryptographic verification, independent response
+observation, current-witness evidence or action admission.
+
+### Separate response verifier; existing client remains closed
+
+[verify_native_response_attestation.py](../scripts/verify_native_response_attestation.py)
+accepts the exact six-field native envelope. It checks the closed outer and
+statement-family fields, actual Ed25519 signature, independently pinned proof
+key, actual client nonce, policy/binary commitments and statement age. It derives
+the challenge above and calls the genuine role-4 verifier on the original Nitro
+document, joining the same boot, proof key, control-plane key and pinned scope.
+A signed binary-digest claim still requires an independently admitted mapping
+from release/PCR expectations to that binary; the quote adds no separate binary
+measurement field.
+
+Its four required pinned-file arguments are the same names as the key verifier.
+The expectation version is `serverware.nativeResponseAttestationExpectations/v1`;
+its `nonce` is the independently held **original client nonce**, not a challenge
+copied from the quote. The remaining boot/key/control-plane-key and release/
+policy/configuration/CA/PCR/EIF/module/age expectations remain independent of
+evidence. Trust uses `serverware.nativeResponseAttestationTrustRoots/v1` and the
+same fixed native PKI profile with empty CRLs. Exact expectation/trust originals
+remain capped at 16 KiB/1 MiB. Input is bounded to 512 KiB, the canonical statement
+to 256 KiB, JSON depth to 64 and nodes to 100,000; producer bounds remain narrower.
+
+Output is at most 4 KiB, version
+`serverware.nativeResponseAttestationVerification/v1`, with
+`resultScope=local-signature-and-native-quote-only` and `okForAction=false`.
+This is unsigned local output, not full nested statement-schema validation,
+control-plane receipt/authorization verification, independent HTTP response or
+TLS-exporter observation, release admission or current witness evidence. A
+fresh quote does not prove that the attested key's signed network claims happened.
+Nonce freshness/reservation, expectation provenance/currentness, trusted time
+and watchdogs remain caller responsibilities.
+
+The existing `serverware-proof-client` production path requires its separately
+signed `serverware.vendorTeeVerification/v1` envelope, exact verified claims and
+the existing HTTP/TLS/request/body joins before capture publication. It does
+**not** accept this distinct native proof. In particular, the local result is
+not a substitute for that verifier signature, and the native PKI profile cannot
+truthfully manufacture its legacy `revocation_checked=true` assertion. Native
+client trust-profile admission and full HTTP/TLS capture integration remain
+missing; neither parser fallback nor a copied success verdict is introduced.
+
 ## Gate integration and remaining boundary
 
 The [gate adapter](../data-plane/decision-gate-rs/src/native_proof_signer.rs)
@@ -178,9 +269,9 @@ be upgraded merely because native quotation or local verification succeeds.
 Independently admitted verifier configuration and role-4 expectations,
 release/configuration/key admission, external checkpoint/witness freshness,
 KMS release, protected persistence, provisioning and complete enclave startup
-remain missing. Existing external
-proof-attestation and response-observation-v2 admission are not replaced by
-native key generation. No daemon, environment mode, hardware proof or production
-activation is supplied by this source work. See the
+remain missing. The native producer replaces the external attestation command
+only on its actual native path; it does not supply independent client acceptance
+or response-observation-v2 admission. No daemon, environment mode, hardware proof
+or production activation is supplied by this source work. See the
 [bootstrap guide](enclave-bootstrap.md) for actual initial policy/state custody
 and its remaining admission requirements.

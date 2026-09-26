@@ -66,7 +66,7 @@ The [cold-input validator](../data-plane/decision-gate-rs/src/native_gate_inputs
 requires both production configuration and an actual production-created shadow
 control. A pending shadow startup request is rejected: this constructor does
 not silently skip or perform its installation. Policy/checkpoint/release-evidence
-filesystem paths or mtimes and an external recipient-attestation command are
+filesystem paths or mtimes and external recipient/proof-attestation commands are
 also rejected. Canonical HTTPS URLs are capped at 4,096 bytes and retain the
 existing URL/token pairing and required service-token checks.
 
@@ -75,9 +75,12 @@ retained verifying key, PEM, key ID and copied metadata must agree. A UDS signer
 is rejected on this native path; the legacy different-UID check remains in the
 separate UDS path. Before state is shared, the actual native proof owner is
 rejoined to the consumed runtime identity's CA, complete role-4 scope and
-original deadline, permanently narrowing key use. Proof-attestation
-command/instance requirements and the existing response-observation v2 client
-remain required. These are checks of
+original deadline, permanently narrowing key use. The actual native backend
+supplies fresh original response quotation; it has no command fallback. A
+canonical SPIFFE instance ID and the existing response-observation v2 client
+remain required. The distinct native envelope still requires its own admitted
+client verification profile; the existing proof-client CLI does not accept it.
+These are checks of
 actual held material and configuration, not independent proof-key provenance;
 in particular, v2 client presence is not evidence that it was production-created
 or that its authority is native.

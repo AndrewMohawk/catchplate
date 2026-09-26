@@ -1216,6 +1216,8 @@ enum LedgerClaimReplayPolicy {
 }
 
 const NATIVE_PROOF_BOOT_DOMAIN: &[u8] = b"serverware/native-proof-custody-boot/v1\0";
+const NATIVE_RESPONSE_ATTESTATION_CHALLENGE_DOMAIN: &[u8] =
+    b"serverware/native-response-attestation-challenge/v1\0";
 
 enum CustodySigningBackend {
     Development(SigningKey),
@@ -1452,6 +1454,128 @@ impl CustodyRuntime {
         });
         self.verify_native_live()?;
         Ok(Some(evidence))
+    }
+
+    /// Quote the same native key only for an exact statement already signed by
+    /// its existing authorization/ledger-gated signer. This verifies that real
+    /// signature; it does not sign again, reclaim the ledger, or admit supplied
+    /// attestation metadata. The returned originals are not a verifier verdict.
+    pub fn quote_native_signed_statement(
+        &self,
+        identity: &mut EnclaveRuntimeIdentityV1,
+        canonical_statement: &[u8],
+        signature: &str,
+        client_nonce: &[u8],
+        deadline: u64,
+    ) -> Result<Value, ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native { owner, quote, .. } = &self.signing_backend else {
+            return Err(native_proof_error("development signing has no native quotation owner".to_owned()));
+        };
+        if canonical_statement.is_empty() || canonical_statement.len() > MAX_FRAME_BYTES
+            || !(MIN_CLIENT_NONCE_BYTES..=MAX_CLIENT_NONCE_BYTES).contains(&client_nonce.len())
+            || signature.len() != "ed25519:".len() + 86 {
+            return Err(invalid_statement("native signed-statement quotation exceeds its fixed bounds"));
+        }
+        let mut owner = owner.lock().map_err(|_| native_proof_error(
+            "native proof owner lock is poisoned".to_owned(),
+        ))?;
+        let deadline = deadline.min(owner.deadline()).min(identity.deadline());
+        owner.verify_live(deadline).map_err(native_proof_error)?;
+        identity.verify_live(deadline).map_err(native_proof_error)?;
+
+        let value: Value = decode_canonical_json(canonical_statement)?;
+        let family = match value.get("apiVersion").and_then(Value::as_str) {
+            Some(RESPONSE_STATEMENT_API_VERSION) => 0,
+            Some(STREAMING_RESPONSE_STATEMENT_API_VERSION) => 1,
+            Some(RESPONSE_OBSERVATION_STATEMENT_API_VERSION) => 2,
+            _ => return Err(invalid_statement("native quotation requires an existing closed statement family")),
+        };
+        let (encoded, statement_nonce, policy, issued_at, fixed_nonce) = match family {
+            0 => {
+                let statement: ProxyResponseStatement = from_value_strict(value, "native buffered statement")?;
+                (canonical_json_bytes(&statement)?, statement.client_nonce,
+                 statement.policy_digest, statement.issued_at_unix, false)
+            }
+            1 => {
+                let statement: StreamingResponseStatement = from_value_strict(value, "native streaming statement")?;
+                (canonical_json_bytes(&statement)?, statement.client_nonce,
+                 statement.policy_digest, statement.issued_at_unix, true)
+            }
+            _ => {
+                let statement: ResponseObservationStatement = from_value_strict(value, "native observation statement")?;
+                (canonical_json_bytes(&statement)?, statement.client_nonce,
+                 statement.policy.digest, statement.issued_at_unix, true)
+            }
+        };
+        if encoded.as_slice() != canonical_statement
+            || (fixed_nonce && client_nonce.len() != 32)
+            || statement_nonce != general_purpose::URL_SAFE_NO_PAD.encode(client_nonce) {
+            return Err(invalid_statement("native quotation differs from the exact typed statement or client nonce"));
+        }
+        let require_fresh = |now: u64| -> Result<(), ProtocolError> {
+            if issued_at == 0 || issued_at > now.saturating_add(30)
+                || now.saturating_sub(issued_at) > MAX_STATEMENT_AGE_SECONDS {
+                return Err(invalid_statement("native quotation statement is outside the allowed clock window"));
+            }
+            Ok(())
+        };
+        let started_epoch_ms = current_epoch_ms()?;
+        require_fresh(started_epoch_ms / 1000)?;
+        validate_sha256_digest("native quotation policy", &policy)?;
+        let mut policy_digest = [0u8; 32];
+        hex::decode_to_slice(&policy[7..], &mut policy_digest)
+            .map_err(|_| invalid_statement("native quotation policy cannot be decoded"))?;
+        owner.verify_policy_commitment(policy_digest, deadline).map_err(native_proof_error)?;
+
+        let public_key = owner.public_key_bytes().map_err(native_proof_error)?;
+        if sha256_prefixed(&ed25519_spki_der(&public_key)) != self.key_id
+            || quote.public_key() != public_key.as_slice()
+            || owner.quote().public_key() != public_key.as_slice()
+            || owner.quote().document() != quote.document()
+            || owner.quote().user_data() != quote.user_data()
+            || owner.quote().nonce() != quote.nonce() {
+            return Err(native_proof_error("native quotation lost its actual key/original quote join".to_owned()));
+        }
+        let encoded_signature = signature.strip_prefix("ed25519:")
+            .ok_or_else(|| invalid_statement("native quotation requires an Ed25519 signature"))?;
+        let signature_bytes: [u8; 64] = decode_receipt_base64url(
+            "native quotation signature", encoded_signature, 64,
+        )?.try_into().map_err(|_| invalid_statement("native quotation signature must contain exactly 64 bytes"))?;
+        let verifying_key = VerifyingKey::from_bytes(&public_key)
+            .map_err(|_| native_proof_error("native quotation public key is invalid".to_owned()))?;
+        verifying_key.verify_strict(canonical_statement, &Signature::from_bytes(&signature_bytes))
+            .map_err(|_| invalid_statement("native quotation signature does not authenticate this exact statement"))?;
+
+        let mut challenge = Sha256::new();
+        challenge.update(NATIVE_RESPONSE_ATTESTATION_CHALLENGE_DOMAIN);
+        challenge.update([client_nonce.len() as u8]);
+        challenge.update(client_nonce);
+        challenge.update(Sha256::digest(canonical_statement));
+        challenge.update(signature_bytes);
+        let challenge: [u8; 32] = challenge.finalize().into();
+        owner.verify_live(deadline).map_err(native_proof_error)?;
+        let fresh = owner.quote_fresh(identity, challenge, deadline).map_err(native_proof_error)?;
+        if fresh.public_key() != public_key.as_slice() || fresh.user_data() != quote.user_data()
+            || fresh.nonce() != &challenge || fresh.document().is_empty()
+            || fresh.document().len() > 0x3000
+            || owner.public_key_bytes().map_err(native_proof_error)? != public_key {
+            return Err(native_proof_error("fresh native quotation does not retain its exact key/scope/challenge".to_owned()));
+        }
+        let evidence = serde_json::json!({
+            "apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+            "attestationDocumentB64": general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
+            "responseProofPublicKey": general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
+        });
+        let finished_epoch_ms = current_epoch_ms()?;
+        if finished_epoch_ms < started_epoch_ms {
+            return Err(invalid_statement("native quotation wall clock moved backwards"));
+        }
+        require_fresh(finished_epoch_ms / 1000)?;
+        owner.verify_live(deadline).map_err(native_proof_error)?;
+        identity.verify_live(deadline).map_err(native_proof_error)?;
+        self.verify_native_process()?;
+        Ok(evidence)
     }
 
     /// Development behavior is unchanged. Native requests cannot cross the

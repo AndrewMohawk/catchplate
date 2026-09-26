@@ -35,6 +35,8 @@ impl Drop for NativeOperationPermit<'_> {
 }
 
 impl CustodySignerTransport {
+    pub(super) fn is_native(&self) -> bool { matches!(self, Self::Native(_)) }
+
     pub(super) fn mode(&self) -> &'static str {
         match self { Self::Unix { .. } => "custody-uds", Self::Native(_) => "custody-native" }
     }
@@ -69,6 +71,24 @@ impl CustodySignerTransport {
         }
     }
 
+    pub(super) fn quote_native_signed_statement(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        statement: &[u8], signature: &str, client_nonce: &[u8], deadline: u64)
+        -> Result<Value, String> {
+        let Self::Native(owner) = self else {
+            return Err("fresh native proof attestation requires its actual native signer".to_owned());
+        };
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |active| (active < CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active + 1))
+            .map_err(|_| "native custody concurrency limit reached".to_owned())?;
+        let _permit = NativeOperationPermit(&owner.active);
+        let evidence = owner.runtime.quote_native_signed_statement(
+            identity, statement, signature, client_nonce, deadline,
+        ).map_err(|error| error.to_string())?;
+        self.verify_live()?;
+        Ok(evidence)
+    }
+
     pub(super) fn manifest(&self) -> Value {
         match self {
             Self::Unix { expected_uid, .. } => json!({
@@ -82,6 +102,8 @@ impl CustodySignerTransport {
                 "quote_assurance":"unverified-original",
                 "quote_sha256":owner.runtime.native_quote().map(|quote| sha256_prefixed(quote.document())),
                 "rollback_protection":"filesystem-development",
+                "response_attestation_profile":"serverware.nativeResponseRuntimeProof/v1",
+                "response_attestation_admission":"independent-client-profile-required",
             }),
         }
     }

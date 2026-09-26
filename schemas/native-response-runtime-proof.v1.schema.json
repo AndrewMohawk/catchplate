@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-response-runtime-proof.v1.schema.json",
+  "title": "Serverware native response runtime proof v1",
+  "description": "Closed native evidence envelope, distinct from legacy vendor/trusted-verifier envelopes. This schema establishes shape only, not cryptographic/Nitro verification, independent response observation, current witness state or action admission. Gate assembly enforces a 128 KiB canonical-envelope bound, exact statement/signature/digest joins and a request-derived fresh challenge; no lifetime is renewed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "kind", "server_statement", "server_statement_sha256",
+    "server_signature", "native_attestation"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeResponseRuntimeProof/v1"},
+    "kind": {"const": "ServerwareNativeResponseRuntimeProof"},
+    "server_statement": {
+      "oneOf": [
+        {"$ref": "#/$defs/bufferedStatement"},
+        {"$ref": "streaming-response-proof.v1.schema.json#/$defs/statement"},
+        {"$ref": "response-observation-proof.v1.schema.json#/$defs/statement"}
+      ]
+    },
+    "server_statement_sha256": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+    "server_signature": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/ed25519Signature"},
+    "native_attestation": {"$ref": "native-response-proof-key-evidence.v1.schema.json"}
+  },
+  "$defs": {
+    "bufferedIdentity": {
+      "description": "Buffered identities are bounded text, not the narrower streaming identifier alphabet. Runtime also checks UTF-8 byte length, trimming and control characters.",
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+    },
+    "bufferedNonce": {
+      "description": "Runtime requires canonical unpadded base64url decoding to exactly 32..64 bytes and exact equality to the independently held client nonce.",
+      "type": "string", "minLength": 43, "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]+(?![\\s\\S])"
+    },
+    "bufferedReleaseAuthority": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "authority_mode", "grant_id", "approval_id", "credential_ref", "credential_version",
+        "request_digest", "operation_digest", "attempt_id", "consumption_identity_digest",
+        "authorization_state_at_upstream_dispatch", "authorization_state_observed_at_epoch_ms",
+        "reservation_expires_at_epoch_ms", "dispatch_expires_at_epoch_ms"
+      ],
+      "properties": {
+        "authority_mode": {"const": "atomic"},
+        "grant_id": {"anyOf": [{"$ref": "#/$defs/bufferedIdentity"}, {"type": "null"}]},
+        "approval_id": {"anyOf": [{"$ref": "#/$defs/bufferedIdentity"}, {"type": "null"}]},
+        "credential_ref": {"anyOf": [{"$ref": "#/$defs/bufferedIdentity"}, {"type": "null"}]},
+        "credential_version": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/uint64"},
+        "request_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "operation_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "attempt_id": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "consumption_identity_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "authorization_state_at_upstream_dispatch": {"const": "dispatching"},
+        "authorization_state_observed_at_epoch_ms": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"},
+        "reservation_expires_at_epoch_ms": {
+          "anyOf": [{"$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"}, {"type": "null"}]
+        },
+        "dispatch_expires_at_epoch_ms": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"}
+      }
+    },
+    "bufferedAuthorizationReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "kind", "principal_id", "route_id", "release_authority", "request", "response"],
+      "properties": {
+        "apiVersion": {"const": "serverware.controlPlaneAuthorizationReceipt/v1"},
+        "kind": {"const": "ControlPlaneAuthorizationReceipt"},
+        "principal_id": {"$ref": "#/$defs/bufferedIdentity"},
+        "route_id": {"$ref": "#/$defs/bufferedIdentity"},
+        "release_authority": {"$ref": "#/$defs/bufferedReleaseAuthority"},
+        "request": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/receiptRequest"},
+        "response": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/receiptResponse"}
+      }
+    },
+    "bufferedUpstreamResponse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "selected_raw_policy_headers_b64", "body_digest", "canonical_digest"],
+      "properties": {
+        "status": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/status"},
+        "selected_raw_policy_headers_b64": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/rawPolicyHeaders"},
+        "body_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "canonical_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"}
+      }
+    },
+    "bufferedHeaderValue": {
+      "description": "Runtime additionally enforces the existing 8192-byte UTF-8 bound.",
+      "type": "string", "minLength": 1, "maxLength": 8192,
+      "pattern": "^[^\\u0000-\\u0008\\u000A-\\u001F\\u007F]+$"
+    },
+    "bufferedSelectedHeaders": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "content-length", "x-serverware-client-request-digest", "x-serverware-policy-hash",
+        "x-serverware-request-digest", "x-serverware-operation-digest", "x-serverware-response-body-sha256"
+      ],
+      "properties": {
+        "content-length": {"type": "string", "maxLength": 8192, "pattern": "^(?:0|[1-9][0-9]*)$"},
+        "content-type": {"$ref": "#/$defs/bufferedHeaderValue"},
+        "x-serverware-client-request-digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "x-serverware-policy-hash": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "x-serverware-request-digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "x-serverware-operation-digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "x-serverware-response-body-sha256": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"}
+      }
+    },
+    "bufferedResponse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "selected_headers", "selected_headers_digest", "body_digest"],
+      "properties": {
+        "status": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/status"},
+        "selected_headers": {"$ref": "#/$defs/bufferedSelectedHeaders"},
+        "selected_headers_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "body_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"}
+      }
+    },
+    "bufferedServerInstance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "identity_digest"],
+      "properties": {
+        "id": {
+          "description": "Buffered server identity is not restricted to a SPIFFE URI. Runtime enforces its existing 1024-byte bound and digest join.",
+          "type": "string", "minLength": 1, "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "identity_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"}
+      }
+    },
+    "bufferedTlsChannelBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": {"const": "tls-exporter"},
+        "value": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/nonce"}
+      }
+    },
+    "bufferedStatement": {
+      "description": "Existing proxyResponseStatement/v2 shape; buffered-specific fields remain separate from the streaming contract. Cross-field authorization, digest, time, nonce and signature checks remain runtime duties.",
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "apiVersion", "issued_at_unix", "client_nonce", "client_request_digest", "principal_id", "route_id",
+        "request_digest", "operation_digest", "release_authority", "control_plane_authorization_receipt",
+        "upstream_response", "response", "policy_digest", "runtime_manifest_digest", "data_plane_binary_digest",
+        "release_digest", "server_instance", "tls_channel_binding"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.proxyResponseStatement/v2"},
+        "issued_at_unix": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"},
+        "client_nonce": {"$ref": "#/$defs/bufferedNonce"},
+        "client_request_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "principal_id": {"$ref": "#/$defs/bufferedIdentity"},
+        "route_id": {"$ref": "#/$defs/bufferedIdentity"},
+        "request_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "operation_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "release_authority": {"$ref": "#/$defs/bufferedReleaseAuthority"},
+        "control_plane_authorization_receipt": {"$ref": "#/$defs/bufferedAuthorizationReceipt"},
+        "upstream_response": {"$ref": "#/$defs/bufferedUpstreamResponse"},
+        "response": {"$ref": "#/$defs/bufferedResponse"},
+        "policy_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "runtime_manifest_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "data_plane_binary_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "release_digest": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"},
+        "server_instance": {"$ref": "#/$defs/bufferedServerInstance"},
+        "tls_channel_binding": {"$ref": "#/$defs/bufferedTlsChannelBinding"}
+      }
+    }
+  }
+}

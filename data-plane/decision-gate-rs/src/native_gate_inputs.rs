@@ -114,10 +114,8 @@ pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs) -> Result<()
         }
     }
 
-    let command = inputs.response_proof_attestation_command.as_deref()
-        .ok_or("native production requires a response proof attestation command")?;
-    if command.is_empty() || command.trim() != command {
-        return Err("native response proof attestation command must be nonempty and trimmed".to_owned());
+    if inputs.response_proof_attestation_command.is_some() {
+        return Err("native bootstrap rejects an external response proof attestation command".to_owned());
     }
     let instance = inputs.server_instance_id.as_deref()
         .ok_or("native production requires a SPIFFE instance ID")?;

@@ -2,6 +2,9 @@
 
 # Portal OAuth And Agent Guide
 
+Workloads in this guide include ordinary applications, services, scheduled jobs,
+and agents. Existing principal, enrollment, and API names remain unchanged.
+
 This guide covers the operator path for connecting OAuth-backed services in the Serverware portal and the agent path for using those credentials without direct credential delivery. Serverware still handles plaintext transiently in its trusted injection path. The Rust gate zeroizes its explicitly owned request/header maps, lease material, buffered and streamed body fragments, strict-JSON graphs, serializer output, proof/signing state, custody frames, and attestation-command staging on normal and error exits. Public diagnostics and cleartext telemetry use fixed reason codes plus bounded counts or digests; they do not reflect provider-derived header names, JSON keys, Gmail message IDs, parser values, transport URLs, or header copies. Authorization-bound canonical requests and JIT review material can still contain the exact provider URL or resource identifier required for approval and policy binding; those structures are trusted in-process authorization inputs, not diagnostic or audit fields. The erasure guarantee stops at gate-owned copies: reqwest, `url`, serde and parser internals, TLS, libc, the system allocator, and the kernel can allocate or retain additional copies that are contained by the measured process or future enclave but are not claimed to be individually erased. Current development Docker therefore does not prove enclave-only custody or allocator-wide zeroization.
 
 [Private deployment screenshot omitted from public source.]
@@ -136,6 +139,35 @@ The broker and Python prototype project the secret to a new JSON object containi
 ## Assign The Credential
 
 Production policy should be published as a signed `PolicyBundle`, not as ad hoc route state. The portal templates are a convenience authoring layer for candidate bundles; the enforced production contract is the signed, activated bundle.
+
+### Choose Or Author The Workload Identity
+
+In **Workload identity and route assignment**, choose an existing workload, create
+a new mTLS workload, or update an existing mTLS workload's selectors. A new
+workload needs a unique principal ID of 1–128 characters, without wildcard,
+whitespace, or controls. Enter only public selectors: SPIFFE,
+DNS, or URI SAN values and optional certificate, public-key SPKI, or issuer-SPKI
+SHA-256 pins. At least one leaf or SAN selector is required; an issuer pin alone
+is not a workload identity. This form neither accepts private keys nor issues
+certificates.
+
+Updating mTLS selectors preserves every other constraint on that principal,
+including source CIDRs, required headers, and proxy authorization. The change
+affects **all routes using that principal**, not only the route being edited.
+Load the selected principal's current selectors, review the all-route impact,
+and explicitly acknowledge its checkbox before previewing an update. Selector
+edits clear that acknowledgement; review and acknowledge again. This update mode
+cannot remove mTLS or upgrade a legacy principal. To isolate a different identity
+instead, create a distinct workload and assign only the intended routes to it.
+
+The form modifies a candidate bundle. **Preview candidate** runs the existing
+compiler and route-match dry-runs; inspect the complete candidate diff and each
+allow/deny result. That preview does not authenticate a client certificate,
+prove possession of its key, provision an issuer, or demonstrate a live mTLS
+handshake. Stage and activate only through the existing independent staged
+authority workflow described below. Neither creating an identity nor a passing
+route-match preview changes the active policy or supplies production approval.
+This UI source has not been browser-verified in the current batch.
 
 [Private deployment screenshot omitted from public source.]
 
@@ -273,19 +305,22 @@ The narrow-viewport capture exercises the same canonical review document and bin
 
 The mobile screenshot shows the responsive operator-passkey and pre-run **New setup** workflows: the empty passkey state, pending configuration/runtime/hardware status pills, next-operator subject field, and assignment controls stacked for a narrow viewport. No durable setup run is selected. This capture demonstrates rendered workflow behavior, not a live provider login, production WebAuthn ceremony, physical YubiKey use, independent enrollment verification, or hardware attestation.
 
-## Teach Agents To Use Serverware
+## Teach Workloads To Use Serverware
 
-Agents do not need provider tokens, OAuth refresh tokens, npm tokens, or API keys. Give them only the proxy/CA setup and the upstream API task.
+Applications, services, jobs, and agents do not need provider tokens, OAuth
+refresh tokens, npm tokens, or API keys. Give them the authenticated proxy/CA
+requirements and upstream task; provision workload client credentials separately
+when the selected principal requires mTLS.
 
 ![Serverware agent enrollment flow](images/agent-enrollment-flow.svg)
 
 Generate an enrollment packet from the portal:
 
 1. Open `http://localhost:3000` or the production control-plane URL.
-2. In **Agent Enrollment**, choose the policy principal that will run the agent.
-3. Enter the Serverware proxy URL, proxy egress CIDR, namespace, CA mount path, and optional pod selector JSON. The control-plane origin is read-only and derived from `SERVERWARE_PUBLIC_URL`; a submitted mismatch is rejected.
-4. Click **Generate enrollment**, then **Download** in the Agent Enrollment panel. In the separate **Credentials** section, click **Download + copy verifier command**. That action downloads the exact signed packet again and copies a fail-closed command that verifies that file before any CA installation step. The Setup and Verify flow exposes the same action beside **Generate enrollment** as **Copy verification command**.
-5. Click **Copy agent instructions** to download the exact packet bytes and copy a fixed `serverware-enrollment` command containing the separately computed raw-file digest, expected principal, and expected nonce. The installed verifier authenticates that file and fresh attestation before emitting the packet's signed `agentHandoff.authenticatedInstructions`. The emitted handoff contains every required step in order, the proxy and CA environment, required CONNECT and provider headers, token identifier when proxy authorization is required, allowed upstream URLs, verified Kubernetes/`nftables` requirements, bodyless GET/HEAD canaries, non-executable write previews, and exact approval/error behavior. It never includes the proxy-authorization secret or a provider credential.
+2. In **Workload enrollment**, choose the existing policy principal for the workload. Review **Workload identity requirements**, including its public mTLS selectors when configured. This display reports policy requirements, not issued credentials or successful authentication.
+3. Enter the Serverware proxy URL, proxy egress CIDR, namespace, CA mount path, and optional pod selector JSON. Configured mTLS requires an **HTTPS** proxy URL; the portal warns and rejects a non-HTTPS submission rather than silently changing it. The control-plane origin is read-only and derived from `SERVERWARE_PUBLIC_URL`; a submitted mismatch is rejected.
+4. Click **Generate enrollment**, then **Download** in the Workload enrollment panel. In the separate **Credentials** section, click **Download + copy verifier command**. That action downloads the exact signed packet again and copies a fail-closed command that verifies that file before any CA installation step. The Setup and Verify flow exposes the same action beside **Generate enrollment** as **Copy verification command**.
+5. Click **Copy workload instructions** to download the exact packet bytes and copy a fixed `serverware-enrollment` command containing the separately computed raw-file digest, expected principal, and expected nonce. The installed verifier authenticates that file and fresh attestation before emitting the packet's signed `agentHandoff.authenticatedInstructions`. The emitted handoff contains every required step in order, the proxy and CA environment, required CONNECT and provider headers, token identifier when proxy authorization is required, allowed upstream URLs, verified Kubernetes/`nftables` requirements, bodyless GET/HEAD canaries, non-executable write previews, and exact approval/error behavior. It never includes the proxy-authorization secret or a provider credential.
 
 The current Coder lane is blocked before build until the sealed clean-room launcher and digest-bound browser/npm closure above exist. Do not treat future Coder output as an installable enrollment release or production evidence, and do not run the superseded consolidated clean-room commands as part of this workflow.
 
@@ -362,8 +397,18 @@ certificate selectors and requires an HTTPS proxy URL. The authenticated
 instructions require a separately provisioned workload certificate/private key
 and independently verified outer-proxy CA, distinct from the intercepted-provider
 TLS settings. Environment variables alone are insufficient. See
-[ordinary workload mTLS](workload-mtls.md) for the two TLS layers, an explicit
-client configuration template and the remaining SDK/provisioning boundary.
+[ordinary workload mTLS](workload-mtls.md#keep-the-two-tls-layers-separate) for the
+two TLS layers. The outer proxy connection uses TLS 1.3, the separately
+provisioned workload certificate/private key, independently verified proxy CA,
+and proxy server-name verification. The inner provider TLS connection uses the
+verified interception CA, **not** the workload client key. Do not substitute a
+provider-TLS client-certificate setting or install the key globally; stop if the
+SDK cannot separate the layers. The implemented source-only
+[Python workload client](workload-mtls.md#explicit-python-workload-client) and
+its [authenticated signed-handoff constructor](workload-mtls.md#construct-from-an-authenticated-signed-handoff)
+make that separation explicit. The portal does not provision these materials,
+install trust, produce an enrollment receipt, or assert that the selected client
+has connected successfully.
 
 This block is not the complete enrollment. Apply the packet's signed Kubernetes NetworkPolicy or recorded-namespace `nftables` deny-by-default egress controls and execute every applicable canary before starting the agent. For a principal that uses top-level `principals[].requiredHeaders`, HTTPS clients must also send those identity headers on the proxy `CONNECT` request and the provider request. For example, curl uses `--proxy-header 'X-Serverware-Agent: mail-reader'` for the tunnel and `-H 'X-Serverware-Agent: mail-reader'` inside it. The enrollment packet exposes these as both `agentHandoff.requiredProxyHeaders` and `agentHandoff.requiredProviderHeaders`; the former also contains the per-enrollment `X-Serverware-Enrollment-Session` value, which is sent on `CONNECT` but not repeated inside that tunnel. The packet separately exposes any `identity.proxyAuthorization` requirements, whose secret must be provisioned outside the packet. Production deployments should prefer source-bound proxy authorization or isolated source CIDRs when the agent SDK cannot set custom proxy headers.
 
@@ -459,7 +504,7 @@ The local provenance and image-signature records are explicitly development fixt
 - Do not create sibling logical credentials for the same Google account under one OAuth project until Serverware has a first-class grant-family model; Google can revoke all project grants for that account together.
 - A host/process failure in the narrow interval after provider issuance and before encrypted revocation material is attached cannot be made atomic with an external OAuth server. Production acceptance still needs measured exchange custody and explicit uncertain-issuance recovery.
 - Staged candidates receive no traffic before activation. Active-policy baseline events and directly supplied audit rows are untrusted, zero-authority status inputs and cannot authorize a candidate. The authenticated durable candidate-shadow, generation-publication, decision-gate activation, and authority-finalization paths are implemented in source, while the legacy activation endpoint is disabled. Real measured fleet evidence, eligible external verification, a production activation, and post-activation denial canaries remain unproven.
-- Source CIDRs, headers, and proxy tokens are implemented, but non-spoofable mTLS/SPIFFE workload identity remains future work.
+- Public mTLS/SPIFFE policy authoring, signed enrollment selectors, and an explicit Python outer/inner TLS client are implemented in source. Certificate/issuer provisioning, independently verified trust installation, current browser/network evidence, and production activation remain separate requirements; a policy preview or selector display establishes none of them.
 - An approved agent can still misuse data that policy legitimately allows, and an approver can approve the wrong operation. Least-privilege provider scopes and careful review remain necessary.
 - The proxy and host can observe destination and timing metadata. A compromised host can deny service even when a TEE protects keys.
 - Streaming response proofs, real hardware quote/KMS Recipient execution, parent-host observation evidence, TEE vendor bugs, side channels, and incorrect PCR/release mappings remain part of the deployment threat model.

@@ -231,6 +231,14 @@ def policy_principal_summaries(snapshot: PolicySnapshot) -> list[dict[str, Any]]
     summaries = []
     for principal_id in sorted(snapshot.principals):
         raw_principal = raw_principals.get(principal_id) or {}
+        # Public policy selectors are requirements, not issued credentials or
+        # evidence that a trusted ingress completed a client handshake.
+        mtls = None
+        if raw_principal.get("mtls") is not None:
+            try:
+                mtls = validate_mtls_identity(raw_principal["mtls"])
+            except ValueError as exc:
+                raise AgentEnrollmentError(str(exc)) from exc
         route_count = sum(
             1
             for route in snapshot.routes
@@ -243,6 +251,8 @@ def policy_principal_summaries(snapshot: PolicySnapshot) -> list[dict[str, Any]]
                 "requiredHeaders": dict(raw_principal.get("requiredHeaders") or {}),
                 "sourceCidrs": list(raw_principal.get("sourceCidrs") or []),
                 "proxyAuthorizationConfigured": bool(raw_principal.get("proxyAuthorization")),
+                "mtlsConfigured": mtls is not None,
+                "mtls": mtls,
             }
         )
     return summaries

@@ -22,7 +22,7 @@ Release-evidence gates: **`[░░░░░░] 0/6 verified`**
 
 | Acceptance gate | Current status |
 | --- | --- |
-| Ordinary application/service and native-path integration | [Python client transport with signed-handoff settings and certificate checks](docs/workload-mtls.md) implemented in source; full native enrollment and end-to-end verification remain. |
+| Ordinary application/service and native-path integration | [Portal workload identity authoring](docs/portal-oauth-agent-guide.md#choose-or-author-the-workload-identity) and [signed-handoff Python client](docs/workload-mtls.md) implemented in source; full native enrollment and end-to-end verification remain. |
 | Immutable dependencies and frozen consolidated build/verification | Prerequisites unresolved; execution pending. |
 | Independent release, signing and reproducibility | Independent release evidence not established. |
 | Real Nitro execution and KMS Recipient custody | Production deployment and custody evidence absent. |

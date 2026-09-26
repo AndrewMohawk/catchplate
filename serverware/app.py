@@ -55,6 +55,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from serverware import __version__
+from serverware.portal_workload_identity import (
+    WORKLOAD_IDENTITY_FORM_HTML,
+    WORKLOAD_IDENTITY_SCRIPT,
+)
+from serverware.portal_workload_enrollment import (
+    WORKLOAD_ENROLLMENT_HTML,
+    WORKLOAD_ENROLLMENT_SCRIPT,
+)
 from serverware.attestation import (
     AttestationContractError,
     TRUSTED_TLS_SCOPE_EXTENSION,
@@ -20232,6 +20240,19 @@ UI_HTML = r"""
       font: inherit;
     }
     textarea { min-height: 84px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    #policy-route-form fieldset,
+    #agent-enrollment-form fieldset {
+      min-width: 0;
+      max-width: 100%;
+      margin: 12px 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow-wrap: anywhere;
+    }
+    #policy-route-form fieldset code,
+    #agent-enrollment-form fieldset code { white-space: normal; overflow-wrap: anywhere; }
+    #policy-route-form input[type="checkbox"] { width: auto; }
     .row { display: flex; gap: 8px; align-items: center; }
     .row > * { min-width: 0; flex: 1; }
     button, .button {
@@ -20681,10 +20702,12 @@ UI_HTML = r"""
           </div>
         </section>
         <section>
-          <h2>Agent Enrollment</h2>
+          <h2>Workload enrollment</h2>
+          <p class="hint">Applications, backend services, scheduled jobs and agents use their own scoped identity. Provider credentials stay in Serverware.</p>
           <form id="agent-enrollment-form">
             <label for="enrollment-principal">Principal</label>
             <select name="principalId" id="enrollment-principal"></select>
+            __SERVERWARE_WORKLOAD_ENROLLMENT_HTML__
             <label for="enrollment-proxy-url">Proxy URL</label>
             <input id="enrollment-proxy-url" name="proxyUrl" value="http://localhost:8080">
             <label for="enrollment-control-plane-url">Control plane URL</label>
@@ -20704,11 +20727,11 @@ UI_HTML = r"""
           <div class="toolbar" style="margin-top:8px">
             <button class="secondary" type="button" onclick="runUiAction('Copy enrollment', copyEnrollment)">Copy exact packet</button>
             <button class="secondary" type="button" onclick="runUiAction('Download enrollment', downloadEnrollmentBinding)">Download</button>
-            <button id="enrollment-copy-agent-instructions" class="secondary" type="button" onclick="runUiAction('Copy agent instructions', copyAgentInstructions)">Copy agent instructions</button>
+            <button id="enrollment-copy-agent-instructions" class="secondary" type="button" onclick="runUiAction('Copy workload instructions', copyAgentInstructions)">Copy workload instructions</button>
           </div>
         </section>
         <section id="policy-workspace" class="policy-authoring-section">
-          <h2>PolicyBundle route assignment</h2>
+          <h2>Workload identity and route assignment</h2>
           <p class="section-kicker">Production signed policy candidate</p>
           <form id="policy-route-form">
             <label for="policy-template">Restriction template</label>
@@ -20718,8 +20741,9 @@ UI_HTML = r"""
             <textarea id="policy-custom-route" name="customRoute" class="policy-result" spellcheck="false" hidden></textarea>
             <label for="policy-route-id">Route ID</label>
             <input id="policy-route-id" name="routeId" required placeholder="gmail.recent.agent-a">
-            <label for="policy-principal">Principal</label>
+            <label for="policy-principal">Existing workload principal</label>
             <select id="policy-principal" name="principalId"></select>
+            __SERVERWARE_WORKLOAD_IDENTITY_FORM_HTML__
             <label for="policy-credential">Credential reference</label>
             <select id="policy-credential" name="credentialRef"></select>
             <div id="policy-approvers-row" hidden>
@@ -20732,6 +20756,8 @@ UI_HTML = r"""
             </div>
           </form>
           <p id="policy-candidate-summary" class="hint" role="status" aria-live="polite"></p>
+          <p id="policy-identity-change-summary" class="hint" role="status" aria-live="polite"></p>
+          <p class="hint">Route-match preview checks policy selection only. It does not authenticate a client certificate, provision an issuer, or prove runtime enforcement.</p>
           <label for="policy-candidate-output">Signed candidate, diff, and route-match dry-run</label>
           <textarea id="policy-candidate-output" class="policy-result" readonly></textarea>
           <label for="policy-authority-package">Signed staged authority and runtime handoff package</label>
@@ -20864,6 +20890,7 @@ UI_HTML = r"""
     let pendingMutation = null;
     let refreshInFlight = null;
     let hasRendered = false;
+    let policyPreviewGeneration = 0;
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const json = (value) => esc(JSON.stringify(value, null, 2));
@@ -22400,6 +22427,8 @@ UI_HTML = r"""
           <td data-label="Reason">${esc(item.reason || '')}</td>
         </tr>`).join('') || '<tr><td colspan="6" class="muted">No traffic</td></tr>';
       restoreControlState(controlState);
+      renderWorkloadIdentityEditor();
+      renderWorkloadEnrollmentRequirements();
       syncCredentialKindFields();
       renderOAuthDefaults(!hasRendered);
       renderPendingMutation();
@@ -22956,13 +22985,19 @@ UI_HTML = r"""
       const template = policyTemplates[form.get('template')];
       if (!template) throw new Error('Select a policy route template');
       const routeId = String(form.get('routeId') || '').trim();
-      const principalId = String(form.get('principalId') || '').trim();
+      const selectedPrincipalId = String(form.get('principalId') || '').trim();
       const credentialRef = String(form.get('credentialRef') || '').trim();
-      if (!routeId || !principalId || !credentialRef) throw new Error('Route ID, principal, and credential reference are required');
+      if (!routeId || !credentialRef) throw new Error('Route ID and credential reference are required');
       const bundle = JSON.parse(JSON.stringify(state.activePolicy.bundle));
-      bundle.metadata = {...(bundle.metadata || {}), sequence: Number(bundle.metadata?.sequence || 0) + 1};
+      const currentSequence = bundle.metadata?.sequence;
+      if (!Number.isSafeInteger(currentSequence) || currentSequence < 1 || currentSequence >= Number.MAX_SAFE_INTEGER) {
+        throw new Error('Active policy sequence cannot be safely incremented by this portal');
+      }
+      bundle.metadata = {...(bundle.metadata || {}), sequence: currentSequence + 1};
       delete bundle.metadata.signature;
       delete bundle.metadata.signingKeyId;
+      const principalDraft = buildWorkloadPrincipalDraft(bundle, selectedPrincipalId);
+      const principalId = principalDraft.principalId;
       bundle.credentials = bundle.credentials || [];
       const storedCredential = (state.credentials || []).find((item) => item.id === credentialRef);
       if (!storedCredential || (storedCredential.lifecycle_status || 'active') !== 'active') {
@@ -23011,15 +23046,29 @@ UI_HTML = r"""
         {name: `${routeId} selects the assigned route`, principalId, scheme: 'https', host: route.match.host, port: route.match.port, method: route.match.methods[0], path: allowPath, expect: 'allow', expectedRouteId: routeId},
         {name: `${routeId} keeps unknown host denied`, principalId, scheme: 'https', host: 'serverware-policy-deny.invalid', port: 443, method: route.match.methods[0], path: allowPath, expect: 'deny'}
       ];
-      return {bundle, dryRun, basePolicyHash: state.activePolicy.policy_hash, routeId, principalId, credentialRef, templateId: form.get('template')};
+      return {bundle, dryRun, basePolicyHash: state.activePolicy.policy_hash, routeId, principalId, credentialRef, templateId: form.get('template'), identityChangeSummary: principalDraft.changeSummary};
+    }
+
+    function invalidatePolicyCandidate() {
+      policyPreviewGeneration += 1;
+      state.policyCandidate = null;
+      renderPolicyCandidate();
     }
 
     async function previewPolicyCandidate() {
+      invalidatePolicyCandidate();
+      const generation = policyPreviewGeneration;
       const candidate = buildPolicyCandidate();
       const report = await api('/api/policy/candidate', {
         method: 'POST',
         body: JSON.stringify({bundle: candidate.bundle, dryRun: candidate.dryRun})
       });
+      if (generation !== policyPreviewGeneration) {
+        throw new Error('Policy inputs changed while preview was running; preview the current draft again');
+      }
+      if (state.activePolicy?.policy_hash !== candidate.basePolicyHash) {
+        throw new Error('Active policy changed while preview was running; preview the current draft again');
+      }
       state.policyCandidate = {...candidate, report, stage: null};
       renderPolicyCandidate();
       return report;
@@ -23030,7 +23079,8 @@ UI_HTML = r"""
       const report = candidate?.report;
       const checks = Array.isArray(report?.dryRun?.results) ? report.dryRun.results : [];
       const dryRunPassed = report?.dryRun?.passed === true && checks.length > 0 && checks.every((item) => item.passed === true);
-      $('policy-stage-button').disabled = !candidate || !report || !state.activePolicy || !dryRunPassed;
+      $('policy-stage-button').disabled = !candidate || !report || !state.activePolicy || !dryRunPassed || candidate.basePolicyHash !== state.activePolicy.policy_hash;
+      $('policy-identity-change-summary').textContent = candidate?.identityChangeSummary || '';
       $('policy-candidate-output').value = candidate ? JSON.stringify({candidate: candidate.report, stage: candidate.stage}, null, 2) : '';
       const passed = checks.filter((item) => item.passed === true).length;
       $('policy-candidate-summary').textContent = report
@@ -23068,6 +23118,7 @@ UI_HTML = r"""
         throw new Error('The signed candidate dry-run did not pass every check');
       }
       const active = await api('/api/policy');
+      if (candidate !== state.policyCandidate) throw new Error('Policy draft changed after staging was requested; preview again');
       if (active.policy_hash !== candidate.basePolicyHash) throw new Error('Active policy changed after preview; generate a new candidate');
       const importedPackage = await api('/api/policy/authority/candidates/package', {
         method: 'POST',
@@ -23079,6 +23130,7 @@ UI_HTML = r"""
         })
       });
       const authorityPackage = importedPackage.portalPackage;
+      if (candidate !== state.policyCandidate) throw new Error('Policy draft changed while the handoff package was loading; preview again');
       const handoff = authorityPackage.handoff;
       const requiredHandoff = [
         'candidateId',
@@ -23384,6 +23436,7 @@ UI_HTML = r"""
 
     async function generateEnrollmentFromForm() {
       const form = new FormData($('agent-enrollment-form'));
+      assertWorkloadEnrollmentTransport(String(form.get('principalId') || ''), String(form.get('proxyUrl') || ''));
       const proxyEgressCidrs = parseProxyEgressCidrs(form.get('proxyEgressCidrs'));
       const enrollmentNonce = generateEnrollmentNonce();
       state.enrollmentPacket = null;
@@ -23564,6 +23617,9 @@ UI_HTML = r"""
       event.preventDefault();
       runUiAction('Preview policy candidate', previewPolicyCandidate);
     });
+    for (const eventName of ['input', 'change']) {
+      $('policy-route-form').addEventListener(eventName, invalidatePolicyCandidate);
+    }
 
     function auditSearchParams({exportMode = false} = {}) {
       const form = new FormData($('audit-search-form'));
@@ -24119,6 +24175,10 @@ UI_HTML = r"""
       await navigator.clipboard.writeText(commandText);
       return {copied: true, principalId: packet.principalId};
     }
+    __SERVERWARE_WORKLOAD_IDENTITY_SCRIPT__
+    __SERVERWARE_WORKLOAD_ENROLLMENT_SCRIPT__
+    initWorkloadIdentityEditor();
+    initWorkloadEnrollmentRequirements();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
       clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
@@ -24166,6 +24226,16 @@ UI_HTML = UI_HTML.replace(
     _PORTAL_POLICY_TEMPLATES_PLACEHOLDER,
     _portal_policy_templates_json(),
 )
+
+for _portal_placeholder, _portal_fragment in (
+    ("__SERVERWARE_WORKLOAD_IDENTITY_FORM_HTML__", WORKLOAD_IDENTITY_FORM_HTML),
+    ("__SERVERWARE_WORKLOAD_IDENTITY_SCRIPT__", WORKLOAD_IDENTITY_SCRIPT),
+    ("__SERVERWARE_WORKLOAD_ENROLLMENT_HTML__", WORKLOAD_ENROLLMENT_HTML),
+    ("__SERVERWARE_WORKLOAD_ENROLLMENT_SCRIPT__", WORKLOAD_ENROLLMENT_SCRIPT),
+):
+    if UI_HTML.count(_portal_placeholder) != 1:
+        raise RuntimeError("portal workload fragment placeholder is missing or duplicated")
+    UI_HTML = UI_HTML.replace(_portal_placeholder, _portal_fragment)
 
 
 app = _SignedControlPlaneASGI(_fastapi_app)

@@ -945,6 +945,11 @@ struct TrustedMtlsEvidence {
     certificate_sha256: Option<String>,
     spki_sha256: Option<String>,
     issuer_spki_sha256: Option<String>,
+    leaf_not_before_epoch_ms: u128,
+    leaf_not_after_epoch_ms: u128,
+    admitted_at_epoch_ms: u128,
+    leaf_deadline: Instant,
+    owner_pid: u32,
 }
 
 #[derive(Clone)]
@@ -6780,6 +6785,17 @@ impl MtlsIdentityPolicy {
 }
 
 impl TrustedMtlsEvidence {
+    // This is an admission/revalidation bound, not CRL checking or cancellation
+    // of an already dispatched stream. Cloning never renews the fixed deadline.
+    fn is_live_at(&self, now_epoch_ms: u128) -> bool {
+        self.owner_pid == std::process::id()
+            && now_epoch_ms >= self.admitted_at_epoch_ms
+            && now_epoch_ms >= self.leaf_not_before_epoch_ms
+            && now_epoch_ms < self.leaf_not_after_epoch_ms
+            && Instant::now() < self.leaf_deadline
+            && self.is_canonical()
+    }
+
     fn is_canonical(&self) -> bool {
         let strictly_sorted = |values: &[String]| {
             values
@@ -6787,6 +6803,11 @@ impl TrustedMtlsEvidence {
                 .all(|pair| pair[0].as_str() < pair[1].as_str())
         };
         self.verified_by_trusted_ingress
+            && self.owner_pid != 0
+            && self.leaf_not_before_epoch_ms < self.leaf_not_after_epoch_ms
+            && self.admitted_at_epoch_ms > 0
+            && self.admitted_at_epoch_ms >= self.leaf_not_before_epoch_ms
+            && self.admitted_at_epoch_ms < self.leaf_not_after_epoch_ms
             && (self.certificate_sha256.is_some()
                 || self.spki_sha256.is_some()
                 || !self.san_spiffe_ids.is_empty()
@@ -6824,6 +6845,10 @@ impl TrustedMtlsEvidence {
             "certificateSha256":self.certificate_sha256,
             "spkiSha256":self.spki_sha256,
             "issuerSpkiSha256":self.issuer_spki_sha256,
+            // Decimal strings preserve the full epoch-ms domain without
+            // serializing process-local Instant/PID/admission-clock state.
+            "leafNotBeforeEpochMs":self.leaf_not_before_epoch_ms.to_string(),
+            "leafNotAfterEpochMs":self.leaf_not_after_epoch_ms.to_string(),
         }))
     }
 }
@@ -6893,6 +6918,13 @@ fn trusted_mtls_evidence_from_verified_peer(
     presented_chain: &[CertificateDer<'static>],
     trust_certificates: &[CertificateDer<'static>],
 ) -> Result<TrustedMtlsEvidence, String> {
+    let owner_pid = std::process::id();
+    // Sample monotonic time first: delayed wall-clock acquisition must not add
+    // that delay back to the leaf's remaining lifetime. This runs only after
+    // the actual outer TLS handshake authenticated the presented chain.
+    let admitted_at_monotonic = Instant::now();
+    let admitted_at_epoch_ms = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|_| "verified proxy TLS peer admission clock is invalid")?.as_millis();
     validate_tls_certificate_vector(presented_chain, "verified proxy TLS peer chain")?;
     let leaf_der = presented_chain
         .first()
@@ -6901,6 +6933,22 @@ fn trusted_mtls_evidence_from_verified_peer(
         leaf_der.as_ref(),
         "verified proxy TLS peer leaf certificate",
     )?;
+    let leaf_not_before_epoch_ms = u128::try_from(leaf.validity().not_before.timestamp())
+        .map_err(|_| "verified proxy TLS peer notBefore is invalid")?
+        .checked_mul(1000).ok_or("verified proxy TLS peer notBefore overflows")?;
+    let leaf_not_after_epoch_ms = u128::try_from(leaf.validity().not_after.timestamp())
+        .map_err(|_| "verified proxy TLS peer notAfter is invalid")?
+        .checked_mul(1000).ok_or("verified proxy TLS peer notAfter overflows")?;
+    if admitted_at_epoch_ms == 0 || leaf_not_before_epoch_ms >= leaf_not_after_epoch_ms
+        || admitted_at_epoch_ms < leaf_not_before_epoch_ms
+        || admitted_at_epoch_ms >= leaf_not_after_epoch_ms
+    {
+        return Err("verified proxy TLS peer leaf has no live validity interval".to_string());
+    }
+    let remaining_ms = u64::try_from(leaf_not_after_epoch_ms - admitted_at_epoch_ms)
+        .map_err(|_| "verified proxy TLS peer remaining lifetime overflows")?;
+    let leaf_deadline = admitted_at_monotonic.checked_add(Duration::from_millis(remaining_ms))
+        .ok_or("verified proxy TLS peer monotonic deadline overflows")?;
     let mut san_dns_names = Vec::new();
     let mut san_uris = Vec::new();
     let mut san_spiffe_ids = Vec::new();
@@ -6961,9 +7009,14 @@ fn trusted_mtls_evidence_from_verified_peer(
             presented_chain,
             trust_certificates,
         ),
+        leaf_not_before_epoch_ms,
+        leaf_not_after_epoch_ms,
+        admitted_at_epoch_ms,
+        leaf_deadline,
+        owner_pid,
     };
-    if !evidence.is_canonical() {
-        return Err("verified proxy TLS peer identity is not canonical and bounded".to_string());
+    if !evidence.is_live_at(now_epoch_ms()) {
+        return Err("verified proxy TLS peer identity is not canonical, live and bounded".to_string());
     }
     Ok(evidence)
 }
@@ -7035,7 +7088,11 @@ impl Principal {
         trusted_mtls_evidence: Option<&TrustedMtlsEvidence>,
         now_epoch_ms: u128,
     ) -> bool {
-        if !ip_in_any_network(client_ip, &self.source_cidrs) {
+        // Mandatory transport authentication remains a prerequisite even if
+        // this principal selects a token rather than an explicit mTLS SAN.
+        if trusted_mtls_evidence.is_some_and(|evidence| !evidence.is_live_at(now_epoch_ms))
+            || !ip_in_any_network(client_ip, &self.source_cidrs)
+        {
             return false;
         }
         if !self
@@ -7082,7 +7139,8 @@ impl Principal {
         trusted_mtls_evidence: Option<&TrustedMtlsEvidence>,
         now_epoch_ms: u128,
     ) -> bool {
-        if !ip_in_any_network(client_ip, &self.source_cidrs)
+        if trusted_mtls_evidence.is_some_and(|evidence| !evidence.is_live_at(now_epoch_ms))
+            || !ip_in_any_network(client_ip, &self.source_cidrs)
             || !self
                 .mtls
                 .as_ref()
@@ -48201,6 +48259,19 @@ fn handle_gate_connection(
             return;
         }
     };
+    // Public routes, including native /attestation, bypass principal lookup.
+    // They still require any authenticated transport evidence to remain live.
+    if trusted_mtls_evidence.as_ref()
+        .is_some_and(|evidence| !evidence.is_live_at(now_epoch_ms()))
+    {
+        let response = http_response(
+            "403 Forbidden",
+            json!({"error":"proxy_mtls_identity_expired"}),
+        );
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    }
     stream.reset_read_deadline(state.request_body_deadline);
     let (origin_path, _) = request_target_parts(&head.target);
     let public_read =
@@ -78972,6 +79043,12 @@ mod tests {
             certificate_sha256: Some(certificate_sha256),
             spki_sha256: Some(spki_sha256),
             issuer_spki_sha256: Some(issuer_spki_sha256),
+            leaf_not_before_epoch_ms: 0,
+            leaf_not_after_epoch_ms: 2,
+            admitted_at_epoch_ms: 1,
+            leaf_deadline: Instant::now().checked_add(Duration::from_secs(60))
+                .expect("fixture leaf lifetime"),
+            owner_pid: std::process::id(),
         };
         assert!(principal.matches_at(
             Some("127.0.0.1"),

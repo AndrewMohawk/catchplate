@@ -347,7 +347,8 @@ Setup enrollment-receipt signing is a separate trust-domain operation. Run `serv
 
 The CLI's local Ed25519 private-key option is a protocol and fixture adapter, not proof of production key custody. A production receipt authority belongs behind an independently operated KMS/HSM or equivalent signing service that releases signatures only after the same closed verifier checks. Its key must never be mounted in, copied to, or referenced by the agent image, VM, portal handoff command, or Serverware workload. This repository does not implement or demonstrate that KMS/HSM authority. Transfer only the signed receipt back to the operator for upload through the Setup workflow.
 
-Start with the signed packet's proxy and CA environment:
+For legacy non-mTLS development handoffs, start with the signed packet's proxy
+and CA environment (the example below is not a native-production transport):
 
 ```bash
 export HTTPS_PROXY=http://serverware-proxy.internal:8080
@@ -355,6 +356,14 @@ export HTTP_PROXY=http://serverware-proxy.internal:8080
 export SSL_CERT_FILE=/etc/serverware/serverware-ca.pem
 export REQUESTS_CA_BUNDLE=/etc/serverware/serverware-ca.pem
 ```
+
+For a principal with `identity.mtls`, the signed packet now retains its public
+certificate selectors and requires an HTTPS proxy URL. The authenticated
+instructions require a separately provisioned workload certificate/private key
+and independently verified outer-proxy CA, distinct from the intercepted-provider
+TLS settings. Environment variables alone are insufficient. See
+[ordinary workload mTLS](workload-mtls.md) for the two TLS layers, an explicit
+client configuration template and the remaining SDK/provisioning boundary.
 
 This block is not the complete enrollment. Apply the packet's signed Kubernetes NetworkPolicy or recorded-namespace `nftables` deny-by-default egress controls and execute every applicable canary before starting the agent. For a principal that uses top-level `principals[].requiredHeaders`, HTTPS clients must also send those identity headers on the proxy `CONNECT` request and the provider request. For example, curl uses `--proxy-header 'X-Serverware-Agent: mail-reader'` for the tunnel and `-H 'X-Serverware-Agent: mail-reader'` inside it. The enrollment packet exposes these as both `agentHandoff.requiredProxyHeaders` and `agentHandoff.requiredProviderHeaders`; the former also contains the per-enrollment `X-Serverware-Enrollment-Session` value, which is sent on `CONNECT` but not repeated inside that tunnel. The packet separately exposes any `identity.proxyAuthorization` requirements, whose secret must be provisioned outside the packet. Production deployments should prefer source-bound proxy authorization or isolated source CIDRs when the agent SDK cannot set custom proxy headers.
 

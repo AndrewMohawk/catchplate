@@ -22,7 +22,7 @@ Release-evidence gates: **`[░░░░░░] 0/6 verified`**
 
 | Acceptance gate | Current status |
 | --- | --- |
-| Ordinary application/service and native-path integration | Implementation in progress; end-to-end verification pending. |
+| Ordinary application/service and native-path integration | [mTLS handoff and certificate lifetime checks](docs/workload-mtls.md) in source; SDK integration and end-to-end verification pending. |
 | Immutable dependencies and frozen consolidated build/verification | Prerequisites unresolved; execution pending. |
 | Independent release, signing and reproducibility | Independent release evidence not established. |
 | Real Nitro execution and KMS Recipient custody | Production deployment and custody evidence absent. |

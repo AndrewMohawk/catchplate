@@ -35,6 +35,7 @@ from .attestation import (  # noqa: E402
     verify_runtime_digest,
 )
 from .http import request_bytes  # noqa: E402
+from .workload_transport import validate_workload_transport  # noqa: E402
 from .receipts import (  # noqa: E402
     ENROLLMENT_CHECKS,
     ENROLLMENT_RECEIPT_API_VERSION,
@@ -310,6 +311,7 @@ def verify_packet(packet: dict[str, object], attestation: dict[str, object], non
         public_key.verify(b64d(signature.split(":", 1)[1]), canonical_json(statement).encode("utf-8"))
     except (InvalidSignature, TypeError, ValueError) as exc:
         raise ValueError("enrollment packet signature verification failed") from exc
+    validate_workload_transport(packet)
     validate_enrollment_tooling(packet)
     return {
         "apiVersion": "serverware.agentEnrollmentVerification/v1",

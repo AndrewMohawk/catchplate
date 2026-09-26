@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from serverware.policy_bundle import PolicySnapshot
 from serverware.response_identity import canonical_json, response_public_key_info, sign_statement
 from serverware_agent_trust import enrollment_tooling_contract
+from serverware_agent_trust.workload_transport import validate_mtls_identity, validate_workload_transport
 
 
 class AgentEnrollmentError(ValueError):
@@ -261,12 +262,21 @@ def _identity_block(raw_principal: dict[str, Any]) -> dict[str, Any]:
     elif isinstance(proxy_auth, str):
         safe_proxy_auth = {"legacyExactHeaderRequired": True}
 
-    return {
+    identity = {
         "sourceCidrs": list(raw_principal.get("sourceCidrs") or []),
         "requiredHeaders": dict(raw_principal.get("requiredHeaders") or {}),
         "proxyAuthorization": safe_proxy_auth,
         "trustedHeaderInjectionRequired": bool(raw_principal.get("requiredHeaders")),
     }
+    # A null raw policy value means unconfigured, as in policy validation.
+    # Only normalized public selectors cross into the signed handoff; never
+    # certificate/key material, file paths or arbitrary policy fields.
+    if raw_principal.get("mtls") is not None:
+        try:
+            identity["mtls"] = validate_mtls_identity(raw_principal["mtls"])
+        except ValueError as exc:
+            raise AgentEnrollmentError(str(exc)) from exc
+    return identity
 
 
 def _required_enrollment_pins(snapshot: PolicySnapshot, attestation: dict[str, Any]) -> dict[str, Any]:
@@ -578,6 +588,13 @@ def render_agent_handoff_instructions(packet: dict[str, Any]) -> str:
     allow_canaries = require_list(canaries, "allow")
     deny_canaries = require_list(canaries, "deny")
     write_route_previews = require_list(canaries, "writeRoutePreviews")
+    mtls = None
+    identity = packet.get("identity")
+    if isinstance(identity, dict) and "mtls" in identity:
+        try:
+            mtls = validate_mtls_identity(identity["mtls"])
+        except ValueError as exc:
+            raise AgentEnrollmentError(str(exc)) from exc
 
     if any(not isinstance(step, str) or not step for step in sequence):
         raise AgentEnrollmentError("agent handoff sequence contains an invalid step")
@@ -617,6 +634,20 @@ def render_agent_handoff_instructions(packet: dict[str, Any]) -> str:
         f"export {name}={shlex.quote(str(proxy_environment[name]))}"
         for name in sorted(proxy_environment)
     )
+    if mtls is not None:
+        lines.extend(
+            [
+                "",
+                "PROXY TLS CLIENT IDENTITY",
+                f"Exact signed public selectors: {canonical_json(mtls)}",
+                "Provision a matching client certificate and its private key separately; this packet contains neither material nor an authorization to issue it.",
+                "Provision independently verified outer proxy CA trust separately. The installed provider MITM CA is not implicitly the outer proxy trust root.",
+                "Require outer TLS1.3 and verify the proxy server certificate name against the HTTPS proxy authority before sending CONNECT or workload traffic.",
+                "Bind this client certificate and private key only to the outer proxy TLS connection. Do not use a provider-TLS client-certificate option or install the private key globally.",
+                "Proxy environment variables alone cannot satisfy this identity requirement. Stop if the SDK or its reviewed adapter cannot separately configure outer proxy TLS and inner provider TLS.",
+                "Complete this separate provisioning and transport setup before allow/deny canaries or agent startup; these instructions do not assert successful provisioning, handshake or enrollment admission.",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -708,6 +739,8 @@ def build_agent_enrollment(
     raw_principal = _raw_principal(snapshot, principal_id)
     routes = _principal_routes(snapshot, principal_id)
     identity = _identity_block(raw_principal)
+    if "mtls" in identity and urlsplit(proxy_url).scheme != "https":
+        raise AgentEnrollmentError("mTLS principal enrollment requires an HTTPS proxyUrl")
     environment = {
         "HTTP_PROXY": proxy_url,
         "HTTPS_PROXY": proxy_url,
@@ -830,6 +863,13 @@ def build_agent_enrollment(
                 "Verify attestation and install the returned CA at destinationPath.",
                 "Run the signed nftables applyAndVerifyScript inside the launcher-recorded agent network namespace; any preflight, apply, or verification failure forbids agent startup.",
                 "Provision proxy authorization separately when required; it is never embedded here.",
+                *(
+                    [
+                        "Provision the separately held outer proxy TLS client certificate/private key and independently verified proxy CA trust for the signed identity.mtls selectors; require TLS1.3 and proxy server-name verification, and stop unless the SDK or reviewed adapter separates outer proxy TLS from inner provider TLS."
+                    ]
+                    if "mtls" in identity
+                    else []
+                ),
                 "Set requiredProxyHeaders on CONNECT, requiredProviderHeaders inside the tunnel, and the enrollment header on a direct plain-HTTP proxy request.",
                 (
                     "Run only the signed bodyless GET/HEAD allow canaries and the deny canary, then start the agent with normal provider URLs."
@@ -885,6 +925,10 @@ def build_agent_enrollment(
             ],
         },
     }
+    try:
+        validate_workload_transport(packet)
+    except ValueError as exc:
+        raise AgentEnrollmentError(str(exc)) from exc
     packet["agentHandoff"]["authenticatedInstructions"] = render_agent_handoff_instructions(packet)
     packet["agentHandoff"]["instructionsText"] = _render_verified_instructions_bootstrap(packet)
     packet_sha256 = "sha256:" + hashlib.sha256(canonical_json(packet).encode("utf-8")).hexdigest()

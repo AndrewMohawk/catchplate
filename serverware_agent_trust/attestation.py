@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives import serialization
 
 from . import validate_enrollment_tooling
 from .http import request_bytes as bounded_request_bytes, validate_http_url
+from .workload_transport import validate_workload_transport
 
 
 MAX_ENROLLMENT_PACKET_BYTES = 8 * 1024 * 1024
@@ -365,6 +366,10 @@ def verify_enrollment_measurements(
         raise ValueError("enrollment packet is not currently valid")
     if expires_at - issued_at > 900_000:
         raise ValueError("enrollment packet lifetime exceeds 900 seconds")
+    # Both authenticated packet consumers call this after the actual packet
+    # signature check. Preserve all fresh pins/receipt/time joins above before
+    # accepting transport requirements or proceeding to instructions/CA output.
+    validate_workload_transport(packet)
 
 
 def request_json(

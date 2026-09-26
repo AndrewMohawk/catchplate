@@ -16,6 +16,15 @@ The signed `routes[].match.resolvedCidrs` field optionally restricts DNS results
 
 Principal network selectors use the same canonical, host-bit-free IPv4/IPv6 CIDR rules. A `requiredHeaders` identity selector is never a trust anchor by itself: admission requires the principal to bind it to a non-universal trusted source CIDR, a validated proxy bearer credential with its own source restriction, or verified `mtls` evidence. An mTLS principal sets `verifiedByTrustedIngress: true` and may match bounded exact `sanSpiffeIds`, `sanDnsNames`, `sanUris`, `certificateSha256`, `spkiSha256`, and `issuerSpkiSha256`. Every declared mTLS selector is an intersection over private connection evidence supplied by an authenticated TLS terminator; an unverified forwarded certificate header is not mTLS evidence. The Python runtime defines this trusted-ingress interface, but `mitm_addon.py` does not currently populate it. Therefore mTLS-only principals deny until a trusted ingress sets `client_conn.serverware_mtls_verified` and bounded `client_conn.serverware_mtls_evidence`; this is not yet an end-to-end live mTLS attestation claim.
 
+The Rust mandatory-mTLS ingress does populate private identity evidence from
+the actual authenticated peer certificate. Its request admission and retained
+CONNECT identity checks now enforce that leaf's validity interval and an
+admission-anchored monotonic expiry, including when a token-only principal is
+selected on that transport. This is source-only work, not continuous revocation
+or cancellation of already dispatched requests. Signed enrollment now includes
+the configured public `identity.mtls` selectors and requires separate outer
+proxy TLS provisioning; see [ordinary workload mTLS](workload-mtls.md).
+
 ```json
 {
   "id": "x-one-tweet-per-day",

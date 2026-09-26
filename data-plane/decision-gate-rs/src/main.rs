@@ -157,6 +157,9 @@ use serverware_decision_gate::enclave_runtime_identity_v1::{
     QuotedCredentialRecipientV1, QuotedMutualTlsIngressV1, TlsAuthorityV1,
 };
 use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
+use serverware_decision_gate::native_upstream_relays_v1::{
+    NativeRelayAssignmentV1, NativeUpstreamRelaysV1,
+};
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
@@ -2506,6 +2509,7 @@ struct GateState {
     upstream_resolver: Arc<dyn UpstreamResolver>,
     upstream_client_config: UpstreamClientConfig,
     pinned_upstream_clients: Mutex<PinnedUpstreamClientCache>,
+    native_upstream_relays: Option<Arc<NativeUpstreamRelaysV1>>,
     audit_client: Client,
     credential_lease_client: Client,
     audit_url: Option<String>,
@@ -20197,6 +20201,20 @@ fn verify_native_credential_lease_scope(state: &GateState, policy_hash: &str) ->
     Ok(())
 }
 
+fn native_upstream_remaining(state: &GateState, policy_hash: &str) -> Result<Option<Duration>, String> {
+    let Some(relays) = state.native_upstream_relays.as_ref() else { return Ok(None); };
+    let mut authority = state.mitm_authority.as_ref()
+        .ok_or("native egress requires its retained runtime authority")?
+        .lock().map_err(|_| "native egress runtime authority is poisoned".to_owned())?;
+    let MitmAuthority::Native(identity) = &mut *authority else {
+        return Err("native egress cannot use a PEM-backed runtime authority".to_owned());
+    };
+    let deadline = identity.deadline();
+    identity.verify_policy_commitment(native_lease_digest_bytes(policy_hash)?, deadline)?;
+    identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+    relays.remaining().map(Some)
+}
+
 fn fetch_scoped_credential_lease(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -20362,12 +20380,16 @@ fn fetch_scoped_credential_lease(
     };
     let request_wire = credential_lease_request_wire_value(&request_body)?;
     verify_native_credential_lease_scope(state, &snapshot.hash)?;
-    let mut response = state
+    let mut request = state
         .credential_lease_client
         .post(request_url)
         .header("X-Serverware-Data-Plane-Token", token)
         .header("X-Serverware-Response-Nonce", recipient_nonce.as_str())
-        .json(&request_wire)
+        .json(&request_wire);
+    if let Some(remaining) = native_upstream_remaining(state, &snapshot.hash)? {
+        request = request.timeout(remaining.min(Duration::from_secs(3)));
+    }
+    let mut response = request
         .send()
         .map_err(|err| format!("fetch credential leases: {err}"))?;
     let status = response.status();
@@ -21925,7 +21947,14 @@ where
             .map_err(UpstreamSendError::CredentialAuthority)?;
         let authorization_timeout = upstream_send_deadline_timeout(deadlines)
             .map_err(UpstreamSendError::CredentialAuthority)?;
-        let send_timeout = [send_timeout, authorization_timeout, maximum_timeout]
+        let native_timeout = native_upstream_remaining(state, &snapshot.hash)
+            .map_err(|_| UpstreamSendError::CredentialAuthority("native_upstream_authority_unavailable"))?
+            .map(|remaining| remaining.min(request.timeout().copied()
+                .unwrap_or(Duration::from_secs(10))));
+        if native_timeout.is_some() && request.url().scheme() != "https" {
+            return Err(UpstreamSendError::CredentialAuthority("native_upstream_requires_https"));
+        }
+        let send_timeout = [send_timeout, authorization_timeout, maximum_timeout, native_timeout]
             .into_iter()
             .flatten()
             .min();
@@ -21960,6 +21989,13 @@ where
                 "upstream dispatch lacks authoritative shadow effect evidence"
                     .to_string(),
             ));
+        }
+        // Recheck after the dispatch barrier, which may itself consume time.
+        // The relay also retains the same absolute bound through response reads.
+        if let Some(remaining) = native_upstream_remaining(state, &snapshot.hash)
+            .map_err(|_| UpstreamSendError::CredentialAuthority("native_upstream_authority_expired"))? {
+            let bounded = request.timeout().copied().unwrap_or(Duration::from_secs(10)).min(remaining);
+            *request.timeout_mut() = Some(bounded);
         }
         let result = client.execute(request);
         let (effect_state, effect_result_sha256) = match result.as_ref() {
@@ -22376,6 +22412,17 @@ fn build_pinned_upstream_client(
     socket_addr: SocketAddr,
     reuse_idle_connections: bool,
 ) -> Result<Client, String> {
+    pinned_upstream_client_builder(config, host, socket_addr, reuse_idle_connections)
+        .build()
+        .map_err(|err| format!("build pinned upstream HTTP client: {err}"))
+}
+
+fn pinned_upstream_client_builder(
+    config: &UpstreamClientConfig,
+    host: &str,
+    socket_addr: SocketAddr,
+    reuse_idle_connections: bool,
+) -> reqwest::blocking::ClientBuilder {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(10))
         .no_proxy()
@@ -22388,8 +22435,6 @@ fn build_pinned_upstream_client(
         builder = builder.add_root_certificate(certificate.clone());
     }
     builder
-        .build()
-        .map_err(|err| format!("build pinned upstream HTTP client: {err}"))
 }
 
 fn ipv4_in_network(address: Ipv4Addr, base: Ipv4Addr, prefix: u8) -> bool {
@@ -22549,9 +22594,13 @@ fn prepare_upstream(
     route: &Route,
     method: &str,
 ) -> Result<PreparedUpstream, UpstreamPreparationError> {
-    let resolved = state
-        .upstream_resolver
-        .resolve(&route.host, route.port)
+    let resolved = if let Some(relays) = state.native_upstream_relays.as_ref() {
+        relays.resolved_addresses(&route.host, route.port)
+            .map(|addresses| addresses.into_iter()
+                .map(|address| SocketAddr::new(address, route.port)).collect())
+    } else {
+        state.upstream_resolver.resolve(&route.host, route.port)
+    }
         .map_err(|detail| UpstreamPreparationError::ResolutionUnavailable { detail })?;
     let addresses =
         validate_resolved_addresses(resolved, route.port, &route.resolved_address_policy)?;
@@ -22563,7 +22612,21 @@ fn prepare_upstream(
         address: socket_addr.ip(),
         reuse_idle_connections,
     };
-    let client = {
+    let client = if let Some(relays) = state.native_upstream_relays.as_ref() {
+        native_upstream_remaining(state, &snapshot.hash)
+            .map_err(|detail| UpstreamPreparationError::TransportPreparation { detail })?;
+        let proxy = relays.proxy_for(&route.host, socket_addr)
+            .map_err(|detail| UpstreamPreparationError::TransportPreparation { detail })?;
+        // This proxy branch retains origin TLS verification but does not use
+        // Reqwest's resolve override. The exact selected IP is therefore bound
+        // by the fixed relay assignment; no legacy direct-client cache is used.
+        pinned_upstream_client_builder(
+            &state.upstream_client_config, &route.host, socket_addr, reuse_idle_connections,
+        ).https_only(true).proxy(proxy).build()
+            .map_err(|_| UpstreamPreparationError::TransportPreparation {
+                detail: "build fixed native upstream TLS client".to_owned(),
+            })?
+    } else {
         let mut cache = state
             .pinned_upstream_clients
             .lock()
@@ -22740,6 +22803,12 @@ fn build_audit_client() -> Result<Client, String> {
 }
 
 fn build_control_plane_client(timeout: Duration) -> Result<Client, String> {
+    control_plane_client_builder(timeout)?
+        .build()
+        .map_err(|err| format!("build control-plane HTTP client: {err}"))
+}
+
+fn control_plane_client_builder(timeout: Duration) -> Result<reqwest::blocking::ClientBuilder, String> {
     let mut builder = Client::builder()
         .timeout(timeout)
         .no_proxy()
@@ -22763,9 +22832,7 @@ fn build_control_plane_client(timeout: Duration) -> Result<Client, String> {
             }
         }
     }
-    builder
-        .build()
-        .map_err(|err| format!("build control-plane HTTP client: {err}"))
+    Ok(builder)
 }
 
 fn audit_enabled(state: &GateState) -> bool {
@@ -49059,6 +49126,7 @@ fn prepare_native_tls_gate_state(
     mut state: GateState,
     mut identity: EnclaveRuntimeIdentityV1,
     ingress: QuotedMutualTlsIngressV1,
+    relay_assignments: Vec<NativeRelayAssignmentV1>,
     deadline: u64,
 ) -> Result<NativeTlsGateV1, String> {
     if state.mitm_authority.is_some() {
@@ -49066,6 +49134,10 @@ fn prepare_native_tls_gate_state(
     }
     if state.credential_lease_recipient_attestation_command.is_some() {
         return Err("native TLS setup cannot retain an external recipient attestation command".to_owned());
+    }
+    if state.native_upstream_relays.is_some() || !state.pinned_upstream_clients.get_mut()
+        .map_err(|_| "native TLS setup found a poisoned upstream cache".to_owned())?.entries.is_empty() {
+        return Err("native TLS setup requires unused upstream transport state".to_owned());
     }
     if !state.leaf_configs.get_mut()
         .map_err(|_| "native TLS setup found a poisoned leaf cache".to_owned())?.is_empty() {
@@ -49077,9 +49149,16 @@ fn prepare_native_tls_gate_state(
     identity.restrict_deadline(deadline)?;
     identity.verify_quoted_ingress(&ingress, deadline)?;
     identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
+    let relays = Arc::new(NativeUpstreamRelaysV1::new(relay_assignments, deadline)?);
+    if let Some(url) = state.credential_lease_url.as_deref() {
+        state.credential_lease_client = control_plane_client_builder(Duration::from_secs(3))?
+            .https_only(true).proxy(relays.broker_proxy(url)?).build()
+            .map_err(|_| "build fixed native credential broker TLS client".to_owned())?;
+    }
     let (_, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
     state.proxy_ingress_attestation = attestation;
     state.mitm_authority = Some(Mutex::new(MitmAuthority::Native(identity)));
+    state.native_upstream_relays = Some(relays);
     Ok(NativeTlsGateV1 { state: Arc::new(state), ingress, deadline })
 }
 
@@ -50316,6 +50395,7 @@ fn main() -> Result<(), String> {
         pinned_upstream_clients: Mutex::new(PinnedUpstreamClientCache::new(
             MAX_PINNED_UPSTREAM_CLIENTS,
         )),
+        native_upstream_relays: None,
         audit_client,
         credential_lease_client,
         audit_url,
@@ -51678,6 +51758,7 @@ mod tests {
             pinned_upstream_clients: Mutex::new(PinnedUpstreamClientCache::new(
                 MAX_PINNED_UPSTREAM_CLIENTS,
             )),
+            native_upstream_relays: None,
             audit_client: client.clone(),
             credential_lease_client: client,
             audit_url: None,

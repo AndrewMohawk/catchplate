@@ -242,7 +242,8 @@ construction alone does not enforce those runtime transitions.
 The [native vsock owner](../data-plane/decision-gate-rs/src/enclave_vsock_v1.rs)
 provides retained nonblocking inbound `AF_VSOCK` streams, exact configured peer
 CID comparison, original boottime deadlines, at most 64 KiB per I/O operation,
-and explicit shutdown custody. It has no outbound connector or generic raw-FD
+and explicit shutdown custody. Its separate outbound connector permits only
+fixed Nitro parent CID `3`; it has no arbitrary-CID connector or generic raw-FD
 export. CID is routing scope, not client authentication: AWS Nitro's parent is
 CID `3`, distinct from Linux's generic `VMADDR_CID_HOST` value `2`.
 See the [AWS networking contract](https://docs.aws.amazon.com/enclaves/latest/user/enclave-networking.html)
@@ -270,6 +271,15 @@ and active sessions. Shutdown closes inbound sessions and joins workers, but
 that join may await existing bounded upstream HTTP/DNS I/O. It is **not** a
 hard syscall/whole-process watchdog or a proof that all work stops at the exact
 deadline. No CLI/environment mode activates this private composition.
+
+The [native outbound transport](enclave-outbound-transport.md) now provides
+source-level provider and credential-broker HTTPS routing through retained,
+fixed-authority loopback CONNECT owners and preassigned parent vsock ports.
+The existing Reqwest client keeps genuine upstream TLS/hostname verification;
+local CONNECT headers and authentication are not sent to the parent. Static
+endpoint assignments and their address inventory are not independently admitted
+merely by constructing these owners. This does not activate native startup or
+convert remaining audit, proof or control-plane transports into enclave paths.
 
 ## Deferred verification
 
@@ -304,11 +314,13 @@ and [AWS request/response types](https://github.com/aws/aws-nitro-enclaves-nsm-a
 
 The full Rust TLS, policy, credential acquisition, injection, upstream TLS,
 response-validation and proof path must execute inside the admitted enclave.
-The parent must handle ciphertext and public evidence only. Still missing are
-the independently admitted complete enclave serving composition and parent/enclave
-transport, real KMS RSA/`CiphertextForRecipient`/CMS integration, and removal of
-the host control-plane `keyB64`/plaintext-key paths. Native NSM access by itself
-does not close any of those gaps.
+The parent must handle ciphertext and public evidence only. The provider/broker
+transport source above is implemented, but full native startup, independently
+admitted endpoint/CID assignments, parent service provisioning, remaining
+audit/proof/control-plane transport and complete enclave serving admission are
+still required. Real KMS RSA/`CiphertextForRecipient`/CMS integration and removal
+of the host control-plane `keyB64`/plaintext-key paths also remain open. Native
+NSM access or a local tunnel by itself does not close those gaps.
 
 Production also requires independently admitted release/configuration roots,
 fresh challenge and PCR/TLS-key verification, actual EIF deployment,

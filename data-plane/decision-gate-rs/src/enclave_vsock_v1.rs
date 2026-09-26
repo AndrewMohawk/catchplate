@@ -1,16 +1,17 @@
-//! Fixed inbound AF_VSOCK transport, not peer authentication or enclave proof.
+//! Bounded AF_VSOCK transport, not peer authentication or enclave proof.
 //!
 //! Linux assigns CID 2 to VMADDR_CID_HOST; AWS Nitro uses CID 3 for the parent
-//! instance. The independently supplied expected CID is compared exactly; no
-//! default, TLS identity, secret authority or attestation is inferred from it.
+//! instance. Inbound peers use the independently supplied expected CID; the
+//! outbound connector permits only Nitro parent CID 3. Neither routing choice
+//! supplies TLS identity, secret authority or attestation.
 //! See https://man7.org/linux/man-pages/man7/vsock.7.html and
 //! https://docs.aws.amazon.com/enclaves/latest/user/enclave-networking.html.
 //!
 //! All data sockets are nonblocking. ppoll waits use remaining CLOCK_BOOTTIME
 //! time in bounded slices; interruption, spurious readiness and partial IO do
 //! not renew an operation deadline. Scheduling/kernel delays are not hard
-//! realtime cancellation. There is no outbound connector, raw-FD export,
-//! stream clone or generic forwarding operation.
+//! realtime cancellation. There is no arbitrary-CID connector, raw-FD export,
+//! stream clone or generic forwarding authorization.
 
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -19,7 +20,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const CID_ANY: u32 = u32::MAX;
+const NITRO_PARENT_CID: u32 = 3;
 const MAX_IO_BYTES: usize = 64 * 1024;
+const CONNECT_TIMEOUT_NS: u64 = 3_000_000_000;
 const POLL_SLICE_NS: u64 = 100_000_000;
 const LISTEN_BACKLOG: libc::c_int = 128;
 
@@ -246,7 +249,7 @@ impl VsockListenerV1 {
                     return Err(failure);
                 }
             };
-            return Ok(VsockStreamV1 { socket, peer, deadline, read_timeout_ns: AtomicU64::new(0),
+            return Ok(VsockStreamV1 { socket, peer, connected_local: None, deadline, read_timeout_ns: AtomicU64::new(0),
                 write_timeout_ns: AtomicU64::new(0), closed: Arc::new(AtomicBool::new(false)) });
         }
     }
@@ -255,6 +258,8 @@ impl VsockListenerV1 {
 pub struct VsockStreamV1 {
     socket: SocketOwner,
     peer: Address,
+    // Outbound scope is joined at connect completion and every subsequent IO.
+    connected_local: Option<Address>,
     deadline: u64,
     read_timeout_ns: AtomicU64,
     write_timeout_ns: AtomicU64,
@@ -262,15 +267,99 @@ pub struct VsockStreamV1 {
 }
 
 impl VsockStreamV1 {
+    /// Connect only to the AWS Nitro parent routing endpoint. A successful
+    /// transport connection does not authenticate that parent or its service.
+    /// The connect attempt is capped at three seconds; a returned stream keeps
+    /// the original session deadline rather than the shorter connect bound.
+    pub fn connect_parent(port: u32, deadline: u64) -> io::Result<Self> {
+        if !valid_port(port) {
+            return Err(error(io::ErrorKind::InvalidInput, "vsock parent port is invalid"));
+        }
+        let session_deadline = deadline;
+        let deadline = session_deadline.min(now()?.saturating_add(CONNECT_TIMEOUT_NS));
+        remaining(deadline)?;
+        let pid = unsafe { libc::getpid() };
+        let fd = unsafe { libc::socket(libc::AF_VSOCK,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, 0) };
+        if fd < 0 { return Err(io::Error::last_os_error()); }
+        let socket = SocketOwner::acquire(unsafe { OwnedFd::from_raw_fd(fd) }, pid)?;
+        let peer = Address { family: libc::AF_VSOCK as _, reserved: 0,
+            port, cid: NITRO_PARENT_CID, flags: 0, zero: [0; 3] };
+        let connected = (|| {
+            socket.check()?;
+            remaining(deadline)?;
+            let status = unsafe { libc::connect(socket.fd.as_raw_fd(),
+                (&peer as *const Address).cast(),
+                std::mem::size_of::<Address>() as libc::socklen_t) };
+            if status != 0 {
+                let failure = io::Error::last_os_error();
+                if failure.raw_os_error() != Some(libc::EINPROGRESS) { return Err(failure); }
+                // A pending connect is not repeated. Writability plus SO_ERROR
+                // determines completion under the same original deadline.
+                let events = socket.poll(libc::POLLOUT, deadline, None)?;
+                let failure = socket_option(socket.fd.as_raw_fd(), libc::SO_ERROR)?;
+                if failure != 0 { return Err(io::Error::from_raw_os_error(failure)); }
+                if events & libc::POLLOUT == 0 || events & (libc::POLLERR | libc::POLLHUP) != 0 {
+                    return Err(error(io::ErrorKind::ConnectionAborted, "vsock parent connect did not complete"));
+                }
+            } else {
+                let failure = socket_option(socket.fd.as_raw_fd(), libc::SO_ERROR)?;
+                if failure != 0 { return Err(io::Error::from_raw_os_error(failure)); }
+            }
+            socket.check()?;
+            remaining(deadline)?;
+            let local = address(socket.fd.as_raw_fd(), false)?;
+            // Linux autobind retains CID_ANY in the local socket address.
+            // Retain that actual value rather than inventing a concrete CID.
+            if address(socket.fd.as_raw_fd(), true)? != peer
+                || (!valid_peer_cid(local.cid) && local.cid != CID_ANY)
+                || socket_option(socket.fd.as_raw_fd(), libc::SO_ACCEPTCONN)? != 0 {
+                return Err(error(io::ErrorKind::PermissionDenied, "vsock parent connection scope was denied"));
+            }
+            socket.check()?;
+            remaining(deadline)?;
+            Ok(local)
+        })();
+        let local = match connected {
+            Ok(local) => local,
+            Err(failure) => {
+                if socket.check().is_ok() {
+                    unsafe { libc::shutdown(socket.fd.as_raw_fd(), libc::SHUT_RDWR); }
+                }
+                return Err(failure);
+            }
+        };
+        let stream = Self { socket, peer, connected_local: Some(local), deadline: session_deadline,
+            read_timeout_ns: AtomicU64::new(0), write_timeout_ns: AtomicU64::new(0),
+            closed: Arc::new(AtomicBool::new(false)) };
+        if let Err(failure) = stream.check(deadline) {
+            let _ = stream.shutdown();
+            return Err(failure);
+        }
+        Ok(stream)
+    }
+
     /// Cached routing metadata, not an authenticated principal.
     pub fn peer_cid(&self) -> u32 { self.peer.cid }
     pub fn peer_port(&self) -> u32 { self.peer.port }
+    /// Original nonrenewable session bound for composing another transport.
+    pub(crate) fn deadline(&self) -> u64 { self.deadline }
 
     fn check(&self, deadline: u64) -> io::Result<()> {
         self.socket.check()?;
         remaining(deadline)?;
         if self.closed.load(Ordering::Acquire) {
             return Err(error(io::ErrorKind::NotConnected, "vsock session was shut down"));
+        }
+        if let Some(local) = self.connected_local {
+            if address(self.socket.fd.as_raw_fd(), false)? != local
+                || address(self.socket.fd.as_raw_fd(), true)? != self.peer
+                || socket_option(self.socket.fd.as_raw_fd(), libc::SO_TYPE)? != libc::SOCK_STREAM
+                || socket_option(self.socket.fd.as_raw_fd(), libc::SO_DOMAIN)? != libc::AF_VSOCK
+                || socket_option(self.socket.fd.as_raw_fd(), libc::SO_ACCEPTCONN)? != 0 {
+                return Err(error(io::ErrorKind::InvalidData, "vsock parent connection identity changed"));
+            }
+            remaining(deadline)?;
         }
         Ok(())
     }
@@ -298,6 +387,45 @@ impl VsockStreamV1 {
     }
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         self.set_timeout(&self.write_timeout_ns, timeout)
+    }
+
+    /// One bounded nonblocking data attempt; only interrupted calls retry.
+    /// WouldBlock never waits or renews the retained session deadline.
+    pub fn try_read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let deadline = self.operation_deadline(&self.read_timeout_ns)?;
+        if buffer.is_empty() { return Ok(0); }
+        loop {
+            self.check(deadline)?;
+            let count = unsafe { libc::recv(self.socket.fd.as_raw_fd(), buffer.as_mut_ptr().cast(),
+                buffer.len().min(MAX_IO_BYTES), libc::MSG_DONTWAIT) };
+            let failure = if count < 0 { Some(io::Error::last_os_error()) } else { None };
+            self.check(deadline)?;
+            if let Some(failure) = failure {
+                if failure.kind() == io::ErrorKind::Interrupted { continue; }
+                return Err(failure);
+            }
+            return Ok(count as usize);
+        }
+    }
+
+    /// One bounded nonblocking data attempt without SIGPIPE. WouldBlock is
+    /// returned directly; partial writes remain the caller's responsibility.
+    pub fn try_write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let deadline = self.operation_deadline(&self.write_timeout_ns)?;
+        if buffer.is_empty() { return Ok(0); }
+        loop {
+            self.check(deadline)?;
+            let count = unsafe { libc::send(self.socket.fd.as_raw_fd(), buffer.as_ptr().cast(),
+                buffer.len().min(MAX_IO_BYTES), libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL) };
+            let failure = if count < 0 { Some(io::Error::last_os_error()) } else { None };
+            self.check(deadline)?;
+            if let Some(failure) = failure {
+                if failure.kind() == io::ErrorKind::Interrupted { continue; }
+                return Err(failure);
+            }
+            if count == 0 { return Err(error(io::ErrorKind::WriteZero, "vsock write made no progress")); }
+            return Ok(count as usize);
+        }
     }
 
     /// Cancellation remains available after expiry; it never permits more IO.

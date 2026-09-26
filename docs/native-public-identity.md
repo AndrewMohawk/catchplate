@@ -87,6 +87,11 @@ packet, the native response-capture artifact or a success token accepted by
 those consumers. No automatic enrollment or existing-verifier compatibility
 is claimed.
 
+The separate [offline ingress verifier](native-ingress-verifier.md) now checks
+this exact object against independent pins, actual certificate signatures and
+the original Nitro quote. Its result remains local-only and `okForAction=false`;
+it does not add a fresh client/session exchange or authorize CA installation.
+
 The [production trust flow](../goal.md#attestation-goal) requires a fresh
 client-held 32-byte challenge over the actual enclave-owned TLS session,
 exporter/request/signed-scope binding, genuine Nitro verification against

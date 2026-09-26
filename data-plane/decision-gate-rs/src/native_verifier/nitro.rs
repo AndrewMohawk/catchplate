@@ -7,6 +7,7 @@
 
 use super::cbor::{self, Value};
 use super::config::{Expectations, TrustRoots};
+use std::collections::BTreeMap;
 
 const MAX_CERTIFICATES: usize = 16;
 const MAX_ATTESTATION_FIELD: usize = 1024;
@@ -14,6 +15,15 @@ const PAYLOAD_FIELDS: [&str; 9] = [
     "module_id", "timestamp", "digest", "pcrs", "certificate", "cabundle",
     "public_key", "user_data", "nonce",
 ];
+
+/// Borrowed independent Nitro scope, without response-proof-specific claims.
+/// Possession of these expectations is not evidence of their admission.
+pub(super) struct NitroExpectationsV1<'a> {
+    pub(super) module_id: &'a str,
+    pub(super) pcrs: &'a BTreeMap<u8, [u8; 48]>,
+    pub(super) max_age: u64,
+    pub(super) future_skew: u64,
+}
 
 fn bytes<'a>(value: &Value<'a>) -> Result<&'a [u8], String> {
     match value {
@@ -68,8 +78,47 @@ pub(super) fn verify(
     challenge: &[u8; 32],
     now: u64,
 ) -> Result<u64, String> {
+    // Preserve the response verifier's fixed raw32, nonzero key contract.
+    if expected_public_key == &[0; 32] {
+        return Err("native Nitro independent expectations are outside the fixed profile".to_owned());
+    }
+    let scope = NitroExpectationsV1 {
+        module_id: &expected.module_id,
+        pcrs: &expected.pcrs,
+        max_age: expected.max_age,
+        future_skew: expected.future_skew,
+    };
+    verify_core(document, &scope, roots, expected_public_key, expected_user_data, challenge, now)
+}
+
+/// Check exact original ingress SPKI/request bytes under the same Nitro
+/// profile. The caller separately joins the actual certificate/SPKI and fixed
+/// role-3 request binding; this function does not parse or admit that identity.
+pub(super) fn verify_ingress(
+    document: &[u8],
+    expected: &NitroExpectationsV1<'_>,
+    roots: &TrustRoots,
+    expected_public_key_spki: &[u8],
+    expected_user_data: &[u8],
+    challenge: &[u8; 32],
+    now: u64,
+) -> Result<u64, String> {
+    verify_core(document, expected, roots, expected_public_key_spki,
+        expected_user_data, challenge, now)
+}
+
+fn verify_core(
+    document: &[u8],
+    expected: &NitroExpectationsV1<'_>,
+    roots: &TrustRoots,
+    expected_public_key: &[u8],
+    expected_user_data: &[u8],
+    challenge: &[u8; 32],
+    now: u64,
+) -> Result<u64, String> {
     if now == 0 || !(1..=300).contains(&expected.max_age) || expected.future_skew > 30
-        || expected_public_key == &[0; 32] || expected_user_data.is_empty()
+        || expected_public_key.is_empty() || expected_public_key.len() > MAX_ATTESTATION_FIELD
+        || expected_user_data.is_empty()
         || expected_user_data.len() > MAX_ATTESTATION_FIELD
         || expected.module_id.is_empty() || expected.module_id.chars().count() > 256
         || !(3..=32).contains(&expected.pcrs.len())
@@ -109,7 +158,7 @@ pub(super) fn verify(
     }
     if text(field(&payload, "module_id")?)? != expected.module_id
         || text(field(&payload, "digest")?)? != "SHA384"
-        || bytes(field(&payload, "public_key")?)? != expected_public_key.as_slice()
+        || bytes(field(&payload, "public_key")?)? != expected_public_key
         || bytes(field(&payload, "user_data")?)? != expected_user_data
         || bytes(field(&payload, "nonce")?)? != challenge.as_slice() {
         return Err("Nitro signed module/digest/key/user-data/challenge differs from independent expectations".to_owned());

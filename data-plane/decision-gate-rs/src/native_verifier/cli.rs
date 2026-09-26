@@ -151,18 +151,28 @@ impl HeldOriginal {
 }
 
 pub(super) fn run() -> Result<(), String> {
+    run_with_input_limit(MAX_INPUT, super::verify)
+}
+
+pub(super) fn run_with_input_limit(
+    limit: usize,
+    verifier: fn(&[u8], &[u8], &[u8]) -> Result<Vec<u8>, String>,
+) -> Result<(), String> {
+    if limit == 0 || limit > MAX_INPUT {
+        return Err("native verifier input limit exceeds its source bound".to_owned());
+    }
     let arguments = arguments()?;
     let (mut expectations, expectations_raw) = HeldOriginal::read(
         arguments.expectations, arguments.expectations_pin, MAX_EXPECTATIONS)?;
     let (mut trust_roots, trust_roots_raw) = HeldOriginal::read(
         arguments.trust_roots, arguments.trust_roots_pin, MAX_TRUST_ROOTS)?;
     let mut raw = Vec::new();
-    std::io::stdin().lock().take(MAX_INPUT as u64 + 1).read_to_end(&mut raw)
+    std::io::stdin().lock().take(limit as u64 + 1).read_to_end(&mut raw)
         .map_err(|_| "read bounded native proof original")?;
-    if raw.is_empty() || raw.len() > MAX_INPUT {
+    if raw.is_empty() || raw.len() > limit {
         return Err("native proof original exceeds its input bound".to_owned());
     }
-    let mut result = super::verify(&raw, &expectations_raw, &trust_roots_raw)?;
+    let mut result = verifier(&raw, &expectations_raw, &trust_roots_raw)?;
     if result.is_empty() || result.len() > MAX_RESULT || result.contains(&b'\n') || result.contains(&b'\r') {
         return Err("native verifier result exceeds its canonical output bound".to_owned());
     }

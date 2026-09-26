@@ -33,19 +33,7 @@ impl Expectations {
         ensure(text(&value, "apiVersion")? == "serverware.nativeResponseAttestationExpectations/v1",
             "native expectations version differs")?;
         let pin = |field| parse_digest::<32>(text(&value, field)?, "sha256:", true);
-        let inventory = value.get("expectedPcrs").and_then(Value::as_object)
-            .ok_or("native expected PCR inventory is not an object")?;
-        ensure((3..=32).contains(&inventory.len()), "native expected PCR inventory size differs")?;
-        let mut pcrs = BTreeMap::new();
-        for (name, value) in inventory {
-            let index: u8 = name.strip_prefix("PCR").ok_or("native PCR name differs")?
-                .parse().map_err(|_| "native PCR index is invalid")?;
-            ensure(index <= 31 && name == &format!("PCR{index}"), "native PCR name is not canonical")?;
-            let bytes = parse_digest::<48>(value.as_str().ok_or("native PCR is not text")?,
-                "sha384:", index < 3)?;
-            ensure(pcrs.insert(index, bytes).is_none(), "native PCR repeats")?;
-        }
-        ensure((0..=2).all(|index| pcrs.contains_key(&index)), "native core PCRs are missing")?;
+        let pcrs = parse_pcr_inventory(&value["expectedPcrs"])?;
         let eif = parse_digest::<48>(text(&value, "expectedEif")?, "sha384:", true)?;
         ensure(pcrs.get(&0) == Some(&eif), "native expected EIF differs from PCR0")?;
         let module_id = text(&value, "expectedModuleId")?;
@@ -68,6 +56,23 @@ impl Expectations {
             control_plane_key_id: pin("controlPlaneResponseSigningKeyId")?, nonce,
         })
     }
+}
+
+pub(super) fn parse_pcr_inventory(value: &Value) -> Result<BTreeMap<u8, [u8; 48]>, String> {
+    let inventory = value.as_object()
+        .ok_or("native expected PCR inventory is not an object")?;
+    ensure((3..=32).contains(&inventory.len()), "native expected PCR inventory size differs")?;
+    let mut pcrs = BTreeMap::new();
+    for (name, value) in inventory {
+        let index: u8 = name.strip_prefix("PCR").ok_or("native PCR name differs")?
+            .parse().map_err(|_| "native PCR index is invalid")?;
+        ensure(index <= 31 && name == &format!("PCR{index}"), "native PCR name is not canonical")?;
+        let bytes = parse_digest::<48>(value.as_str().ok_or("native PCR is not text")?,
+            "sha384:", index < 3)?;
+        ensure(pcrs.insert(index, bytes).is_none(), "native PCR repeats")?;
+    }
+    ensure((0..=2).all(|index| pcrs.contains_key(&index)), "native core PCRs are missing")?;
+    Ok(pcrs)
 }
 
 pub(super) struct TrustRoots {

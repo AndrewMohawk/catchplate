@@ -11,6 +11,10 @@ mod config;
 mod json;
 mod nitro;
 mod statement;
+mod ingress;
+mod ingress_certificates;
+mod ingress_cli;
+mod ingress_config;
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
@@ -18,6 +22,15 @@ use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run() -> Result<(), String> { cli::run() }
+pub(crate) fn run_ingress() -> Result<(), String> { ingress_cli::run() }
+
+pub(super) fn verify_ingress(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])
+    -> Result<Vec<u8>, String> {
+    let result = ingress::verify(raw, expectations_raw, trust_roots_raw)?;
+    let bytes = serde_json::to_vec(&result).map_err(|_| "encode native ingress verdict")?;
+    ensure(!bytes.is_empty() && bytes.len() < 4096, "native ingress verdict exceeds its bound")?;
+    Ok(bytes)
+}
 
 fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])
     -> Result<Vec<u8>, String> {

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-ingress-attestation-expectations.v1.schema.json",
+  "title": "Serverware native ingress attestation expectations v1",
+  "description": "Closed independently supplied expectations for the offline native ingress verifier. Schema conformance establishes shape only, not pin provenance, current release or policy authority, nonce freshness, Nitro or TLS verification, CA installation permission or service readiness. The runtime retains a separately pinned original of at most 16384 bytes and performs canonicalization, cross-field and cryptographic checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "releaseRecordSha256", "policyHash", "configurationSha256",
+    "clientTrustBundleSha256", "expectedPcrs", "expectedEif", "expectedModuleId",
+    "maxAgeSeconds", "futureSkewSeconds", "nonceBase64url", "ingressHost",
+    "serverInstanceId"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeIngressAttestationExpectations/v1"},
+    "releaseRecordSha256": {"$ref": "#/$defs/nonzeroSha256"},
+    "policyHash": {"$ref": "#/$defs/nonzeroSha256"},
+    "configurationSha256": {"$ref": "#/$defs/nonzeroSha256"},
+    "clientTrustBundleSha256": {
+      "description": "Independent nonzero commitment to the actual mandatory-client-auth trust bundle. A syntactically valid digest does not admit that trust bundle or its provenance.",
+      "$ref": "#/$defs/nonzeroSha256"
+    },
+    "expectedPcrs": {
+      "description": "Complete independently pinned PCR inventory, not a selected subset. Runtime requires exact equality to the original Nitro document's inventory. Core PCR0, PCR1 and PCR2 are nonzero; additional pinned PCRs may be zero.",
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 32,
+      "additionalProperties": false,
+      "required": ["PCR0", "PCR1", "PCR2"],
+      "properties": {
+        "PCR0": {"$ref": "#/$defs/nonzeroSha384"},
+        "PCR1": {"$ref": "#/$defs/nonzeroSha384"},
+        "PCR2": {"$ref": "#/$defs/nonzeroSha384"}
+      },
+      "patternProperties": {
+        "^PCR(?:[0-9]|[12][0-9]|3[01])(?![\\s\\S])": {"$ref": "#/$defs/sha384"}
+      }
+    },
+    "expectedEif": {
+      "description": "Nonzero independently expected EIF measurement. Runtime additionally requires exact equality to expectedPcrs.PCR0; this schema does not establish that join.",
+      "$ref": "#/$defs/nonzeroSha384"
+    },
+    "expectedModuleId": {
+      "description": "Exact expected Nitro module identifier as printable ASCII, not a module identity learned from the evidence being checked.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[ -~]+(?![\\s\\S])"
+    },
+    "maxAgeSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+    "futureSkewSeconds": {"type": "integer", "minimum": 0, "maximum": 30},
+    "nonceBase64url": {
+      "description": "Independently expected 32-byte challenge in canonical unpadded URL-safe base64. The final-character restriction excludes nonzero padding bits; runtime decodes, rejects the all-zero value and joins the exact original quote nonce. Shape does not establish freshness or one-use challenge custody.",
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])"
+    },
+    "ingressHost": {
+      "description": "Expected lowercase ASCII DNS name or unbracketed IP literal, never a wildcard. Runtime enforces exact canonical IP spelling or the DNS-name rules and rejects a trailing dot; this character bound is not an IP or DNS parser.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[a-z0-9.:-]+(?![\\s\\S])"
+    },
+    "serverInstanceId": {
+      "description": "Expected canonical SPIFFE URI. Runtime requires a canonical lowercase DNS trust domain and exact URL spelling, with no user information, port, query, fragment, repeated path separators or dot segments. This bounded ASCII prefix check does not establish those URI semantics or independent workload identity.",
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 2048,
+      "pattern": "^spiffe://[!-~]+(?![\\s\\S])"
+    }
+  },
+  "$defs": {
+    "nonzeroSha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "sha384": {
+      "type": "string",
+      "minLength": 103,
+      "maxLength": 103,
+      "pattern": "^sha384:[0-9a-f]{96}(?![\\s\\S])"
+    },
+    "nonzeroSha384": {
+      "allOf": [
+        {"$ref": "#/$defs/sha384"},
+        {"pattern": "^sha384:(?!0{96})"}
+      ]
+    }
+  }
+}

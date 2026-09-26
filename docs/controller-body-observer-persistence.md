@@ -16,15 +16,16 @@ There is no caller-record, parsed-marker or successful-proof constructor.
 2. **Adopt protected storage.** Consume the supplied directory, reopen `.` to
    obtain an independent open file description, take a nonblocking exclusive
    advisory lock, and require an empty source-checked directory.
-3. **Publish exact originals.** Exclusively create and verify `maps.bin`, then
-   `snapshot.json`, then `event.json`; publish `initial.commit` last. Each file
-   completes the file/readback/directory-sync boundary before the next one.
+3. **Publish exact originals.** Exclusively create `stop.json`, then all eight
+   task originals in the fixed order below, then `maps.bin`, `snapshot.json`
+   and `event.json`; publish `initial.commit` last. Each file completes the
+   file/readback/directory-sync boundary before the next one.
 4. **Return the gated session.** Join retained store contents/head/counts to the
    same actual initial owner and recheck gated custody. No Ready or continuation
    message follows from success.
 
 The [store](../data-plane/decision-gate-rs/src/body_observer_history_store_v14.rs)
-owns all four retained originals. The session retains the initial owner **before**
+owns all thirteen retained originals. The session retains the initial owner **before**
 the store in field-drop order, so fail-closed worker cleanup precedes release of
 the retained store. `verify_gated(deadline)` can only shorten the original bound;
 a failure permanently poisons that session. `abort` remains available, without
@@ -35,20 +36,36 @@ values, not fresh verification or permission.
 
 | Fixed file | Original content | Source maximum |
 | --- | --- | --- |
+| `stop.json` | Exact typed-canonical worker stop original | 4 KiB |
+| `target-before-status.bin` | Original target status, before task acquisition | 64 KiB |
+| `target-before-stat.bin` | Original target stat, before task acquisition | 16 KiB |
+| `target-after-status.bin` | Original target status, after task acquisition | 64 KiB |
+| `target-after-stat.bin` | Original target stat, after task acquisition | 16 KiB |
+| `worker-before-status.bin` | Original worker status, before task acquisition | 64 KiB |
+| `worker-before-stat.bin` | Original worker stat, before task acquisition | 16 KiB |
+| `worker-after-status.bin` | Original worker status, after task acquisition | 64 KiB |
+| `worker-after-stat.bin` | Original worker stat, after task acquisition | 16 KiB |
 | `maps.bin` | Exact original procfs maps bytes | 4 MiB |
 | `snapshot.json` | Complete typed-canonical initial mapping snapshot | 16 MiB |
 | `event.json` | Typed-canonical sequence-1 `Initial` event | 256 KiB |
-| `initial.commit` | Fixed binary scope/length/digest binding | 256 bytes |
+| `initial.commit` | Fixed binary scope/length/digest binding | 640 bytes |
 
-`stored_bytes` counts the actual bytes in all four files, not disk allocation,
-filesystem metadata or a provisioned quota. The map digest is raw SHA-256;
+The eight status/stat originals have a separate combined cap of 327,680 bytes;
+the stop original is charged separately. They are obtained only from the actual
+initial owner's retained, authenticated worker handoff, not from file paths or
+caller-provided records. The fixed
+[task-original collection](../data-plane/decision-gate-rs/src/body_observer_task_originals_v14.rs)
+preserves those bytes and their identities.
+
+`stored_bytes` counts the actual bytes in all thirteen files, not disk allocation,
+filesystem metadata or a provisioned quota. Stop, task and map digests are raw SHA-256;
 snapshot/event identities use their distinct
 [history domains](controller-body-observer-history.md#closed-originals-and-bounds).
 All original bytes remain stored; a digest cannot replace a missing file.
 
 The marker starts with the exact NUL-terminated bytes
-`serverware.controllerBodyInitialHistoryCommit/v14`, followed by this fixed
-188-byte payload in order:
+`serverware.controllerBodyInitialHistoryCommit/v15`, followed by this fixed
+584-byte payload in order:
 
 - Context digest, 32 bytes.
 - Target pidfd inode, target PID-namespace inode and original scope deadline,
@@ -57,6 +74,22 @@ The marker starts with the exact NUL-terminated bytes
 - Event count, unsigned 64-bit big-endian, exactly one.
 - Maps, snapshot and event respectively: original length as unsigned 64-bit
   big-endian, then the applicable 32-byte digest.
+- Task-original binding digest, 32 bytes; task-original count as unsigned
+  32-bit big-endian, exactly eight.
+- Each task original in the table's fixed order: original length as unsigned
+  64-bit big-endian, then raw SHA-256, 32 bytes.
+- Stop-original length as unsigned 64-bit big-endian, then its raw SHA-256,
+  32 bytes.
+
+The task binding commits the fixed NUL-terminated domain
+`serverware/controller-body-task-originals/v14`, the stop-original length
+(u64BE) and exact stop bytes, then each task index (u32BE), length (u64BE) and
+exact original bytes. Retaining `stop.json` preserves that binding's preimage,
+rather than retaining only its digest.
+
+This local v15 marker is explicitly incompatible with the earlier four-file
+v14 marker; there is no parser, migration, fallback or old-marker adoption.
+Existing signed evidence v13 and unsigned history v14 formats are unchanged.
 
 The source produces this marker from actual retained custody; it does not parse
 one as an authorization or recovery input. Its presence alone is not a complete
@@ -105,7 +138,9 @@ output tmpfs is not substituted for this storage domain.
 This is the persisted initial gated session only. It supplies no continuous
 event transport/append loop, scheduler, actual MM-sharing or mapping policy,
 host-surviving final-status source, independent output reconciliation, signer
-or serving lifecycle. Existing v13 admission remains unchanged. The
+or serving lifecycle. Native wait-status/syscall-info originals and ongoing
+events are not archived by these thirteen files: this is not a complete
+acquisition archive. Existing v13 admission remains unchanged. The
 [lifecycle design](controller-body-observer-lifecycle-design.md) defines those
 cohesive dependencies and the future acknowledgment-before-continuation rule;
 this initial store does not activate that transition. Frozen preparation and

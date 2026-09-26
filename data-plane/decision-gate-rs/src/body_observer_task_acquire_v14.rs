@@ -281,6 +281,15 @@ impl AcquiredInitialTaskV14 {
     pub(super) fn observed_at_boottime_ns(&self) -> u64 { self.observed_at }
     pub(super) fn deadline(&self) -> u64 { self.scope.deadline }
 
+    /// Exact retained acquisition originals in fixed transport/storage order.
+    /// Borrowing these bytes performs no fresh proc read or custody admission.
+    pub(super) fn originals(&self) -> [&[u8]; 8] {
+        [&self._before.target._status_original, &self._before.target._stat_original,
+            &self.after.target._status_original, &self.after.target._stat_original,
+            &self._before.worker._status_original, &self._before.worker._stat_original,
+            &self.after.worker._status_original, &self.after.worker._stat_original]
+    }
+
     fn custody(&self, stop: &InitialNamespaceStopV14, deadline: u64) -> PlanResult<()> {
         live(deadline)?;
         if unsafe { libc::getpid() } != self.owner_pid

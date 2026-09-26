@@ -182,9 +182,10 @@ process custody, freshness or action authority.
 
 The owner can now be consumed by `HeldInitialBodyHistoryV14::persist_initial`
 into a [persisted initial gated session](controller-body-observer-persistence.md).
-That composition retains actual process custody while publishing the exact maps,
-snapshot and event originals and a fixed local commit record into a consumed
-preprovisioned directory. It supplies neither continuous history transport nor
+That composition retains actual process custody while publishing the authenticated
+worker stop/task originals, exact maps, snapshot and event originals, and a fixed
+local commit record into a consumed preprovisioned directory. It supplies neither
+continuous history transport nor
 independently admitted storage/execution policy, readiness or continuation.
 
 ## What is still missing

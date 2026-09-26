@@ -15,6 +15,7 @@ use super::body_observer_wait_acquire_v14::acquire_initial_interrupt_stop;
 use super::body_observer_syscall_info_v14::{observe as observe_syscall_info, SyscallOperationV14};
 use super::body_observer_task_proc_v14::{parse_stat_original, parse_status_original, TaskStatusV14};
 use super::body_observer_task_acquire_v14::acquire_initial_task;
+use super::body_observer_task_transport_v14::send_task_originals;
 use crate::plan_protocol::body_launch_contract_v12::{BodyLaunchContextV12, MAX_CONTEXT_BYTES_V12};
 use crate::plan_protocol::{PlanProtocolError, PlanResult};
 use std::ffi::{CStr, CString};
@@ -500,6 +501,8 @@ fn run(scope: &NamespaceWorkerScopeV12) -> PlanResult<()> {
     };
     actual_task.verify(&initial_stop, scope.deadline_boottime_ns)?;
     send_stop(scope.control_fd, scope.parent_pidfd, &record, scope.deadline_boottime_ns)?;
+    send_task_originals(scope.control_fd, scope.parent_pidfd, &record, &actual_task,
+        &initial_stop, scope.deadline_boottime_ns)?;
     // Keep the same-thread stop owner through the abort-only lifetime. No
     // continuation or journal event is inferred from the copied observations.
     let result = wait_for_abort(scope.control_fd, scope.parent_pidfd, scope.deadline_boottime_ns);

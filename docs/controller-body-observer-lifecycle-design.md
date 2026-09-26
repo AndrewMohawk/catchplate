@@ -215,6 +215,13 @@ Provision byte/inode/descriptor limits and account queued acquisition originals
 separately. Exhaustion aborts; it does not drop events or reset the deadline.
 The current controller-output tmpfs is not durable host history storage.
 
+The current [initial task-original transfer](controller-body-observer-acquisition.md#worker-to-host-task-originals)
+implements a bounded credential-checked chunk path for the worker's eight
+before/after status/stat originals and binds the exact stop. Those originals now
+reach initial persistence. It does not yet provide continuous snapshot/event
+transport, durable acknowledgment before continuation or complete native
+wait/syscall acquisition originals.
+
 ## Namespace-init termination and terminal reconciliation
 
 When PID-namespace init terminates, Linux kills the namespace's remaining

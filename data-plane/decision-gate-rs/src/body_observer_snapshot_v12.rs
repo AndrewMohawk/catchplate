@@ -208,6 +208,9 @@ impl StoppedBodyMappingSnapshotV12 {
     }
 
     pub(crate) fn original_maps(&self) -> &[u8] { &self.original }
+    pub(super) fn task_originals(&self) -> &super::body_observer_task_originals_v14::TaskOriginalsV14 {
+        self.stopped.task_originals.records()
+    }
     pub(super) fn mappings(&self) -> &[ProcMappingV12] { &self.rows }
     pub(super) fn executable_bindings(&self) -> PlanResult<&[ExecutableMappingFileBindingV12]> {
         Ok(self.backing()?.bindings())

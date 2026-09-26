@@ -269,6 +269,9 @@ impl HeldInitialBodyHistoryV14 {
     pub(crate) fn initial_event_original(&self) -> &[u8] { &self.event_original }
     pub(super) fn history_scope(&self) -> &HistoryScopeV14 { &self.scope }
     pub(super) fn original_maps(&self) -> &[u8] { self.snapshot.original_maps() }
+    pub(super) fn task_originals(&self) -> &super::body_observer_task_originals_v14::TaskOriginalsV14 {
+        self.snapshot.task_originals()
+    }
     pub(super) fn maps_original_sha256(&self) -> Digest { self.maps_original_sha256 }
     pub(super) fn initial_snapshot_sha256(&self) -> Digest { self.snapshot_sha256 }
     pub(crate) fn head_sha256(&self) -> Digest { self.replay.head_sha256() }

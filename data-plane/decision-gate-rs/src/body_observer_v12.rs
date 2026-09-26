@@ -47,6 +47,10 @@ mod body_observer_history_files_v14;
 mod body_observer_history_store_v14;
 #[path = "body_observer_session_v14.rs"]
 mod body_observer_session_v14;
+#[path = "body_observer_task_originals_v14.rs"]
+mod body_observer_task_originals_v14;
+#[path = "body_observer_task_transport_v14.rs"]
+mod body_observer_task_transport_v14;
 
 use crate::plan_protocol::{Digest, PlanProtocolError, PlanResult};
 use crate::plan_protocol::body_observer_contract_v12::BodyObserverLaunchV12;
@@ -55,6 +59,7 @@ use body_observer_receive_v12::{ObserverLaunchChannelV12, ReceivedObserverLaunch
 use body_observer_target_v12::ReceivedBodyTargetV12;
 use body_observer_process_v12::HeldNamespaceWorkerV12;
 use body_observer_worker_contract_v12::{receive_stop, NamespaceWorkerStopV12};
+use body_observer_task_transport_v14::{receive_task_originals, ReceivedInitialTaskOriginalsV14};
 pub(crate) use body_observer_snapshot_v12::StoppedBodyMappingSnapshotV12;
 pub(crate) use body_observer_history_acquire_v14::HeldInitialBodyHistoryV14;
 pub(crate) use body_observer_session_v14::BodyObservationSessionV14;
@@ -118,7 +123,12 @@ impl AcquiredBodyObserverLaunchV12 {
             || stop.observed_at_boottime_ns < worker.started_at_boottime_ns() {
             return Err(PlanProtocolError::Invalid("namespace worker stop differs from actual held launch/birth"));
         }
-        let held = StoppedBodyObserverLaunchV12 { worker, target, channel, launch, stop, deadline };
+        // The v14 private stop is followed by a mandatory bounded transfer from
+        // this exact actual child. No received-record DTO constructs custody.
+        let task_originals = receive_task_originals(worker.control_fd(), worker.worker_pidfd(),
+            worker.worker_pid(), &stop, deadline)?;
+        let held = StoppedBodyObserverLaunchV12 { worker, target, channel, launch, stop,
+            task_originals, deadline };
         held.verify_stopped(deadline)?;
         Ok(held)
     }
@@ -134,6 +144,7 @@ pub(crate) struct StoppedBodyObserverLaunchV12 {
     channel: ObserverLaunchChannelV12,
     launch: BodyObserverLaunchV12,
     stop: NamespaceWorkerStopV12,
+    task_originals: ReceivedInitialTaskOriginalsV14,
     deadline: u64,
 }
 
@@ -149,6 +160,8 @@ impl StoppedBodyObserverLaunchV12 {
         let deadline = deadline.min(self.deadline);
         self.channel.verify_pending(deadline)?;
         self.worker.verify_live(deadline)?;
+        self.task_originals.verify_quiet(self.worker.control_fd(), self.worker.worker_pidfd(),
+            self.worker.worker_pid(), deadline)?;
         self.target.verify_gated(deadline)?;
         actual_tracer(&self.target, self.worker.worker_pid(), deadline)?;
         self.worker.verify_live(deadline)?;

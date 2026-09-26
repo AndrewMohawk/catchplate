@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::os::fd::RawFd;
 
-pub(super) const WORKER_STOP_VERSION: &str = "serverware.controllerBodyObserverNamespaceStop/v12";
+pub(super) const WORKER_STOP_VERSION: &str = "serverware.controllerBodyObserverNamespaceStop/v14";
 pub(super) const MAX_WORKER_CONTROL_BYTES: usize = 4096;
+pub(super) const MAX_INITIAL_TASK_PACKET_BYTES: usize = 56 + 16 * 1024;
 const SCM_PIDFD: libc::c_int = 4;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -234,6 +235,10 @@ pub(super) fn send_stop(fd: RawFd, parent_pidfd: RawFd, record: &NamespaceWorker
         return Err(invalid("namespace worker stop differs from its actual sender or original time"));
     }
     let bytes = record.original_bytes()?;
+    send_packet(fd, parent_pidfd, &bytes, deadline)
+}
+
+fn send_packet(fd: RawFd, parent_pidfd: RawFd, bytes: &[u8], deadline: u64) -> PlanResult<()> {
     loop {
         wait(fd, parent_pidfd, libc::POLLOUT, deadline)?;
         // No sender-supplied credentials or FDs: the parent's pre-enabled
@@ -245,7 +250,7 @@ pub(super) fn send_stop(fd: RawFd, parent_pidfd: RawFd, record: &NamespaceWorker
             if matches!(error.kind(), std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock) { continue; }
             return Err(error.into());
         }
-        if count as usize != bytes.len() { return Err(invalid("namespace worker stop packet was not sent atomically")); }
+        if count as usize != bytes.len() { return Err(invalid("namespace worker packet was not sent atomically")); }
         peer_live(parent_pidfd)?;
         return Ok(());
     }
@@ -272,14 +277,57 @@ pub(super) fn receive_stop(fd: RawFd, worker_pidfd: RawFd, expected_worker_host_
         || record.observed_at_boottime_ns > live(deadline)? {
         return Err(invalid("namespace worker stop differs from child custody or original time"));
     }
-    // This is one record, not a stream or a reusable RPC. Do not accept an
-    // already queued second packet (including empty packets or premature EOF).
-    if receive_once(fd, &mut [0u8; 1], deadline)?.is_some() {
-        return Err(invalid("namespace worker sent additional stop-control packets or early EOF"));
-    }
+    // Version14 requires the fixed initial-task original transfer immediately
+    // after this stop. Its end-frame receiver performs the final quiet check.
     peer_live(worker_pidfd)?;
     live(deadline)?;
     Ok(record)
+}
+
+// Only the fixed initial-task transport uses these packet seams. They retain
+// the inherited endpoint, actual pidfd, original deadline and per-frame kernel
+// credentials; they do not expose a PID-taking operation or generic command.
+pub(super) fn send_initial_task_packet(fd: RawFd, parent_pidfd: RawFd, bytes: &[u8], deadline: u64)
+    -> PlanResult<()> {
+    if !(1..=MAX_INITIAL_TASK_PACKET_BYTES).contains(&bytes.len()) {
+        return Err(invalid("initial task packet exceeds its fixed frame bound"));
+    }
+    require_socket(fd, parent_pidfd, false, deadline)?;
+    send_packet(fd, parent_pidfd, bytes, deadline)
+}
+
+pub(super) fn receive_initial_task_packet(fd: RawFd, worker_pidfd: RawFd, expected_worker_host_pid: u32,
+    bytes: &mut [u8], deadline: u64) -> PlanResult<usize> {
+    if bytes.len() != MAX_INITIAL_TASK_PACKET_BYTES || !(2..=i32::MAX as u32).contains(&expected_worker_host_pid) {
+        return Err(invalid("initial task receiver lacks its fixed frame buffer or child identity"));
+    }
+    require_socket(fd, worker_pidfd, true, deadline)?;
+    let packet = loop {
+        wait(fd, worker_pidfd, libc::POLLIN, deadline)?;
+        if let Some(packet) = receive_once(fd, bytes, deadline)? { break packet; }
+    };
+    let credentials = packet.credentials
+        .ok_or_else(|| invalid("initial task packet lacks kernel sender credentials"))?;
+    if packet.count == 0 || credentials.pid <= 1 || credentials.pid as u32 != expected_worker_host_pid
+        || credentials.uid != 0 || credentials.gid != 0 {
+        return Err(invalid("initial task packet is not from the exact live root child"));
+    }
+    peer_live(worker_pidfd)?;
+    live(deadline)?;
+    Ok(packet.count)
+}
+
+pub(super) fn require_initial_task_transfer_quiet(fd: RawFd, worker_pidfd: RawFd, deadline: u64)
+    -> PlanResult<()> {
+    require_socket(fd, worker_pidfd, true, deadline)?;
+    // Even unexpected packets take the recvmsg path that closes installed
+    // rights/pidfds. Zero-sized packets and actual EOF are both forbidden here.
+    if receive_once(fd, &mut [0u8; 1], deadline)?.is_some() {
+        return Err(invalid("initial task transfer has extra queued packets or early EOF"));
+    }
+    peer_live(worker_pidfd)?;
+    live(deadline)?;
+    Ok(())
 }
 
 pub(super) fn wait_for_abort(fd: RawFd, parent_pidfd: RawFd, deadline: u64) -> PlanResult<()> {

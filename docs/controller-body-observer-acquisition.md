@@ -116,7 +116,7 @@ The fixed [helper](../data-plane/decision-gate-rs/src/body_observer_worker_v12.r
 receives only its fixed retained descriptors and private channel.
 It verifies its actual namespace and init identity before attaching to fixed
 namespace PID `1`, checks the genuine interrupt stop, and emits one bounded
-`serverware.controllerBodyObserverNamespaceStop/v12` original. The host parent
+`serverware.controllerBodyObserverNamespaceStop/v14` original. The host parent
 joins that message to the exact child pidfd, kernel per-message credentials,
 launch and target identities, birth interval and actual target `TracerPid`/state.
 The private socketpair's creator credentials are not substituted for the helper's
@@ -163,12 +163,59 @@ that design is not an implemented continuous producer.
 
 The private
 [stop contract](../data-plane/decision-gate-rs/src/body_observer_worker_contract_v12.rs)
-is one canonical, closed, eleven-field JSON packet capped at 4 KiB over an
+starts with one canonical, closed, eleven-field JSON packet capped at 4 KiB over an
 inherited nonblocking, close-on-exec `AF_UNIX/SOCK_SEQPACKET` pair. The parent
-enables `SO_PASSCRED` before birth. Unexpected received rights and ancillary
-pidfds are closed before rejection; truncation, duplicate credentials, extra
-packets and a zero-length packet masquerading as EOF are rejected. The record
-is unsigned acquisition data, not an independently signed observer result.
+enables `SO_PASSCRED` before birth. Its private stop version is now
+`serverware.controllerBodyObserverNamespaceStop/v14`, which requires the task-
+original transfer below; legacy stop-only traffic is not an accepted fallback.
+Unexpected received rights and ancillary pidfds are closed before rejection;
+truncation, duplicate credentials, malformed/trailing packets and a zero-length
+packet masquerading as EOF are rejected. These unsigned acquisition records are
+not independently signed observer results. The external v12 launch exchange and
+signed v13 evidence consumer are unchanged.
+
+### Worker-to-host task originals
+
+The [fixed transfer](../data-plane/decision-gate-rs/src/body_observer_task_transport_v14.rs)
+follows the actual initial stop with exactly eight original records: target
+before status/stat, target after status/stat, worker before status/stat and worker
+after status/stat. Each status is capped at 64 KiB and each stat at 16 KiB;
+all eight together cannot exceed 320 KiB. No caller-selected filename, target,
+command, descriptor or policy enters this transfer.
+
+Every frame has a fixed 56-byte header and at most 16 KiB of payload. The header
+binds the transfer digest, object index, complete object length, offset and chunk
+length; reserved bytes must be zero. Objects and chunks arrive in exact order,
+with full-size chunks except the final chunk of each object. A separate fixed
+terminal frame closes the transfer. This is bounded chunking, not a single large
+SEQPACKET or an unbounded event stream. A malformed length is rejected before
+allocation, and missing frames retain the original deadline rather than opening
+another window.
+
+The [ordinary collection](../data-plane/decision-gate-rs/src/body_observer_task_originals_v14.rs)
+re-parses every status/stat pair and joins identity projections before/after,
+target lifetime, tracer, worker lifetime and ordered namespace identities to the
+exact stop. Volatile counters are not required to match. Its binding hashes a
+fixed domain, the length-prefixed canonical stop original, then each indexed,
+length-prefixed raw original. The receiver must reproduce that binding from
+all completed originals; no hash substitutes for missing bytes.
+
+The actual acquired-task owner brackets sending with stopped-task verification.
+The host checks exact worker credentials on every frame and retains a separate
+opaque receive owner; the ordinary collection alone cannot construct that
+owner. Kernel per-message credentials are necessary here because socketpair
+peer credentials describe its creator, not a later child sender. See
+[UNIX socket credentials](https://man7.org/linux/man-pages/man7/unix.7.html).
+The host also checks peer pidfd liveness and rejects queued extra traffic or EOF
+after the terminal frame and on later stopped-custody verification. A failed
+quiet-channel check permanently poisons the receive owner; consuming an invalid
+packet cannot make a later retry acceptable.
+
+The stopped owner carries the authenticated originals through mapping/history
+acquisition into the [initial persistent session](controller-body-observer-persistence.md).
+The store preserves the canonical stop and all eight raw records before history
+publication. This is not a transfer acknowledgment authorizing continuation,
+nor a complete archive of native wait/syscall observations or later events.
 
 The resulting `StoppedBodyObserverLaunchV12` retains both worker and target.
 The helper holds the initial stop without resuming the workload and accepts only
@@ -265,6 +312,11 @@ review is not a substitute for those checks. Required cases include:
   after setup, restoration or child-start failures.
 - Malformed, extra and truncated private packets; forbidden descriptor delivery;
   wrong credentials; actual EOF versus an empty packet; and deadline expiry.
+- Mandatory v14 transfer after the stop, exact per-frame credentials, fixed
+  object/chunk order, offset and allocation bounds, mismatched stop/binding,
+  missing/duplicate/end/trailing frames and permanent quiet-check poisoning.
+  All eight raw originals and the canonical stop must reach the retained
+  thirteen-file store unchanged; a marker alone cannot pass incomplete custody.
 - Parent or target death during setup and while held, abandoned custody and
   bounded exact-child cleanup. A helper exit or reap must never be counted as
   proof that the full generation is destroyed.

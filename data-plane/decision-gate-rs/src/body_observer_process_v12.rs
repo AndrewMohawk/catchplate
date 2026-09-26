@@ -337,7 +337,7 @@ fn filesystem(fd: RawFd, expected: libc::c_long) -> PlanResult<()> {
     if unsafe { libc::fstatfs(fd, &mut value) } != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    if value.f_type != expected { return Err(invalid("namespace worker kernel filesystem mismatch")); }
+    if value.f_type != expected as _ { return Err(invalid("namespace worker kernel filesystem mismatch")); }
     Ok(())
 }
 

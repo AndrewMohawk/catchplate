@@ -304,7 +304,7 @@ impl ObserverLaunchChannelV12 {
         let peer_pidfd = peer_pidfd(socket.as_raw_fd(), deadline)?;
         let proc_root = open_at(libc::AT_FDCWD, c"/proc", libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW)?;
         let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstatfs(proc_root.as_raw_fd(), &mut filesystem) } != 0 || filesystem.f_type != PROC_MAGIC {
+        if unsafe { libc::fstatfs(proc_root.as_raw_fd(), &mut filesystem) } != 0 || filesystem.f_type != PROC_MAGIC as _ {
             return Err(invalid("observer controller custody requires actual procfs"));
         }
         let pid_name = CString::new(credentials.pid.to_string()).map_err(|_| invalid("observer peer PID encoding failed"))?;

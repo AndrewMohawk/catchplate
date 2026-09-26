@@ -55,7 +55,7 @@ fn maps_node(fd: RawFd, proc_fd: RawFd, deadline: u64) -> PlanResult<MapsNode> {
     }
     let descriptor_flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     let status_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if filesystem.f_type != PROC_MAGIC || value.st_mode & libc::S_IFMT != libc::S_IFREG
+    if filesystem.f_type != PROC_MAGIC as _ || value.st_mode & libc::S_IFMT != libc::S_IFREG
         || parent.st_mode & libc::S_IFMT != libc::S_IFDIR || value.st_dev != parent.st_dev
         || value.st_ino == 0 || value.st_nlink != 1
         || descriptor_flags < 0 || descriptor_flags & libc::FD_CLOEXEC == 0

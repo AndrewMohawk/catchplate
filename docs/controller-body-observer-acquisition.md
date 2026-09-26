@@ -122,6 +122,15 @@ launch and target identities, birth interval and actual target `TracerPid`/state
 The private socketpair's creator credentials are not substituted for the helper's
 actual message-sender identity.
 
+The initial wait now has a dedicated same-thread acquisition owner rather than
+discarding the raw kernel observation after a status comparison. It retains
+that original and rechecks the exact namespace-init stop. The kernel syscall-info
+reader is usable only with this actual owner; the initial path requires `NONE`,
+not a guessed syscall phase. The
+[history guide](controller-body-observer-history.md#kernel-wait-observations-before-journal-events)
+explains the separate status classifier and the still-missing continuous producer.
+This does not widen the worker's target selection or private control protocol.
+
 The private
 [stop contract](../data-plane/decision-gate-rs/src/body_observer_worker_contract_v12.rs)
 is one canonical, closed, eleven-field JSON packet capped at 4 KiB over an

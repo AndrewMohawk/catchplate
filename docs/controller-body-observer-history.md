@@ -111,6 +111,53 @@ can report a different PID namespace; same-group threads and execution
 replacement must preserve their applicable group/namespace identities. Actual
 birth, sharing, namespace and lifetime custody remain the event producer's job.
 
+## Kernel wait observations before journal events
+
+A kernel wait result is not itself a v14 journal event. The
+[wait classifier](../data-plane/decision-gate-rs/src/body_observer_wait_contract_v14.rs)
+preserves the namespace-local task number and original status while separating
+final exit/signal outcomes, ptrace events, syscall stops, ambiguous signal-stop
+candidates and continued notifications. Unknown events and malformed status
+bits fail classification. In particular, an early exit event cannot become a
+`TaskExited` merely because both concern termination. Signal-stop candidates
+still need actual kernel metadata and lifecycle context.
+
+The first concrete caller is deliberately limited to the existing initial
+interrupt stop. Its
+[acquisition owner](../data-plane/decision-gate-rs/src/body_observer_wait_acquire_v14.rs)
+waits only for literal PID `1` inside the already joined target namespace. It
+retains the actual wait observation, original deadline and same-thread custody,
+and rechecks namespace, pidfds and stop metadata. No caller-authored wait record
+can construct this owner. It does not add a wait-any-child loop or a target-PID
+parameter.
+
+Held descriptor metadata is checked for changes, not treated as a unique
+process identifier: older Linux pidfds can share anonymous-inode metadata.
+The fixed worker still joins the actual pidfd `fdinfo` process identities before
+and after acquisition; the wait owner retains exact descriptor duplicates.
+The observer's filesystem-type comparisons and syscall-info request use the
+target's actual libc field/argument types, including the static musl build.
+These are source compatibility corrections, not executed platform verification.
+The relevant primary definitions are Linux's
+[pidfd creation](https://github.com/torvalds/linux/blob/v6.6/kernel/fork.c),
+[shared anonymous inode](https://github.com/torvalds/linux/blob/v6.6/fs/anon_inodes.c)
+and the pinned [libc musl ABI](https://github.com/rust-lang/libc/blob/0.2.186/src/unix/linux_like/linux/musl/mod.rs).
+
+The [syscall-info reader](../data-plane/decision-gate-rs/src/body_observer_syscall_info_v14.rs)
+requires that actual stop owner, uses the kernel's returned operation and length,
+and preserves architecture, instruction/stack pointers and the applicable typed
+payload. It rejects truncated or unsupported ABI shapes. Syscall phase is never
+inferred by toggling an entry/exit flag. The current initial-stop integration
+requires the kernel's `NONE` operation; an entry, exit or seccomp observation is
+not accepted as that initial interrupt stop.
+
+These distinctions follow the [Linux tracing interface](https://man7.org/linux/man-pages/man2/ptrace.2.html)
+and [kernel syscall-info ABI](https://github.com/torvalds/linux/blob/v6.6/include/uapi/linux/ptrace.h).
+Supporting a status or ABI variant in a decoder does not implement its actual
+lifecycle producer. There is still no descendant scheduler, shared-memory
+acquisition, mapping-change tracking, resume operation or history-end producer.
+The worker holds the initial stop through its existing abort-only lifetime.
+
 ## Initial records from actual custody
 
 `StoppedBodyMappingSnapshotV12::begin_history` consumes the actual held snapshot
@@ -154,5 +201,9 @@ scope/sequence/hash/time drift, shared-memory updates, distinct processes with
 overlapping virtual ranges, thread-group exec supersession, PID/ordinal reuse,
 final exit versus pre-exit notifications, cap exhaustion and permanent poisoning.
 Initial production also needs actual custody/measurement-mismatch and cleanup
-checks. None of these tests or runtime scenarios has been executed for this
+checks. Kernel-wait coverage must also exercise malformed status bits, unknown
+events, continued versus stopped state, shortened deadlines, stale descriptor or
+thread/namespace custody, truncated syscall-info replies and initial phase
+mismatch. Decoder fixtures cannot replace isolated real-kernel acquisition tests.
+None of these tests or runtime scenarios has been executed for this
 source checkpoint; immutable preparation and full production gates remain.

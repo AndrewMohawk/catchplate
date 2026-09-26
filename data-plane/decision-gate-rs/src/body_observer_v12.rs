@@ -31,6 +31,12 @@ mod body_observer_history_contract_v14;
 mod body_observer_history_state_v14;
 #[path = "body_observer_history_acquire_v14.rs"]
 mod body_observer_history_acquire_v14;
+#[path = "body_observer_wait_contract_v14.rs"]
+mod body_observer_wait_contract_v14;
+#[path = "body_observer_wait_acquire_v14.rs"]
+mod body_observer_wait_acquire_v14;
+#[path = "body_observer_syscall_info_v14.rs"]
+mod body_observer_syscall_info_v14;
 
 use crate::plan_protocol::{Digest, PlanProtocolError, PlanResult};
 use crate::plan_protocol::body_observer_contract_v12::BodyObserverLaunchV12;

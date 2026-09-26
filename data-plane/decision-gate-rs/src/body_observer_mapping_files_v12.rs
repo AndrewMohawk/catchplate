@@ -307,7 +307,7 @@ fn proc_directory(fd: RawFd, deadline: u64) -> PlanResult<Node> {
         return Err(std::io::Error::last_os_error().into());
     }
     live(deadline)?;
-    if filesystem.f_type != PROC_MAGIC || value.st_mode & libc::S_IFMT != libc::S_IFDIR
+    if filesystem.f_type != PROC_MAGIC as _ || value.st_mode & libc::S_IFMT != libc::S_IFDIR
         || value.st_nlink == 0 {
         return Err(invalid("mapping-files anchor is not a retained procfs directory"));
     }

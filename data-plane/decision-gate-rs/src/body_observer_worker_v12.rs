@@ -11,6 +11,8 @@ use super::body_observer_process_v12::NamespaceWorkerScopeV12;
 use super::body_observer_worker_contract_v12::{
     send_stop, wait_for_abort, NamespaceWorkerStopV12, WORKER_STOP_VERSION,
 };
+use super::body_observer_wait_acquire_v14::acquire_initial_interrupt_stop;
+use super::body_observer_syscall_info_v14::{observe as observe_syscall_info, SyscallOperationV14};
 use crate::plan_protocol::body_launch_contract_v12::{BodyLaunchContextV12, MAX_CONTEXT_BYTES_V12};
 use crate::plan_protocol::{PlanProtocolError, PlanResult};
 use std::ffi::{CStr, CString};
@@ -55,7 +57,7 @@ fn stat(fd: RawFd) -> PlanResult<libc::stat> {
 fn filesystem(fd: RawFd, expected: libc::c_long) -> PlanResult<()> {
     let mut value: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(fd, &mut value) } != 0 { return Err(std::io::Error::last_os_error().into()); }
-    if value.f_type != expected { return Err(invalid("namespace worker descriptor filesystem differs")); }
+    if value.f_type != expected as _ { return Err(invalid("namespace worker descriptor filesystem differs")); }
     Ok(())
 }
 
@@ -454,49 +456,6 @@ fn fixed_signal_policy() -> PlanResult<()> {
     Ok(())
 }
 
-fn exact_stop(scope: &NamespaceWorkerScopeV12) -> PlanResult<()> {
-    loop {
-        live(scope.deadline_boottime_ns)?;
-        live_pidfd(scope.parent_pidfd, scope.deadline_boottime_ns)?;
-        let mut status = 0;
-        let waited = unsafe { libc::waitpid(1, &mut status, libc::__WALL | libc::__WNOTHREAD | libc::WNOHANG) };
-        let error = (waited < 0).then(std::io::Error::last_os_error);
-        live(scope.deadline_boottime_ns)?;
-        if let Some(error) = error {
-            if error.kind() == std::io::ErrorKind::Interrupted { continue; }
-            return Err(error.into());
-        }
-        if waited != 0 {
-            if waited != 1 || status != ((libc::PTRACE_EVENT_STOP << 16) | (libc::SIGTRAP << 8) | 0x7f) {
-                return Err(invalid("namespace worker did not receive the exact init interrupt stop"));
-            }
-            break;
-        }
-        let remaining = scope.deadline_boottime_ns - live(scope.deadline_boottime_ns)?;
-        let timeout = libc::timespec { tv_sec: 0, tv_nsec: remaining.min(5_000_000) as libc::c_long };
-        let mut fds = [libc::pollfd { fd: scope.parent_pidfd, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: scope.target_pidfd, events: libc::POLLIN, revents: 0 }];
-        let result = unsafe { libc::ppoll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, &timeout, std::ptr::null()) };
-        let error = (result < 0).then(std::io::Error::last_os_error);
-        live(scope.deadline_boottime_ns)?;
-        if let Some(error) = error {
-            if error.kind() == std::io::ErrorKind::Interrupted { continue; }
-            return Err(error.into());
-        }
-        if result != 0 || fds.iter().any(|fd| fd.revents != 0) { return Err(invalid("namespace worker parent or init terminated")); }
-    }
-    let mut information: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    if unsafe { libc::ptrace(libc::PTRACE_GETSIGINFO, 1, std::ptr::null_mut::<libc::c_void>(),
-        (&mut information as *mut libc::siginfo_t).cast::<libc::c_void>()) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    if information.si_signo != libc::SIGTRAP || information.si_code != ((libc::PTRACE_EVENT_STOP << 8) | libc::SIGTRAP) {
-        return Err(invalid("namespace worker init stop siginfo differs"));
-    }
-    live(scope.deadline_boottime_ns)?;
-    Ok(())
-}
-
 fn run(scope: &NamespaceWorkerScopeV12) -> PlanResult<()> {
     fixed_signal_policy()?;
     if scope.context_sha256 == [0; 32] || scope.target_host_pid <= 1 || scope.target_host_pid > i32::MAX as u32
@@ -514,7 +473,13 @@ fn run(scope: &NamespaceWorkerScopeV12) -> PlanResult<()> {
     live_pidfd(scope.parent_pidfd, scope.deadline_boottime_ns)?;
     if unsafe { libc::ptrace(libc::PTRACE_INTERRUPT, 1, std::ptr::null_mut::<libc::c_void>(),
         std::ptr::null_mut::<libc::c_void>()) } != 0 { return Err(std::io::Error::last_os_error().into()); }
-    exact_stop(scope)?;
+    // Only actual literal-init wait custody can reach the metadata reader. A
+    // replayed status or caller PID cannot substitute for this owned stop.
+    let initial_stop = acquire_initial_interrupt_stop(scope)?;
+    let syscall_info = observe_syscall_info(&initial_stop, scope.deadline_boottime_ns)?;
+    if !matches!(syscall_info.operation, SyscallOperationV14::None) {
+        return Err(invalid("namespace worker initial interrupt unexpectedly reports a syscall phase"));
+    }
     worker.verify(scope, true)?;
     let record = NamespaceWorkerStopV12 {
         version: WORKER_STOP_VERSION.to_owned(), context_sha256: scope.context_sha256,
@@ -522,10 +487,16 @@ fn run(scope: &NamespaceWorkerScopeV12) -> PlanResult<()> {
         target_pidfd_inode: stat(scope.target_pidfd)?.st_ino,
         target_pid_namespace_inode: worker.namespace.1, host_worker_pid: worker.host_pid,
         namespace_worker_pid: worker.local_pid, worker_start_ticks: worker.start_ticks,
-        observed_at_boottime_ns: live(scope.deadline_boottime_ns)?, deadline_boottime_ns: scope.deadline_boottime_ns,
+        observed_at_boottime_ns: initial_stop.observed_at_boottime_ns(),
+        deadline_boottime_ns: scope.deadline_boottime_ns,
     };
+    initial_stop.verify_stopped(scope.deadline_boottime_ns)?;
     send_stop(scope.control_fd, scope.parent_pidfd, &record, scope.deadline_boottime_ns)?;
-    wait_for_abort(scope.control_fd, scope.parent_pidfd, scope.deadline_boottime_ns)
+    // Keep the same-thread stop owner through the abort-only lifetime. No
+    // continuation or journal event is inferred from the copied observations.
+    let result = wait_for_abort(scope.control_fd, scope.parent_pidfd, scope.deadline_boottime_ns);
+    drop(initial_stop);
+    result
 }
 
 /// Only the source-owned clone3 child calls this fixed entry. Every path exits;

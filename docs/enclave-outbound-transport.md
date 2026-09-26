@@ -4,7 +4,9 @@ Status: source-only, unbuilt and unexecuted. This is a fixed-route transport
 composition, not enclave deployment, production activation or independent
 admission of the supplied endpoints, policy or trust roots. The later
 [service transport integration](enclave-service-transport.md) adds a bounded
-parent serving owner, not a provisioned listener daemon.
+parent serving owner. The [fixed parent relay CLI](native-parent-relay.md) and
+static packaging recipe now expose that owner, without provisioning or admitting
+a listener daemon.
 
 ## Preserve the real TLS endpoint
 
@@ -114,8 +116,9 @@ session cancellation remain real owner responsibilities, not digest claims.
 
 ## Remaining production work
 
-The parent daemon must admit the enclave CID and independently fixed port-to-TCP
-assignments; no arbitrary forwarding service is activated here. Static endpoint
+The [parent relay CLI](native-parent-relay.md) still requires independent admission
+of the enclave CID and fixed port-to-TCP assignments; it is not an arbitrary
+forwarding service or a deployed daemon. Static endpoint
 and address provenance, independently admitted inventory updates, lifecycle
 provisioning and end-to-end runtime verification remain necessary. Native
 provider/broker routing does not use ambient DNS; this is not blanket admission

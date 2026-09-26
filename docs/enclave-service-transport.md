@@ -2,9 +2,10 @@
 
 Status: source-only, unbuilt and unexecuted. The native preparation path now
 composes the existing control-plane HTTP clients with fixed-authority transport,
-and a callable parent relay owns bounded serving and cleanup. This is not an
-activated native startup, daemon installation or independent admission of
-configuration, keys, endpoints or enclave identity.
+and a callable parent relay owns bounded serving and cleanup. The
+[fixed parent CLI and static artifact recipe](native-parent-relay.md) now invoke
+that owner. This is not a deployed native startup, daemon installation or
+independent admission of configuration, keys, endpoints or enclave identity.
 
 ## Exact service inventory
 
@@ -95,6 +96,9 @@ no detached worker, on-wire target command, DNS lookup or alternate destination
 retry. An already-running TCP connect may delay joining by its remaining
 three-second connect bound plus kernel/scheduling delay; this is not a hard
 watchdog or proof of remote destruction.
+The [parent CLI](native-parent-relay.md) supplies pinned fixed configuration and
+cooperative SIGTERM/SIGINT shutdown. Its original deadline is parent-local;
+it must not be equated numerically with the enclave's boottime deadline.
 
 The shared pump retains the [outbound transport](enclave-outbound-transport.md)
 policy: opaque TLS bytes, two 16 KiB buffers, nonblocking I/O, requested idle
@@ -111,8 +115,10 @@ The normal `main` policy loader and environment-driven startup remain legacy;
 the separate [native bootstrap](enclave-bootstrap.md) now installs retained
 transport before actually loading and compiling bounded original policy bytes
 into fresh state. It does not retroactively admit legacy state or supply
-independent bootstrap authority. No new CLI/environment mode, parent daemon/systemd
-unit, listener provisioning or complete native bootstrap is activated here.
+independent bootstrap authority. The [native startup CLI](native-startup-config.md)
+and [parent relay CLI](native-parent-relay.md) are explicit source entrypoints,
+not deployed parent daemons/systemd units, admitted listener provisioning or
+complete native deployment.
 Proof/observation custody transports and the complete admitted enclave lifecycle
 remain separate work.
 

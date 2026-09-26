@@ -10,8 +10,8 @@
 //! stops sessions and joins all workers; no detached worker is created. A TCP
 //! connect already in progress can delay joining by its clipped three-second
 //! operation bound, plus kernel/scheduling delay. Polls are not a hard syscall
-//! watchdog. This is source composition, not a daemon, provisioning mechanism,
-//! admitted configuration, CLI/environment switch or production activation.
+//! watchdog. The separate fixed-configuration CLI now selects this composition;
+//! this module is not provisioning, admitted configuration or production proof.
 
 use crate::enclave_tls_relay_io_v1::{relay_fixed_upstream_with_cancel_v1, validate_target};
 use crate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
@@ -35,6 +35,7 @@ struct Lifetime {
     deadline: u64,
     expected_peer_cid: u32,
     stopped: AtomicBool,
+    external_cancel: Arc<AtomicBool>,
     sessions: Mutex<Vec<Weak<VsockShutdownV1>>>,
     capacity: usize,
 }
@@ -49,7 +50,9 @@ impl Lifetime {
 
     fn remaining(&self) -> io::Result<u64> {
         self.owner()?;
-        if self.stopped.load(Ordering::Acquire) {
+        if self.stopped.load(Ordering::Acquire)
+            || self.external_cancel.load(Ordering::Acquire)
+        {
             return Err(error(io::ErrorKind::ConnectionAborted, "parent relay serving stopped"));
         }
         let mut sample: libc::timespec = unsafe { std::mem::zeroed() };
@@ -150,12 +153,29 @@ fn run_worker(receiver: &Mutex<mpsc::Receiver<Work>>, lifetime: &Lifetime,
     }
 }
 
+/// Check the same literal-target rules used by serving, before listener bind.
+/// This does not resolve a hostname, contact the target or admit its provenance.
+pub fn validate_parent_relay_target_v1(target: SocketAddr) -> io::Result<()> {
+    validate_target(target)
+}
+
 /// Serve one already-created listener and one separately configured target.
 /// Expiry is an error, not a completion receipt. Workers are joined on every
 /// exit; capacity rejection silently closes only the newly accepted stream.
 pub fn serve_parent_relay_v1(listener: VsockListenerV1, target: SocketAddr,
     expected_peer_cid: u32, worker_count: usize, queue_capacity: usize,
     deadline: u64) -> io::Result<()> {
+    serve_parent_relay_with_cancel_v1(listener, target, expected_peer_cid,
+        worker_count, queue_capacity, deadline, Arc::new(AtomicBool::new(false)))
+}
+
+/// Serve the same fixed scope with externally owned cancellation. Cancellation
+/// returns ConnectionAborted, not a completion receipt; the existing bounded
+/// accept/idle ticks observe it and stop registered sessions before all joins.
+/// An already-running TCP connect retains its clipped three-second bound.
+pub fn serve_parent_relay_with_cancel_v1(listener: VsockListenerV1, target: SocketAddr,
+    expected_peer_cid: u32, worker_count: usize, queue_capacity: usize,
+    deadline: u64, cancel: Arc<AtomicBool>) -> io::Result<()> {
     if !(1..=MAX_WORKERS).contains(&worker_count) || !(1..=MAX_QUEUED).contains(&queue_capacity)
         || expected_peer_cid <= 3 || expected_peer_cid == u32::MAX {
         return Err(error(io::ErrorKind::InvalidInput, "parent relay worker, queue or enclave CID is invalid"));
@@ -169,12 +189,14 @@ pub fn serve_parent_relay_v1(listener: VsockListenerV1, target: SocketAddr,
         let capacity = worker_count + queue_capacity + 1;
         let lifetime = Arc::new(Lifetime { pid: unsafe { libc::getpid() }, deadline,
             expected_peer_cid, stopped: AtomicBool::new(false), capacity,
+            external_cancel: cancel,
             sessions: Mutex::new(Vec::with_capacity(capacity)) });
         // This guard drops before the queue during unwind; thread::scope then
         // still joins every spawned worker after all streams are cancelled.
         let _stop_guard = StopGuard(Arc::clone(&lifetime));
         let mut workers = Vec::with_capacity(worker_count);
         let serving = (|| -> io::Result<()> {
+            lifetime.remaining()?;
             for index in 0..worker_count {
                 let receiver = Arc::clone(&receiver);
                 let lifetime = Arc::clone(&lifetime);

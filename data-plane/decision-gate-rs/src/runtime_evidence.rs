@@ -3,6 +3,9 @@
 #[path = "body_result_v12.rs"]
 pub(crate) mod body_result_v12;
 
+#[path = "body_observer_v12.rs"]
+pub(crate) mod body_observer_v12;
+
 use crate::plan_protocol::{
     canonical_bytes, sha256_bytes, ArtifactCasReference, Digest,
     DigestValidation,

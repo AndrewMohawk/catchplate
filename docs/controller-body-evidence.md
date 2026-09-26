@@ -3,6 +3,8 @@
 Status: source-implemented admission, observer client and controller terminal
 publication, unbuilt and unexecuted. The actual observer server and independent
 launch/event/mapping acquisition remain unfinished and unprovisioned. A
+[receiving-side target and gate owner](controller-body-observer-acquisition.md)
+now validates actual handed-off descriptors but sends no ready response. A
 [fixed supervisor and launch owner](controller-body-launch.md) and
 [controller-side stream/output collection](controller-body-output.md)
 are now source-implemented but unexecuted. This document does not
@@ -130,7 +132,11 @@ The fixed [BodyObserverExchangeV12 client](../data-plane/decision-gate-rs/src/bo
 uses only the root-owned Unix stream endpoint
 `/run/serverware/coder/v12/runtime-observer/control.sock`. It checks the actual
 peer UID/GID `0:0` and immutable executable against the already admitted observer
-policy. This is not permission to substitute any root process or a caller-chosen
+policy. The shared closed wire codec is also used by receiving-side admission.
+Peer custody requires Linux `SO_PEERPIDFD`, not a numeric PID reopen; the
+[acquisition contract](controller-body-observer-acquisition.md) records this
+kernel prerequisite and the still-missing serving/event ownership.
+This is not permission to substitute any root process or a caller-chosen
 socket. All phases retain the original absolute deadline; no retry or lifetime
 renewal is introduced.
 

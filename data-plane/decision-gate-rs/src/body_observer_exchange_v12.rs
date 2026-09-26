@@ -7,110 +7,23 @@
 
 use super::{boottime_now_ns_v11, ControllerError, Digest, Result};
 use super::runner_output_storage_v12::fd_mount_id;
-use crate::plan_protocol::{ArtifactCasReference, LogicalLane, SourceCasReference};
-use crate::plan_protocol::body_launch_contract_v12::{BodyLaunchContextV12, MAX_CONTEXT_BYTES_V12};
-use crate::plan_protocol::body_output_contract_v12::stream_byte_limit;
+use crate::plan_protocol::{ArtifactCasReference, SourceCasReference};
+use crate::plan_protocol::body_launch_contract_v12::BodyLaunchContextV12;
+use crate::plan_protocol::body_observer_contract_v12::{BodyObserverLaunchV12,
+    BodyObserverReadyV12, BodyObserverTerminalV12, SOCKET_PATH, LAUNCH_VERSION,
+    TERMINAL_VERSION, MAX_CONTROL_BYTES, FD_ROLES};
+pub(super) use crate::plan_protocol::body_observer_contract_v12::BodyObserverTerminalRequestV12;
 use crate::runtime_evidence::{verify_static_executable_fd_bounded, ExecutableRole};
 use crate::runtime_evidence::body_result_v12::MAX_BODY_RESULT_BYTES_V12;
-use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString};
-use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
-const SOCKET_PATH: &str = "/run/serverware/coder/v12/runtime-observer/control.sock";
-const LAUNCH_VERSION: &str = "serverware.controllerBodyObserverLaunch/v12";
-const READY_VERSION: &str = "serverware.controllerBodyObserverReady/v12";
-const TERMINAL_VERSION: &str = "serverware.controllerBodyObserverTerminal/v12";
-const MAX_LAUNCH_BYTES: usize = MAX_CONTEXT_BYTES_V12;
-const MAX_CONTROL_BYTES: usize = 4096;
 const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const PROC_MAGIC: libc::c_long = 0x9fa0;
 const FS_IOC_GETFLAGS: libc::c_ulong = 0x8008_6601;
 const FS_IMMUTABLE_FL: libc::c_uint = 0x10;
-const FD_ROLES: [&str; 9] = ["pidfd", "proc", "exe", "userns", "mntns",
-    "pidns", "netns", "cgroupns", "cgroupdir"];
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct BodyObserverTerminalRequestV12 {
-    pub(super) plan_id: Digest,
-    pub(super) lane: LogicalLane,
-    pub(super) body_sha256: Digest,
-    pub(super) command_sha256: Digest,
-    pub(super) exit_status: i32,
-    pub(super) stdout_sha256: Digest,
-    pub(super) stdout_bytes: u64,
-    pub(super) stderr_sha256: Digest,
-    pub(super) stderr_bytes: u64,
-    pub(super) output_manifest_sha256: Digest,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) native_postgres_output_sha256: Option<Digest>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Launch<'a> {
-    version: &'static str,
-    context: &'a BodyLaunchContextV12,
-    source: &'a SourceCasReference,
-    artifacts: Option<&'a ArtifactCasReference>,
-    expected_proxy: &'a Digest,
-    target_pid: u32,
-    target_start: u64,
-    target_pidfd_inode: u64,
-    target_custody: Digest,
-    deadline_boottime_ns: u64,
-    fd_roles: [&'static str; 9],
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Ready {
-    version: String,
-    context_sha256: Digest,
-    target_pid: u32,
-    target_start: u64,
-    target_pidfd_inode: u64,
-    target_custody: Digest,
-    deadline_boottime_ns: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Terminal<'a> {
-    version: &'static str,
-    context_sha256: Digest,
-    target_custody: Digest,
-    deadline_boottime_ns: u64,
-    claims: &'a BodyObserverTerminalRequestV12,
-}
-
-struct BoundedBytes { bytes: Vec<u8>, maximum: usize }
-impl Write for BoundedBytes {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let length = self.bytes.len().checked_add(bytes.len())
-            .filter(|length| *length <= self.maximum)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData,
-                "observer exchange frame exceeds its source bound"))?;
-        if length > self.bytes.capacity() {
-            let target = length.max(self.bytes.capacity().max(4096)
-                .saturating_mul(2).min(self.maximum));
-            self.bytes.try_reserve_exact(target - self.bytes.len())
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other,
-                    "observer exchange bounded allocation failed"))?;
-        }
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-}
-
-fn encoded<T: Serialize>(value: &T, maximum: usize) -> Result<Vec<u8>> {
-    let mut writer = BoundedBytes { bytes: Vec::new(), maximum };
-    serde_json::to_writer(&mut writer, value)
-        .map_err(|_| rejected("observer exchange cannot encode its bounded closed frame"))?;
-    Ok(writer.bytes)
-}
+// Kernel-generated ancillary pidfds are forbidden, but still need closing.
+const SCM_PIDFD: libc::c_int = 0x04;
 
 fn rejected(message: &'static str) -> ControllerError { ControllerError::Rejected(message) }
 fn live(deadline: u64) -> Result<()> {
@@ -182,6 +95,36 @@ fn peer_credentials(socket: RawFd) -> Result<libc::ucred> {
         return Err(rejected("observer socket peer is not one actual root process"));
     }
     Ok(value)
+}
+
+// Linux >=6.5: pin sk_peer_pid itself, not a reopened numeric SO_PEERCRED PID.
+fn socket_peer_pidfd(socket: RawFd, deadline: u64) -> Result<OwnedFd> {
+    live(deadline)?;
+    let mut raw: RawFd = -1;
+    let mut length = std::mem::size_of::<RawFd>() as libc::socklen_t;
+    if unsafe { libc::getsockopt(socket, libc::SOL_SOCKET, libc::SO_PEERPIDFD,
+        (&mut raw as *mut RawFd).cast(), &mut length) } != 0 {
+        // No numeric-PID reopen fallback on kernels without this facility.
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if raw < 0 { return Err(rejected("observer socket did not return its actual peer pidfd")); }
+    // Adopt immediately: all subsequent length/time/flag failures close it.
+    let owned = unsafe { OwnedFd::from_raw_fd(raw) };
+    if length as usize != std::mem::size_of::<RawFd>() {
+        return Err(rejected("observer socket peer pidfd has an invalid returned length"));
+    }
+    live(deadline)?;
+    let flags = unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_GETFD) };
+    if flags < 0 { return Err(std::io::Error::last_os_error().into()); }
+    if flags & libc::FD_CLOEXEC == 0 && unsafe {
+        libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC)
+    } < 0 { return Err(std::io::Error::last_os_error().into()); }
+    let actual = unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_GETFD) };
+    if actual < 0 { return Err(std::io::Error::last_os_error().into()); }
+    if actual & libc::FD_CLOEXEC == 0 { return Err(rejected("observer peer pidfd lacks close-on-exec")); }
+    pidfd_live(owned.as_raw_fd())?;
+    live(deadline)?;
+    Ok(owned)
 }
 
 fn pidfd_live(pidfd: RawFd) -> Result<()> {
@@ -290,11 +233,12 @@ fn close_ancillary(message: &libc::msghdr) -> bool {
     unsafe {
         let mut header = libc::CMSG_FIRSTHDR(message);
         while !header.is_null() {
-            if (*header).cmsg_level == libc::SOL_SOCKET && (*header).cmsg_type == libc::SCM_RIGHTS {
+            if (*header).cmsg_level == libc::SOL_SOCKET
+                && matches!((*header).cmsg_type, libc::SCM_RIGHTS | SCM_PIDFD) {
                 let length = (*header).cmsg_len.saturating_sub(libc::CMSG_LEN(0) as usize);
                 for index in 0..length / std::mem::size_of::<RawFd>() {
                     let fd = std::ptr::read_unaligned(libc::CMSG_DATA(header).cast::<RawFd>().add(index));
-                    libc::close(fd);
+                    if fd >= 0 { libc::close(fd); }
                 }
             }
             header = libc::CMSG_NXTHDR(message, header);
@@ -413,14 +357,7 @@ pub(super) struct BodyObserverExchangeV12 {
     peer_start: u64,
     peer_executable: OwnedFd,
     peer_executable_identity: ExecutableIdentity,
-    context_sha256: Digest,
-    target_custody: Digest,
-    plan_id: Digest,
-    lane: LogicalLane,
-    body_sha256: Digest,
-    command_sha256: Digest,
-    native: bool,
-    stream_limit: u64,
+    launch: BodyObserverLaunchV12,
     deadline: u64,
 }
 
@@ -437,7 +374,8 @@ impl BodyObserverExchangeV12 {
             || deadline > context.deadline_boottime_ns {
             return Err(rejected("observer launch lacks original root/target/deadline scope"));
         }
-        context.validate().map_err(|_| rejected("observer launch context is invalid"))?;
+        // Bound the admitted original graph before making the owned launch.
+        drop(context.original_bytes().map_err(|_| rejected("observer launch context is invalid"))?);
         source.validate().map_err(|_| rejected("observer launch source reference is invalid"))?;
         if let Some(artifacts) = artifacts {
             artifacts.validate().map_err(|_| rejected("observer launch artifact reference is invalid"))?;
@@ -447,11 +385,12 @@ impl BodyObserverExchangeV12 {
         }
         // Typed serialization keeps the original context's own exact field
         // order; the whole wrapper, including independent scope, is capped.
-        let launch = encoded(&Launch { version: LAUNCH_VERSION, context, source, artifacts,
-            expected_proxy, target_pid, target_start, target_pidfd_inode, target_custody,
-            deadline_boottime_ns: deadline, fd_roles: FD_ROLES }, MAX_LAUNCH_BYTES)?;
-        let stream_limit = stream_byte_limit(context.runner.execution_bounds.output_bytes)
-            .map_err(|_| rejected("observer launch output bounds are invalid"))?;
+        let launch = BodyObserverLaunchV12 { version: LAUNCH_VERSION.to_owned(), context: context.clone(),
+            source: source.clone(), artifacts: artifacts.cloned(), expected_proxy: *expected_proxy,
+            target_pid, target_start, target_pidfd_inode, target_custody,
+            deadline_boottime_ns: deadline, fd_roles: FD_ROLES.map(str::to_owned) };
+        let launch_original = launch.original_bytes()
+            .map_err(|_| rejected("observer launch cannot encode its closed original scope"))?;
         let parent = endpoint_parent(deadline)?;
         let parent_identity = protected_directory(parent.as_raw_fd())?;
         let parent_mount = fd_mount_id(parent.as_raw_fd())?;
@@ -488,10 +427,7 @@ impl BodyObserverExchangeV12 {
         }
         live(deadline)?;
         let credentials = peer_credentials(socket.as_raw_fd())?;
-        let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, credentials.pid, 0) };
-        if raw < 0 { return Err(std::io::Error::last_os_error().into()); }
-        let peer_pidfd = unsafe { OwnedFd::from_raw_fd(raw as RawFd) };
-        pidfd_live(peer_pidfd.as_raw_fd())?;
+        let peer_pidfd = socket_peer_pidfd(socket.as_raw_fd(), deadline)?;
         let proc_root = open_at(libc::AT_FDCWD, c"/proc", libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW)?;
         let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::fstatfs(proc_root.as_raw_fd(), &mut filesystem) } != 0 || filesystem.f_type != PROC_MAGIC {
@@ -512,22 +448,16 @@ impl BodyObserverExchangeV12 {
         }
         let held = Self { owner_pid: unsafe { libc::getpid() }, socket, parent, parent_identity, parent_mount,
             socket_identity, peer_pid: credentials.pid, peer_pidfd, peer_proc, peer_proc_identity, peer_start,
-            peer_executable, peer_executable_identity, context_sha256: context.context_sha256, target_custody,
-            plan_id: context.plan_id, lane: context.lane, body_sha256: context.body.body_sha256,
-            command_sha256: context.body.command.command_sha256, native: context.body.native_postgres.is_some(),
-            stream_limit, deadline };
+            peer_executable, peer_executable_identity, launch, deadline };
         held.verify(deadline)?;
         require_quiet(held.socket.as_raw_fd(), deadline)?;
         transfer_target(held.socket.as_raw_fd(), held.peer_pidfd.as_raw_fd(), target_fds, deadline)?;
-        frame(held.socket.as_raw_fd(), held.peer_pidfd.as_raw_fd(), &launch, deadline)?;
+        frame(held.socket.as_raw_fd(), held.peer_pidfd.as_raw_fd(), &launch_original, deadline)?;
         let original = receive_frame(held.socket.as_raw_fd(), held.peer_pidfd.as_raw_fd(), MAX_CONTROL_BYTES, deadline)?;
-        let ready: Ready = serde_json::from_slice(&original).map_err(|_| rejected("observer ready original is not the closed schema"))?;
-        if encoded(&ready, MAX_CONTROL_BYTES)? != original || ready.version != READY_VERSION
-            || ready.context_sha256 != context.context_sha256 || ready.target_pid != target_pid
-            || ready.target_start != target_start || ready.target_pidfd_inode != target_pidfd_inode
-            || ready.target_custody != target_custody || ready.deadline_boottime_ns != deadline {
-            return Err(rejected("observer ready original does not join the exact held launch"));
-        }
+        let ready = BodyObserverReadyV12::parse_original(&original)
+            .map_err(|_| rejected("observer ready original is not the closed canonical schema"))?;
+        ready.validate_for(&held.launch)
+            .map_err(|_| rejected("observer ready original does not join the exact held launch"))?;
         require_quiet(held.socket.as_raw_fd(), deadline)?;
         held.verify(deadline)?;
         Ok(held)
@@ -566,16 +496,13 @@ impl BodyObserverExchangeV12 {
     pub(super) fn finish(self, claims: &BodyObserverTerminalRequestV12, deadline: u64) -> Result<Vec<u8>> {
         let deadline = deadline.min(self.deadline);
         self.verify(deadline)?;
-        if claims.plan_id != self.plan_id || claims.lane != self.lane || claims.body_sha256 != self.body_sha256
-            || claims.command_sha256 != self.command_sha256 || claims.stdout_sha256 == [0; 32]
-            || claims.stderr_sha256 == [0; 32] || claims.output_manifest_sha256 == [0; 32]
-            || claims.stdout_bytes > self.stream_limit || claims.stderr_bytes > self.stream_limit
-            || claims.native_postgres_output_sha256.is_some() != self.native
-            || claims.native_postgres_output_sha256 == Some([0; 32]) {
-            return Err(rejected("observer terminal request differs from held body/output scope"));
-        }
-        let original = encoded(&Terminal { version: TERMINAL_VERSION, context_sha256: self.context_sha256,
-            target_custody: self.target_custody, deadline_boottime_ns: self.deadline, claims }, MAX_CONTROL_BYTES)?;
+        let terminal = BodyObserverTerminalV12 { version: TERMINAL_VERSION.to_owned(),
+            context_sha256: self.launch.context.context_sha256, target_custody: self.launch.target_custody,
+            deadline_boottime_ns: self.deadline, claims: claims.clone() };
+        terminal.validate_for(&self.launch)
+            .map_err(|_| rejected("observer terminal request differs from held body/output scope"))?;
+        let original = terminal.original_bytes()
+            .map_err(|_| rejected("observer terminal request cannot encode its closed original"))?;
         require_quiet(self.socket.as_raw_fd(), deadline)?;
         frame(self.socket.as_raw_fd(), self.peer_pidfd.as_raw_fd(), &original, deadline)?;
         live(deadline)?;

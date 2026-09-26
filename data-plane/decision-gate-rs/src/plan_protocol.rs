@@ -13,6 +13,9 @@ pub mod body_output_contract_v12;
 #[path = "body_launch_contract_v12.rs"]
 pub mod body_launch_contract_v12;
 
+#[path = "body_observer_contract_v12.rs"]
+pub mod body_observer_contract_v12;
+
 pub type Digest = [u8; 32];
 pub type PlanResult<T> = Result<T, PlanProtocolError>;
 

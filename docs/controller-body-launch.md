@@ -8,6 +8,9 @@ the observer's original signed evidence before publishing the terminal result.
 The independent observer server, continuous acquisition and signing owner are
 still unimplemented and unprovisioned. Ordinary child exit or a channel
 acknowledgement is not an accepted body result or signed runtime observation.
+The [receiving-side acquisition](controller-body-observer-acquisition.md) now
+joins actual handed-off descriptors and the still-closed launch gate. It is a
+read-only snapshot prerequisite, not continuous observation or a ready sender.
 
 ## Separate launch authority from workload arguments
 

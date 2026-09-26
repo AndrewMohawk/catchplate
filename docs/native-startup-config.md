@@ -19,8 +19,12 @@ serverware-decision-gate --native-startup \
 ```
 
 `--native-startup` must be first; all four named options are required exactly
-once. Unknown, duplicate, missing or malformed arguments fail. With no arguments,
-the existing environment-driven startup remains unchanged. Native parsing or
+once. The optional valueless `--public-identity-stdout` flag may appear once
+after it; [public identity export](native-public-identity.md) emits one bounded
+public JSON line after actual preparation and before the listener bind, not a
+readiness or CA-installation receipt. Unknown, duplicate, missing or malformed
+arguments fail. With no arguments, the existing environment-driven startup
+remains unchanged. Native parsing or
 startup failure never falls back to that legacy path. No environment default
 fills missing native configuration.
 

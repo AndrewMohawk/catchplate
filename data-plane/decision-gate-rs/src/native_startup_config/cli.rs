@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
-    -> Result<Option<(ArtifactV1, ArtifactV1)>, String>
+    -> Result<Option<(ArtifactV1, ArtifactV1, bool)>, String>
 {
     let Some(mode) = arguments.next() else { return Ok(None); };
     if mode != "--native-startup" {
@@ -15,8 +15,16 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     let mut configuration_pin = None;
     let mut launch = None;
     let mut launch_pin = None;
+    let mut public_identity_stdout = false;
     while let Some(flag) = arguments.next() {
         let flag = flag.to_str().ok_or("native startup flag must be UTF-8")?;
+        if flag == "--public-identity-stdout" {
+            if public_identity_stdout {
+                return Err("native startup received an unknown or repeated flag".to_owned());
+            }
+            public_identity_stdout = true;
+            continue;
+        }
         let value = arguments.next().ok_or("native startup flag requires a value")?;
         match flag {
             "--configuration" if configuration.is_none() => configuration = Some(PathBuf::from(value)),
@@ -36,5 +44,5 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     }, ArtifactV1 {
         path: launch.ok_or("native startup requires --launch")?,
         sha256: launch_pin.ok_or("native startup requires --launch-sha256")?,
-    })))
+    }, public_identity_stdout)))
 }

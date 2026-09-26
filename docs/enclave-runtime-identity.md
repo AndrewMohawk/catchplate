@@ -3,7 +3,8 @@
 Status: source-only, unbuilt and unexecuted. These owners are computation and
 native-device prerequisites for the [production enclave boundary](../goal.md),
 not a complete enclave proxy, production admission or hardware-custody proof.
-No new serving mode or environment switch activates that boundary.
+The [explicit native startup CLI](native-startup-config.md) selects source-level
+composition, not that production acceptance boundary.
 
 ## Concrete owners
 
@@ -252,9 +253,11 @@ construction alone does not enforce those runtime transitions.
 The [native vsock owner](../data-plane/decision-gate-rs/src/enclave_vsock_v1.rs)
 provides retained nonblocking inbound `AF_VSOCK` streams, exact configured peer
 CID comparison, original boottime deadlines, at most 64 KiB per I/O operation,
-and explicit shutdown custody. Its separate outbound connector permits only
-fixed Nitro parent CID `3`; it has no arbitrary-CID connector or generic raw-FD
-export. CID is routing scope, not client authentication: AWS Nitro's parent is
+and explicit shutdown custody. Its outbound enclave-to-parent connector fixes
+Nitro parent CID `3`; the separate [parent ingress](native-parent-ingress.md)
+connector uses a configured enclave CID/port. Neither accepts an on-wire
+destination or exposes a generic raw FD. CID is routing scope, not client
+authentication: AWS Nitro's parent is
 CID `3`, distinct from Linux's generic `VMADDR_CID_HOST` value `2`.
 See the [AWS networking contract](https://docs.aws.amazon.com/enclaves/latest/user/enclave-networking.html)
 and [Linux vsock API](https://man7.org/linux/man-pages/man7/vsock.7.html).
@@ -282,7 +285,14 @@ bounded worker/queue inventory retains shutdown custody for queued
 and active sessions. Shutdown closes inbound sessions and joins workers, but
 that join may await existing bounded upstream HTTP/DNS I/O. It is **not** a
 hard syscall/whole-process watchdog or a proof that all work stops at the exact
-deadline. No CLI/environment mode activates this private composition.
+deadline. The explicit native startup CLI selects this composition; it does not
+independently admit the configuration or production runtime.
+
+The opt-in [startup public identity export](native-public-identity.md) carries
+the actual leaf/CA and original role-3 quote before listening. It contains no
+private key or client-root DERs, retains the startup nonce and is explicitly
+unverified public material, not readiness, fresh client evidence or permission
+to install a CA.
 
 The [native outbound transport](enclave-outbound-transport.md) now provides
 source-level provider and credential-broker HTTPS routing through retained,
@@ -301,8 +311,9 @@ The separate [native bootstrap](enclave-bootstrap.md) now consumes these actual
 owners before initial policy acquisition, fetches trust through retained native
 transport, compiles bounded original signed-policy bytes and assembles fresh
 state. Supplied checkpoint, configuration and proof-owner consistency remain
-distinct from independent currentness/provenance admission; no CLI or complete
-enclave startup is activated.
+distinct from independent currentness/provenance admission. The explicit
+[cold startup and CLI](native-startup.md) now compose those source owners;
+complete deployed enclave acceptance remains unproven.
 
 ## Deferred verification
 
@@ -338,10 +349,11 @@ and [AWS request/response types](https://github.com/aws/aws-nitro-enclaves-nsm-a
 The full Rust TLS, policy, credential acquisition, injection, upstream TLS,
 response-validation and proof path must execute inside the admitted enclave.
 The parent must handle ciphertext and public evidence only. The provider/broker
-and shared control-plane transport source above is implemented, but full native
-startup, independently admitted endpoint/CID assignments, parent service
-provisioning, independent proof-authority admission and complete enclave serving
-admission are still required. Real KMS RSA/`CiphertextForRecipient`/CMS integration and removal
+and shared control-plane transport source above is implemented, but actual
+deployed native startup, independently admitted endpoint/CID assignments, parent
+service provisioning, independent proof-authority admission and complete enclave
+serving admission are still required. Real KMS RSA/`CiphertextForRecipient`/CMS
+integration and removal
 of the host control-plane `keyB64`/plaintext-key paths also remain open. Native
 NSM access or a local tunnel by itself does not close those gaps.
 

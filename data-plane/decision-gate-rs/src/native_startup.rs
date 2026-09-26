@@ -136,6 +136,7 @@ pub(super) fn run(
     parameters: NativeStartupParametersV1,
     shadow_config: PolicyShadowGenerationConfig,
     v2_config: ResponseObservationV2ClientConfig,
+    public_identity_stdout: bool,
 ) -> Result<(), String> {
     // This guard starts no tasks and grants no new interval. Runtime serving
     // later installs its own cancellation owner with this SAME absolute bound.
@@ -203,6 +204,13 @@ pub(super) fn run(
     if prepared.deadline != parameters.deadline_boottime_ns {
         return Err("native startup preparation changed its original lifetime".to_owned());
     }
+    // This opt-in writes public originals only. Publication is not independent
+    // attestation verification, CA installation permission or service readiness.
+    startup.check()?;
+    if public_identity_stdout {
+        super::native_public_identity::write_startup_public_identity(&prepared)?;
+    }
+    startup.check()?;
     // No external vsock ingress is bound before genuine preparation succeeds.
     // Preparation can create its private outbound loopback bridges. Peer CID
     // is routing scope, not authentication; the actual quoted TLS config still

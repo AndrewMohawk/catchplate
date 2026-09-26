@@ -17,6 +17,7 @@ mod native_lease_renewal;
 mod native_runtime;
 mod native_startup;
 mod native_startup_config;
+mod native_public_identity;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};

@@ -11,7 +11,8 @@ admission or evidence that a complete enclave deployment has run.
 ## Explicit inputs, no host-ready placeholders
 
 The callable interface is
-`run(inputs, parameters, shadow_config, v2_config) -> Result<(), String>`.
+`run(inputs, parameters, shadow_config, v2_config, public_identity_stdout) -> Result<(), String>`.
+The final boolean selects only the public startup export described below.
 `GateStateInputs` must be cold: its shadow control and response-observation-v2
 client are both absent. It contains no generated proof signer, snapshot, HTTP
 client, resolver or TLS authority. The actual generated proof material enters
@@ -94,7 +95,11 @@ freshly generated proof material is separate from cold configuration and is
 rejoined to the actual identity before sharing state.
 
 No external vsock ingress is bound until preparation succeeds; preparation can
-create its private loopback bridges for outbound TLS. The final bind uses
+create its private loopback bridges for outbound TLS. The optional
+[`--public-identity-stdout` export](native-public-identity.md) writes actual
+public ingress and unchanged startup-quote originals after preparation and
+before this bind. It does not prove readiness, supply a fresh client challenge
+or authorize CA installation. The final bind uses
 the supplied fixed port and expected Nitro parent CID **3**, with the unchanged
 original deadline. CID is routing scope, not authentication; mandatory mTLS
 remains inside the enclave. The prepared object and listener are consumed by

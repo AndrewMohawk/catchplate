@@ -78,7 +78,7 @@ fn decode<T: DeserializeOwned>(raw: &[u8], maximum: usize) -> Result<T, String> 
         .map_err(|_| "native configuration does not match its closed JSON contract".to_owned())
 }
 
-fn run(configuration: ArtifactV1, launch: ArtifactV1) -> Result<(), String> {
+fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bool) -> Result<(), String> {
     let configuration_pin = configuration.sha256.clone();
     let (mut configuration_original, raw_configuration) =
         HeldOriginal::read(configuration, MAX_CONFIGURATION_BYTES)?;
@@ -109,12 +109,13 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1) -> Result<(), String> {
     drop(raw_configuration);
     // Owners remain in this frame through serving. Runtime policy uses the
     // retained parsed bytes; it does not periodically reopen the policy path.
-    super::native_startup::run(inputs, parameters, shadow, v2)
+    super::native_startup::run(inputs, parameters, shadow, v2, public_identity_stdout)
 }
 
 pub(super) fn run_from_process_arguments() -> Result<Option<()>, String> {
     match cli::arguments(std::env::args_os().skip(1))? {
         None => Ok(None),
-        Some((configuration, launch)) => run(configuration, launch).map(Some),
+        Some((configuration, launch, public_identity_stdout)) =>
+            run(configuration, launch, public_identity_stdout).map(Some),
     }
 }

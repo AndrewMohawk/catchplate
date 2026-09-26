@@ -70,10 +70,14 @@ filesystem paths or mtimes and an external recipient-attestation command are
 also rejected. Canonical HTTPS URLs are capped at 4,096 bytes and retain the
 existing URL/token pairing and required service-token checks.
 
-The actual custody signer is required; its retained verifying key, PEM, key ID
-and copied metadata must agree, and its expected peer UID must differ from the
-gate's effective UID. Proof-attestation command/instance requirements and the
-existing response-observation v2 client remain required. These are checks of
+The actual [native custody signer](enclave-proof-custody.md) is required; its
+retained verifying key, PEM, key ID and copied metadata must agree. A UDS signer
+is rejected on this native path; the legacy different-UID check remains in the
+separate UDS path. Before state is shared, the actual native proof owner is
+rejoined to the consumed runtime identity's CA, complete role-4 scope and
+original deadline, permanently narrowing key use. Proof-attestation
+command/instance requirements and the existing response-observation v2 client
+remain required. These are checks of
 actual held material and configuration, not independent proof-key provenance;
 in particular, v2 client presence is not evidence that it was production-created
 or that its authority is native.
@@ -126,10 +130,12 @@ still needs the retained prepared object and actual lifecycle ownership.
 Supplied configuration, service tokens, verifier/release pins, TLS roots and
 ordinary checkpoint values require independent admission. Existing proof and
 response-observation owners retain their protocol checks; accepting those
-owners here does not relocate their keys inside the enclave or establish native
-proof authority. Independently current off-host checkpoint/rollback custody,
-native proof-key and KMS release, immutable deployment, startup provisioning,
-session revocation and complete frozen runtime verification remain required.
+owners here does not establish an independently admitted enclave or proof
+authority. The native proof key is actually retained in the gate's address
+space, not isolated by a separate UID. Independently current off-host
+checkpoint/rollback custody, proof-key admission and KMS release, immutable
+deployment, startup provisioning, session revocation and complete frozen
+runtime verification remain required.
 Local wall-clock samples and deadline checks are not trusted-time evidence or a
 hard syscall/watchdog guarantee. See [runtime identity](enclave-runtime-identity.md)
 for the remaining full-enclave boundary.

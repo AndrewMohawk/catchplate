@@ -5,13 +5,14 @@ native-device prerequisites for the [production enclave boundary](../goal.md),
 not a complete enclave proxy, production admission or hardware-custody proof.
 No new serving mode or environment switch activates that boundary.
 
-## Three concrete owners
+## Concrete owners
 
 | Owner | Source responsibility | Boundary |
 | --- | --- | --- |
 | `CredentialRecipientV1` | Generate a fresh X25519 key using `ring::rand`, retain its `StaticSecret`, expose public bytes and consume the owner to derive one shared key | Existing credential-lease envelope/KDF only; not KMS RSA Recipient or CMS decryption |
 | `TlsAuthorityV1` | Generate an in-memory CA and issue rustls leaf configurations without a private-key export API | Certificate generation does not authenticate a release or prove where the process runs |
 | `NsmDeviceV1` | Submit bounded attestation requests to the actual native NSM device and retain the original returned document | A device response is not independent verification of certificate trust, PCRs, release identity or current authorization |
+| `PendingResponseProofKeyV1` / `QuotedResponseProofKeyV1` | Retain a freshly generated Ed25519 key and its original role-4 quote behind the existing custody runtime | No generic signing endpoint, independently admitted hardware or production rollback witness |
 
 The [recipient](../data-plane/decision-gate-rs/src/credential_recipient_v1.rs)
 rejects creator-PID drift. Its generation temporary and returned shared bytes
@@ -93,6 +94,13 @@ actual generated configuration and its original process/deadline scope. Those
 bytes allow independent checking; neither a supplied commitment nor the
 returned quote is release/policy admission.
 
+Role `4` now quotes the actual raw Ed25519 response-proof key. Its seventh
+field commits the actual custody boot ID and the SHA-256 identities of the
+proof-key and pinned control-plane-key SPKI originals. The
+[proof-custody guide](enclave-proof-custody.md) gives the fixed domain/recipe,
+same-key preparation/quotation, closed authorization/ledger gates and
+in-process isolation limitations. Existing role `1`/`2`/`3` encodings stay intact.
+
 Lease quotation is deliberately two-phase. `prepare_lease_recipient(deadline)`
 creates an opaque `PendingCredentialRecipientV1`; its `public_key_bytes()`
 allows the caller to construct the real request, whose digest includes that
@@ -108,9 +116,11 @@ The ordinary Rust gate reuses the recipient and TLS owners at its existing
 credential-lease and MITM-CA seams. Its optional external recipient attestation
 command remains the standalone path; only a retained `MitmAuthority::Native`
 selects native quotation. Neither reuse relocates the gate into an enclave,
-authenticates NSM claims locally, changes the credential-lease KDF, or replaces
-the existing proof signer and rollback policy. This batch generates no new
-proof-signing identity and supplies no caller-dictionary signing API.
+authenticates NSM claims locally or changes the credential-lease KDF. The later
+[native proof-custody composition](enclave-proof-custody.md) generates a fresh
+role-4 proof identity behind the existing authorization, replay and reservation
+protocol. It supplies no caller-dictionary signing endpoint or production
+rollback authority.
 
 ### Native credential-lease fetch
 
@@ -281,7 +291,9 @@ endpoint assignments and their address inventory are not independently admitted
 merely by constructing these owners. The [service transport integration](enclave-service-transport.md)
 now covers shared audit/grant/rate/release clients, retained trust refresh and
 bounded parent serving. Neither integration activates native startup or
-supplies proof custody transport.
+independently admits proof authority. The separate
+[proof-custody adapter](enclave-proof-custody.md) now retains the actual native
+signer in-process; this is not a new isolated service or production admission.
 
 The separate [native bootstrap](enclave-bootstrap.md) now consumes these actual
 owners before initial policy acquisition, fetches trust through retained native
@@ -326,8 +338,8 @@ response-validation and proof path must execute inside the admitted enclave.
 The parent must handle ciphertext and public evidence only. The provider/broker
 and shared control-plane transport source above is implemented, but full native
 startup, independently admitted endpoint/CID assignments, parent service
-provisioning, proof transport and complete enclave serving admission are
-still required. Real KMS RSA/`CiphertextForRecipient`/CMS integration and removal
+provisioning, independent proof-authority admission and complete enclave serving
+admission are still required. Real KMS RSA/`CiphertextForRecipient`/CMS integration and removal
 of the host control-plane `keyB64`/plaintext-key paths also remain open. Native
 NSM access or a local tunnel by itself does not close those gaps.
 

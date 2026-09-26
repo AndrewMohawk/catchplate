@@ -99,9 +99,10 @@ def _text(value: Any, label: str, maximum: int) -> str:
     return value
 
 
-def _expectations(document: Any) -> dict[str, Any]:
-    expected = exact_keys(document, EXPECTATION_FIELDS, "native recipient expectations")
-    require(expected["apiVersion"] == EXPECTATIONS_VERSION, "expectations version mismatch")
+def _expectations(document: Any, *, api_version: str = EXPECTATIONS_VERSION,
+                  extra_fields: frozenset[str] = frozenset()) -> dict[str, Any]:
+    expected = exact_keys(document, EXPECTATION_FIELDS | extra_fields, "native recipient expectations")
+    require(expected["apiVersion"] == api_version, "expectations version mismatch")
     for field in (
         "releaseRecordSha256", "policyHash", "configurationSha256",
         "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest",
@@ -127,12 +128,12 @@ def _expectations(document: Any) -> dict[str, Any]:
     return expected
 
 
-def _trust_roots(document: Any) -> tuple[list[x509.Certificate], list[x509.CertificateRevocationList], dict[str, Any]]:
+def _trust_roots(document: Any, *, api_version: str = TRUST_ROOTS_VERSION) -> tuple[list[x509.Certificate], list[x509.CertificateRevocationList], dict[str, Any]]:
     trust = exact_keys(document, {
         "apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url",
         "nitroCertificateProfile",
     }, "native recipient trust roots")
-    require(trust["apiVersion"] == TRUST_ROOTS_VERSION, "trust-root version mismatch")
+    require(trust["apiVersion"] == api_version, "trust-root version mismatch")
     roots_input = trust["awsNitroRootCertificatesPem"]
     require(isinstance(roots_input, list) and 1 <= len(roots_input) <= MAX_CERTIFICATES,
             "Nitro root inventory is invalid")

@@ -9,11 +9,13 @@ mod gate_state_init;
 mod control_plane_client_config;
 mod native_gate_bootstrap;
 mod native_gate_inputs;
+mod native_proof_signer;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};
 use control_plane_client_config::ControlPlaneClientConfig;
 use native_gate_bootstrap::prepare_native_tls_gate_state;
+use native_proof_signer::CustodySignerTransport;
 
 use base64::{engine::general_purpose, Engine as _};
 use csv::{ByteRecord, ReaderBuilder, WriterBuilder};
@@ -45,7 +47,8 @@ use serverware_decision_gate::{
     response_observation_v2_stable_resume_id_sha256,
     response_observation_v2_transition_evidence_sha256,
     result_exact_object_descriptors as v2_result_exact_object_descriptors,
-    write_frame as write_custody_frame, CustodyRequest, HELLO_OPERATION as CUSTODY_HELLO_OPERATION,
+    write_frame as write_custody_frame, CustodyRequest, CustodyRuntime,
+    HELLO_OPERATION as CUSTODY_HELLO_OPERATION,
     IO_DEADLINE as CUSTODY_IO_DEADLINE,
     MAX_CONCURRENT_CONNECTIONS as CUSTODY_MAX_CONCURRENT_CONNECTIONS,
     MAX_FRAME_BYTES as CUSTODY_MAX_FRAME_BYTES,
@@ -2577,7 +2580,7 @@ impl ResponseProofSigner {
     fn mode(&self) -> &'static str {
         match self {
             Self::LocalEphemeral(_) => "local-ephemeral",
-            Self::Custody(_) => "custody-uds",
+            Self::Custody(signer) => signer.transport.mode(),
         }
     }
 
@@ -2623,14 +2626,21 @@ impl ResponseProofSigner {
     fn proof_dispatch_ready(&self) -> bool {
         match self {
             Self::LocalEphemeral(_) => true,
-            Self::Custody(signer) => signer.health.transport_dispatch_ready(),
+            Self::Custody(signer) => signer.transport.verify_live().is_ok()
+                && signer.health.transport_dispatch_ready(),
         }
     }
 
     fn with_proof_dispatch_permit<T>(&self, operation: impl FnOnce() -> T) -> Result<T, ()> {
         match self {
             Self::LocalEphemeral(_) => Ok(operation()),
-            Self::Custody(signer) => signer.health.with_dispatch_permit(operation),
+            Self::Custody(signer) => {
+                signer.transport.verify_live().map_err(|_| ())?;
+                signer.health.with_dispatch_permit(|| {
+                    signer.transport.verify_live().map_err(|_| ())?;
+                    Ok(operation())
+                })?
+            }
         }
     }
 
@@ -2763,8 +2773,7 @@ impl ResponseProofSigner {
 
 #[derive(Debug)]
 struct CustodyResponseProofSigner {
-    socket_path: PathBuf,
-    expected_uid: libc::uid_t,
+    transport: CustodySignerTransport,
     boot_id: String,
     boot_digest: String,
     verifying_key: VerifyingKey,
@@ -3133,7 +3142,8 @@ impl CustodyResponseProofSigner {
             .state
             .lock()
             .expect("custody passive health mutex poisoned");
-        let healthy = health.transport_healthy
+        let healthy = self.transport.verify_live().is_ok()
+            && health.transport_healthy
             && health.signing_healthy
             && health.proof_assembly_healthy
             && health.last_liveness_success.elapsed()
@@ -3151,7 +3161,7 @@ impl CustodyResponseProofSigner {
             "sign_failure_count":health.sign_failure_count,
             "proof_assembly_success_count":health.proof_assembly_success_count,
             "proof_assembly_failure_count":health.proof_assembly_failure_count,
-            "probe_assurance":"hello-pinned-boot-key-peer-uid",
+            "probe_assurance":self.transport.probe_assurance(),
             "last_failure_at_epoch_ms":health.last_failure_at_epoch_ms,
             "last_failure_digest":health.last_failure_digest,
             "last_failure_stage":health.last_failure_stage,
@@ -3164,14 +3174,10 @@ impl CustodyResponseProofSigner {
     fn runtime_manifest(&self) -> Value {
         json!({
             "protocol_api_version":CUSTODY_PROTOCOL_API_VERSION,
-            "transport":{
-                "kind":"unix-domain-socket",
-                "peer_authentication":"uid",
-                "expected_uid":self.expected_uid,
-            },
+            "transport":self.transport.manifest(),
             "health_probe":{
                 "mode":"cached-background",
-                "assurance":"hello-pinned-boot-key-peer-uid",
+                "assurance":self.transport.probe_assurance(),
                 "interval_ms":RESPONSE_PROOF_CUSTODY_HEALTH_PROBE_INTERVAL.as_millis(),
                 "max_staleness_ms":RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS.as_millis(),
             },
@@ -16297,6 +16303,17 @@ fn validate_custody_hello_response(
     expected_uid: libc::uid_t,
     deadline: Instant,
 ) -> Result<CustodyResponseProofSigner, String> {
+    validate_custody_hello_response_for_transport(response_bytes, expected_request_id,
+        CustodySignerTransport::Unix { socket_path, expected_uid }, deadline)
+}
+
+fn validate_custody_hello_response_for_transport(
+    response_bytes: &[u8],
+    expected_request_id: &str,
+    transport: CustodySignerTransport,
+    deadline: Instant,
+) -> Result<CustodyResponseProofSigner, String> {
+    transport.verify_live()?;
     let (boot_id, result): (String, CustodyHelloResult) = decode_successful_custody_response(
         response_bytes,
         expected_request_id,
@@ -16325,7 +16342,7 @@ fn validate_custody_hello_response(
         return Err("custody hello runtime limits mismatch".to_string());
     }
     if result.hardware_proof {
-        return Err("custody UDS runtime must report hardwareProof=false".to_string());
+        return Err("custody runtime must report hardwareProof=false until independently admitted".to_string());
     }
     let (verifying_key, derived_key_id) =
         verifying_key_from_spki_pem_text(&result.public_key_pem, "custody response proof")?;
@@ -16340,9 +16357,9 @@ fn validate_custody_hello_response(
     }
     let boot_bytes = decode_canonical_base64url_exact(&boot_id, 32, "custody boot ID")?;
     custody_deadline_remaining(deadline, "hello validation")?;
+    transport.verify_live()?;
     Ok(CustodyResponseProofSigner {
-        socket_path,
-        expected_uid,
+        transport,
         boot_id,
         boot_digest: sha256_prefixed(&boot_bytes),
         verifying_key,
@@ -16524,13 +16541,7 @@ fn validate_local_response_proof_mode(
 impl CustodyResponseProofSigner {
     fn probe(&self) -> Result<(), String> {
         let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
-        let observed =
-            custody_hello_once(&self.socket_path, self.expected_uid, deadline).map_err(|err| {
-                match err {
-                    CustodyHelloAttemptError::Retryable(err)
-                    | CustodyHelloAttemptError::Fatal(err) => err,
-                }
-            })?;
+        let observed = self.transport.hello(deadline)?;
         if observed.boot_id != self.boot_id {
             return Err(
                 "custody runtime boot identity changed; decision gate restart required".to_string(),
@@ -16553,6 +16564,7 @@ impl CustodyResponseProofSigner {
                     .to_string(),
             );
         }
+        self.transport.verify_live()?;
         Ok(())
     }
 
@@ -16601,12 +16613,6 @@ impl CustodyResponseProofSigner {
     ) -> Result<(), String> {
         let operation = CUSTODY_RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION;
         let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
-        let mut stream = connect_custody_socket(&self.socket_path, self.expected_uid, deadline)
-            .map_err(|err| match err {
-                CustodyHelloAttemptError::Retryable(err) | CustodyHelloAttemptError::Fatal(err) => {
-                    err
-                }
-            })?;
         let request_id = canonical_custody_request_id()?;
         let request = CustodyRequest {
             api_version: CUSTODY_PROTOCOL_API_VERSION.to_string(),
@@ -16619,7 +16625,7 @@ impl CustodyResponseProofSigner {
                 "request_aggregate_digest":request_aggregate_digest,
             }),
         };
-        let response = custody_exchange(&mut stream, &request, deadline)?;
+        let response = self.transport.exchange(&request, deadline)?;
         let (_, result): (String, CustodyObservationReserveResult) =
             decode_successful_custody_response(
                 &response,
@@ -16644,6 +16650,8 @@ impl CustodyResponseProofSigner {
         {
             return Err("custody response observation reservation expiry is invalid".to_string());
         }
+        self.transport.verify_live()?;
+        custody_deadline_remaining(deadline, "reservation validation")?;
         Ok(())
     }
 
@@ -16654,12 +16662,6 @@ impl CustodyResponseProofSigner {
         authorization_binding: Option<&ReleaseAuthorizationBinding>,
     ) -> Result<String, String> {
         let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
-        let mut stream = connect_custody_socket(&self.socket_path, self.expected_uid, deadline)
-            .map_err(|err| match err {
-                CustodyHelloAttemptError::Retryable(err) | CustodyHelloAttemptError::Fatal(err) => {
-                    err
-                }
-            })?;
         let request_id = canonical_custody_request_id()?;
         let request = CustodyRequest {
             api_version: CUSTODY_PROTOCOL_API_VERSION.to_string(),
@@ -16671,14 +16673,14 @@ impl CustodyResponseProofSigner {
                 "authorization_binding":authorization_binding,
             }),
         };
-        let response = custody_exchange(&mut stream, &request, deadline)?;
+        let response = self.transport.exchange(&request, deadline)?;
         custody_deadline_remaining(deadline, "statement canonicalization")?;
         let canonical_statement = Zeroizing::new(
             custody_canonical_json_bytes(statement)
                 .map_err(|_| "canonicalize custody response statement".to_string())?,
         );
         custody_deadline_remaining(deadline, "statement canonicalization")?;
-        validate_custody_sign_response(
+        let signature = validate_custody_sign_response(
             &response,
             &request_id,
             operation,
@@ -16687,7 +16689,9 @@ impl CustodyResponseProofSigner {
             &self.verifying_key,
             &canonical_statement,
             deadline,
-        )
+        )?;
+        self.transport.verify_live()?;
+        Ok(signature)
     }
 }
 
@@ -50694,8 +50698,9 @@ mod tests {
         let (signing_key, public_key_pem, key_id) =
             response_proof_signing_material().expect("test custody signer material");
         ResponseProofSigner::Custody(CustodyResponseProofSigner {
-            socket_path: PathBuf::from("/unused/custody.sock"),
-            expected_uid: 123,
+            transport: CustodySignerTransport::Unix {
+                socket_path: PathBuf::from("/unused/custody.sock"), expected_uid: 123,
+            },
             boot_id: test_custody_boot_id(42),
             boot_digest: sha256_prefixed(&[42u8; 32]),
             verifying_key: signing_key.verifying_key(),
@@ -50819,7 +50824,7 @@ mod tests {
             signer.control_plane_response_signing_key_id,
             control_plane_key_id
         );
-        assert_eq!(signer.expected_uid, 123);
+        assert!(matches!(signer.transport, CustodySignerTransport::Unix { expected_uid: 123, .. }));
 
         let mut wrong_capability = response.clone();
         wrong_capability["result"]["capabilities"] = json!([CUSTODY_HELLO_OPERATION]);
@@ -51181,8 +51186,9 @@ mod tests {
             }
         });
         let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
-            socket_path: sign_path.clone(),
-            expected_uid: effective_uid,
+            transport: CustodySignerTransport::Unix {
+                socket_path: sign_path.clone(), expected_uid: effective_uid,
+            },
             boot_id,
             boot_digest: sha256_prefixed(&[14u8; 32]),
             verifying_key,
@@ -52695,8 +52701,9 @@ mod tests {
         // SAFETY: geteuid has no preconditions.
         let effective_uid = unsafe { libc::geteuid() };
         let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
-            socket_path: socket_path.clone(),
-            expected_uid: effective_uid,
+            transport: CustodySignerTransport::Unix {
+                socket_path: socket_path.clone(), expected_uid: effective_uid,
+            },
             boot_id: boot_id.clone(),
             boot_digest: sha256_prefixed(&[71u8; 32]),
             verifying_key: signing_key.verifying_key(),

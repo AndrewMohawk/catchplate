@@ -127,13 +127,11 @@ pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs) -> Result<()
     let ResponseProofSigner::Custody(signer) = &inputs.response_proof_signer else {
         return Err("native production requires an actual custody response proof signer".to_owned());
     };
-    // SAFETY: geteuid has no preconditions. This preserves the production
-    // separation check; it is not fresh authentication of the custody process.
-    if signer.expected_uid == unsafe { libc::geteuid() } {
-        return Err("native custody signer UID must differ from the gate effective UID".to_owned());
-    }
-    if !signer.socket_path.is_absolute()
-        || signer.public_key_pem != inputs.response_proof_public_key_pem
+    // Native custody is an actual retained owner in this address space, not a
+    // host UDS peer or UID-isolated process. Legacy UDS startup still enforces
+    // its separate UID. Neither construction supplies independent admission.
+    signer.transport.require_native()?;
+    if signer.public_key_pem != inputs.response_proof_public_key_pem
         || signer.key_id != inputs.response_proof_signing_key_id
     {
         return Err("native custody signer metadata does not match the supplied proof configuration".to_owned());

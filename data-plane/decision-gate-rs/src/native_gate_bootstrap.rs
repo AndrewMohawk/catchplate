@@ -103,10 +103,17 @@ pub(super) fn prepare_native_tls_gate_state(
     }
     // Pure consistency only: no local file creation or candidate-derived
     // checkpoint substitutes for independently latest off-host witness state.
-    let (identity, ingress, held_relays, deadline) = bootstrap.into_parts(OffsetDateTime::now_utc())?;
+    let (mut identity, ingress, held_relays, deadline) = bootstrap.into_parts(OffsetDateTime::now_utc())?;
     if !Arc::ptr_eq(&relays, &held_relays) {
         return Err("native bootstrap lost its original relay owner".to_owned());
     }
+    let ResponseProofSigner::Custody(signer) = &inputs.response_proof_signer else {
+        return Err("native bootstrap lost its custody signer".to_owned());
+    };
+    // Join the actual key's role-4 binding to this actual CA and complete scope,
+    // and permanently narrow key use to this cohort's original deadline. A
+    // hello label or public-key equality alone cannot establish that ownership.
+    signer.transport.verify_native_identity(&mut identity, deadline)?;
     let (_, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
     let mut state = inputs.into_state(GateStateRuntime {
         snapshot: Arc::new(snapshot), audit_client, credential_lease_client: credential_client,

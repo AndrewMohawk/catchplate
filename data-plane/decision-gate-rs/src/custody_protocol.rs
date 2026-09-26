@@ -30,6 +30,9 @@ pub mod enclave_loopback_tunnel_v1;
 pub mod enclave_tls_relay_io_v1;
 pub mod enclave_parent_relay_v1;
 pub mod native_upstream_relays_v1;
+use enclave_runtime_identity_v1::{
+    EnclaveRuntimeIdentityV1, QuotedResponseProofKeyV1, RuntimeKeyQuoteV1,
+};
 #[path = "response_v2/http11.rs"]
 mod response_v2_http11;
 
@@ -1212,9 +1215,22 @@ enum LedgerClaimReplayPolicy {
     RejectObservationNonce,
 }
 
+const NATIVE_PROOF_BOOT_DOMAIN: &[u8] = b"serverware/native-proof-custody-boot/v1\0";
+
+enum CustodySigningBackend {
+    Development(SigningKey),
+    Native {
+        owner: Mutex<QuotedResponseProofKeyV1>,
+        owner_pid: libc::pid_t,
+        // Only public originals are copied. The actual secret owner is neither
+        // cloned nor exported, and its quote is not remote quote admission.
+        quote: RuntimeKeyQuoteV1,
+    },
+}
+
 pub struct CustodyRuntime {
     boot_id: String,
-    signing_key: SigningKey,
+    signing_backend: CustodySigningBackend,
     public_key_pem: String,
     key_id: String,
     control_plane_response_verifying_key: Option<VerifyingKey>,
@@ -1270,6 +1286,73 @@ impl CustodyRuntime {
         )
     }
 
+    /// Generate and quote the actual proof key within the supplied native
+    /// identity. No environment or imported proof key is consulted. The caller
+    /// still owns release/PCR/nonce and control-plane-key admission.
+    ///
+    /// This deliberately retains the existing filesystem attempt ledger: it is
+    /// development rollback storage, not a production witness or protection
+    /// against restoration of an older host filesystem. Blocking NSM/filesystem
+    /// operations still need an outer watchdog; deadline checks do not interrupt
+    /// a blocked kernel operation.
+    pub fn generate_native_with_control_plane_response_public_key(
+        identity: &mut EnclaveRuntimeIdentityV1,
+        control_plane_response_verifying_key: VerifyingKey,
+        expected_key_id: &str,
+        nonce: [u8; 32],
+        attempt_ledger_directory: &Path,
+        deadline: u64,
+    ) -> Result<Self, ProtocolError> {
+        validate_pinned_control_plane_response_key(
+            &control_plane_response_verifying_key,
+            expected_key_id,
+        )?;
+        identity.verify_live(deadline).map_err(native_proof_error)?;
+        let attempt_statement_ledger = AttemptStatementLedger::open(attempt_ledger_directory)?;
+        identity.verify_live(deadline).map_err(native_proof_error)?;
+        let mut boot_id_bytes = [0u8; BOOT_ID_BYTES];
+        SystemRandom::new().fill(&mut boot_id_bytes).map_err(|_| {
+            ProtocolError::new("entropy_unavailable", "generate native custody runtime boot ID")
+        })?;
+        let mut pending = identity.prepare_response_proof_key(deadline)
+            .map_err(native_proof_error)?;
+        let public_key = pending.public_key_bytes().map_err(native_proof_error)?;
+        let spki_der = ed25519_spki_der(&public_key);
+        let control_plane_spki = ed25519_spki_der(control_plane_response_verifying_key.as_bytes());
+        // Exact fixed-width preimage: domain (including NUL), raw boot ID32,
+        // SHA256(actual proof SPKI)32, SHA256(actual pinned CP SPKI)32. The NSM
+        // public_key is the raw Ed25519 key; hello keyId remains the SPKI hash.
+        let mut binding = Sha256::new();
+        binding.update(NATIVE_PROOF_BOOT_DOMAIN);
+        binding.update(boot_id_bytes);
+        binding.update(Sha256::digest(&spki_der));
+        binding.update(Sha256::digest(&control_plane_spki));
+        let request_binding: [u8; 32] = binding.finalize().into();
+        let mut owner = identity.quote_response_proof_key(
+            pending, request_binding, nonce, deadline,
+        ).map_err(native_proof_error)?;
+        if owner.public_key_bytes().map_err(native_proof_error)? != public_key {
+            return Err(native_proof_error("native quoted proof key changed during construction".to_owned()));
+        }
+        owner.verify_live(deadline).map_err(native_proof_error)?;
+        let quote = owner.quote().clone();
+        let runtime = Self {
+            boot_id: general_purpose::URL_SAFE_NO_PAD.encode(boot_id_bytes),
+            signing_backend: CustodySigningBackend::Native {
+                owner: Mutex::new(owner), owner_pid: unsafe { libc::getpid() }, quote,
+            },
+            public_key_pem: pem_public_key(&spki_der),
+            key_id: sha256_prefixed(&spki_der),
+            control_plane_response_verifying_key: Some(control_plane_response_verifying_key),
+            control_plane_response_signing_key_id: Some(sha256_prefixed(&control_plane_spki)),
+            seen_request_ids: Mutex::new(HashSet::new()),
+            response_proof_validation: Mutex::new(()),
+            attempt_statement_ledger: Mutex::new(attempt_statement_ledger),
+        };
+        runtime.verify_native_live()?;
+        Ok(runtime)
+    }
+
     fn generate_with_optional_control_plane_response_key(
         control_plane_response_verifying_key: Option<VerifyingKey>,
         attempt_statement_ledger: AttemptStatementLedger,
@@ -1313,7 +1396,7 @@ impl CustodyRuntime {
             .map(control_plane_response_key_id);
         Self {
             boot_id: general_purpose::URL_SAFE_NO_PAD.encode(boot_id_bytes),
-            signing_key,
+            signing_backend: CustodySigningBackend::Development(signing_key),
             public_key_pem: pem_public_key(&spki_der),
             key_id: sha256_prefixed(&spki_der),
             control_plane_response_verifying_key,
@@ -1342,7 +1425,112 @@ impl CustodyRuntime {
         &self.boot_id
     }
 
+    pub fn is_native(&self) -> bool {
+        matches!(&self.signing_backend, CustodySigningBackend::Native { .. })
+    }
+
+    /// Unverified original quote and its public request inputs. These may be
+    /// inspected after expiry but never authorize signing or extend its owner.
+    pub fn native_quote(&self) -> Option<&RuntimeKeyQuoteV1> {
+        match &self.signing_backend {
+            CustodySigningBackend::Development(_) => None,
+            CustodySigningBackend::Native { quote, .. } => Some(quote),
+        }
+    }
+
+    /// Package only the actual original document and raw public key. This is
+    /// unverified evidence for an independent verifier, not an accepted proof.
+    pub fn native_key_evidence(&self) -> Result<Option<Value>, ProtocolError> {
+        let Some(quote) = self.native_quote() else {
+            return Ok(None);
+        };
+        self.verify_native_live()?;
+        let evidence = serde_json::json!({
+            "apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+            "attestationDocumentB64": general_purpose::URL_SAFE_NO_PAD.encode(quote.document()),
+            "responseProofPublicKey": general_purpose::URL_SAFE_NO_PAD.encode(quote.public_key()),
+        });
+        self.verify_native_live()?;
+        Ok(Some(evidence))
+    }
+
+    /// Development behavior is unchanged. Native requests cannot cross the
+    /// original process/deadline or continue after the actual owner is poisoned.
+    pub fn verify_native_live(&self) -> Result<(), ProtocolError> {
+        self.verify_native_process()?;
+        if let CustodySigningBackend::Native { owner, .. } = &self.signing_backend {
+            let mut owner = owner.lock().map_err(|_| native_proof_error(
+                "native proof owner lock is poisoned".to_owned(),
+            ))?;
+            let deadline = owner.deadline();
+            owner.verify_live(deadline).map_err(native_proof_error)?;
+        }
+        Ok(())
+    }
+
+    /// Join the actual quoted key to the retained native CA and full role-4
+    /// scope, permanently clipping its lifetime to the native bootstrap. This
+    /// is local custody consistency, not independent attestation admission.
+    pub fn verify_native_identity(
+        &self,
+        identity: &mut EnclaveRuntimeIdentityV1,
+        deadline: u64,
+    ) -> Result<(), ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native { owner, .. } = &self.signing_backend else {
+            return Err(native_proof_error("development proof key is not a native owner".to_owned()));
+        };
+        let mut owner = owner.lock().map_err(|_| native_proof_error(
+            "native proof owner lock is poisoned".to_owned(),
+        ))?;
+        owner.verify_identity(identity, deadline).map_err(native_proof_error)
+    }
+
+    fn verify_native_process(&self) -> Result<(), ProtocolError> {
+        if let CustodySigningBackend::Native { owner_pid, .. } = &self.signing_backend {
+            // Reject before locking: an inherited mutex may have been held by
+            // a vanished thread at fork. The actual key owner checks PID again.
+            if unsafe { libc::getpid() } != *owner_pid {
+                return Err(native_proof_error("native custody runtime crossed its creating process".to_owned()));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_native_policy_commitment(&self, policy: &str) -> Result<(), ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native { owner, .. } = &self.signing_backend else {
+            return Ok(());
+        };
+        validate_sha256_digest("native proof policy", policy)?;
+        let mut digest = [0u8; 32];
+        hex::decode_to_slice(&policy[7..], &mut digest).map_err(|_| {
+            invalid_statement("native proof policy digest cannot be decoded")
+        })?;
+        let mut owner = owner.lock().map_err(|_| native_proof_error(
+            "native proof owner lock is poisoned".to_owned(),
+        ))?;
+        let deadline = owner.deadline();
+        owner.verify_policy_commitment(digest, deadline).map_err(native_proof_error)
+    }
+
     pub fn handle_canonical_request(&self, request_bytes: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+        self.verify_native_live()?;
+        let outcome = self.handle_live_canonical_request(request_bytes);
+        // Even hello, reservations and malformed/denied requests are bracketed.
+        // A late failure discards the response; prior durable claims are not
+        // undone and cannot be recycled into a new authorized attempt.
+        self.verify_native_live()?;
+        outcome
+    }
+
+    fn handle_live_canonical_request(&self, request_bytes: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+        if self.is_native() && (request_bytes.is_empty() || request_bytes.len() > MAX_FRAME_BYTES) {
+            return Err(ProtocolError::new(
+                "invalid_frame_size",
+                "native custody request must fit the existing nonempty frame bound",
+            ));
+        }
         let request: CustodyRequest = decode_canonical_json(request_bytes)?;
         validate_request_id(&request.request_id)?;
         validate_operation_label(&request.operation)?;
@@ -1449,6 +1637,7 @@ impl CustodyRuntime {
                         &params.authorization_binding,
                         validation_epoch_ms,
                     )?;
+                    self.validate_native_policy_commitment(&params.statement.policy_digest)?;
                     let canonical_statement = canonical_json_bytes(&params.statement)?;
                     let statement_digest = sha256_prefixed(&canonical_statement);
                     let retain_until_epoch_ms = params
@@ -1509,6 +1698,7 @@ impl CustodyRuntime {
                         control_plane_response_verifying_key,
                         validation_epoch_ms,
                     )?;
+                    self.validate_native_policy_commitment(&params.statement.policy_digest)?;
                     let canonical_statement = canonical_json_bytes(&params.statement)?;
                     let statement_digest = sha256_prefixed(&canonical_statement);
                     Ok::<_, ProtocolError>((
@@ -1607,6 +1797,7 @@ impl CustodyRuntime {
                         self.control_plane_response_verifying_key.as_ref(),
                         validation_epoch_ms,
                     )?;
+                    self.validate_native_policy_commitment(&params.statement.policy.digest)?;
                     let ledger_key = params
                         .authorization_binding
                         .as_ref()
@@ -1714,6 +1905,7 @@ impl CustodyRuntime {
                 "response observation reservation state is unavailable",
             )
         })?;
+        self.verify_native_live()?;
         let now_epoch_ms = current_epoch_ms().inspect_err(|_| {
             let _ = ledger.advance_max_observed_time(reservation.validation_epoch_ms);
         })?;
@@ -1745,12 +1937,22 @@ impl CustodyRuntime {
         canonical_statement: Vec<u8>,
         statement_digest: String,
     ) -> Result<Value, ProtocolError> {
-        let signature = self.signing_key.sign(&canonical_statement);
+        self.verify_native_process()?;
+        let signature = match &self.signing_backend {
+            CustodySigningBackend::Development(key) => key.sign(&canonical_statement).to_bytes(),
+            CustodySigningBackend::Native { owner, .. } => {
+                let mut owner = owner.lock().map_err(|_| native_proof_error(
+                    "native proof owner lock is poisoned".to_owned(),
+                ))?;
+                let deadline = owner.deadline();
+                owner.sign(&canonical_statement, deadline).map_err(native_proof_error)?
+            }
+        };
         serde_json::to_value(SignResult {
             statement_digest,
             signature: format!(
                 "ed25519:{}",
-                general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+                general_purpose::URL_SAFE_NO_PAD.encode(signature)
             ),
             key_id: &self.key_id,
         })
@@ -1815,6 +2017,7 @@ impl CustodyRuntime {
                 "attempt statement binding state is unavailable",
             )
         })?;
+        self.verify_native_live()?;
         let now_epoch_ms = match clock() {
             Ok(now_epoch_ms) => now_epoch_ms,
             Err(error) => {
@@ -1869,6 +2072,7 @@ impl CustodyRuntime {
                 "response observation reservation state is unavailable",
             )
         })?;
+        self.verify_native_live()?;
         let now_epoch_ms = match clock() {
             Ok(now_epoch_ms) => now_epoch_ms,
             Err(error) => {
@@ -1910,6 +2114,7 @@ impl CustodyRuntime {
                 "attempt statement binding state is unavailable",
             )
         })?;
+        self.verify_native_live()?;
         ledger.advance_max_observed_time(observed_epoch_ms)
     }
 }
@@ -5880,6 +6085,10 @@ fn is_canonical_decimal(value: &str) -> bool {
 
 fn invalid_statement(message: impl Into<String>) -> ProtocolError {
     ProtocolError::new("invalid_response_statement", message)
+}
+
+fn native_proof_error(message: String) -> ProtocolError {
+    ProtocolError::new("native_proof_owner_unavailable", message)
 }
 
 fn ed25519_spki_der(public_key: &[u8; 32]) -> Vec<u8> {

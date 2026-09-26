@@ -12,8 +12,11 @@ mod enclave_nsm_v1;
 mod tls_authority_v1;
 #[path = "credential_recipient_v1.rs"]
 mod credential_recipient_v1;
+#[path = "enclave_response_proof_key_v1.rs"]
+mod enclave_response_proof_key_v1;
 
 pub use credential_recipient_v1::CredentialRecipientV1;
+pub use enclave_response_proof_key_v1::{PendingResponseProofKeyV1, QuotedResponseProofKeyV1};
 pub use tls_authority_v1::{GeneratedMutualTlsV1, TlsAuthorityV1};
 use enclave_nsm_v1::NsmDeviceV1;
 use rustls::ServerConfig;
@@ -26,6 +29,7 @@ const BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
 const TLS_ROOT: u8 = 1;
 const LEASE_RECIPIENT: u8 = 2;
 const MUTUAL_TLS_INGRESS: u8 = 3;
+const RESPONSE_PROOF: u8 = 4;
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
 
 /// Ordinary independently expected commitments must be admitted by the caller.
@@ -47,6 +51,8 @@ impl RuntimeScopeCommitmentsV1 {
 }
 
 /// Original quote plus exact public request inputs; not a verified quote token.
+/// Cloning copies public originals only, never the associated private key.
+#[derive(Clone)]
 pub struct RuntimeKeyQuoteV1 {
     document: Vec<u8>,
     user_data: Vec<u8>,

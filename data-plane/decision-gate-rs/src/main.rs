@@ -16,6 +16,7 @@ mod native_background_workers;
 mod native_lease_renewal;
 mod native_runtime;
 mod native_startup;
+mod native_startup_config;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};
@@ -49868,6 +49869,9 @@ fn start_response_proof_custody_health_probe(state: Arc<GateState>) -> Result<()
 
 fn main() -> Result<(), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    if native_startup_config::run_from_process_arguments()?.is_some() {
+        return Ok(());
+    }
     let policy_path = env::var("SERVERWARE_POLICY_BUNDLE")
         .unwrap_or_else(|_| "/data/policy-bundle.json".to_string());
     let release_channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();

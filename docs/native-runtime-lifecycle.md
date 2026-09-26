@@ -17,6 +17,8 @@ The [callable native startup](native-startup.md) now constructs the actual
 native owners and explicit shadow/v2 clients, performs preparation and binds
 the fixed-parent listener before handing both owners to this run. It adds no
 CLI/environment activation or independent admission.
+The separate [native CLI configuration loader](native-startup-config.md) now
+selects this sequence explicitly, before legacy environment startup.
 
 `NativeRuntimeSettingsV1::new` accepts 1–24 proxy workers, queue capacity
 1–4,096, policy interval 50 ms–60 s and audit interval 10 ms–60 s. These are
@@ -103,8 +105,9 @@ watchdog remains necessary. This is not a hard real-time destruction receipt.
 ## Boundaries unchanged
 
 The normal startup remains the legacy entrypoint. This callable lifecycle adds
-no management listener, daemon installation, native CLI selection or production
-activation. Independently admitted configuration, roots, service credentials,
+no management listener, daemon installation or production admission. Native CLI
+selection is now provided by the separate pinned-input loader, not this runner.
+Independently admitted configuration, roots, service credentials,
 release/PCR mapping, response-observation-v2 provenance, protected current
 checkpoint/witness and rollback custody, KMS Recipient release, session
 revocation, immutable packaging and frozen runtime verification remain separate

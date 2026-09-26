@@ -4,6 +4,9 @@ Status: source-only, unbuilt and unexecuted. This composes actual retained nativ
 key/quote/transport owners with initial signed-policy acquisition before a new
 `GateState` is shared. It does not introduce a CLI or environment mode, admit
 configuration or activate a complete enclave deployment.
+The separate [explicit native CLI](native-startup-config.md) now selects this
+path through pinned configuration and launch originals; it does not supply
+independent configuration or release admission.
 The enclosing [callable native startup](native-startup.md) now generates and
 joins the actual owners, constructs explicit shadow/v2 clients and binds the
 fixed-parent listener only after this preparation succeeds.
@@ -140,7 +143,8 @@ lease/health work, checks readiness and serves with shared cancellation and
 joined shutdown. This callable run does not activate CLI startup or provision
 its inputs. The [enclosing startup sequence](native-startup.md) now composes
 owner generation, this preparation, listener binding and that run without
-invoking the legacy entrypoint.
+invoking the legacy entrypoint. Its separate explicit CLI performs the input
+loading and mode selection described above.
 
 Supplied configuration, service tokens, verifier/release pins, TLS roots and
 ordinary checkpoint values require independent admission. Existing proof and

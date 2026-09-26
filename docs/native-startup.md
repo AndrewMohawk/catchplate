@@ -4,8 +4,9 @@ Status: source-only, unbuilt and unexecuted. The main-private
 [native_startup::run](../data-plane/decision-gate-rs/src/native_startup.rs)
 composes actual cold startup through generated native identity, existing custody
 and service checks, signed-policy preparation, listener creation and owned
-serving. It is not a new CLI/environment mode, a configuration-admission format
-or evidence that a complete enclave deployment has run.
+serving. The [explicit pinned-original CLI](native-startup-config.md) now selects
+this sequence before legacy environment loading. It is not signed configuration
+admission or evidence that a complete enclave deployment has run.
 
 ## Explicit inputs, no host-ready placeholders
 
@@ -117,8 +118,8 @@ NSM quotes and checked local owners still require the independent admission
 described in [proof custody](enclave-proof-custody.md) and
 [runtime identity](enclave-runtime-identity.md).
 
-This sequence does not provide standalone native CLI selection, service/ledger
-provisioning, independently admitted configuration or hardware, KMS Recipient
+The source-level opt-in CLI provides selection, not service/ledger provisioning,
+independently admitted configuration or hardware, KMS Recipient
 release, current witness/rollback custody, or complete deployment. Immutable
 packaging and consolidated frozen build/runtime/failure validation remain
 required. No source inspection or callable API substitutes for those gates.

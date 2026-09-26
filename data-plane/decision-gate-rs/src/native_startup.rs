@@ -1,4 +1,4 @@
-//! Callable cold native startup, not a command-line activation or admission token.
+//! Cold native startup called by the explicit native CLI, not an admission token.
 //!
 //! All configuration, trust pins, clocks/nonces and the existing attempt ledger
 //! still require independent admission. This sequence generates the real keys,

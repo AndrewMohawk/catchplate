@@ -2294,6 +2294,7 @@ pub(crate) struct PolicyShadowGenerationConfig {
     pub(crate) webauthn_verifier: PinnedVerifierCommand,
     pub(crate) publication_handoff: PinnedVerifierCommand,
     pub(crate) custody_config_path: PathBuf,
+    pub(crate) custody_config_sha256: Option<Sha256Digest>,
     pub(crate) startup_generation_path: Option<PathBuf>,
     pub(crate) startup_generation_sha256: Option<Sha256Digest>,
     pub(crate) startup_active_authorization_path: Option<PathBuf>,
@@ -2385,6 +2386,7 @@ impl PolicyShadowGenerationControl {
             custody_config_path: PathBuf::from(required_env(
                 CUSTODY_CONFIG_PATH_ENV,
             )?),
+            custody_config_sha256: None,
             startup_generation_path: optional_env_path(
                 STARTUP_GENERATION_PATH_ENV,
             ),
@@ -2424,6 +2426,7 @@ impl PolicyShadowGenerationControl {
             webauthn_verifier,
             publication_handoff,
             custody_config_path,
+            custody_config_sha256,
             startup_generation_path,
             startup_generation_sha256,
             startup_active_authorization_path,
@@ -2465,6 +2468,11 @@ impl PolicyShadowGenerationControl {
         )?;
         let custody_config =
             immutable_config_identity(&custody_path, is_production)?;
+        if custody_config_sha256.as_ref().is_some_and(|expected|
+            expected != &custody_config.content_sha256)
+        {
+            return Err("policy-shadow custody configuration differs from its explicit SHA-256 pin".to_owned());
+        }
 
         let startup_path = startup_generation_path
             .map(|path| normalized_absolute_path(

@@ -1,0 +1,40 @@
+//! Closed opt-in native mode; no arguments retains the legacy entrypoint.
+
+use super::originals::ArtifactV1;
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
+    -> Result<Option<(ArtifactV1, ArtifactV1)>, String>
+{
+    let Some(mode) = arguments.next() else { return Ok(None); };
+    if mode != "--native-startup" {
+        return Err("decision gate accepts no arguments or the explicit --native-startup mode".to_owned());
+    }
+    let mut configuration = None;
+    let mut configuration_pin = None;
+    let mut launch = None;
+    let mut launch_pin = None;
+    while let Some(flag) = arguments.next() {
+        let flag = flag.to_str().ok_or("native startup flag must be UTF-8")?;
+        let value = arguments.next().ok_or("native startup flag requires a value")?;
+        match flag {
+            "--configuration" if configuration.is_none() => configuration = Some(PathBuf::from(value)),
+            "--configuration-sha256" if configuration_pin.is_none() => {
+                configuration_pin = Some(value.into_string().map_err(|_| "native configuration pin must be UTF-8")?);
+            }
+            "--launch" if launch.is_none() => launch = Some(PathBuf::from(value)),
+            "--launch-sha256" if launch_pin.is_none() => {
+                launch_pin = Some(value.into_string().map_err(|_| "native launch pin must be UTF-8")?);
+            }
+            _ => return Err("native startup received an unknown or repeated flag".to_owned()),
+        }
+    }
+    Ok(Some((ArtifactV1 {
+        path: configuration.ok_or("native startup requires --configuration")?,
+        sha256: configuration_pin.ok_or("native startup requires --configuration-sha256")?,
+    }, ArtifactV1 {
+        path: launch.ok_or("native startup requires --launch")?,
+        sha256: launch_pin.ok_or("native startup requires --launch-sha256")?,
+    })))
+}

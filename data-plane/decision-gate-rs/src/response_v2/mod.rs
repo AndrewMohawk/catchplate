@@ -9,6 +9,7 @@ mod envelope_authentication;
 mod envelope_semantics;
 mod http11;
 mod integration;
+mod native_config;
 mod release;
 mod transparency_contract;
 mod transaction;
@@ -38,6 +39,20 @@ use serverware_decision_gate::{
     V2_STAGE_OPERATION, V2_TERMINAL_OPERATION,
     V2_VERIFY_ARCHIVE_OPERATION,
 };
+
+/// Main-visible wrapper; the closed JSON schema and conversion live in the
+/// private native_config child, without widening its internal DTO visibility.
+#[derive(Deserialize)]
+#[serde(transparent)]
+pub(super) struct NativeResponseObservationV2ConfigV1(
+    native_config::NativeResponseObservationV2ConfigV1,
+);
+
+impl NativeResponseObservationV2ConfigV1 {
+    pub(super) fn into_config(self) -> Result<ResponseObservationV2ClientConfig, String> {
+        self.0.into_config()
+    }
+}
 
 pub(super) fn initialize_response_observation_v2_client(
     is_production: bool,

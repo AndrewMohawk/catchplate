@@ -2,8 +2,8 @@
 
 Status: source-only, unbuilt and unexecuted. The receiver, descriptor-bound
 target acquisition, read-only gate snapshot and namespace-confined initial
-tracing stop are prerequisites for a future observer, not an operational
-observer server or permission to release a body.
+tracing stop with retained initial mapping custody are prerequisites for a future
+observer, not an operational observer server or permission to release a body.
 No ready acknowledgement, continuous event acquisition or signed evidence is
 produced by these components.
 
@@ -149,6 +149,61 @@ namespace, process, ptrace, signal or cleanup operation has been executed as par
 of this source work. An admitted immutable observer process, its required host
 capabilities and complete serving/signing lifecycle remain to be provisioned.
 
+## Held initial mapping snapshot
+
+`StoppedBodyObserverLaunchV12::acquire_initial_mappings` consumes the stopped
+owner into
+[StoppedBodyMappingSnapshotV12](../data-plane/decision-gate-rs/src/body_observer_snapshot_v12.rs).
+The worker, target and external channel stay owned together with the actual
+procfs maps descriptor, original map bytes, complete parsed inventory and retained
+executable-file descriptors. There is no snapshot-to-ready or snapshot-to-signed-
+evidence conversion.
+
+```mermaid
+flowchart LR
+    Stop[Verify held tracing stop] --> Maps[Read complete maps original]
+    Maps --> Files[Acquire executable backing files]
+    Files --> Same[Require identical maps original]
+    Same --> Hold[Recheck and retain stopped custody]
+```
+
+The [maps parser](../data-plane/decision-gate-rs/src/body_observer_maps_v12.rs)
+retains every row, including non-executable regions and special or unsupported
+labels. Input is capped at 4 MiB and 4,096 mappings, with bounded path display
+bytes, complete records, checked numeric fields and sorted nonoverlapping ranges.
+Raw pathname bytes are preserved, including non-UTF8 names. Classification is
+an observation about a displayed label, not a permission decision or proof of
+kernel provenance. No row is omitted merely because the existing evidence
+contract cannot represent it.
+
+The [file owner](../data-plane/decision-gate-rs/src/body_observer_mapping_files_v12.rs)
+acquires every executable row with a nonzero backing inode through the retained
+proc directory's `map_files` entry named by the actual address range. It never
+resolves the displayed pathname. Files must satisfy actual immutable root-owned
+regular-file custody; device/inode, range, offset and held/named identities stay
+bound to the same row. One retained file and full-file SHA-256 may serve multiple
+mapping ranges, but those bindings remain separate. Unique file bytes are capped
+at 512 MiB in aggregate and reads share the original absolute deadline. The file
+owner allows at most 4,094 unique backing descriptors, plus its retained directory
+and one transient named reopen, within its 4,096-descriptor bound. Verification
+rechecks metadata and actual immutability without repeating the full-file hash.
+
+This path choice follows Linux's documented ambiguity: a maps pathname can
+contain an ambiguous newline escape or deletion suffix. The corresponding
+`map_files` entry is the kernel reference to the mapped object, and access has
+host capability requirements; missing permission fails acquisition rather than
+falling back to a path lookup. See
+[maps format](https://man7.org/linux/man-pages/man5/proc_pid_maps.5.html) and
+[map_files references](https://man7.org/linux/man-pages/man5/proc_pid_map_files.5.html).
+
+Executable zero-inode mappings, including kernel-special or unsupported labels,
+remain explicit and unmeasured in this unsigned inventory. Non-executable rows
+are also retained but do not receive executable-file measurements. A full-file
+digest is not a digest of mapped process memory, and neither a mapping label nor
+a file digest establishes membership in an independently admitted runner or
+kernel closure. The snapshot covers this initial stopped task only, not later
+processes, address-space changes, transient code or complete execution history.
+
 ## Deferred verification scope
 
 The consolidated frozen verification must exercise this code only with owned,
@@ -167,6 +222,11 @@ review is not a substitute for those checks. Required cases include:
 - Parent or target death during setup and while held, abandoned custody and
   bounded exact-child cleanup. A helper exit or reap must never be counted as
   proof that the full generation is destroyed.
+- Complete bounded maps parsing, raw ambiguous/non-UTF8 display names, explicit
+  special/unknown mappings, exact maps readback and file range/device/inode
+  joins. File alias deduplication must not merge mapping ranges or enlarge the
+  aggregate byte allowance; permission, immutability, identity, truncation and
+  deadline failures must not yield a partial successful inventory.
 
 None of these runtime checks has been performed for this source checkpoint.
 
@@ -177,11 +237,9 @@ treatment, continuous event history, independent signing authority and an actual
 serving lifecycle remain missing. In particular, the current file-backed mapping
 contract must not invent a backing file for `[vdso]` or silently omit it.
 
-The next implementation slice is a bounded, unsigned initial mapping snapshot
-under the retained stopped-target custody and original deadline. It must retain
-actual mapping/backing identities, offsets and complete special-map
-classification. Unsupported mappings remain explicit; the snapshot cannot be
-converted into accepted observer evidence or authorize readiness or resume.
+The unsigned initial snapshot supplies source-level acquisition for the held
+initial task, not accepted observer evidence. Unsupported mappings remain
+explicit; acquisition does not authorize readiness or resume.
 
 This ordering is deliberate. The existing
 [runtime evidence contract](../data-plane/decision-gate-rs/src/runtime_evidence.rs)

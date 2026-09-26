@@ -19,6 +19,12 @@ mod body_observer_process_v12;
 mod body_observer_worker_v12;
 #[path = "body_observer_worker_contract_v12.rs"]
 mod body_observer_worker_contract_v12;
+#[path = "body_observer_maps_v12.rs"]
+mod body_observer_maps_v12;
+#[path = "body_observer_mapping_files_v12.rs"]
+mod body_observer_mapping_files_v12;
+#[path = "body_observer_snapshot_v12.rs"]
+mod body_observer_snapshot_v12;
 
 use crate::plan_protocol::{Digest, PlanProtocolError, PlanResult};
 use crate::plan_protocol::body_observer_contract_v12::BodyObserverLaunchV12;
@@ -27,6 +33,7 @@ use body_observer_receive_v12::{ObserverLaunchChannelV12, ReceivedObserverLaunch
 use body_observer_target_v12::ReceivedBodyTargetV12;
 use body_observer_process_v12::HeldNamespaceWorkerV12;
 use body_observer_worker_contract_v12::{receive_stop, NamespaceWorkerStopV12};
+pub(crate) use body_observer_snapshot_v12::StoppedBodyMappingSnapshotV12;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 /// Non-cloneable custody of a received, independently remeasured, still-gated
@@ -107,6 +114,13 @@ pub(crate) struct StoppedBodyObserverLaunchV12 {
 }
 
 impl StoppedBodyObserverLaunchV12 {
+    /// Consume the actual held stop into a complete initial maps snapshot with
+    /// retained executable-file backing custody. This remains unsigned internal
+    /// observation: it cannot authorize ready, resume or observer signing.
+    pub(crate) fn acquire_initial_mappings(self) -> PlanResult<StoppedBodyMappingSnapshotV12> {
+        StoppedBodyMappingSnapshotV12::acquire(self)
+    }
+
     pub(crate) fn verify_stopped(&self, deadline: u64) -> PlanResult<()> {
         let deadline = deadline.min(self.deadline);
         self.channel.verify_pending(deadline)?;

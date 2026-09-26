@@ -18,9 +18,10 @@ parent CID/source address into client identity.
 The [handler](../data-plane/decision-gate-rs/src/native_ingress_attestation.rs)
 rejects malformed challenge/target/body input with `400`; unavailable, busy or
 failed quote/owner checks use a generic `503`. Expired request/cohort checks
-withhold success. The response uses `application/json`, exact Content-Length,
-`Cache-Control: no-store` and connection close; it does not open a persistent
-management session or fall back to raw/development handling.
+withhold success. The ordinary one-shot response uses `application/json`, exact
+Content-Length, `Cache-Control: no-store` and connection close. The explicit
+single-CONNECT continuation below is separate; neither flow opens a persistent
+management session or falls back to raw/development handling.
 
 The [shared recipe](../data-plane/decision-gate-rs/src/native_ingress_challenge_v1.rs)
 exports `EXPORTER_LABEL`, `CHALLENGE_HEADER` and
@@ -39,6 +40,42 @@ Both all-zero inputs are rejected. Fixed lengths make the preimage unambiguous;
 the header's encoded text and its digest are not substituted for raw challenge
 bytes. Calling this pure helper with arrays does not prove that an exporter
 came from TLS, that a challenge is fresh, or that any caller is authorized.
+
+## One explicit CONNECT continuation
+
+An opt-in proof client can request `x-serverware-ingress-continuation: connect-v1`
+and `Connection: keep-alive` on this same challenge-bearing GET. The successful
+response has exactly four headers: `Content-Length`, `Connection: keep-alive`,
+`Content-Type: application/json`, and `Cache-Control: no-store`, with the unchanged
+evidence body. After emitting that bounded response, the native server permits
+exactly one next CONNECT, without a request body or prefetched bytes, on the same
+owned outer TLS connection. The quote/write phase keeps its existing two-second
+bound. Continuation has a fixed 120-second transport cap measured from handler
+entry, clipped to the original native runtime's remaining lifetime and retained
+through CONNECT and inner I/O. Neither deadline is renewed. It does not create a
+reusable attestation-management loop,
+accept another arbitrary request as a continuation, or renew the serving scope.
+Normal CONNECT parsing, mTLS-derived principal matching, route/policy checks and
+upstream authorization still run; a quote is not permission to proxy traffic.
+
+The [proof-client opt-in](native-proof-client.md#opt-in-ingress-attestation-before-connect)
+uses a separately pinned
+[serverware.nativeProxyIngress/v1 configuration](../schemas/native-proxy-ingress.v1.schema.json).
+It verifies still-fresh startup evidence before reading the outer client private
+key, joins the actual outer CA/name/peer, and generates one fresh challenge.
+The evidence response is framed by its exact bounded Content-Length rather
+than EOF. Genuine Nitro verification and actual same-connection exporter/peer
+joins must succeed **before** the client sends CONNECT through that retained
+socket. A reconnect is not equivalent to this exchange, and there is no fallback
+after a failed quote check.
+
+Without this explicit continuation request, the existing one-shot response and
+authenticated TLS EOF remain unchanged. Both clients still require startup
+evidence inside the configured 1–300-second age limit: this initial path does
+not refresh an old startup pin or implement long-running enrollment renewal.
+The public evidence wire shape, caller challenge recipe and local-only verdict
+below are unchanged. No durable replay reservation, full public-evidence flow,
+release/KMS/witness authority, or production/action admission is added.
 
 ## Same key, new original quote
 

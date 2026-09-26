@@ -113,6 +113,26 @@ impl NativeResponseVerifierV1 {
     }
 
     pub(super) fn control_plane_key_id(&self) -> &str { &self.control_plane_key_id }
+
+    // This only rejects mismatched independently pinned configurations. It
+    // does not treat a supplied scope as a quote or an admission capability.
+    pub(super) fn require_ingress_scope(&self, scope: &Value,
+        trust_roots_sha256: &str, expected_instance: &str) -> Result<(), String> {
+        self.check_live(self.deadline)?;
+        for field in ["releaseRecordSha256", "policyHash", "configurationSha256",
+            "expectedPcrs", "expectedEif", "expectedModuleId", "maxAgeSeconds", "futureSkewSeconds"]
+        {
+            if scope.get(field).is_none() || scope.get(field) != self.expected.get(field) {
+                return Err("native ingress and response expectation scopes differ".to_owned());
+            }
+        }
+        if scope.get("serverInstanceId").and_then(Value::as_str) != Some(expected_instance)
+            || self.inputs[2].pin != trust_roots_sha256
+        {
+            return Err("native ingress and response instance or trust roots differ".to_owned());
+        }
+        self.check_live(self.deadline)
+    }
     pub(super) fn ca_certificate_sha256(&self) -> &str { &self.ca_certificate_sha256 }
     pub(super) fn ca_public_key_spki_sha256(&self) -> &str { &self.ca_public_key_spki_sha256 }
 

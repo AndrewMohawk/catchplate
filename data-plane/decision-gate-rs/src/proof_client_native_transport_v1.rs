@@ -78,9 +78,26 @@ pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
 }
 
 impl NativeProxyTransportV1 {
-    fn check(&self) -> io::Result<()> {
+    pub(super) fn client(&self) -> &ClientConnection { &self.tls.conn }
+
+    pub(super) fn check(&self) -> io::Result<()> {
         check_lifetime(self.owner_pid, self.deadline)?;
         self.tls.sock.check()
+    }
+
+    /// Inspect only rustls's already decrypted plaintext, never the socket.
+    /// WouldBlock means no buffered payload or observed EOF; it cannot prove
+    /// that unread network bytes or a later unsolicited response do not exist.
+    pub(super) fn require_no_buffered_plaintext(&mut self) -> io::Result<()> {
+        self.check()?;
+        let mut byte = [0u8; 1];
+        let result = self.tls.conn.reader().read(&mut byte);
+        self.check()?;
+        match result {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData,
+                "native ingress continuation has buffered plaintext or observed TLS EOF")),
+        }
     }
 }
 

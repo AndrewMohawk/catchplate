@@ -23,9 +23,11 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-**Latest implementation milestone:** [portal workload identity authoring](docs/portal-oauth-agent-guide.md#choose-or-author-the-workload-identity)
-and the [signed-handoff Python client](docs/workload-mtls.md) are implemented in
-source. They still need verification against the frozen release.
+**Latest implementation milestone:** the native proof client can optionally
+[attest and then CONNECT on the same TLS session](docs/native-proof-client.md#opt-in-ingress-attestation-before-connect).
+[Portal workload identities](docs/portal-oauth-agent-guide.md#choose-or-author-the-workload-identity)
+and the [signed-handoff Python client](docs/workload-mtls.md) are also in source.
+These paths still need verification against the frozen release.
 
 | Acceptance gate | State | What remains to close it |
 | --- | --- | --- |

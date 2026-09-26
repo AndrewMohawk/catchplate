@@ -15,6 +15,13 @@ use serverware_decision_gate::native_ingress_challenge_v1::{
 
 const MAX_PUBLIC_IDENTITY_BYTES: usize = 64 * 1024;
 const MAX_SESSION_EVIDENCE_BYTES: usize = 96 * 1024;
+const MAX_CONTINUATION_LIFETIME: Duration = Duration::from_secs(120);
+pub(super) const CONTINUATION_HEADER: &str = "x-serverware-ingress-continuation";
+
+pub(super) enum Outcome {
+    Closed,
+    Connect { deadline: Instant },
+}
 
 enum Failure {
     BadRequest,
@@ -25,31 +32,72 @@ enum Failure {
 /// existing HTTP/rustls owners. No arbitrary request or credential is relayed.
 pub(super) fn handle(state: &GateState, head: &RequestHead,
     stream: &mut DirectProxyStream, trusted_mtls: Option<&TrustedMtlsEvidence>,
-    management_listener: bool, proxy_ingress: &ProxyIngressConfig) {
-    let Ok(operation_deadline) = custody_deadline_after(CUSTODY_IO_DEADLINE) else {
-        return;
+    management_listener: bool, proxy_ingress: &ProxyIngressConfig) -> Outcome {
+    let opening = Instant::now();
+    let Some(mut operation_deadline) = opening.checked_add(CUSTODY_IO_DEADLINE) else {
+        return Outcome::Closed;
     };
+    let prepared = continuation_requested(head).and_then(|continued| {
+        let continuation_deadline = if continued {
+            let lifetime = state.native_runtime_lifetime.as_ref().ok_or(Failure::Unavailable)?;
+            // Both bounds start at this original Instant. The later BOOTTIME
+            // remaining sample can only shorten the actual runtime lifetime.
+            let remaining = lifetime.remaining().map_err(|_| Failure::Unavailable)?;
+            let deadline = opening.checked_add(remaining.min(MAX_CONTINUATION_LIFETIME))
+                .ok_or(Failure::Unavailable)?;
+            operation_deadline = operation_deadline.min(deadline);
+            stream.restrict_operation_deadline(deadline);
+            reject_buffered_plaintext(stream)?;
+            Some(deadline)
+        } else {
+            None
+        };
+        stream.set_terminal_write_deadline(Some(operation_deadline));
+        let bytes = original(state, head, stream, trusted_mtls,
+            management_listener, proxy_ingress, operation_deadline)?;
+        if continued { reject_buffered_plaintext(stream)?; }
+        Ok((bytes, continuation_deadline))
+    });
+    // Invalid opt-in requests still receive only the existing bounded close
+    // response. No error or partial success can produce a continuation token.
     stream.set_terminal_write_deadline(Some(operation_deadline));
-    let (status, body) = match original(state, head, stream, trusted_mtls,
-        management_listener, proxy_ingress, operation_deadline)
-    {
-        Ok(original) => (StatusCode::OK, original),
+    let (status, body, continuation_deadline) = match prepared {
+        Ok((original, deadline)) => (StatusCode::OK, original, deadline),
         Err(Failure::BadRequest) => (StatusCode::BAD_REQUEST,
-            br#"{"error":"invalid_native_ingress_attestation_request"}"#.to_vec()),
+            br#"{"error":"invalid_native_ingress_attestation_request"}"#.to_vec(), None),
         Err(Failure::Unavailable) => (StatusCode::SERVICE_UNAVAILABLE,
-            br#"{"error":"native_ingress_attestation_unavailable"}"#.to_vec()),
+            br#"{"error":"native_ingress_attestation_unavailable"}"#.to_vec(), None),
     };
-    let response = http_binary_response_with_headers(status, Some("application/json"), body,
-        &[("Cache-Control".to_owned(), "no-store".to_owned())]);
+    let response = if continuation_deadline.is_some() {
+        let mut response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: keep-alive\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n",
+            body.len()).into_bytes();
+        response.extend_from_slice(&body);
+        response
+    } else {
+        http_binary_response_with_headers(status, Some("application/json"), body,
+            &[("Cache-Control".to_owned(), "no-store".to_owned())])
+    };
     if custody_deadline_remaining(operation_deadline, "native ingress response").is_err()
         || state.native_runtime_lifetime.as_ref().is_some_and(|owner| owner.check().is_err())
+        || trusted_mtls.is_some_and(|evidence| !evidence.is_live_at(now_epoch_ms()))
     {
-        return;
+        return Outcome::Closed;
     }
     // The helper adds no body LF. The successful original already carries its
-    // sole LF, counted in Content-Length. This connection is always closed.
+    // sole LF, counted in Content-Length.
     if stream.write_all(&response).is_err() || stream.flush().is_err() {
-        return;
+        return Outcome::Closed;
+    }
+    if let Some(deadline) = continuation_deadline {
+        if custody_deadline_remaining(operation_deadline, "native ingress continuation").is_err()
+            || !state.native_runtime_lifetime.as_ref().is_some_and(|owner| owner.check().is_ok())
+            || !trusted_mtls.is_some_and(|evidence| evidence.is_live_at(now_epoch_ms()))
+        {
+            return Outcome::Closed;
+        }
+        // No close_notify and no second quotation. The caller clears only the
+        // short quote-write cap; the fixed transport cap cannot be removed.
+        return Outcome::Connect { deadline };
     }
     // The client requires authenticated TLS EOF after the exact body. Queue
     // close_notify only after the original response completed; never attempt
@@ -58,6 +106,38 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
         tls.conn.send_close_notify();
     }
     let _ = stream.flush();
+    Outcome::Closed
+}
+
+fn continuation_requested(head: &RequestHead) -> Result<bool, Failure> {
+    match head.headers.get(CONTINUATION_HEADER).map(String::as_str) {
+        None => Ok(false),
+        Some("connect-v1") if head.http_version == "HTTP/1.1"
+            && head.headers.get("connection").map(String::as_str) == Some("keep-alive") => Ok(true),
+        Some(_) => Err(Failure::BadRequest),
+    }
+}
+
+pub(super) fn continuation_head_valid(head: &RequestHead,
+    stream: &mut DirectProxyStream) -> bool {
+    head.method == "CONNECT" && head.http_version == "HTTP/1.1"
+        && head.content_length == 0 && head.prefetched_body.is_empty()
+        && !head.headers.contains_key(CONTINUATION_HEADER)
+        && !head.headers.contains_key(CHALLENGE_HEADER)
+        && reject_buffered_plaintext(stream).is_ok()
+}
+
+fn reject_buffered_plaintext(stream: &mut DirectProxyStream) -> Result<(), Failure> {
+    let DirectProxyStream::MutualTls(tls) = stream else {
+        return Err(Failure::Unavailable);
+    };
+    // Inspect only already decrypted bytes: this never waits for the next
+    // request. Unread network bytes do not prove when a peer sent them or that
+    // the peer verified the evidence. Any observed prefetch denies the path.
+    match tls.conn.reader().read(&mut [0u8; 1]) {
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
+        _ => Err(Failure::BadRequest),
+    }
 }
 
 fn challenge(head: &RequestHead) -> Result<[u8; 32], Failure> {
@@ -86,7 +166,8 @@ fn original(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
     -> Result<Vec<u8>, Failure>
 {
     if management_listener || !state.is_production
-        || !trusted_mtls.is_some_and(|evidence| evidence.verified_by_trusted_ingress)
+        || !trusted_mtls.is_some_and(|evidence| evidence.verified_by_trusted_ingress
+            && evidence.is_live_at(now_epoch_ms()))
     {
         return Err(Failure::Unavailable);
     }

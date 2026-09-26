@@ -33,6 +33,8 @@ mod proof_client_native_verifier_v1;
 mod proof_client_native_session_v1;
 #[path = "../proof_client_native_transport_v1.rs"]
 mod proof_client_native_transport_v1;
+#[path = "../proof_client_native_ingress_v1.rs"]
+mod proof_client_native_ingress_v1;
 #[path = "../proof_client_native_io_v1.rs"]
 mod proof_client_native_io_v1;
 use proof_client_native_io_v1::CaptureIo;
@@ -94,6 +96,7 @@ struct Args {
     collector_key: PathBuf,
     verifier_key: Option<PathBuf>,
     native_verifier: Option<NativeVerifierConfigV1>,
+    native_ingress_configuration: Option<(PathBuf, String)>,
     control_plane_response_key: PathBuf,
     expected_server_instance_id: Option<String>,
     client_nonce: Option<[u8; 32]>,
@@ -360,6 +363,7 @@ where
     let mut collector_key = None;
     let mut verifier_key = None;
     let mut native_options = BTreeMap::new();
+    let mut native_ingress_options = BTreeMap::new();
     let mut control_plane_response_key = None;
     let mut expected_server_instance_id = None;
     let mut expected_principal_id = None;
@@ -416,6 +420,11 @@ where
             | "--native-expectations" | "--native-expectations-sha256"
             | "--native-trust-roots" | "--native-trust-roots-sha256" => {
                 if value.is_empty() || native_options.insert(flag.clone(), value).is_some() {
+                    return Err(format!("{flag} requires one nonempty value and cannot repeat"));
+                }
+            }
+            "--native-ingress-configuration" | "--native-ingress-configuration-sha256" => {
+                if value.is_empty() || native_ingress_options.insert(flag.clone(), value).is_some() {
                     return Err(format!("{flag} requires one nonempty value and cannot repeat"));
                 }
             }
@@ -635,6 +644,23 @@ where
             trust_roots_sha256: native_options.remove("--native-trust-roots-sha256").expect("six native options"),
         })
     };
+    let native_ingress_configuration = if native_ingress_options.is_empty() {
+        None
+    } else {
+        if native_ingress_options.len() != 2 || native_verifier.is_none() {
+            return Err("native ingress requires both configuration options and the native response verifier".to_string());
+        }
+        let path = PathBuf::from(native_ingress_options.remove("--native-ingress-configuration")
+            .ok_or("native ingress configuration path is missing")?);
+        let pin = native_ingress_options.remove("--native-ingress-configuration-sha256")
+            .ok_or("native ingress configuration pin is missing")?;
+        if !path.is_absolute() || path.as_os_str().as_bytes().len() > 4096
+            || !is_sha256_digest(&pin) || pin.as_bytes()[7..].iter().all(|byte| *byte == b'0')
+        {
+            return Err("native ingress configuration requires an absolute bounded path and nonzero SHA256 pin".to_string());
+        }
+        Some((path, pin))
+    };
     Ok(Args {
         stream,
         observation,
@@ -653,6 +679,7 @@ where
         collector_key: collector_key.ok_or("--collector-key is required")?,
         verifier_key,
         native_verifier,
+        native_ingress_configuration,
         control_plane_response_key: control_plane_response_key
             .ok_or("--control-plane-response-key is required")?,
         expected_server_instance_id,

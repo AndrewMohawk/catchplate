@@ -80,8 +80,9 @@ admitted, retained CA/client-certificate/private-key bytes, rather than reopenin
 those paths later to create a different configuration. It retains ordinary
 WebPKI name and handshake-signature verification, mandatory client identity,
 TLS 1.3, disabled resumption/early data and the original input rechecks. This
-does not by itself attest the outer proxy CA or add the separate fresh-ingress
-bootstrap protocol to response capture.
+does not by itself attest the outer proxy CA. The explicit ingress option below
+adds a separate genuine startup and same-connection quote check before CONNECT;
+it is not enabled implicitly by native response verification.
 
 The [native proxy transport](../data-plane/decision-gate-rs/src/proof_client_native_transport_v1.rs)
 uses one fixed-address connect, capped at the lesser of three seconds and the
@@ -99,6 +100,67 @@ buffered, streaming and observation capture. Thus already-buffered inner TLS
 data does not bypass the original acceptance deadline. These checks do not
 re-read input files per byte. No raw socket/descriptor accessor, resolver,
 alternate-address retry or new forwarding capability is exported.
+
+## Opt-in ingress attestation before CONNECT
+
+Only the native verifier mode accepts this additional pair, and both options
+are required together:
+
+```text
+--native-ingress-configuration /approved/native-proxy-ingress.json
+--native-ingress-configuration-sha256 sha256:<exact-configuration-original-digest>
+```
+
+The [closed configuration schema](../schemas/native-proxy-ingress.v1.schema.json)
+has exactly five fields: `apiVersion=serverware.nativeProxyIngress/v1`,
+`startupEvidence`, `startupExpectations`, `sessionScope`, and `trustRoots`.
+Each artifact is exactly `{path, sha256}`: an independently supplied canonical
+absolute path and nonzero lowercase SHA-256 pin, not a value learned from the
+server. The configuration is at most 16 KiB; startup evidence is at most 64 KiB,
+each expectation/scope original at most 16 KiB, and trust roots at most 1 MiB.
+The existing proxy endpoint, TLS client files and original capture deadline
+remain authoritative; this configuration adds no endpoint, private key or
+timeout override.
+
+Before reading the outer client private key or opening a connection, the client
+verifies the original startup Nitro evidence against the pinned expectations and
+roots. Every static field in the nonce-free session scope must match startup.
+The retained ingress and response-verifier expectations must also agree on
+release, policy, configuration, complete PCR inventory, EIF, module, maximum age
+and future skew; the independently expected server instance and exact trust-root
+original digest must match. Equivalent-looking files cannot substitute for
+those original-byte joins.
+The actual outer CA and expected server name are joined to that startup, and the
+completed full TLS 1.3 handshake must present the exact expected leaf/CA chain.
+Ordinary WebPKI/name verification and mandatory client authentication remain.
+
+The client draws one fresh nonzero 32-byte CSPRNG challenge, distinct from the
+startup nonce, and retains it without regeneration. It sends `GET /attestation`
+with `x-serverware-ingress-challenge`, the explicit
+`x-serverware-ingress-continuation: connect-v1` header and
+`Connection: keep-alive`. The
+[retained ingress owner](../data-plane/decision-gate-rs/src/proof_client_native_ingress_v1.rs)
+consumes the exact evidence response, bounded to 96 KiB,
+verifies the genuine Nitro quote and challenge/exporter/peer joins using that
+actual connection, and only then sends CONNECT through the **same owned TLS
+socket**. It does not treat an echoed exporter or copied successful verdict as
+its observation. Any failure ends this path without reconnecting or falling
+back to an unattested CONNECT. Normal CONNECT, policy, principal, response-proof
+and publication checks are unchanged.
+The server keeps its two-second quote/write bound and caps the opted-in
+connection at 120 seconds from handler entry, additionally clipped to native
+runtime lifetime; the client's original capture deadline can be shorter.
+
+This is an **initial freshness** path: the pinned startup quote must still be
+within its configured 1–300-second maximum age. A fresh session quote neither
+renews stale startup inputs nor supplies long-running enrollment renewal. Held
+originals and startup freshness are rechecked through final publication. The
+standalone one-shot ingress GET/EOF flow remains unchanged; see the
+[session protocol and continuation boundary](native-ingress-session.md#one-explicit-connect-continuation).
+The option does not supply the goal's full public-evidence protocol, durable
+replay consumption, current release/KMS/witness authority, or production/action
+admission. Native capture retains `environment=native-unadmitted` and
+`okForAction=false`.
 
 ## Actual capture before signed publication
 

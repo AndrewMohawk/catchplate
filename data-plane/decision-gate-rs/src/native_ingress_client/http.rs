@@ -4,7 +4,6 @@
 //! consumption or permission to dispatch a proxy request. The returned bytes
 //! remain the exact response original, including its evidence framing LF.
 
-use super::transport::Connection;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serverware_decision_gate::native_ingress_challenge_v1::CHALLENGE_HEADER;
 use std::collections::BTreeMap;
@@ -14,25 +13,44 @@ const MAX_HEAD_BYTES: usize = 8192;
 const MAX_BODY_BYTES: usize = 98_304;
 const MAX_AUTHORITY_BYTES: usize = 259;
 
-pub(super) fn exchange(connection: &mut Connection, authority: &str,
+#[derive(Clone, Copy)]
+enum Completion { AuthenticatedClose, ConnectContinuation }
+
+pub(super) fn exchange<T: Read + Write>(connection: &mut T, authority: &str,
     challenge: [u8; 32]) -> Result<Vec<u8>, String> {
-    connection.check()?;
+    exchange_fixed(connection, authority, challenge, Completion::AuthenticatedClose)
+}
+
+/// The caller must supply an actual original-deadline TLS owner and verify the
+/// returned originals against that same connection before sending CONNECT.
+/// This fixed opt-in never accepts an arbitrary HTTP method, path or header.
+pub(super) fn exchange_for_connect<T: Read + Write>(connection: &mut T, authority: &str,
+    challenge: [u8; 32]) -> Result<Vec<u8>, String> {
+    exchange_fixed(connection, authority, challenge, Completion::ConnectContinuation)
+}
+
+fn exchange_fixed<T: Read + Write>(connection: &mut T, authority: &str,
+    challenge: [u8; 32], completion: Completion) -> Result<Vec<u8>, String> {
     validate_authority(authority)?;
     if challenge == [0; 32] {
         return Err("native ingress HTTP challenge must be nonzero".to_owned());
     }
     // Authority is a separately chosen endpoint spelling, not a destination
     // received from a server. No method/path/header/credential extension exists.
+    let ending = match completion {
+        Completion::AuthenticatedClose => "Connection: close\r\n\r\n",
+        Completion::ConnectContinuation =>
+            "x-serverware-ingress-continuation: connect-v1\r\nConnection: keep-alive\r\n\r\n",
+    };
     let request = format!(
-        "GET /attestation HTTP/1.1\r\nHost: {authority}\r\n{CHALLENGE_HEADER}: {}\r\nConnection: close\r\n\r\n",
-        URL_SAFE_NO_PAD.encode(challenge),
-    );
-    connection.check()?;
+        "GET /attestation HTTP/1.1\r\nHost: {authority}\r\n{CHALLENGE_HEADER}: {}\r\n{ending}",
+        URL_SAFE_NO_PAD.encode(challenge));
+    // Both actual TLS callers check their original lifetime before and after
+    // every read/write/flush, including accesses to buffered plaintext. No
+    // generic stream, parser result or HTTP status supplies that ownership.
     connection.write_all(request.as_bytes())
         .map_err(|_| "write fixed native ingress attestation request".to_owned())?;
-    connection.check()?;
     connection.flush().map_err(|_| "flush native ingress attestation request".to_owned())?;
-    connection.check()?;
 
     // Byte reads prevent the header reader from discarding any original body
     // or surplus plaintext. The source bound includes the terminating CRLFCRLF.
@@ -48,8 +66,7 @@ pub(super) fn exchange(connection: &mut Connection, authority: &str,
         head.push(one[0]);
         if head.ends_with(b"\r\n\r\n") { break; }
     }
-    let length = response_length(&head)?;
-    connection.check()?;
+    let length = response_length(&head, completion)?;
     let mut body = vec![0u8; length];
     let mut offset = 0usize;
     while offset < body.len() {
@@ -62,10 +79,13 @@ pub(super) fn exchange(connection: &mut Connection, authority: &str,
     // Nonempty rustls reads return zero only after peer close_notify with all
     // plaintext drained. A bare TCP close propagates UnexpectedEof; it is not
     // completion. Any extra plaintext, including trailers, is rejected.
-    if read_checked(connection, &mut one)? != 0 {
-        return Err("native ingress response contains surplus plaintext".to_owned());
+    if matches!(completion, Completion::AuthenticatedClose) {
+        if read_checked(connection, &mut one)? != 0 {
+            return Err("native ingress response contains surplus plaintext".to_owned());
+        }
     }
-    connection.check()?;
+    // Continuation deliberately stops at exact Content-Length. Do not probe
+    // EOF or consume subsequent bytes on the persistent TLS connection.
     Ok(body)
 }
 
@@ -85,11 +105,9 @@ fn validate_authority(authority: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn read_checked(connection: &mut Connection, buffer: &mut [u8]) -> Result<usize, String> {
+fn read_checked<T: Read>(connection: &mut T, buffer: &mut [u8]) -> Result<usize, String> {
     loop {
-        connection.check()?;
         let result = connection.read(buffer);
-        connection.check()?;
         match result {
             Ok(read) => return Ok(read),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -98,7 +116,7 @@ fn read_checked(connection: &mut Connection, buffer: &mut [u8]) -> Result<usize,
     }
 }
 
-fn response_length(head: &[u8]) -> Result<usize, String> {
+fn response_length(head: &[u8], completion: Completion) -> Result<usize, String> {
     let bodyless = head.strip_suffix(b"\r\n\r\n")
         .ok_or("native ingress HTTP head is incomplete")?;
     if !bodyless.is_ascii() {
@@ -127,8 +145,12 @@ fn response_length(head: &[u8]) -> Result<usize, String> {
             return Err("native ingress HTTP has an invalid or repeated physical header".to_owned());
         }
     }
+    let expected_connection = match completion {
+        Completion::AuthenticatedClose => "close",
+        Completion::ConnectContinuation => "keep-alive",
+    };
     if headers.len() != 4 || headers.get("content-type") != Some(&"application/json")
-        || headers.get("connection") != Some(&"close")
+        || headers.get("connection") != Some(&expected_connection)
         || headers.get("cache-control") != Some(&"no-store")
     {
         return Err("native ingress HTTP response headers differ from the fixed contract".to_owned());

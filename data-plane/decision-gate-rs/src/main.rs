@@ -3978,6 +3978,7 @@ struct DeadlineIo<T> {
     write_budget: Duration,
     write_started: Option<Instant>,
     terminal_write_deadline: Option<Instant>,
+    operation_deadline: Option<Instant>,
 }
 
 trait TerminalDeadlineWrite: Write {
@@ -4073,6 +4074,7 @@ impl<T> DeadlineIo<T> {
             write_budget,
             write_started: None,
             terminal_write_deadline: None,
+            operation_deadline: None,
         }
     }
 
@@ -4091,8 +4093,32 @@ impl<T> DeadlineIo<T> {
         budget.checked_sub(started.elapsed())
     }
 
+    fn restrict_operation_deadline(&mut self, deadline: Instant) {
+        self.operation_deadline = Some(self.operation_deadline.map_or(deadline,
+            |original| original.min(deadline)));
+    }
+
+    fn check_operation_deadline(&self) -> io::Result<()> {
+        if self.operation_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(io::Error::new(io::ErrorKind::TimedOut,
+                "absolute connection operation deadline exceeded"));
+        }
+        Ok(())
+    }
+
+    fn read_remaining(&mut self) -> Option<Duration> {
+        let remaining = Self::phase_remaining(&mut self.read_started, self.read_budget)?;
+        match self.operation_deadline {
+            Some(deadline) => Some(remaining.min(deadline.checked_duration_since(Instant::now())?)),
+            None => Some(remaining),
+        }
+    }
+
     fn write_remaining(&mut self) -> Option<Duration> {
-        let phase_remaining = Self::phase_remaining(&mut self.write_started, self.write_budget)?;
+        let mut phase_remaining = Self::phase_remaining(&mut self.write_started, self.write_budget)?;
+        if let Some(deadline) = self.operation_deadline {
+            phase_remaining = phase_remaining.min(deadline.checked_duration_since(Instant::now())?);
+        }
         match self.terminal_write_deadline {
             Some(deadline) => {
                 Some(phase_remaining.min(deadline.checked_duration_since(Instant::now())?))
@@ -4123,7 +4149,7 @@ impl TerminalDeadlineWrite for Vec<u8> {
 impl<T: ConfigureIoTimeout + Read> Read for DeadlineIo<T> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
-            let Some(remaining) = Self::phase_remaining(&mut self.read_started, self.read_budget)
+            let Some(remaining) = self.read_remaining()
             else {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -4142,7 +4168,7 @@ impl<T: ConfigureIoTimeout + Read> Read for DeadlineIo<T> {
                     continue;
                 }
                 Ok(read) => {
-                    if Self::phase_remaining(&mut self.read_started, self.read_budget).is_none() {
+                    if self.read_remaining().is_none() {
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,
                             "absolute request read deadline exceeded",
@@ -4244,6 +4270,22 @@ enum DirectProxyStream {
 }
 
 impl DirectProxyStream {
+    // Only the explicit attestation-to-CONNECT path installs this cap. Phase
+    // resets and terminal-write changes cannot widen or remove it afterward.
+    fn restrict_operation_deadline(&mut self, deadline: Instant) {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.restrict_operation_deadline(deadline),
+            Self::MutualTls(stream) => stream.sock.restrict_operation_deadline(deadline),
+        }
+    }
+
+    fn check_operation_deadline(&self) -> io::Result<()> {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.check_operation_deadline(),
+            Self::MutualTls(stream) => stream.sock.check_operation_deadline(),
+        }
+    }
+
     fn reset_read_deadline(&mut self, budget: Duration) {
         match self {
             Self::DevelopmentRaw(stream) => stream.reset_read_deadline(budget),
@@ -4275,26 +4317,37 @@ impl DirectProxyStream {
 
 impl Read for DirectProxyStream {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        match self {
+        self.check_operation_deadline()?;
+        let result = match self {
             Self::DevelopmentRaw(stream) => stream.read(buffer),
             Self::MutualTls(stream) => stream.read(buffer),
-        }
+        };
+        // rustls may satisfy this read from decrypted buffered plaintext
+        // without reaching DeadlineIo, so the outer owner also checks it.
+        self.check_operation_deadline()?;
+        result
     }
 }
 
 impl Write for DirectProxyStream {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        match self {
+        self.check_operation_deadline()?;
+        let result = match self {
             Self::DevelopmentRaw(stream) => stream.write(buffer),
             Self::MutualTls(stream) => stream.write(buffer),
-        }
+        };
+        self.check_operation_deadline()?;
+        result
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        match self {
+        self.check_operation_deadline()?;
+        let result = match self {
             Self::DevelopmentRaw(stream) => stream.flush(),
             Self::MutualTls(stream) => stream.flush(),
-        }
+        };
+        self.check_operation_deadline()?;
+        result
     }
 }
 
@@ -4310,6 +4363,42 @@ impl TerminalDeadlineWrite for DirectProxyStream {
 impl TerminalDeadlineWrite for StreamOwned<ServerConnection, DirectProxyStream> {
     fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
         self.sock.set_terminal_write_deadline(deadline);
+    }
+}
+
+// The inner rustls connection can retain plaintext after the outer transport
+// was read. Preserve an opted-in continuation's cap at that second buffering
+// layer too. With no installed cap these are the existing IO operations.
+struct ConnectOperationIo<'a>(&'a mut StreamOwned<ServerConnection, DirectProxyStream>);
+
+impl Read for ConnectOperationIo<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.0.sock.check_operation_deadline()?;
+        let result = self.0.read(buffer);
+        self.0.sock.check_operation_deadline()?;
+        result
+    }
+}
+
+impl Write for ConnectOperationIo<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0.sock.check_operation_deadline()?;
+        let result = self.0.write(buffer);
+        self.0.sock.check_operation_deadline()?;
+        result
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.sock.check_operation_deadline()?;
+        let result = self.0.flush();
+        self.0.sock.check_operation_deadline()?;
+        result
+    }
+}
+
+impl TerminalDeadlineWrite for ConnectOperationIo<'_> {
+    fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
+        self.0.set_terminal_write_deadline(deadline);
     }
 }
 
@@ -47582,6 +47671,7 @@ fn handle_connect_request(
     request: IncomingRequest,
     trusted_mtls_evidence: Option<TrustedMtlsEvidence>,
 ) {
+    if stream.check_operation_deadline().is_err() { return; }
     if !state.policy_shadow.account_unsupported(
         &snapshot,
         ShadowIngressKind::OuterConnect,
@@ -47766,7 +47856,7 @@ fn handle_connect_request(
     loop {
         tls.sock.reset_read_deadline(state.request_head_deadline);
         tls.sock.reset_write_deadline(state.response_write_deadline);
-        let head = match read_request_head_from(&mut tls, client_ip.clone()) {
+        let head = match read_request_head_from(&mut ConnectOperationIo(&mut tls), client_ip.clone()) {
             Ok(head) => head,
             Err(err) if err == "connection closed before headers" => break,
             Err(err) => {
@@ -47933,6 +48023,7 @@ fn handle_connect_request(
             let _ = tls.flush();
             break;
         }
+        if tls.sock.check_operation_deadline().is_err() { break; }
         tls.sock.reset_read_deadline(state.request_body_deadline);
         let forwarded = match connect_inner_absolute_target(&authority, &head.target, &host, port) {
             Ok(target) => {
@@ -47962,7 +48053,7 @@ fn handle_connect_request(
                             &state,
                             &request_snapshot,
                             head,
-                            &mut tls,
+                            &mut ConnectOperationIo(&mut tls),
                             policy,
                             Some(connect_authentication.principal_id.as_str()),
                             !close_after,
@@ -47986,7 +48077,8 @@ fn handle_connect_request(
                             &head,
                             Some(connect_authentication.principal_id.as_str()),
                         );
-                        let inner = match read_request_body_from_head(&mut tls, head, body_limit) {
+                        let inner = match read_request_body_from_head(
+                            &mut ConnectOperationIo(&mut tls), head, body_limit) {
                             Ok(inner) => inner,
                             Err(err) => {
                                 let response = override_response_connection(
@@ -48004,6 +48096,7 @@ fn handle_connect_request(
                                 break;
                             }
                         };
+                        if tls.sock.check_operation_deadline().is_err() { break; }
                         let response_proof = buffered_response_proof
                             .as_ref()
                             .map(ResponseProofRequestContext::Buffered)
@@ -48023,7 +48116,7 @@ fn handle_connect_request(
                             inner,
                             Some(connect_authentication.principal_id.as_str()),
                             !close_after,
-                            &mut tls,
+                            &mut ConnectOperationIo(&mut tls),
                             response_proof,
                             connection_identity_sha256.as_deref(),
                         )
@@ -48250,7 +48343,7 @@ fn handle_gate_connection(
             return;
         }
     };
-    let head = match read_request_head_from(&mut stream, client_ip) {
+    let mut head = match read_request_head_from(&mut stream, client_ip.clone()) {
         Ok(head) => head,
         Err(err) => {
             let response = request_head_error_response(&err);
@@ -48272,21 +48365,49 @@ fn handle_gate_connection(
         let _ = stream.flush();
         return;
     }
-    stream.reset_read_deadline(state.request_body_deadline);
-    let (origin_path, _) = request_target_parts(&head.target);
-    let public_read =
-        head.method == "GET" && matches!(origin_path.as_str(), "/healthz" | "/attestation");
     // Native requests cannot fall through to the legacy none-dev document,
     // including when a required native owner/configuration has been lost.
     let native_ingress = state.native_runtime_lifetime.is_some()
         || state.proxy_ingress_attestation.mode == "native-mtls-v1"
         || matches!(&proxy_ingress, ProxyIngressConfig::MutualTls(config)
             if config.native_owner.is_some());
-    if native_ingress && head.method == "GET" && origin_path == "/attestation" {
-        native_ingress_attestation::handle(&state, &head, &mut stream,
-            trusted_mtls_evidence.as_ref(), management_listener, &proxy_ingress);
-        return;
+    if native_ingress && head.method == "GET"
+        && request_target_parts(&head.target).0 == "/attestation" {
+        let deadline = match native_ingress_attestation::handle(&state, &head, &mut stream,
+            trusted_mtls_evidence.as_ref(), management_listener, &proxy_ingress) {
+            native_ingress_attestation::Outcome::Closed => return,
+            native_ingress_attestation::Outcome::Connect { deadline } => deadline,
+        };
+        // Only the short completed quote-write phase ends here. The earlier
+        // nonrenewing transport cap survives every later phase reset, including
+        // normal CONNECT/inner TLS. This is not generic HTTP keep-alive.
+        stream.set_terminal_write_deadline(None);
+        stream.reset_read_deadline(state.request_head_deadline);
+        let continuation_live = || {
+            custody_deadline_remaining(deadline, "native attestation CONNECT").is_ok()
+                && trusted_mtls_evidence.as_ref()
+                    .is_some_and(|evidence| evidence.is_live_at(now_epoch_ms()))
+                && state.native_runtime_lifetime.as_ref()
+                    .is_some_and(|owner| owner.check().is_ok())
+        };
+        if !continuation_live() { return; }
+        let next = match read_request_head_from(&mut stream, client_ip) {
+            Ok(next) => next,
+            Err(_) => return,
+        };
+        if !continuation_live()
+            || !native_ingress_attestation::continuation_head_valid(&next, &mut stream)
+        {
+            return;
+        }
+        head = next;
     }
+    stream.reset_read_deadline(state.request_body_deadline);
+    // Recompute route classification from the one admitted continued head;
+    // the attestation request never supplies CONNECT authorization or identity.
+    let (origin_path, _) = request_target_parts(&head.target);
+    let public_read =
+        head.method == "GET" && matches!(origin_path.as_str(), "/healthz" | "/attestation");
     let policy_shadow_install_post =
         head.method == "POST"
             && head.target == POLICY_SHADOW_INSTALL_PATH;

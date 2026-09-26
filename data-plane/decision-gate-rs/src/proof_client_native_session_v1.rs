@@ -64,6 +64,7 @@ impl InputSnapshot {
 
 pub(super) struct NativeCaptureSessionV1 {
     verifier: NativeResponseVerifierV1,
+    ingress: Option<super::proof_client_native_ingress_v1::NativeIngressAdmission>,
     pub(super) control_plane_key: VerifyingKey,
     collector_key: SigningKey,
     roots: RootCertStore,
@@ -86,7 +87,7 @@ impl NativeCaptureSessionV1 {
         }
         let endpoint = parse_proxy_endpoint(&args.proxy, false, args.proxy_server_name.as_deref())?;
         let outer_endpoint = native_outer_endpoint(&endpoint.address)?;
-        let outer_name = ServerName::try_from(endpoint.server_name)
+        let outer_name = ServerName::try_from(endpoint.server_name.clone())
             .map_err(|_| "native outer TLS server name is invalid")?;
         // Require all three even if an in-process caller bypasses Args parsing.
         let proxy_ca_path = args.proxy_ca.as_deref().ok_or("native capture requires --proxy-ca")?;
@@ -95,6 +96,19 @@ impl NativeCaptureSessionV1 {
         let proxy_key_path = args.proxy_client_key.as_deref()
             .ok_or("native capture requires --proxy-client-key")?;
         let verifier = NativeResponseVerifierV1::open(config, deadline)?;
+        // A failed opt-in ingress admission cannot fall back to the historical
+        // CA-only transport. All public startup checks precede private keys.
+        let ingress = args.native_ingress_configuration.as_ref()
+            .map(|(path, pin)| super::proof_client_native_ingress_v1::NativeIngressAdmission::open(
+                path, pin, deadline)).transpose()?;
+        if let Some(admission) = ingress.as_ref() {
+            let instance = args.expected_server_instance_id.as_deref()
+                .ok_or("native ingress requires expected server instance")?;
+            verifier.require_ingress_scope(admission.scope(), admission.trust_roots_sha256(), instance)?;
+            if endpoint.server_name != admission.host() {
+                return Err("native proxy TLS name differs from verified ingress scope".to_owned());
+            }
+        }
         let nonce = args.client_nonce.ok_or("native capture requires explicit --nonce")?;
         if verifier.expected_nonce()?.as_slice() != nonce {
             return Err("native independently pinned nonce differs from --nonce".to_string());
@@ -125,11 +139,6 @@ impl NativeCaptureSessionV1 {
         if key_id != verifier.control_plane_key_id() {
             return Err("native control-plane key does not match independently pinned key ID".to_string());
         }
-        let (collector_input, collector_bytes) = InputSnapshot::open(&args.collector_key,
-            "--collector-key", true, MAX_TRUST_KEY_BYTES)?;
-        let collector_key = SigningKey::from_pkcs8_pem(
-            std::str::from_utf8(&collector_bytes).map_err(|_| "native collector key is not UTF-8")?)
-            .map_err(|err| format!("parse native collector key: {err}"))?;
         let (proxy_ca_input, proxy_ca_bytes) = InputSnapshot::open(
             proxy_ca_path, "--proxy-ca", false, MAX_CA_BUNDLE_BYTES)?;
         let outer_certificates = CertificateDer::pem_slice_iter(&proxy_ca_bytes)
@@ -137,6 +146,12 @@ impl NativeCaptureSessionV1 {
             .map_err(|_| "parse retained native outer CA bundle")?;
         if outer_certificates.is_empty() {
             return Err("native outer CA bundle contains no certificates".to_string());
+        }
+        if let Some(admission) = ingress.as_ref() {
+            if outer_certificates.len() != 1 || outer_certificates[0].as_ref() != admission.ca() {
+                return Err("native proxy CA differs from the exact verified ingress CA".to_owned());
+            }
+            admission.recheck()?;
         }
         let mut outer_roots = RootCertStore::empty();
         for certificate in outer_certificates {
@@ -159,6 +174,11 @@ impl NativeCaptureSessionV1 {
         outer_config.resumption = rustls::client::Resumption::disabled();
         outer_config.enable_early_data = false;
         drop(proxy_key_bytes);
+        let (collector_input, collector_bytes) = InputSnapshot::open(&args.collector_key,
+            "--collector-key", true, MAX_TRUST_KEY_BYTES)?;
+        let collector_key = SigningKey::from_pkcs8_pem(
+            std::str::from_utf8(&collector_bytes).map_err(|_| "native collector key is not UTF-8")?)
+            .map_err(|err| format!("parse native collector key: {err}"))?;
         let mut inputs = vec![ca_input, cp_input, collector_input, proxy_ca_input,
             proxy_certificate_input, proxy_key_input];
         if let Some(path) = args.request_body.as_deref() {
@@ -166,7 +186,7 @@ impl NativeCaptureSessionV1 {
             inputs.push(snapshot);
         }
         let session = Self {
-            verifier, control_plane_key, collector_key, roots, inputs, deadline,
+            verifier, ingress, control_plane_key, collector_key, roots, inputs, deadline,
             owner_pid, outer_endpoint, outer_name, outer_config: Arc::new(outer_config),
             expected_peer: args.expected_server_instance_id.clone()
                 .ok_or("native capture requires expected SPIFFE identity")?,
@@ -189,6 +209,7 @@ impl NativeCaptureSessionV1 {
     pub(super) fn recheck(&self) -> Result<(), String> {
         self.check_live()?;
         self.verifier.recheck_inputs()?;
+        if let Some(ingress) = self.ingress.as_ref() { ingress.recheck()?; }
         for input in &self.inputs { input.recheck()?; }
         self.check_live()
     }
@@ -197,13 +218,20 @@ impl NativeCaptureSessionV1 {
         -> Result<super::proof_client_native_transport_v1::NativeProxyTransportV1, String>
     {
         self.recheck()?;
-        let transport = super::proof_client_native_transport_v1::connect(
+        let mut transport = super::proof_client_native_transport_v1::connect(
             self.outer_endpoint, self.outer_name.clone(), Arc::clone(&self.outer_config), self.deadline)?;
+        if let Some(ingress) = self.ingress.as_ref() {
+            let authority = if ingress.host().contains(':') {
+                format!("[{}]:{}", ingress.host(), self.outer_endpoint.port())
+            } else { format!("{}:{}", ingress.host(), self.outer_endpoint.port()) };
+            ingress.attest(&mut transport, &authority)?;
+        }
         self.recheck()?;
         Ok(transport)
     }
 
     pub(super) fn protect_target(&self, target: &ResolvedOutputTarget) -> Result<(), String> {
+        if let Some(ingress) = self.ingress.as_ref() { ingress.protect_target(target)?; }
         // Anchored parent identity + name catches lexical aliases even before a
         // target exists; held inode catches hard-link aliases. Same-UID writers
         // remain trusted, as in the existing private publication protocol.
@@ -332,7 +360,7 @@ fn native_outer_client_chain(bytes: &[u8]) -> Result<Vec<CertificateDer<'static>
     Ok(certificates)
 }
 
-fn reject_alias(target: &ResolvedOutputTarget, input_path: &Path,
+pub(super) fn reject_alias(target: &ResolvedOutputTarget, input_path: &Path,
     chain: &[FileIdentity], metadata: &fs::Metadata) -> Result<(), String>
 {
     let parent = chain.get(chain.len().checked_sub(2).ok_or("native input parent identity missing")?)

@@ -105,13 +105,111 @@ recipient after computing the request digest would break this binding; no
 caller-created pending record or replacement-key argument is accepted.
 
 The ordinary Rust gate reuses the recipient and TLS owners at its existing
-credential-lease and MITM-CA seams. Its existing optional external recipient
-attestation command remains unchanged; that path does not automatically select
-the native composition or put these new quotes into a lease request. That reuse
-does not relocate the gate into an enclave, authenticate NSM claims, change the
-credential-lease KDF, or replace the existing proof signer and rollback policy.
-This batch generates no new proof-signing identity and supplies no
-caller-dictionary signing API.
+credential-lease and MITM-CA seams. Its optional external recipient attestation
+command remains the standalone path; only a retained `MitmAuthority::Native`
+selects native quotation. Neither reuse relocates the gate into an enclave,
+authenticates NSM claims locally, changes the credential-lease KDF, or replaces
+the existing proof signer and rollback policy. This batch generates no new
+proof-signing identity and supplies no caller-dictionary signing API.
+
+### Native credential-lease fetch
+
+The actual `fetch_scoped_credential_lease` path prepares a native pending key,
+constructs the unchanged credential request with that key, computes its
+existing request-binding digest, then quotes that same pending key. It sends
+only this exact three-field `recipientAttestation` evidence object:
+
+| Field | Original value |
+| --- | --- |
+| `apiVersion` | `serverware.nativeCredentialRecipientEvidence/v1` |
+| `attestationDocumentB64` | Original NSM document, URL-safe base64 without padding |
+| `recipientPublicKey` | Actual raw 32-byte X25519 public key, in the same encoding |
+
+The closed [evidence JSON schema](../schemas/native-credential-recipient-evidence.v1.schema.json)
+describes this wire shape and encoding bounds only; schema conformance is not
+Nitro verification or key admission.
+
+The retained native identity must match the active snapshot's policy
+commitment. Policy and original process/deadline checks bracket the blocking
+broker HTTP operation and run again after decryption. The private
+`LeaseRecipientOwner::Native` retains the actual quoted recipient until
+`decrypt_credential_lease_envelope_with_owner` consumes it. The existing
+standalone decrypt API delegates to that same body; envelope shape, scope,
+nonce, associated data, HKDF and authenticated-decryption rules are unchanged.
+No response-supplied key replaces the recipient.
+
+Native setup and recipient preparation reject an external recipient-attestation
+command mixed with the native owner. Failure does not fall back to a standalone
+key or command. No new environment/profile switch selects this path. Original
+deadline checks reject late results but do not interrupt blocking HTTP or NSM
+ioctls; the existing three-second HTTP client timeout is not a hard native
+whole-operation watchdog.
+
+### Separate raw-X25519 verifier adapter
+
+[`verify_native_lease_recipient.py`](../scripts/verify_native_lease_recipient.py)
+is an explicit adapter for the existing broker verifier input, not a locally
+successful quote flag or automatic application activation. Its required CLI
+inputs are independently provisioned files and their exact byte digests:
+
+```text
+python3 /absolute/path/to/verify_native_lease_recipient.py \
+  --expectations /absolute/path/to/expectations.json \
+  --expectations-sha256 sha256:<hex> \
+  --trust-roots /absolute/path/to/trust-roots.json \
+  --trust-roots-sha256 sha256:<hex>
+```
+
+The adapter accepts at most 64 KiB on standard input and the exact evidence
+object above, including at most 12,288 original document bytes. It reconstructs
+the fixed role-2 binding from independently pinned runtime expectations and the
+actual request/nonce/key scope. It does not obtain expected release, PCR, CA or
+configuration commitments from the unverified quote, nor accept an override
+clock or substitute defaults for missing pinned configuration.
+
+The expectations file is at most 16 KiB with schema
+`serverware.nativeCredentialRecipientExpectations/v1`. Its closed fields pin
+release record, policy, configuration, CA certificate/SPKI and binary digests;
+the complete expected locked-PCR inventory, EIF equal to PCR `0`, module ID,
+maximum age of 1..300 seconds and future skew of 0..30 seconds. The inventory
+has 3..32 entries at indices `0`..`31`, includes nonzero PCRs `0`/`1`/`2`, and
+must exactly match the document's keys and values. Additional reserved zero
+values are permitted only when explicitly pinned; no reported PCR is ignored.
+The separate trust file is at most 1 MiB with schema
+`serverware.nativeCredentialRecipientTrustRoots/v1`. It retains the fixed
+root-certificate, CRL and certificate-profile fields, but this native profile
+requires an **empty** `awsNitroCrlsDerBase64url` list and certificate profile
+`aws-nitro-attestation-pki-native-v1`. Original file digests are checked before
+parsing. These files need independent admission and provisioning, not values
+copied from the presented quote.
+
+The broker must supply its independently reconstructed full request digest and
+scope to the adapter; the adapter input is not itself the complete original
+credential request. Only after genuine verification does the adapter return
+`ok: true`, `debug: false` and exact request-scope echoes, under a 64 KiB output
+bound. That unsigned process-local verdict is not reusable signed authority or
+a replacement for the broker's request/authorization checks. Age checking uses
+the local clock; this is not trusted-time or rollback proof.
+
+The dedicated `verify_native_recipient_nitro_document` profile in
+[`verify_nitro_tee.py`](../scripts/verify_nitro_tee.py) accepts a COSE Sign1 array
+either untagged or with tag `18`, while verifying its original signed bytes.
+It enforces signature, certificate-chain/time/role/EKU/P-384, exact complete
+PCR/EIF, module, nonce and age checks, then joins the exact nonzero raw 32-byte
+key and complete fixed role-2 user data. Its raw-key result is distinct from
+DER/RSA recipient evidence. The existing RSA/KMS profile, including its
+mandatory CRL policy, is unchanged.
+
+This native-only distinction follows the [AWS attestation specification,
+sections 2.2, 3.1 and 3.2.4](https://github.com/aws/aws-nitro-enclaves-nsm-api/blob/main/docs/attestation_process.md):
+the document contains all locked PCRs, COSE tagging is optional, and AWS's
+attestation PKI does not use CRLs. Consequently **vendor CRL revocation is not
+proved** by this native path. Independently current local trust pins, release
+admission/revocation and application nonce reservation remain separate duties.
+The verifier does not reserve a nonce or establish rollback-resistant time.
+These source paths still require genuine deployment verification; they neither
+perform KMS recipient decryption nor prove possession merely by returning
+public evidence.
 
 ### Retained native inner TLS authority
 
@@ -184,19 +282,21 @@ mandatory outer client authentication, TLS-version/root-bundle rejection and
 exact role `3` joins; unknown-IP handling, bounded queues and session shutdown.
 Native inner-TLS coverage must also reject authority/cache substitution and
 deadline extension, including cache hits after the prepared bound expires.
+Native lease coverage must join the prepared key, unchanged request digest,
+original quote and consumed key; deny native/command mixing, policy drift and
+late broker/decrypt results; and reject adapter input/pin/profile substitution,
+missing or extra PCRs, unsupported COSE tags and nonempty native CRLs without
+relaxing the existing RSA/KMS tests. Both supported COSE forms still need
+genuine signature verification over their original signed bytes.
 
 Actual Nitro checks then need a fresh independent challenge, the original COSE
 document and genuine certificate/PCR/nonce/public-key/user-data verification
 against independently accepted releases. Existing production quote consumers
-are unchanged: this new internal binding is not a compatibility path into their
-acceptance. Device access or a locally parsed document cannot replace that work.
-In particular, the existing
-[Nitro verifier](../scripts/verify_nitro_tee.py) requires an RSA DER recipient for
-its KMS profile, while native role `2` carries a raw 32-byte X25519 key and the
-binary binding above. Connecting native credential leases needs a distinct
-genuine verifier profile and original-request/nonce/key joins, without
-relaxing RSA/KMS verification or treating a raw NSM response as accepted
-evidence. The existing external recipient-verifier gate remains mandatory.
+are not automatically reconfigured to accept this internal binding. Device
+access or a locally parsed document cannot replace that work. The new explicit
+native recipient adapter is separate from the existing RSA DER KMS profile;
+its source availability is not broker provisioning or production admission.
+The existing external recipient-verifier gate remains mandatory.
 The fixed transport follows the [Linux NSM UAPI](https://github.com/torvalds/linux/blob/v6.12/include/uapi/linux/nsm.h)
 and [AWS request/response types](https://github.com/aws/aws-nitro-enclaves-nsm-api/blob/main/src/api/mod.rs).
 

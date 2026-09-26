@@ -203,6 +203,17 @@ impl EnclaveRuntimeIdentityV1 {
         self.finish(deadline)
     }
 
+    /// Join a request's actual policy digest to the declared runtime scope.
+    /// Equality is not independent policy admission; mismatch poisons the owner.
+    pub fn verify_policy_commitment(&mut self, policy: [u8; 32], deadline: u64)
+        -> Result<(), String> {
+        let deadline = self.begin(deadline)?;
+        if policy != self.scope.policy {
+            return Err("native credential request policy differs from runtime scope".to_owned());
+        }
+        self.finish(deadline)
+    }
+
     fn require_tls_time(&self, now: OffsetDateTime) -> Result<(), String> {
         if now < self.ca_not_before || now >= self.ca_not_after {
             return Err("native TLS scope is outside its original CA validity interval".to_owned());

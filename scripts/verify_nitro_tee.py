@@ -1690,7 +1690,18 @@ def verify_nitro_chain(
     *,
     at: datetime,
     now_at: datetime,
+    native_profile: bool = False,
 ) -> tuple[x509.Certificate, x509.Certificate]:
+    require(type(native_profile) is bool, "Nitro certificate profile selector is invalid")
+    if native_profile:
+        require(
+            certificate_profile.get("profileId") == "aws-nitro-attestation-pki-native-v1"
+            and crls == [],
+            "native Nitro certificate profile requires its fixed ID and empty CRL inventory",
+        )
+        # AWS attestation_process.md section 3.2.4 specifies no vendor CRL.
+        # This fixed native profile supplies no vendor revocation proof;
+        # independently current pins and app-level revocation remain required.
     require(1 <= len(bundle_der) <= MAX_CERTIFICATES, "Nitro cabundle size is invalid")
     try:
         leaf = x509.load_der_x509_certificate(leaf_der)
@@ -1785,32 +1796,33 @@ def verify_nitro_chain(
                 key_usage.key_cert_sign and key_usage.crl_sign,
                 "Nitro CA KeyUsage lacks certificate/CRL signing",
             )
-    for index, cert in enumerate(chain[:-1]):
-        issuer = chain[index + 1]
-        matching_crls = [crl for crl in crls if crl.issuer == issuer.subject]
-        require(
-            len(matching_crls) == 1,
-            "Nitro certificate does not have exactly one current issuer CRL",
-        )
-        crl = matching_crls[0]
-        verify_crl_signature(issuer, crl)
-        last_update = getattr(crl, "last_update_utc", None) or crl.last_update.replace(
-            tzinfo=timezone.utc
-        )
-        next_update = getattr(crl, "next_update_utc", None)
-        if next_update is None and crl.next_update is not None:
-            next_update = crl.next_update.replace(tzinfo=timezone.utc)
-        require(
-            next_update is not None
-            and last_update <= now_at <= next_update
-            and last_update <= at <= next_update,
-            "Nitro revocation material is stale at issuance or verification",
-        )
-        require(
-            crl.get_revoked_certificate_by_serial_number(cert.serial_number)
-            is None,
-            "Nitro certificate serial is revoked",
-        )
+    if not native_profile:
+        for index, cert in enumerate(chain[:-1]):
+            issuer = chain[index + 1]
+            matching_crls = [crl for crl in crls if crl.issuer == issuer.subject]
+            require(
+                len(matching_crls) == 1,
+                "Nitro certificate does not have exactly one current issuer CRL",
+            )
+            crl = matching_crls[0]
+            verify_crl_signature(issuer, crl)
+            last_update = getattr(crl, "last_update_utc", None) or crl.last_update.replace(
+                tzinfo=timezone.utc
+            )
+            next_update = getattr(crl, "next_update_utc", None)
+            if next_update is None and crl.next_update is not None:
+                next_update = crl.next_update.replace(tzinfo=timezone.utc)
+            require(
+                next_update is not None
+                and last_update <= now_at <= next_update
+                and last_update <= at <= next_update,
+                "Nitro revocation material is stale at issuance or verification",
+            )
+            require(
+                crl.get_revoked_certificate_by_serial_number(cert.serial_number)
+                is None,
+                "Nitro certificate serial is revoked",
+            )
     leaf_key = leaf.public_key()
     require(
         isinstance(leaf_key, ec.EllipticCurvePublicKey)
@@ -1835,7 +1847,7 @@ def expected_user_data(claims: dict[str, Any]) -> bytes:
     )
 
 
-def verify_nitro_document(
+def _verify_nitro_document_common(
     raw: bytes,
     *,
     claims: dict[str, Any] | None,
@@ -1850,16 +1862,45 @@ def verify_nitro_document(
     now: int | None,
     max_age: int,
     future_skew: int,
-) -> dict[str, Any]:
+    native_profile: bool = False,
+) -> tuple[
+    dict[str, Any], int, dict[str, str], x509.Certificate, x509.Certificate
+]:
+    """Verify the original document before either fixed recipient profile.
+
+    No caller-supplied verdict or recipient-algorithm selector is accepted.
+    Both wrappers must still enforce their own distinct public-key profile.
+    """
     require(1 <= len(raw) <= MAX_NITRO_BYTES, "Nitro attestation document size is invalid")
+    if native_profile:
+        allowed_pcr_names = {f"PCR{index}" for index in range(32)}
+        require(
+            type(expected_pcrs) is dict
+            and 3 <= len(expected_pcrs) <= 32
+            and all(type(name) is str for name in expected_pcrs)
+            and set(expected_pcrs) <= allowed_pcr_names
+            and {"PCR0", "PCR1", "PCR2"} <= set(expected_pcrs),
+            "native Nitro expectations must contain a complete canonical PCR0..PCR31 map including PCR0/PCR1/PCR2",
+        )
+        for name, value in expected_pcrs.items():
+            require_sha384(value, f"independently expected native Nitro {name}")
+        expected_pcr_indices = {int(name[3:]) for name in expected_pcrs}
     require(
         expected_pcrs.get("PCR0") == expected_eif,
         "independently expected EIF digest does not map exactly to PCR0",
     )
     cose = parse_cbor_one(raw, "Nitro attestation document")
-    require(isinstance(cose, CBORTag) and cose.tag == 18, "production Nitro evidence must be tagged COSE_Sign1")
-    require(isinstance(cose.value, list) and len(cose.value) == 4, "Nitro COSE_Sign1 shape is invalid")
-    protected, unprotected, payload_raw, signature = cose.value
+    if native_profile:
+        if isinstance(cose, CBORTag):
+            require(cose.tag == 18, "native Nitro evidence has an unsupported COSE tag")
+            sign1 = cose.value
+        else:
+            sign1 = cose
+    else:
+        require(isinstance(cose, CBORTag) and cose.tag == 18, "production Nitro evidence must be tagged COSE_Sign1")
+        sign1 = cose.value
+    require(isinstance(sign1, list) and len(sign1) == 4, "Nitro COSE_Sign1 shape is invalid")
+    protected, unprotected, payload_raw, signature = sign1
     require(isinstance(protected, bytes) and protected, "Nitro protected header is missing")
     require(unprotected == {}, "Nitro unprotected COSE headers are forbidden")
     require(isinstance(payload_raw, bytes) and isinstance(signature, bytes), "Nitro COSE payload/signature types are invalid")
@@ -1914,6 +1955,7 @@ def verify_nitro_document(
         certificate_profile,
         at=attestation_time,
         now_at=datetime.fromtimestamp(now, tz=timezone.utc),
+        native_profile=native_profile,
     )
     sig_structure = cbor2.dumps(["Signature1", protected, b"", payload_raw])
     try:
@@ -1927,18 +1969,67 @@ def verify_nitro_document(
     pcrs = payload["pcrs"]
     require(isinstance(pcrs, dict), "Nitro PCR map is invalid")
     normalized: dict[str, str] = {}
-    for index in (0, 1, 2):
-        value = pcrs.get(index)
-        require(isinstance(value, bytes) and len(value) == 48, f"Nitro PCR{index} is invalid")
-        require(value != b"\x00" * 48, "Nitro debug PCRs are not accepted")
-        normalized[f"PCR{index}"] = "sha384:" + value.hex()
-    require(set(pcrs) == {0, 1, 2}, "Nitro PCR map must be exactly PCR0/PCR1/PCR2")
-    require(normalized == expected_pcrs, "Nitro PCR0/PCR1/PCR2 do not match independent expectations")
+    if native_profile:
+        require(
+            3 <= len(pcrs) <= 32
+            and all(type(index) is int for index in pcrs)
+            and set(pcrs) == expected_pcr_indices,
+            "native Nitro PCR map does not match the complete independently expected index set",
+        )
+        for index in sorted(expected_pcr_indices):
+            value = pcrs[index]
+            require(type(value) is bytes and len(value) == 48, f"native Nitro PCR{index} is invalid")
+            if index in (0, 1, 2):
+                require(value != b"\x00" * 48, "Nitro debug PCRs are not accepted")
+            normalized[f"PCR{index}"] = "sha384:" + value.hex()
+        require(normalized == expected_pcrs, "native Nitro locked PCRs do not match independent expectations")
+    else:
+        for index in (0, 1, 2):
+            value = pcrs.get(index)
+            require(isinstance(value, bytes) and len(value) == 48, f"Nitro PCR{index} is invalid")
+            require(value != b"\x00" * 48, "Nitro debug PCRs are not accepted")
+            normalized[f"PCR{index}"] = "sha384:" + value.hex()
+        require(set(pcrs) == {0, 1, 2}, "Nitro PCR map must be exactly PCR0/PCR1/PCR2")
+        require(normalized == expected_pcrs, "Nitro PCR0/PCR1/PCR2 do not match independent expectations")
     if claims is not None:
         require(
             claims["eif"]["imageSha384"] == expected_eif,
             "Nitro claims do not bind the independently expected EIF",
         )
+    return payload, issued_at, normalized, leaf, root
+
+
+def verify_nitro_document(
+    raw: bytes,
+    *,
+    claims: dict[str, Any] | None,
+    expected_user_data_bytes: bytes | None = None,
+    challenge: bytes,
+    expected_pcrs: dict[str, str],
+    expected_eif: str,
+    roots: list[x509.Certificate],
+    crls: list[x509.CertificateRevocationList],
+    certificate_profile: dict[str, Any],
+    expected_module_id: str,
+    now: int | None,
+    max_age: int,
+    future_skew: int,
+) -> dict[str, Any]:
+    payload, issued_at, normalized, leaf, root = _verify_nitro_document_common(
+        raw,
+        claims=claims,
+        expected_user_data_bytes=expected_user_data_bytes,
+        challenge=challenge,
+        expected_pcrs=expected_pcrs,
+        expected_eif=expected_eif,
+        roots=roots,
+        crls=crls,
+        certificate_profile=certificate_profile,
+        expected_module_id=expected_module_id,
+        now=now,
+        max_age=max_age,
+        future_skew=future_skew,
+    )
     recipient_der = payload["public_key"]
     require(isinstance(recipient_der, bytes) and 1 <= len(recipient_der) <= 4096, "Nitro recipient public key is invalid")
     try:
@@ -1961,6 +2052,103 @@ def verify_nitro_document(
         "rootCertificateSha256": certificate_sha256(root),
         "recipientPublicKeyDerB64": base64.urlsafe_b64encode(recipient_der).decode("ascii").rstrip("="),
         "recipientPublicKeySha256": sha256(recipient_der),
+        "userDataSha256": sha256(payload["user_data"]),
+    }
+
+
+def verify_native_recipient_nitro_document(
+    raw: bytes,
+    *,
+    expected_public_key: bytes,
+    expected_user_data_bytes: bytes,
+    challenge: bytes,
+    expected_pcrs: dict[str, str],
+    expected_eif: str,
+    roots: list[x509.Certificate],
+    crls: list[x509.CertificateRevocationList],
+    certificate_profile: dict[str, Any],
+    expected_module_id: str,
+    now: int | None,
+    max_age: int,
+    future_skew: int,
+) -> dict[str, Any]:
+    """Verify one native raw-X25519 recipient, never an RSA/KMS recipient.
+
+    The signed key must equal the independently expected nonzero raw 32 bytes.
+    This neither performs key agreement nor proves private-key possession;
+    callers retain the original request/authority and one-use lease boundaries.
+    """
+    require(
+        type(raw) is bytes and 1 <= len(raw) <= 0x3000,
+        "native Nitro attestation must contain 1..12288 original bytes",
+    )
+    require(
+        type(expected_public_key) is bytes
+        and len(expected_public_key) == 32
+        and expected_public_key != b"\x00" * 32,
+        "native Nitro recipient expectation must be nonzero raw X25519 bytes",
+    )
+    require(
+        type(challenge) is bytes and len(challenge) == 32,
+        "native Nitro challenge must contain exactly 32 bytes",
+    )
+    binding_prefix = b"serverware/enclave-runtime-key-binding/v1\x00\x02"
+    require(
+        type(expected_user_data_bytes) is bytes
+        and len(expected_user_data_bytes) == len(binding_prefix) + 7 * 32
+        and expected_user_data_bytes.startswith(binding_prefix),
+        "native Nitro user_data must be the exact role-2 runtime binding",
+    )
+    binding_fields = expected_user_data_bytes[len(binding_prefix):]
+    require(
+        all(
+            binding_fields[index * 32:(index + 1) * 32] != b"\x00" * 32
+            for index in range(3)
+        ),
+        "native Nitro release, policy and configuration commitments must be nonzero",
+    )
+    require(
+        binding_fields[5 * 32:6 * 32] == hashlib.sha256(expected_public_key).digest(),
+        "native Nitro runtime binding does not name the exact raw recipient key",
+    )
+    require(
+        binding_fields[6 * 32:7 * 32] != b"\x00" * 32,
+        "native Nitro original request commitment must be nonzero",
+    )
+    payload, issued_at, normalized, leaf, root = _verify_nitro_document_common(
+        raw,
+        claims=None,
+        expected_user_data_bytes=expected_user_data_bytes,
+        challenge=challenge,
+        expected_pcrs=expected_pcrs,
+        expected_eif=expected_eif,
+        roots=roots,
+        crls=crls,
+        certificate_profile=certificate_profile,
+        expected_module_id=expected_module_id,
+        now=now,
+        max_age=max_age,
+        future_skew=future_skew,
+        native_profile=True,
+    )
+    recipient_raw = payload["public_key"]
+    require(
+        isinstance(recipient_raw, bytes)
+        and len(recipient_raw) == 32
+        and recipient_raw != b"\x00" * 32
+        and recipient_raw == expected_public_key,
+        "native Nitro recipient does not match the exact raw X25519 key",
+    )
+    return {
+        "raw": raw,
+        "attestationDocumentSha256": sha256(raw),
+        "issuedAtUnix": issued_at,
+        "moduleId": payload["module_id"],
+        "pcrs": normalized,
+        "leafCertificateSha256": certificate_sha256(leaf),
+        "rootCertificateSha256": certificate_sha256(root),
+        "recipientPublicKeyRawB64": base64.urlsafe_b64encode(recipient_raw).decode("ascii").rstrip("="),
+        "recipientPublicKeySha256": sha256(recipient_raw),
         "userDataSha256": sha256(payload["user_data"]),
     }
 

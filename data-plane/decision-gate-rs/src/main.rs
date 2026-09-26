@@ -153,7 +153,8 @@ use serverware_decision_gate::{
     response_observation_v2_lifecycle_state_sha256,
 };
 use serverware_decision_gate::enclave_runtime_identity_v1::{
-    CredentialRecipientV1, EnclaveRuntimeIdentityV1, QuotedMutualTlsIngressV1, TlsAuthorityV1,
+    CredentialRecipientV1, EnclaveRuntimeIdentityV1, PendingCredentialRecipientV1,
+    QuotedCredentialRecipientV1, QuotedMutualTlsIngressV1, TlsAuthorityV1,
 };
 use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
 use sha2::{Digest, Sha256, Sha512};
@@ -19326,6 +19327,23 @@ enum CredentialLeaseMaterial {
     DispatchSecret(Box<SecretLease>),
 }
 
+// A native recipient retains its actual quote-bound, one-use key owner until
+// the unchanged envelope checks consume it. No key or successful-proof DTO is
+// accepted in place of either concrete owner.
+enum LeaseRecipientOwner {
+    Standalone(CredentialRecipientV1),
+    Native(QuotedCredentialRecipientV1),
+}
+
+impl LeaseRecipientOwner {
+    fn derive_shared_key(self, peer: [u8; 32]) -> Result<Zeroizing<[u8; 32]>, String> {
+        match self {
+            Self::Standalone(owner) => owner.derive_shared_key(peer),
+            Self::Native(owner) => owner.derive_shared_key(peer),
+        }
+    }
+}
+
 fn decrypt_credential_lease_envelope(
     snapshot: &Snapshot,
     binary_digest: &str,
@@ -19335,6 +19353,38 @@ fn decrypt_credential_lease_envelope(
     request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
     recipient_private_key: CredentialRecipientV1,
+    recipient_key_id: &str,
+    recipient_nonce: &str,
+    recipient_nonce_bytes: &[u8; 32],
+    body: &[u8],
+    requested_ttl_seconds: u64,
+) -> Result<CredentialLeaseMaterial, String> {
+    decrypt_credential_lease_envelope_with_owner(
+        snapshot,
+        binary_digest,
+        scope,
+        purpose,
+        request_binding_sha256,
+        request_authority,
+        release_authorization,
+        LeaseRecipientOwner::Standalone(recipient_private_key),
+        recipient_key_id,
+        recipient_nonce,
+        recipient_nonce_bytes,
+        body,
+        requested_ttl_seconds,
+    )
+}
+
+fn decrypt_credential_lease_envelope_with_owner(
+    snapshot: &Snapshot,
+    binary_digest: &str,
+    scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose,
+    request_binding_sha256: &str,
+    request_authority: Option<&CredentialLeaseRequestAuthority>,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
+    recipient_private_key: LeaseRecipientOwner,
     recipient_key_id: &str,
     recipient_nonce: &str,
     recipient_nonce_bytes: &[u8; 32],
@@ -20092,6 +20142,61 @@ fn validate_credential_lease_release_scope(
     Ok(())
 }
 
+enum LeaseRecipientPreparation {
+    Standalone(CredentialRecipientV1),
+    Native(PendingCredentialRecipientV1),
+}
+
+impl LeaseRecipientPreparation {
+    fn public_key_bytes(&self) -> Result<[u8; 32], String> {
+        match self {
+            Self::Standalone(owner) => owner.public_key_bytes(),
+            Self::Native(owner) => owner.public_key_bytes(),
+        }
+    }
+}
+
+fn native_lease_digest_bytes(value: &str) -> Result<[u8; 32], String> {
+    if !is_sha256_digest(value) {
+        return Err("native credential binding requires a canonical SHA256 digest".to_owned());
+    }
+    let mut digest = [0u8; 32];
+    hex::decode_to_slice(&value[7..], &mut digest)
+        .map_err(|_| "decode native credential binding digest".to_owned())?;
+    Ok(digest)
+}
+
+fn prepare_credential_lease_recipient(
+    state: &GateState,
+    policy_hash: &str,
+) -> Result<LeaseRecipientPreparation, String> {
+    if let Some(authority) = state.mitm_authority.as_ref() {
+        let mut authority = authority.lock()
+            .map_err(|_| "credential recipient runtime authority is poisoned".to_owned())?;
+        if let MitmAuthority::Native(identity) = &mut *authority {
+            if state.credential_lease_recipient_attestation_command.is_some() {
+                return Err("native recipient cannot use an external attestation command".to_owned());
+            }
+            let deadline = identity.deadline();
+            identity.verify_policy_commitment(native_lease_digest_bytes(policy_hash)?, deadline)?;
+            return identity.prepare_lease_recipient(deadline).map(LeaseRecipientPreparation::Native);
+        }
+    }
+    CredentialRecipientV1::generate().map(LeaseRecipientPreparation::Standalone)
+}
+
+fn verify_native_credential_lease_scope(state: &GateState, policy_hash: &str) -> Result<(), String> {
+    if let Some(authority) = state.mitm_authority.as_ref() {
+        let mut authority = authority.lock()
+            .map_err(|_| "credential recipient runtime authority is poisoned".to_owned())?;
+        if let MitmAuthority::Native(identity) = &mut *authority {
+            let deadline = identity.deadline();
+            identity.verify_policy_commitment(native_lease_digest_bytes(policy_hash)?, deadline)?;
+        }
+    }
+    Ok(())
+}
+
 fn fetch_scoped_credential_lease(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -20168,8 +20273,8 @@ fn fetch_scoped_credential_lease(
         return Err("attested control-plane trust root is stale".to_string());
     }
     let rng = ring_rand::SystemRandom::new();
-    let recipient_private_key = CredentialRecipientV1::generate()?;
-    let recipient_public_key = recipient_private_key.public_key_bytes()?;
+    let recipient_preparation = prepare_credential_lease_recipient(state, &snapshot.hash)?;
+    let recipient_public_key = recipient_preparation.public_key_bytes()?;
     let recipient_key_id = sha256_prefixed(&recipient_public_key);
     let mut recipient_nonce_bytes = Zeroizing::new([0u8; 32]);
     rng.fill(recipient_nonce_bytes.as_mut())
@@ -20204,36 +20309,59 @@ fn fetch_scoped_credential_lease(
     let request_binding_sha256 = credential_lease_request_binding_sha256(&request_body);
     let request_authority_sha256 =
         request_authority.map(credential_lease_request_authority_sha256);
-    request_body.recipient_attestation = if let Some(command) = state
-        .credential_lease_recipient_attestation_command
-        .as_deref()
-    {
-        let attestation_request = json!({
-            "apiVersion":if request_bound {
-                "serverware.recipientAttestationRequest/v4"
+    let recipient_private_key = match recipient_preparation {
+        LeaseRecipientPreparation::Native(pending) => {
+            let mut authority = state.mitm_authority.as_ref()
+                .ok_or("native recipient lost its runtime authority")?
+                .lock().map_err(|_| "native recipient runtime authority is poisoned".to_owned())?;
+            let MitmAuthority::Native(identity) = &mut *authority else {
+                return Err("native recipient cannot switch to a standalone authority".to_owned());
+            };
+            let deadline = identity.deadline();
+            identity.verify_policy_commitment(native_lease_digest_bytes(&snapshot.hash)?, deadline)?;
+            let quoted = identity.quote_lease_recipient(pending,
+                native_lease_digest_bytes(&request_binding_sha256)?, *recipient_nonce_bytes, deadline)?;
+            // Only original public evidence travels out. No local successful-
+            // verification claims or replacement public key can be supplied.
+            request_body.recipient_attestation = Some(json!({
+                "apiVersion":"serverware.nativeCredentialRecipientEvidence/v1",
+                "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(quoted.quote().document()),
+                "recipientPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(quoted.quote().public_key()),
+            }));
+            LeaseRecipientOwner::Native(quoted)
+        }
+        LeaseRecipientPreparation::Standalone(owner) => {
+            request_body.recipient_attestation = if let Some(command) = state
+                .credential_lease_recipient_attestation_command
+                .as_deref()
+            {
+                let attestation_request = json!({
+                    "apiVersion":if request_bound {
+                        "serverware.recipientAttestationRequest/v4"
+                    } else {
+                        "serverware.recipientAttestationRequest/v3"
+                    },
+                    "purpose":purpose,
+                    "requestBindingSha256":request_binding_sha256,
+                    "requestAuthoritySha256":request_authority_sha256,
+                    "recipientPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(recipient_public_key),
+                    "recipientKeyId":recipient_key_id,
+                    "recipientNonce":recipient_nonce,
+                    "policyHash":snapshot.hash,
+                    "dataPlaneBinaryDigest":state.binary_digest,
+                    "principalId":scope.principal_id,
+                    "routeId":scope.route_id,
+                    "credentialId":scope.credential_id,
+                });
+                Some(generate_recipient_attestation(command, &attestation_request)?)
             } else {
-                "serverware.recipientAttestationRequest/v3"
-            },
-            "purpose":purpose,
-            "requestBindingSha256":request_binding_sha256,
-            "requestAuthoritySha256":request_authority_sha256,
-            "recipientPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(recipient_public_key),
-            "recipientKeyId":recipient_key_id,
-            "recipientNonce":recipient_nonce,
-            "policyHash":snapshot.hash,
-            "dataPlaneBinaryDigest":state.binary_digest,
-            "principalId":scope.principal_id,
-            "routeId":scope.route_id,
-            "credentialId":scope.credential_id,
-        });
-        Some(generate_recipient_attestation(
-            command,
-            &attestation_request,
-        )?)
-    } else {
-        None
+                None
+            };
+            LeaseRecipientOwner::Standalone(owner)
+        }
     };
     let request_wire = credential_lease_request_wire_value(&request_body)?;
+    verify_native_credential_lease_scope(state, &snapshot.hash)?;
     let mut response = state
         .credential_lease_client
         .post(request_url)
@@ -20261,7 +20389,8 @@ fn fetch_scoped_credential_lease(
             "credential lease control plane returned HTTP {status}"
         ));
     }
-    let lease = decrypt_credential_lease_envelope(
+    verify_native_credential_lease_scope(state, &snapshot.hash)?;
+    let lease = decrypt_credential_lease_envelope_with_owner(
         snapshot,
         &state.binary_digest,
         scope,
@@ -20276,6 +20405,7 @@ fn fetch_scoped_credential_lease(
         body.as_ref(),
         requested_ttl_seconds,
     )?;
+    verify_native_credential_lease_scope(state, &snapshot.hash)?;
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot changed while credential lease was fetched".to_string());
     }
@@ -48933,6 +49063,9 @@ fn prepare_native_tls_gate_state(
 ) -> Result<NativeTlsGateV1, String> {
     if state.mitm_authority.is_some() {
         return Err("native TLS setup cannot replace an existing MITM authority".to_owned());
+    }
+    if state.credential_lease_recipient_attestation_command.is_some() {
+        return Err("native TLS setup cannot retain an external recipient attestation command".to_owned());
     }
     if !state.leaf_configs.get_mut()
         .map_err(|_| "native TLS setup found a poisoned leaf cache".to_owned())?.is_empty() {

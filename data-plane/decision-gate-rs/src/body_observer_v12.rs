@@ -25,6 +25,12 @@ mod body_observer_maps_v12;
 mod body_observer_mapping_files_v12;
 #[path = "body_observer_snapshot_v12.rs"]
 mod body_observer_snapshot_v12;
+#[path = "body_observer_history_contract_v14.rs"]
+mod body_observer_history_contract_v14;
+#[path = "body_observer_history_state_v14.rs"]
+mod body_observer_history_state_v14;
+#[path = "body_observer_history_acquire_v14.rs"]
+mod body_observer_history_acquire_v14;
 
 use crate::plan_protocol::{Digest, PlanProtocolError, PlanResult};
 use crate::plan_protocol::body_observer_contract_v12::BodyObserverLaunchV12;
@@ -34,6 +40,7 @@ use body_observer_target_v12::ReceivedBodyTargetV12;
 use body_observer_process_v12::HeldNamespaceWorkerV12;
 use body_observer_worker_contract_v12::{receive_stop, NamespaceWorkerStopV12};
 pub(crate) use body_observer_snapshot_v12::StoppedBodyMappingSnapshotV12;
+pub(crate) use body_observer_history_acquire_v14::HeldInitialBodyHistoryV14;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 /// Non-cloneable custody of a received, independently remeasured, still-gated
@@ -139,6 +146,15 @@ impl StoppedBodyObserverLaunchV12 {
     /// generation destruction proof.
     pub(crate) fn abort(mut self, deadline: u64) -> PlanResult<()> {
         self.worker.abort_and_reap(deadline.min(self.deadline))
+    }
+}
+
+impl StoppedBodyMappingSnapshotV12 {
+    /// Start an unsigned history from actual held snapshot custody. Journal-local
+    /// task/address-space ordinals do not prove kernel identity or authorize
+    /// continuous execution, and structural replay does not grant authority.
+    pub(crate) fn begin_history(self) -> PlanResult<HeldInitialBodyHistoryV14> {
+        HeldInitialBodyHistoryV14::acquire(self)
     }
 }
 

@@ -206,6 +206,13 @@ processes, address-space changes, transient code or complete execution history.
 
 ## Deferred verification scope
 
+The held snapshot can also start an unsigned v14 history through
+`StoppedBodyMappingSnapshotV12::begin_history`. The
+[history guide](controller-body-observer-history.md) describes its separate
+task/address-space identities, bounded original records, structural lifecycle
+replay and actual initial-record production. It does not add continuous
+observation, signed evidence, readiness or resume.
+
 The consolidated frozen verification must exercise this code only with owned,
 isolated fixture processes and the exact prepared observer artifact. Source
 review is not a substitute for those checks. Required cases include:
@@ -249,9 +256,11 @@ that vector and executable mappings. Its mapping root hashes that flat vector,
 not a temporal event history; `RuntimeProvided` does not exempt kernel mappings
 from the file-backed checks. Combining successive snapshots or different
 process address spaces would misrepresent those semantics. Continuous execution
-therefore needs a versioned per-task/address-space, sequenced lifecycle and
-mapping-event contract plus independently admitted kernel-mapping policy. It
-cannot be implemented by silently weakening or reinterpreting the v13 consumer.
+therefore needs actual per-task/address-space event acquisition and independently
+admitted kernel-mapping policy. The separate unsigned v14 record/replay model
+now represents those lifetimes structurally, but it does not implement the event
+source or signed-evidence admission. Neither is supplied by silently weakening
+or reinterpreting the v13 consumer.
 
 No listener provisioning, observer keys, release approval or production-runtime
 proof is supplied here. The existing client must still obtain a genuine observer

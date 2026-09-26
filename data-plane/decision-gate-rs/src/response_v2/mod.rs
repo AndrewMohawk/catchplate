@@ -53,6 +53,13 @@ pub(super) fn start_response_observation_v2_health_probe(
     integration::start_response_observation_v2_health_probe(client);
 }
 
+pub(super) fn probe_response_observation_v2_once(
+    client: &ResponseObservationV2Client,
+    max_duration: Duration,
+) -> bool {
+    integration::probe_response_observation_v2_once(client, max_duration)
+}
+
 pub(super) fn execute_response_observation_v2_transaction(
     state: &GateState,
     snapshot: &Arc<Snapshot>,

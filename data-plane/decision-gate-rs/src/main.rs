@@ -11,6 +11,10 @@ mod native_gate_bootstrap;
 mod native_gate_inputs;
 mod native_proof_signer;
 mod native_response_attestation;
+mod native_runtime_lifetime;
+mod native_background_workers;
+mod native_lease_renewal;
+mod native_runtime;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};
@@ -18,6 +22,8 @@ use control_plane_client_config::ControlPlaneClientConfig;
 use native_gate_bootstrap::prepare_native_tls_gate_state;
 use native_proof_signer::CustodySignerTransport;
 use native_response_attestation::{native_response_runtime_proof, response_attestation_available};
+use native_runtime_lifetime::NativeRuntimeLifetimeV1;
+use native_runtime::NativeRuntimeSettingsV1;
 
 use base64::{engine::general_purpose, Engine as _};
 use csv::{ByteRecord, ReaderBuilder, WriterBuilder};
@@ -2524,6 +2530,7 @@ struct GateState {
     upstream_client_config: UpstreamClientConfig,
     pinned_upstream_clients: Mutex<PinnedUpstreamClientCache>,
     native_upstream_relays: Option<Arc<NativeUpstreamRelaysV1>>,
+    native_runtime_lifetime: Option<Arc<NativeRuntimeLifetimeV1>>,
     audit_client: Client,
     credential_lease_client: Client,
     audit_url: Option<String>,
@@ -3932,7 +3939,10 @@ impl Drop for CredentialLeaseRenewalPendingGuard {
     fn drop(&mut self) {
         self.pending
             .lock()
-            .expect("credential lease renewal pending mutex poisoned")
+            // Cleanup must not panic a second time during worker/queue unwind.
+            // Recover only to remove this owned registration; the mutex stays
+            // poisoned so ordinary work continues to fail closed.
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(&self.key);
         self.state
             .credential_lease_renewal_queued
@@ -20265,6 +20275,7 @@ fn prepare_credential_lease_recipient(
     state: &GateState,
     policy_hash: &str,
 ) -> Result<LeaseRecipientPreparation, String> {
+    native_runtime_live(state)?;
     if let Some(authority) = state.mitm_authority.as_ref() {
         let mut authority = authority.lock()
             .map_err(|_| "credential recipient runtime authority is poisoned".to_owned())?;
@@ -20281,6 +20292,7 @@ fn prepare_credential_lease_recipient(
 }
 
 fn verify_native_credential_lease_scope(state: &GateState, policy_hash: &str) -> Result<(), String> {
+    native_runtime_live(state)?;
     if let Some(authority) = state.mitm_authority.as_ref() {
         let mut authority = authority.lock()
             .map_err(|_| "credential recipient runtime authority is poisoned".to_owned())?;
@@ -20289,10 +20301,18 @@ fn verify_native_credential_lease_scope(state: &GateState, policy_hash: &str) ->
             identity.verify_policy_commitment(native_lease_digest_bytes(policy_hash)?, deadline)?;
         }
     }
-    Ok(())
+    native_runtime_live(state)
+}
+
+fn native_runtime_live(state: &GateState) -> Result<(), String> {
+    match &state.native_runtime_lifetime {
+        Some(lifetime) => lifetime.check(),
+        None => Ok(()), // Legacy and not-yet-running cold native preparation.
+    }
 }
 
 fn native_upstream_remaining(state: &GateState, policy_hash: &str) -> Result<Option<Duration>, String> {
+    native_runtime_live(state)?;
     let Some(relays) = state.native_upstream_relays.as_ref() else { return Ok(None); };
     let mut authority = state.mitm_authority.as_ref()
         .ok_or("native egress requires its retained runtime authority")?
@@ -20303,12 +20323,15 @@ fn native_upstream_remaining(state: &GateState, policy_hash: &str) -> Result<Opt
     let deadline = identity.deadline();
     identity.verify_policy_commitment(native_lease_digest_bytes(policy_hash)?, deadline)?;
     identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
-    relays.remaining().map(Some)
+    let remaining = relays.remaining()?;
+    native_runtime_live(state)?;
+    Ok(Some(remaining))
 }
 
 // Service requests may settle an earlier policy operation, so this checks the
 // retained native lifetime rather than relabeling the operation's policy hash.
 fn native_service_remaining(state: &GateState) -> Result<Option<Duration>, String> {
+    native_runtime_live(state)?;
     let Some(relays) = state.native_upstream_relays.as_ref() else { return Ok(None); };
     let mut authority = state.mitm_authority.as_ref()
         .ok_or("native service transport requires its runtime authority")?
@@ -20318,7 +20341,9 @@ fn native_service_remaining(state: &GateState) -> Result<Option<Duration>, Strin
     };
     let deadline = identity.deadline();
     identity.verify_live(deadline)?;
-    relays.remaining().map(Some)
+    let remaining = relays.remaining()?;
+    native_runtime_live(state)?;
+    Ok(Some(remaining))
 }
 
 fn bounded_service_request(state: &GateState, request: reqwest::blocking::RequestBuilder)
@@ -49225,36 +49250,15 @@ struct NativeTlsGateV1 {
     deadline: u64,
 }
 
-/// Source-level TLS/ingress composition, not a complete enclave startup. The
-/// caller must separately construct/admit enclave-owned policy, broker, proof
-/// and egress state. No host state is promoted by this function.
+/// Owned native serving/worker composition, not independent startup admission.
+/// Only a consumed native preparation enters this runner; legacy main remains
+/// separate and no environment activation switch is introduced.
 fn serve_native_vsock_proxy(
     listener: VsockListenerV1,
     prepared: NativeTlsGateV1,
-    worker_count: usize,
-    queue_capacity: usize,
+    settings: NativeRuntimeSettingsV1,
 ) -> Result<(), String> {
-    let NativeTlsGateV1 { state, ingress, deadline } = prepared;
-    {
-        let mut authority = state.mitm_authority.as_ref()
-            .ok_or("native serving requires the held runtime authority")?
-            .lock().map_err(|_| "native serving runtime authority is poisoned".to_owned())?;
-        let MitmAuthority::Native(identity) = &mut *authority else {
-            return Err("native serving cannot use a PEM-backed MITM authority".to_owned());
-        };
-        identity.verify_quoted_ingress(&ingress, deadline)?;
-        identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
-    }
-    let (config, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
-    if state.proxy_ingress_attestation.value() != attestation.value() {
-        return Err("native ingress state does not describe the held TLS configuration".to_owned());
-    }
-    ingress.verify_live(deadline)?;
-    let result = serve_vsock_proxy(listener, state, config, worker_count, queue_capacity, deadline);
-    // The private key owner remains alive until all scoped handlers have joined.
-    // It does not turn the original NSM response into independent admission.
-    drop(ingress);
-    result
+    native_runtime::run(listener, prepared, settings)
 }
 
 fn load_proxy_ingress_config(
@@ -49604,7 +49608,7 @@ struct GateConnection {
 }
 
 struct VsockProxyLifetime {
-    stopped: AtomicBool,
+    runtime: Arc<NativeRuntimeLifetimeV1>,
     sessions: Mutex<Vec<Weak<VsockShutdownV1>>>,
     capacity: usize,
 }
@@ -49616,7 +49620,7 @@ impl VsockProxyLifetime {
         let mut sessions = self.sessions.lock()
             .map_err(|_| "vsock session registry is poisoned".to_owned())?;
         sessions.retain(|entry| entry.strong_count() != 0);
-        if self.stopped.load(Ordering::Acquire) || sessions.len() >= self.capacity {
+        if self.runtime.is_stopped() || sessions.len() >= self.capacity {
             let _ = handle.shutdown();
             return Err("vsock proxy stopped or exceeded its bounded session inventory".to_owned());
         }
@@ -49625,7 +49629,7 @@ impl VsockProxyLifetime {
     }
 
     fn stop(&self) -> Result<(), String> {
-        self.stopped.store(true, Ordering::Release);
+        self.runtime.stop();
         // Cleanup must still close every retained session if a worker panicked
         // while another operation poisoned this lock. Never skip later handles
         // after a shutdown error; preserve the first error for the caller.
@@ -49662,7 +49666,7 @@ fn run_gate_connection_worker(
         let connection = receiver.lock()
             .map_err(|_| "connection receiver mutex poisoned".to_owned())?.recv();
         let Ok(connection) = connection else { return Ok(()); };
-        if lifetime.is_some_and(|owner| owner.stopped.load(Ordering::Acquire)) {
+        if lifetime.is_some_and(|owner| owner.runtime.is_stopped()) {
             drop(connection);
             continue;
         }
@@ -49692,7 +49696,15 @@ fn serve_vsock_proxy(
     worker_count: usize,
     queue_capacity: usize,
     deadline: u64,
+    runtime: Arc<NativeRuntimeLifetimeV1>,
 ) -> Result<(), String> {
+    runtime.check()?;
+    if runtime.deadline() != deadline
+        || state.native_runtime_lifetime.as_ref()
+            .is_none_or(|held| !Arc::ptr_eq(held, &runtime))
+    {
+        return Err("vsock proxy requires its exact retained native lifecycle".to_owned());
+    }
     if !matches!(&proxy_ingress, ProxyIngressConfig::MutualTls(_)) {
         return Err("vsock proxy requires actual mutual-TLS ingress".to_owned());
     }
@@ -49704,7 +49716,7 @@ fn serve_vsock_proxy(
         let (sender, receiver) = mpsc::sync_channel::<GateConnection>(queue_capacity);
         let receiver = Arc::new(Mutex::new(receiver));
         let capacity = worker_count + queue_capacity + 1;
-        let lifetime = Arc::new(VsockProxyLifetime { stopped: AtomicBool::new(false),
+        let lifetime = Arc::new(VsockProxyLifetime { runtime: Arc::clone(&runtime),
             sessions: Mutex::new(Vec::with_capacity(capacity)), capacity });
         // Declared after sender: unwind closes sessions before disconnecting
         // the queue, and the enclosing thread scope still joins every worker.
@@ -49731,12 +49743,12 @@ fn serve_vsock_proxy(
                 workers.push(worker);
             }
             loop {
-                if lifetime.stopped.load(Ordering::Acquire) {
+                if lifetime.runtime.is_stopped() {
                     return Err("vsock proxy worker lifecycle stopped".to_owned());
                 }
                 // Never substitute a polling-tick deadline: this exact bound
                 // is inherited by every accepted stream for its whole lifetime.
-                let stream = listener.accept(deadline)
+                let stream = listener.accept_cancellable(deadline, runtime.stopped_flag())
                     .map_err(|error| format!("vsock proxy accept ended: {error}"))?;
                 let shutdown_guard = lifetime.register(&stream)?;
                 let connection = GateConnection { socket: GateSocket::Vsock(stream),
@@ -51788,6 +51800,7 @@ mod tests {
                 MAX_PINNED_UPSTREAM_CLIENTS,
             )),
             native_upstream_relays: None,
+            native_runtime_lifetime: None,
             audit_client: client.clone(),
             credential_lease_client: client,
             audit_url: None,

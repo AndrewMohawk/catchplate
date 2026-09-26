@@ -8,17 +8,26 @@ pub(super) fn start_response_observation_v2_health_probe(
     };
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(1));
-        let healthy = ResponseObservationV2Deadline::after(
-            Duration::from_secs(2),
-        )
+        probe_response_observation_v2_once(&client, Duration::from_secs(2));
+    });
+}
+
+/// Run the same pinned hello check without creating a detached worker. The
+/// caller's remaining lifetime may shorten, but never extend, the legacy bound.
+pub(super) fn probe_response_observation_v2_once(
+    client: &ResponseObservationV2Client,
+    max_duration: Duration,
+) -> bool {
+    let max_duration = max_duration.min(Duration::from_secs(2));
+    let healthy = !max_duration.is_zero()
+        && ResponseObservationV2Deadline::after(max_duration)
             .and_then(|deadline| {
                 let probe_config =
                     ResponseObservationV2ClientConfig {
                         socket_path:
                             client.socket_path.clone(),
                         expected_uid: client.expected_uid,
-                        startup_timeout:
-                            Duration::from_secs(2),
+                        startup_timeout: max_duration,
                         attestation_mode:
                             client.attestation_mode,
                         signer_key_sha256:
@@ -77,8 +86,8 @@ pub(super) fn start_response_observation_v2_health_probe(
                         >= client.revocation_epoch
             })
             .unwrap_or(false);
-        client
-            .healthy
-            .store(u64::from(healthy), Ordering::Release);
-    });
+    client
+        .healthy
+        .store(u64::from(healthy), Ordering::Release);
+    healthy
 }

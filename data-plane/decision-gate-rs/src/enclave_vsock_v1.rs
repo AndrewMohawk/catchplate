@@ -236,6 +236,34 @@ impl VsockListenerV1 {
         }
     }
 
+    /// Cancellation affects only this accept operation. A returned stream
+    /// keeps the original clipped session deadline, never a polling slice.
+    /// Cancellation is checked around acquisition and by bounded ppoll; no
+    /// descriptor or successful session escapes an observed cancellation.
+    pub fn accept_cancellable(&self, deadline: u64, stopped: &AtomicBool) -> io::Result<VsockStreamV1> {
+        let deadline = self.deadline.min(deadline);
+        loop {
+            if stopped.load(Ordering::Acquire) {
+                return Err(error(io::ErrorKind::NotConnected, "vsock accept was cancelled"));
+            }
+            match self.try_accept(deadline) {
+                Ok(stream) => {
+                    if stopped.load(Ordering::Acquire) {
+                        let _ = stream.shutdown();
+                        return Err(error(io::ErrorKind::NotConnected, "vsock accept was cancelled"));
+                    }
+                    return Ok(stream);
+                }
+                Err(failure) if failure.kind() == io::ErrorKind::WouldBlock => {}
+                Err(failure) => return Err(failure),
+            }
+            let events = self.socket.poll(libc::POLLIN, deadline, Some(stopped))?;
+            if events & (libc::POLLERR | libc::POLLHUP) != 0 {
+                return Err(error(io::ErrorKind::ConnectionAborted, "vsock listener failed"));
+            }
+        }
+    }
+
     /// One nonblocking accept (retrying only interruptions). WouldBlock does
     /// not substitute a polling deadline for the returned session's lifetime.
     pub fn try_accept(&self, deadline: u64) -> io::Result<VsockStreamV1> {

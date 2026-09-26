@@ -1,8 +1,8 @@
 //! Fresh original native evidence, separate from vendor-verifier admission.
 //!
 //! This producer neither invokes a host command nor invents a trusted_verifier
-//! envelope. The existing proof client must reject this distinct version until
-//! an explicitly admitted native client profile covers full response semantics.
+//! envelope. Only the explicit native client profile accepts this distinct
+//! version; legacy vendor evidence and production admission remain separate.
 
 use super::*;
 
@@ -13,6 +13,7 @@ pub(super) fn response_attestation_available(state: &GateState) -> bool {
     if let ResponseProofSigner::Custody(signer) = &state.response_proof_signer {
         if signer.transport.is_native() {
             return state.response_proof_attestation_command.is_none()
+                && native_runtime_live(state).is_ok()
                 && signer.transport.verify_live().is_ok();
         }
     }
@@ -29,6 +30,7 @@ pub(super) fn native_response_runtime_proof(state: &GateState, statement: &Value
         return Ok(None);
     };
     if !signer.transport.is_native() { return Ok(None); }
+    native_runtime_live(state)?;
     if state.response_proof_attestation_command.is_some() {
         return Err("native response attestation forbids an external command".to_owned());
     }
@@ -77,5 +79,6 @@ pub(super) fn native_response_runtime_proof(state: &GateState, statement: &Value
     }
     custody_deadline_remaining(operation_deadline, "native response evidence assembly")?;
     signer.transport.verify_live()?;
+    native_runtime_live(state)?;
     Ok(Some(proof))
 }

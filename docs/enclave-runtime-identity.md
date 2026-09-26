@@ -266,7 +266,9 @@ accepted environment mode or external-verifier profile. The chain commitment
 uses SHA-256 over `serverware/native-tls-server-chain/v1` plus NUL, a `u32BE`
 count and each `u64BE` length plus original DER, in chain order. Leaf/SPKI hashes
 remain raw SHA-256; the client-root commitment is the framed digest above.
-`serve_native_vsock_proxy` consumes the prepared `NativeTlsGateV1`, rechecks
+`serve_native_vsock_proxy` consumes the prepared `NativeTlsGateV1` through the
+[owned native lifecycle](native-runtime-lifecycle.md), with actual scoped
+background workers, readiness checks and shared stop/join ownership. It rechecks
 the retained native authority/outer-quote join and time scope, requires exact
 state metadata equality, and retains the owners until all scoped handlers
 join. Accepted streams inherit the prepared deadline. It does not admit the

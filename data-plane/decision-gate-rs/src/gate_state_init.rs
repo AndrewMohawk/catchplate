@@ -121,6 +121,7 @@ impl GateStateInputs {
                 MAX_PINNED_UPSTREAM_CLIENTS,
             )),
             native_upstream_relays: None,
+            native_runtime_lifetime: None,
             audit_client: runtime.audit_client,
             credential_lease_client: runtime.credential_lease_client,
             audit_url: self.audit_url,

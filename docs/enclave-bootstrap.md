@@ -127,9 +127,12 @@ or credentials. Original service and response-verification gates remain.
 ## What this does not admit or start
 
 The normal environment-driven `main` remains a separate legacy startup. The
-native constructor does not run it, copy its ready state, start its policy/audit/
-lease or health workers, bind listeners, or install a daemon. Explicit serving
-still needs the retained prepared object and actual lifecycle ownership.
+native constructor does not run it, copy its ready state, start workers, bind
+listeners or install a daemon. The separate [owned native lifecycle](native-runtime-lifecycle.md)
+consumes the prepared object and actual listener, starts scoped policy/audit/
+lease/health work, checks readiness and serves with shared cancellation and
+joined shutdown. This callable run does not activate CLI startup or provision
+its inputs.
 
 Supplied configuration, service tokens, verifier/release pins, TLS roots and
 ordinary checkpoint values require independent admission. Existing proof and

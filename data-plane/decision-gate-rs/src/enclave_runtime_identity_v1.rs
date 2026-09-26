@@ -83,6 +83,14 @@ impl QuotedMutualTlsIngressV1 {
         }
         live(deadline.min(self.deadline))
     }
+
+    /// Permanently narrow local custody, not the original quote's signed data.
+    /// Existing Arc configurations still require serving-session cancellation.
+    pub fn restrict_deadline(&mut self, deadline: u64) -> Result<(), String> {
+        self.verify_live(self.deadline)?;
+        self.deadline = self.deadline.min(deadline);
+        self.verify_live(self.deadline)
+    }
 }
 
 /// Fresh one-use X25519 key and the NSM original naming its actual public key.

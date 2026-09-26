@@ -5,8 +5,15 @@ mod policy_core;
 mod policy_shadow;
 mod policy_shadow_generation;
 mod response_v2;
+mod gate_state_init;
+mod control_plane_client_config;
+mod native_gate_bootstrap;
+mod native_gate_inputs;
 
 use response_v2::*;
+use gate_state_init::{GateStateInputs, GateStateRuntime};
+use control_plane_client_config::ControlPlaneClientConfig;
+use native_gate_bootstrap::prepare_native_tls_gate_state;
 
 use base64::{engine::general_purpose, Engine as _};
 use csv::{ByteRecord, ReaderBuilder, WriterBuilder};
@@ -157,8 +164,9 @@ use serverware_decision_gate::enclave_runtime_identity_v1::{
     QuotedCredentialRecipientV1, QuotedMutualTlsIngressV1, TlsAuthorityV1,
 };
 use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
+use serverware_decision_gate::enclave_bootstrap_v1::EnclaveBootstrapV1;
 use serverware_decision_gate::native_upstream_relays_v1::{
-    NativeRelayAssignmentV1, NativeUpstreamRelaysV1,
+    NativeUpstreamRelaysV1,
 };
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -2477,6 +2485,7 @@ struct GateState {
         Option<Arc<PolicyShadowGenerationControl>>,
     snapshot: RwLock<Arc<Snapshot>>,
     policy_path: String,
+    native_policy_bytes: Option<Arc<[u8]>>,
     policy_trust_root_source: PolicyTrustRootSource,
     policy_mtime: Mutex<Option<SystemTime>>,
     release_evidence_mtimes: Mutex<(Option<SystemTime>, Option<SystemTime>)>,
@@ -4294,6 +4303,7 @@ enum ControlPlaneAttestationVerifier {
 struct NativeControlPlaneTransport {
     client: Client,
     relays: Arc<NativeUpstreamRelaysV1>,
+    expected_policy_signing_key_id: String,
 }
 
 #[derive(Clone)]
@@ -14198,6 +14208,11 @@ fn load_snapshot(
     trust_root_source: &PolicyTrustRootSource,
     running_binary_digest: &str,
 ) -> Result<Snapshot, String> {
+    if matches!(trust_root_source, PolicyTrustRootSource::AttestedControlPlane {
+        native_transport: Some(_), ..
+    }) {
+        return Err("native policy loading requires retained original bytes".to_owned());
+    }
     let text = fs::read_to_string(path).map_err(|err| format!("read policy bundle: {err}"))?;
     let raw =
         strict_json_value_from_str(&text).map_err(|err| format!("parse policy bundle: {err}"))?;
@@ -14229,17 +14244,19 @@ fn load_shadow_snapshot_pair(
         );
     }
     let trust_root = load_policy_trust_root(trust_root_source)?;
-    let active = compile_signed_snapshot(
+    let active = compile_signed_snapshot_for_source(
         active_raw,
         trust_root.clone(),
         running_binary_digest,
         true,
+        trust_root_source,
     )?;
-    let candidate = compile_signed_snapshot(
+    let candidate = compile_signed_snapshot_for_source(
         candidate_raw,
         trust_root,
         running_binary_digest,
         false,
+        trust_root_source,
     )?;
     if active.policy_signing_key_id
         != candidate.policy_signing_key_id
@@ -14257,6 +14274,35 @@ fn compile_signed_snapshot(
     trust_root: PolicyTrustRoot,
     running_binary_digest: &str,
     require_attested_policy_hash: bool,
+) -> Result<Snapshot, String> {
+    let expected = env::var("SERVERWARE_EXPECTED_POLICY_SIGNING_KEY_ID")
+        .ok().filter(|value| !value.trim().is_empty());
+    compile_signed_snapshot_with_expected_key(raw, trust_root, running_binary_digest,
+        require_attested_policy_hash, expected.as_deref())
+}
+
+fn compile_signed_snapshot_for_source(raw: Value, trust_root: PolicyTrustRoot,
+    binary_digest: &str, require_active: bool, source: &PolicyTrustRootSource)
+    -> Result<Snapshot, String> {
+    if let PolicyTrustRootSource::AttestedControlPlane {
+        native_transport: Some(transport), ..
+    } = source {
+        transport.relays.remaining()?;
+        let snapshot = compile_signed_snapshot_with_expected_key(raw, trust_root, binary_digest,
+            require_active, Some(&transport.expected_policy_signing_key_id))?;
+        transport.relays.remaining()?;
+        Ok(snapshot)
+    } else {
+        compile_signed_snapshot(raw, trust_root, binary_digest, require_active)
+    }
+}
+
+fn compile_signed_snapshot_with_expected_key(
+    raw: Value,
+    trust_root: PolicyTrustRoot,
+    running_binary_digest: &str,
+    require_attested_policy_hash: bool,
+    expected_signing_key_id: Option<&str>,
 ) -> Result<Snapshot, String> {
     if raw.get("apiVersion").and_then(Value::as_str) != Some("serverware.policy/v1") {
         return Err("apiVersion must be serverware.policy/v1".to_string());
@@ -14307,10 +14353,7 @@ fn compile_signed_snapshot(
             ));
         }
     }
-    if let Some(expected_key_id) = env::var("SERVERWARE_EXPECTED_POLICY_SIGNING_KEY_ID")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
+    if let Some(expected_key_id) = expected_signing_key_id {
         if signing_key_id != expected_key_id {
             return Err(format!(
                 "policy signing key is not trusted: expected {expected_key_id}, bundle has {signing_key_id}"
@@ -14934,11 +14977,12 @@ fn clear_local_grants_if_signed_policy_changed(
 }
 
 fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, String> {
-    let mtime = file_mtime(&state.policy_path);
-    let evidence_mtimes = release_evidence_mtimes(
-        state.release_provenance_path.as_deref(),
-        state.image_signatures_path.as_deref(),
-    );
+    let (mtime, evidence_mtimes) = if state.native_policy_bytes.is_some() {
+        (None, (None, None))
+    } else {
+        (file_mtime(&state.policy_path), release_evidence_mtimes(
+            state.release_provenance_path.as_deref(), state.image_signatures_path.as_deref()))
+    };
     let evidence_changed = matches!(
         state.policy_trust_root_source,
         PolicyTrustRootSource::AttestedControlPlane { .. }
@@ -14964,11 +15008,16 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
             return Ok(false);
         }
     }
-    match load_snapshot(
-        &state.policy_path,
-        &state.policy_trust_root_source,
-        &state.binary_digest,
-    ) {
+    let loaded = if let Some(bytes) = state.native_policy_bytes.as_deref() {
+        native_gate_bootstrap::load_native_snapshot(bytes, &state.policy_trust_root_source, &state.binary_digest)
+            .and_then(|snapshot| {
+                verify_native_credential_lease_scope(state, &snapshot.hash)?;
+                Ok(snapshot)
+            })
+    } else {
+        load_snapshot(&state.policy_path, &state.policy_trust_root_source, &state.binary_digest)
+    };
+    match loaded {
         Ok(mut snapshot) => {
             if let Err(err) = validate_response_proof_signer_policy_binding(
                 &snapshot,
@@ -22850,30 +22899,16 @@ fn build_control_plane_client(timeout: Duration) -> Result<Client, String> {
 }
 
 fn control_plane_client_builder(timeout: Duration) -> Result<reqwest::blocking::ClientBuilder, String> {
-    let mut builder = Client::builder()
-        .timeout(timeout)
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .tls_info(true);
+    let mut config = ControlPlaneClientConfig::builtin();
     if let Ok(path) = env::var("SERVERWARE_CONTROL_PLANE_CA_BUNDLE") {
         if !path.trim().is_empty() {
-            builder = builder.tls_built_in_root_certs(false);
             let text = fs::read_to_string(&path)
                 .map_err(|err| format!("read control-plane CA bundle {path}: {err}"))?;
-            let certs = pem_certificates(&text);
-            if certs.is_empty() {
-                return Err(format!(
-                    "control-plane CA bundle {path} has no PEM certificates"
-                ));
-            }
-            for cert in certs {
-                let cert = reqwest::Certificate::from_pem(&cert)
-                    .map_err(|err| format!("parse control-plane CA certificate {path}: {err}"))?;
-                builder = builder.add_root_certificate(cert);
-            }
+            config = ControlPlaneClientConfig::from_pem(&text)
+                .map_err(|error| format!("control-plane CA bundle {path}: {error}"))?;
         }
     }
-    Ok(builder)
+    Ok(config.builder(timeout))
 }
 
 fn audit_enabled(state: &GateState) -> bool {
@@ -49166,73 +49201,6 @@ struct NativeTlsGateV1 {
     deadline: u64,
 }
 
-/// Install both TLS layers before state can be shared with serving workers.
-/// This consumes an actual NSM/native-CA owner, not a supplied key or proof DTO.
-/// Other gate dependencies still need enclave-owned startup and admission.
-fn prepare_native_tls_gate_state(
-    mut state: GateState,
-    mut identity: EnclaveRuntimeIdentityV1,
-    ingress: QuotedMutualTlsIngressV1,
-    relay_assignments: Vec<NativeRelayAssignmentV1>,
-    deadline: u64,
-) -> Result<NativeTlsGateV1, String> {
-    if state.mitm_authority.is_some() {
-        return Err("native TLS setup cannot replace an existing MITM authority".to_owned());
-    }
-    if state.credential_lease_recipient_attestation_command.is_some() {
-        return Err("native TLS setup cannot retain an external recipient attestation command".to_owned());
-    }
-    if state.native_upstream_relays.is_some() || !state.pinned_upstream_clients.get_mut()
-        .map_err(|_| "native TLS setup found a poisoned upstream cache".to_owned())?.entries.is_empty() {
-        return Err("native TLS setup requires unused upstream transport state".to_owned());
-    }
-    if !state.leaf_configs.get_mut()
-        .map_err(|_| "native TLS setup found a poisoned leaf cache".to_owned())?.is_empty() {
-        return Err("native TLS setup requires an unused leaf cache".to_owned());
-    }
-    let deadline = deadline.min(identity.deadline()).min(ingress.deadline());
-    // Inner issuance and cache checks must inherit this same nonrenewing bound,
-    // not merely the potentially later deadline from native key generation.
-    identity.restrict_deadline(deadline)?;
-    identity.verify_quoted_ingress(&ingress, deadline)?;
-    identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)?;
-    let initial_policy_hash = state.snapshot.get_mut()
-        .map_err(|_| "native setup found a poisoned policy snapshot".to_owned())?.hash.clone();
-    identity.verify_policy_commitment(native_lease_digest_bytes(&initial_policy_hash)?, deadline)?;
-    let relays = Arc::new(NativeUpstreamRelaysV1::new(relay_assignments, deadline)?);
-    let trust_url = match &state.policy_trust_root_source {
-        PolicyTrustRootSource::AttestedControlPlane { url, native_transport: None, .. } => url.as_str(),
-        _ => return Err("native setup requires an unused attested control-plane trust source".to_owned()),
-    };
-    let mut service_urls = vec![trust_url];
-    service_urls.extend([
-        state.audit_url.as_deref(), state.grant_consume_url.as_deref(),
-        state.rate_limit_consume_url.as_deref(), state.release_authorization_base_url.as_deref(),
-    ].into_iter().flatten());
-    let service_proxy = relays.service_proxy(&service_urls)?;
-    // The bridge has four synchronous relay workers shared across origins.
-    // Idle pooled TLS connections must not reserve them between requests.
-    state.audit_client = control_plane_client_builder(Duration::from_secs(2))?
-        .https_only(true).pool_max_idle_per_host(0).proxy(service_proxy.clone()).build()
-        .map_err(|_| "build fixed native control-plane TLS client".to_owned())?;
-    let trust_client = control_plane_client_builder(Duration::from_secs(5))?
-        .https_only(true).pool_max_idle_per_host(0).proxy(service_proxy).build()
-        .map_err(|_| "build fixed native policy trust TLS client".to_owned())?;
-    if let PolicyTrustRootSource::AttestedControlPlane { native_transport, .. } = &mut state.policy_trust_root_source {
-        *native_transport = Some(NativeControlPlaneTransport { client: trust_client, relays: Arc::clone(&relays) });
-    }
-    if let Some(url) = state.credential_lease_url.as_deref() {
-        state.credential_lease_client = control_plane_client_builder(Duration::from_secs(3))?
-            .https_only(true).proxy(relays.broker_proxy(url)?).build()
-            .map_err(|_| "build fixed native credential broker TLS client".to_owned())?;
-    }
-    let (_, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
-    state.proxy_ingress_attestation = attestation;
-    state.mitm_authority = Some(Mutex::new(MitmAuthority::Native(identity)));
-    state.native_upstream_relays = Some(relays);
-    Ok(NativeTlsGateV1 { state: Arc::new(state), ingress, deadline })
-}
-
 /// Source-level TLS/ingress composition, not a complete enclave startup. The
 /// caller must separately construct/admit enclave-owned policy, broker, proof
 /// and egress state. No host state is promoted by this function.
@@ -50423,53 +50391,23 @@ fn main() -> Result<(), String> {
     let audit_client = build_audit_client()?;
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
-    let state = Arc::new(GateState {
-        upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
-        #[cfg(test)]
-        upstream_send_credential_lock_contentions: AtomicU64::new(0),
-        policy_shadow: ShadowRuntime::new(),
+    let state = Arc::new(GateStateInputs {
         policy_shadow_generation_control,
-        snapshot: RwLock::new(snapshot),
         policy_path,
         policy_trust_root_source,
-        policy_mtime: Mutex::new(initial_policy_mtime),
-        release_evidence_mtimes: Mutex::new(initial_release_evidence_mtimes),
-        policy_trust_refresh_due: Mutex::new(Instant::now() + POLICY_TRUST_REFRESH_INTERVAL),
-        policy_trust_last_success: Mutex::new(Instant::now()),
-        policy_reload_success: AtomicU64::new(0),
-        policy_reload_failed: AtomicU64::new(0),
+        initial_policy_mtime,
+        initial_release_evidence_mtimes,
         policy_high_water_path,
-        policy_high_water: Mutex::new(policy_high_water),
-        grants: Mutex::new(HashMap::new()),
+        policy_high_water,
         grant_cache_max,
-        gmail_proofs: Mutex::new(HashMap::new()),
         gmail_proof_cache_max,
-        constraint_rate_counters: Mutex::new(HashMap::new()),
-        credential_leases: Mutex::new(HashMap::new()),
-        credential_generations: Mutex::new(HashMap::new()),
-        credential_lease_activity: Mutex::new(HashMap::new()),
-        credential_lease_flights: Mutex::new(HashMap::new()),
         credential_lease_url,
         credential_lease_recipient_attestation_command,
-        credential_lease_refresh_success: AtomicU64::new(0),
-        credential_lease_refresh_failed: AtomicU64::new(0),
-        credential_lease_renewal_poll_interval_ms: u64::try_from(
-            credential_lease_renewal_interval.as_millis(),
-        )
-        .unwrap_or(u64::MAX),
+        credential_lease_renewal_interval,
         credential_lease_renewal_workers,
         credential_lease_renewal_queue_capacity,
-        credential_lease_renewal_queued: AtomicU64::new(0),
-        credential_lease_renewal_queue_full: AtomicU64::new(0),
         credential_lease_cache_max,
-        upstream_resolver,
         upstream_client_config,
-        pinned_upstream_clients: Mutex::new(PinnedUpstreamClientCache::new(
-            MAX_PINNED_UPSTREAM_CLIENTS,
-        )),
-        native_upstream_relays: None,
-        audit_client,
-        credential_lease_client,
         audit_url,
         credential_lease_token,
         audit_token,
@@ -50482,32 +50420,24 @@ fn main() -> Result<(), String> {
         release_authorization_base_url,
         release_authorization_token,
         management_token,
-        audit_queue: Mutex::new(VecDeque::new()),
-        audit_reserved: AtomicU64::new(0),
         audit_queue_max,
         audit_batch_max,
-        audit_enqueued: AtomicU64::new(0),
-        audit_dropped: AtomicU64::new(0),
-        audit_required_failed: AtomicU64::new(0),
-        audit_sent: AtomicU64::new(0),
-        audit_send_failed: AtomicU64::new(0),
         request_head_deadline,
         request_body_deadline,
         response_write_deadline,
-        proxy_ingress_attestation,
-        mitm_authority: mitm_authority.map(Mutex::new),
-        leaf_configs: Mutex::new(HashMap::new()),
         binary_digest,
         release_provenance_path,
         image_signatures_path,
         response_proof_signer,
-        response_observation_nonce_reservations: Mutex::new(HashMap::new()),
         response_proof_public_key_pem,
         response_proof_signing_key_id,
         response_proof_attestation_command,
         server_instance_id,
         response_observation_v2_client,
-    });
+    }.into_state(GateStateRuntime {
+        snapshot, upstream_resolver, audit_client, credential_lease_client,
+        proxy_ingress_attestation, mitm_authority,
+    }));
     if let Some(control) =
         state.policy_shadow_generation_control.as_ref()
     {
@@ -51793,6 +51723,7 @@ mod tests {
             policy_shadow_generation_control: None,
             snapshot: RwLock::new(snapshot),
             policy_path: "/unused/test-policy.json".to_string(),
+            native_policy_bytes: None,
             policy_trust_root_source: PolicyTrustRootSource::File(
                 "/unused/test-policy-key.pem".to_string(),
             ),

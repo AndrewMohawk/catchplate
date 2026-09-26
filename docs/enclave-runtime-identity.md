@@ -283,6 +283,13 @@ now covers shared audit/grant/rate/release clients, retained trust refresh and
 bounded parent serving. Neither integration activates native startup or
 supplies proof custody transport.
 
+The separate [native bootstrap](enclave-bootstrap.md) now consumes these actual
+owners before initial policy acquisition, fetches trust through retained native
+transport, compiles bounded original signed-policy bytes and assembles fresh
+state. Supplied checkpoint, configuration and proof-owner consistency remain
+distinct from independent currentness/provenance admission; no CLI or complete
+enclave startup is activated.
+
 ## Deferred verification
 
 The consolidated frozen phase must cover the real gate call sites as well as

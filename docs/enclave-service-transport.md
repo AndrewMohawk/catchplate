@@ -107,9 +107,11 @@ encrypt or validate arbitrary caller-supplied bytes.
 
 ## Still outside this source integration
 
-The normal `main` initial policy loader and environment-driven startup remain
-legacy; later native preparation does not retroactively make their reads or
-admission enclave-owned. No new CLI/environment mode, parent daemon/systemd
+The normal `main` policy loader and environment-driven startup remain legacy;
+the separate [native bootstrap](enclave-bootstrap.md) now installs retained
+transport before actually loading and compiling bounded original policy bytes
+into fresh state. It does not retroactively admit legacy state or supply
+independent bootstrap authority. No new CLI/environment mode, parent daemon/systemd
 unit, listener provisioning or complete native bootstrap is activated here.
 Proof/observation custody transports and the complete admitted enclave lifecycle
 remain separate work.

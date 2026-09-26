@@ -2480,6 +2480,10 @@ impl PolicyShadowGenerationControl {
         })))
     }
 
+    pub(crate) fn is_production(&self) -> bool {
+        self.is_production
+    }
+
     pub(crate) fn startup_request(&self) -> Option<&[u8]> {
         self.startup_request.as_deref()
     }

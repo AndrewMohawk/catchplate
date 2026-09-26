@@ -1,0 +1,165 @@
+//! Shared state assembly only, not configuration loading or native admission.
+//!
+//! All non-default material is supplied by the caller. This constructor does
+//! not read environment/files, contact a service, create keys, or start workers.
+//! Empty state and clocks preserve the existing main-constructor defaults.
+
+use super::{
+    Client, GateState, MitmAuthority, PinnedUpstreamClientCache,
+    PolicyHighWater, PolicyShadowGenerationControl, PolicyTrustRootSource,
+    ProxyIngressAttestation, ResponseObservationV2Client, ResponseProofSigner,
+    ShadowRuntime, Snapshot, UpstreamClientConfig, UpstreamDispatchAuthority,
+    UpstreamResolver, MAX_PINNED_UPSTREAM_CLIENTS, POLICY_TRUST_REFRESH_INTERVAL,
+};
+use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime};
+
+pub(super) struct GateStateInputs {
+    pub(super) policy_shadow_generation_control: Option<Arc<PolicyShadowGenerationControl>>,
+    pub(super) policy_path: String,
+    pub(super) policy_trust_root_source: PolicyTrustRootSource,
+    pub(super) initial_policy_mtime: Option<SystemTime>,
+    pub(super) initial_release_evidence_mtimes: (Option<SystemTime>, Option<SystemTime>),
+    pub(super) policy_high_water_path: Option<PathBuf>,
+    pub(super) policy_high_water: PolicyHighWater,
+    pub(super) grant_cache_max: usize,
+    pub(super) gmail_proof_cache_max: usize,
+    pub(super) credential_lease_url: Option<String>,
+    pub(super) credential_lease_recipient_attestation_command: Option<String>,
+    pub(super) credential_lease_renewal_interval: Duration,
+    pub(super) credential_lease_renewal_workers: usize,
+    pub(super) credential_lease_renewal_queue_capacity: usize,
+    pub(super) credential_lease_cache_max: usize,
+    pub(super) upstream_client_config: UpstreamClientConfig,
+    pub(super) audit_url: Option<String>,
+    pub(super) credential_lease_token: Option<String>,
+    pub(super) audit_token: Option<String>,
+    pub(super) grant_consume_url: Option<String>,
+    pub(super) grant_consume_token: Option<String>,
+    pub(super) rate_limit_consume_url: Option<String>,
+    pub(super) rate_limit_consume_token: Option<String>,
+    pub(super) is_production: bool,
+    pub(super) atomic_release_authorization_enabled: bool,
+    pub(super) release_authorization_base_url: Option<String>,
+    pub(super) release_authorization_token: Option<String>,
+    pub(super) management_token: Option<String>,
+    pub(super) audit_queue_max: usize,
+    pub(super) audit_batch_max: usize,
+    pub(super) request_head_deadline: Duration,
+    pub(super) request_body_deadline: Duration,
+    pub(super) response_write_deadline: Duration,
+    pub(super) binary_digest: String,
+    pub(super) release_provenance_path: Option<String>,
+    pub(super) image_signatures_path: Option<String>,
+    pub(super) response_proof_signer: ResponseProofSigner,
+    pub(super) response_proof_public_key_pem: String,
+    pub(super) response_proof_signing_key_id: String,
+    pub(super) response_proof_attestation_command: Option<String>,
+    pub(super) server_instance_id: Option<String>,
+    pub(super) response_observation_v2_client: Option<ResponseObservationV2Client>,
+}
+
+/// Actual runtime material is separate so native startup never needs a dummy
+/// host snapshot, resolver, HTTP client or PEM authority as a prerequisite.
+pub(super) struct GateStateRuntime {
+    pub(super) snapshot: Arc<Snapshot>,
+    pub(super) upstream_resolver: Arc<dyn UpstreamResolver>,
+    pub(super) audit_client: Client,
+    pub(super) credential_lease_client: Client,
+    pub(super) proxy_ingress_attestation: ProxyIngressAttestation,
+    pub(super) mitm_authority: Option<MitmAuthority>,
+}
+
+impl GateStateInputs {
+    pub(super) fn into_state(self, runtime: GateStateRuntime) -> GateState {
+        GateState {
+            upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
+            #[cfg(test)]
+            upstream_send_credential_lock_contentions: AtomicU64::new(0),
+            policy_shadow: ShadowRuntime::new(),
+            policy_shadow_generation_control: self.policy_shadow_generation_control,
+            snapshot: RwLock::new(runtime.snapshot),
+            policy_path: self.policy_path,
+            native_policy_bytes: None,
+            policy_trust_root_source: self.policy_trust_root_source,
+            policy_mtime: Mutex::new(self.initial_policy_mtime),
+            release_evidence_mtimes: Mutex::new(self.initial_release_evidence_mtimes),
+            policy_trust_refresh_due: Mutex::new(Instant::now() + POLICY_TRUST_REFRESH_INTERVAL),
+            policy_trust_last_success: Mutex::new(Instant::now()),
+            policy_reload_success: AtomicU64::new(0),
+            policy_reload_failed: AtomicU64::new(0),
+            policy_high_water_path: self.policy_high_water_path,
+            policy_high_water: Mutex::new(self.policy_high_water),
+            grants: Mutex::new(HashMap::new()),
+            grant_cache_max: self.grant_cache_max,
+            gmail_proofs: Mutex::new(HashMap::new()),
+            gmail_proof_cache_max: self.gmail_proof_cache_max,
+            constraint_rate_counters: Mutex::new(HashMap::new()),
+            credential_leases: Mutex::new(HashMap::new()),
+            credential_generations: Mutex::new(HashMap::new()),
+            credential_lease_activity: Mutex::new(HashMap::new()),
+            credential_lease_flights: Mutex::new(HashMap::new()),
+            credential_lease_url: self.credential_lease_url,
+            credential_lease_recipient_attestation_command:
+                self.credential_lease_recipient_attestation_command,
+            credential_lease_refresh_success: AtomicU64::new(0),
+            credential_lease_refresh_failed: AtomicU64::new(0),
+            credential_lease_renewal_poll_interval_ms: u64::try_from(
+                self.credential_lease_renewal_interval.as_millis(),
+            ).unwrap_or(u64::MAX),
+            credential_lease_renewal_workers: self.credential_lease_renewal_workers,
+            credential_lease_renewal_queue_capacity: self.credential_lease_renewal_queue_capacity,
+            credential_lease_renewal_queued: AtomicU64::new(0),
+            credential_lease_renewal_queue_full: AtomicU64::new(0),
+            credential_lease_cache_max: self.credential_lease_cache_max,
+            upstream_resolver: runtime.upstream_resolver,
+            upstream_client_config: self.upstream_client_config,
+            pinned_upstream_clients: Mutex::new(PinnedUpstreamClientCache::new(
+                MAX_PINNED_UPSTREAM_CLIENTS,
+            )),
+            native_upstream_relays: None,
+            audit_client: runtime.audit_client,
+            credential_lease_client: runtime.credential_lease_client,
+            audit_url: self.audit_url,
+            credential_lease_token: self.credential_lease_token,
+            audit_token: self.audit_token,
+            grant_consume_url: self.grant_consume_url,
+            grant_consume_token: self.grant_consume_token,
+            rate_limit_consume_url: self.rate_limit_consume_url,
+            rate_limit_consume_token: self.rate_limit_consume_token,
+            is_production: self.is_production,
+            atomic_release_authorization_enabled: self.atomic_release_authorization_enabled,
+            release_authorization_base_url: self.release_authorization_base_url,
+            release_authorization_token: self.release_authorization_token,
+            management_token: self.management_token,
+            audit_queue: Mutex::new(VecDeque::new()),
+            audit_reserved: AtomicU64::new(0),
+            audit_queue_max: self.audit_queue_max,
+            audit_batch_max: self.audit_batch_max,
+            audit_enqueued: AtomicU64::new(0),
+            audit_dropped: AtomicU64::new(0),
+            audit_required_failed: AtomicU64::new(0),
+            audit_sent: AtomicU64::new(0),
+            audit_send_failed: AtomicU64::new(0),
+            request_head_deadline: self.request_head_deadline,
+            request_body_deadline: self.request_body_deadline,
+            response_write_deadline: self.response_write_deadline,
+            proxy_ingress_attestation: runtime.proxy_ingress_attestation,
+            mitm_authority: runtime.mitm_authority.map(Mutex::new),
+            leaf_configs: Mutex::new(HashMap::new()),
+            binary_digest: self.binary_digest,
+            release_provenance_path: self.release_provenance_path,
+            image_signatures_path: self.image_signatures_path,
+            response_proof_signer: self.response_proof_signer,
+            response_observation_nonce_reservations: Mutex::new(HashMap::new()),
+            response_proof_public_key_pem: self.response_proof_public_key_pem,
+            response_proof_signing_key_id: self.response_proof_signing_key_id,
+            response_proof_attestation_command: self.response_proof_attestation_command,
+            server_instance_id: self.server_instance_id,
+            response_observation_v2_client: self.response_observation_v2_client,
+        }
+    }
+}

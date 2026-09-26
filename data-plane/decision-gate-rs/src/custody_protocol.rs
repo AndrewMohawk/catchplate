@@ -24,6 +24,7 @@ use zeroize::Zeroize;
 mod response_observation_v2;
 mod response_observation_v2_api;
 pub mod enclave_runtime_identity_v1;
+pub mod enclave_bootstrap_v1;
 pub mod enclave_vsock_v1;
 pub mod enclave_loopback_tunnel_v1;
 pub mod enclave_tls_relay_io_v1;

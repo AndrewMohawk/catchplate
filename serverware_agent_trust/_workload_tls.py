@@ -19,9 +19,12 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
-from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
+from ._workload_identity import (
+    CertificateOriginal, check_client_selectors, check_interception_ca,
+    parse_certificate_original,
+)
 from ._workload_stream import Budget, WorkloadClientError
 
 
@@ -227,12 +230,15 @@ def _load_original(
     return original
 
 
-def _public_certificates(raw: bytes, budget: Budget, *, client: bool) -> str:
+def _public_certificates(
+    raw: bytes, budget: Budget, *, client: bool,
+) -> tuple[str, tuple[CertificateOriginal, ...]]:
     budget.check()
     if b"PRIVATE KEY" in raw.upper():
         raise WorkloadClientError("workload TLS public input contains a private-key marker")
     text = raw.decode("ascii")
     matches = list(_CERTIFICATE.finditer(raw))
+    certificates: list[CertificateOriginal] = []
     position = 0
     if not matches or (client and len(matches) > 16):
         raise WorkloadClientError("workload TLS certificate inventory is empty or exceeds its bound")
@@ -240,12 +246,12 @@ def _public_certificates(raw: bytes, budget: Budget, *, client: bool) -> str:
         if raw[position:match.start()].strip():
             raise WorkloadClientError("workload TLS public input contains non-certificate data")
         budget.check()
-        x509.load_pem_x509_certificate(match.group())
+        certificates.append(parse_certificate_original(match.group(), budget))
         budget.check()
         position = match.end()
     if raw[position:].strip():
         raise WorkloadClientError("workload TLS public input contains trailing data")
-    return text
+    return text, tuple(certificates)
 
 
 def _canonical_private_key(raw: bytes, budget: Budget) -> None:
@@ -327,6 +333,8 @@ def load_tls_contexts(
     client_private_key: PinnedFile,
     interception_ca: PinnedFile,
     budget: Budget,
+    expected_mtls: dict[str, object] | None = None,
+    expected_interception_ca_spki_sha256: str | None = None,
 ) -> TlsContexts:
     """Build distinct private contexts from one checked set of pinned bytes."""
     try:
@@ -341,12 +349,22 @@ def load_tls_contexts(
             certificate_original = _load_original(
                 client_certificate, _MAX_IDENTITY_BYTES, False, budget, owners,
             )
+            proxy_pem, _ = _public_certificates(proxy_original.raw, budget, client=False)
+            provider_pem, provider_certificates = _public_certificates(
+                provider_original.raw, budget, client=False,
+            )
+            _, client_certificates = _public_certificates(certificate_original.raw, budget, client=True)
+            if expected_mtls is not None:
+                check_client_selectors(client_certificates, expected_mtls, budget)
+            if expected_interception_ca_spki_sha256 is not None:
+                check_interception_ca(
+                    provider_certificates, expected_interception_ca_spki_sha256, budget,
+                )
+            # Authenticated public selector/CA joins precede even acquisition
+            # of the private-key original. They do not prove ingress trust.
             key_original = _load_original(
                 client_private_key, _MAX_IDENTITY_BYTES, True, budget, owners,
             )
-            proxy_pem = _public_certificates(proxy_original.raw, budget, client=False)
-            provider_pem = _public_certificates(provider_original.raw, budget, client=False)
-            _public_certificates(certificate_original.raw, budget, client=True)
             _canonical_private_key(key_original.raw, budget)
             proxy = _context(proxy_pem, budget)
             provider = _context(provider_pem, budget)

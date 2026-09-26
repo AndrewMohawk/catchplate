@@ -10,15 +10,19 @@ from __future__ import annotations
 import os
 import re
 import threading
+import time
 import urllib.parse
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 
+from ._workload_handoff import extract_workload_handoff
 from ._workload_http import WorkloadResponse, encode_connect, encode_request, read_response
+from ._workload_signed_packet import verify_signed_workload_packet
 from ._workload_stream import (
     Budget, InnerTLS, OuterTLS, WorkloadClientError, _endpoint, _require_name,
 )
-from ._workload_tls import PinnedFile, TlsContexts, load_tls_contexts
+from ._workload_tls import PinnedFile, TlsContexts, _load_original, _require_linux, load_tls_contexts
 
 
 __all__ = ["PinnedFile", "WorkloadClientError", "WorkloadProxyClient", "WorkloadResponse"]
@@ -27,6 +31,22 @@ _MAX_BODY_BYTES = 8 * 1024 * 1024
 _MAX_URL_BYTES = 8192
 _PORT = re.compile(r"[1-9][0-9]{0,4}\Z")
 _BAD_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
+
+
+@dataclass(frozen=True, repr=False)
+class _HandoffLifetime:
+    admitted_at_epoch_ms: int
+    issued_at_epoch_ms: int
+    expires_at_epoch_ms: int
+    deadline: float
+
+    def check(self) -> None:
+        now = time.time_ns() // 1_000_000
+        if (
+            now < self.admitted_at_epoch_ms or now < self.issued_at_epoch_ms
+            or now >= self.expires_at_epoch_ms or time.monotonic() >= self.deadline
+        ):
+            raise WorkloadClientError("workload signed handoff expired or clock moved before admission")
 
 
 @dataclass(frozen=True, repr=False)
@@ -143,6 +163,8 @@ class WorkloadProxyClient:
         self._endpoint = (proxy_ip, proxy_port)
         self._server_name = proxy_server_name
         self._proxy_headers = scoped_headers
+        self._provider_headers: dict[str, str] = {}
+        self._lifetime: _HandoffLifetime | None = None
         self._timeout_ms = timeout_ms
         self._max_response_bytes = max_response_bytes
         self._contexts: TlsContexts | None = load_tls_contexts(
@@ -151,6 +173,102 @@ class WorkloadProxyClient:
             budget=budget,
         )
         budget.check()
+
+    @classmethod
+    def from_signed_handoff(
+        cls, *, packet: PinnedFile, packet_signing_key: PinnedFile,
+        expected_principal: str, expected_nonce: str, proxy_ip: str,
+        proxy_ca: PinnedFile, client_certificate: PinnedFile,
+        client_private_key: PinnedFile, interception_ca: PinnedFile,
+        proxy_authorization: str | None = None,
+        timeout_ms: int = 30_000, max_response_bytes: int = _MAX_BODY_BYTES,
+    ) -> WorkloadProxyClient:
+        """Derive transport settings from an original authenticated handoff.
+
+        The signing key and every file pin must already be independently
+        admitted. This checks signature/configuration compatibility, not fresh
+        attestation, egress enforcement, canaries or enrollment completion.
+        No receipt flag, packet-supplied key, command or CA installer is used.
+        """
+        budget = Budget(timeout_ms)
+        anchored_monotonic = time.monotonic()
+        anchored_epoch_ms = time.time_ns() // 1_000_000
+        if type(max_response_bytes) is not int or not 1 <= max_response_bytes <= _MAX_BODY_BYTES:
+            raise WorkloadClientError("workload response limit must be an integer in 1..8388608 bytes")
+        try:
+            _require_linux()
+            with ExitStack() as owners:
+                packet_original = _load_original(packet, 8 * 1024 * 1024, False, budget, owners)
+                key_original = _load_original(packet_signing_key, 64 * 1024, False, budget, owners)
+                authenticated = verify_signed_workload_packet(
+                    packet_original.raw, key_original.raw,
+                    expected_principal=expected_principal, expected_nonce=expected_nonce,
+                    budget=budget,
+                )
+                settings = extract_workload_handoff(
+                    authenticated, proxy_ip=proxy_ip, proxy_authorization=proxy_authorization,
+                    budget=budget,
+                )
+                if not settings.issued_at_epoch_ms <= anchored_epoch_ms < settings.expires_at_epoch_ms:
+                    raise WorkloadClientError("workload handoff is outside its original admission window")
+                lifetime = _HandoffLifetime(
+                    anchored_epoch_ms, settings.issued_at_epoch_ms, settings.expires_at_epoch_ms,
+                    anchored_monotonic + (settings.expires_at_epoch_ms - anchored_epoch_ms) / 1000,
+                )
+                budget._bind_lifetime(lifetime.deadline, lifetime.check)
+                contexts = load_tls_contexts(
+                    proxy_ca=proxy_ca, client_certificate=client_certificate,
+                    client_private_key=client_private_key, interception_ca=interception_ca,
+                    budget=budget, expected_mtls=settings.mtls,
+                    expected_interception_ca_spki_sha256=settings.interception_ca_spki_sha256,
+                )
+                packet_original.recheck(budget)
+                key_original.recheck(budget)
+                # Reuse only the actual admitted contexts. Calling __init__
+                # here would reload paths and give construction a new budget.
+                client = object.__new__(cls)
+                client._pid = os.getpid()
+                client._thread = threading.current_thread()
+                client._closed = False
+                client._active = False
+                client._endpoint = (settings.proxy_ip, settings.proxy_port)
+                client._server_name = settings.proxy_server_name
+                client._proxy_headers = dict(settings.proxy_headers)
+                client._provider_headers = dict(settings.provider_headers)
+                client._lifetime = lifetime
+                client._timeout_ms = timeout_ms
+                client._max_response_bytes = max_response_bytes
+                client._contexts = contexts
+            budget.check()
+            return client
+        except WorkloadClientError:
+            raise
+        except Exception:
+            raise WorkloadClientError("workload signed handoff construction failed") from None
+
+    def _request_headers(
+        self, supplied: Mapping[str, str] | None, *, plain_http: bool, budget: Budget,
+    ) -> dict[str, str]:
+        fields = dict(self._provider_headers)
+        required = {name.lower(): name for name in fields}
+        for name, value in _headers(supplied, budget).items():
+            signed_name = required.get(name.lower())
+            if signed_name is not None:
+                if fields[signed_name] != value:
+                    raise WorkloadClientError("workload request cannot replace a signed required header")
+            else:
+                fields[name] = value
+        if plain_http:
+            proxy = {name.lower(): value for name, value in self._proxy_headers.items()}
+            # The signed handoff repeats identity headers for HTTPS's two
+            # phases. Plain HTTP has one head: emit each signed copy once.
+            # Other caller-created overlaps still fail in encode_request.
+            for lower, name in required.items():
+                if lower in proxy:
+                    if fields[name] != proxy[lower]:
+                        raise WorkloadClientError("signed provider and proxy header values disagree")
+                    del fields[name]
+        return _headers(fields, budget)
 
     def _check_owner(self) -> None:
         if os.getpid() != self._pid or threading.current_thread() is not self._thread:
@@ -172,6 +290,8 @@ class WorkloadProxyClient:
         """
         self._check_owner()
         budget = Budget(self._timeout_ms)
+        if self._lifetime is not None:
+            budget._bind_lifetime(self._lifetime.deadline, self._lifetime.check)
         self._active = True
         outer: OuterTLS | None = None
         inner: InnerTLS | None = None
@@ -179,7 +299,9 @@ class WorkloadProxyClient:
             destination = _destination(url)
             if type(body) is not bytes or len(body) > _MAX_BODY_BYTES:
                 raise WorkloadClientError("workload request body must be bytes no larger than 8MiB")
-            provider_headers = _headers(headers, budget)
+            provider_headers = self._request_headers(
+                headers, plain_http=destination.scheme == "http", budget=budget,
+            )
             contexts = self._contexts
             if contexts is None:
                 raise WorkloadClientError("workload client is closed")
@@ -234,10 +356,13 @@ class WorkloadProxyClient:
         self._check_owner()
         self._contexts = None
         self._proxy_headers.clear()
+        self._provider_headers.clear()
         self._closed = True
 
     def __enter__(self) -> WorkloadProxyClient:
         self._check_owner()
+        if self._lifetime is not None:
+            self._lifetime.check()
         return self
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:

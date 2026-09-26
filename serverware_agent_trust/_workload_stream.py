@@ -14,6 +14,7 @@ Contexts/materials are supplied by the caller, not enrolled or provisioned here.
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
 import socket
 import ssl
@@ -41,10 +42,25 @@ class Budget:
             raise WorkloadClientError("workload timeout must be an integer in 100..30000 milliseconds")
         self._pid = os.getpid()
         self._deadline = time.monotonic() + timeout_ms / 1000
+        self._scope_check: Callable[[], None] | None = None
+
+    def _bind_lifetime(self, deadline: float, check_live: Callable[[], None]) -> None:
+        """Narrow once to authenticated configuration; never renew a budget."""
+        if (
+            self._scope_check is not None or type(deadline) is not float
+            or not math.isfinite(deadline) or not callable(check_live)
+        ):
+            raise WorkloadClientError("workload lifetime binding is invalid or already set")
+        self.check()
+        self._deadline = min(self._deadline, deadline)
+        self._scope_check = check_live
+        self.check()
 
     def check(self) -> None:
         if os.getpid() != self._pid or time.monotonic() >= self._deadline:
             raise WorkloadClientError("workload original process or deadline ended")
+        if self._scope_check is not None:
+            self._scope_check()
 
     def remaining(self) -> float:
         self.check()

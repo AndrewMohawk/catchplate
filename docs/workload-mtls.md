@@ -120,7 +120,9 @@ none are required. For HTTPS, they appear on CONNECT only, while `request(header
 appears inside the provider-name TLS session. Provider headers cannot contain
 `proxy-*` or `X-Serverware-Enrollment-Session`. Plain HTTP uses absolute-form HTTP
 inside outer mTLS; proxy and provider header names must not overlap, even with
-equal values. No provider API key or OAuth token is supplied to this client.
+equal values in the explicit constructor. Signed-handoff mode below handles
+the packet's equal duplicated identity headers separately. No provider API key
+or OAuth token is supplied to this client.
 The example logs neither private paths/material nor response bodies; keep those
 out of application diagnostics as well.
 
@@ -152,6 +154,75 @@ Limits and lifetime are explicit:
 
 This is transport integration in source, not native quote verification,
 enrollment completion, CA-install authorization or a passed production gate.
+
+## Construct from an authenticated signed handoff
+
+`WorkloadProxyClient.from_signed_handoff(...)` derives settings from the pinned
+original signed enrollment packet. It verifies that packet against a separately
+pinned, independently admitted signer public-key PEM and the caller's expected
+principal and enrollment nonce. It rejects a `verificationReceipt`-decorated
+packet: a copied receipt flag is not a substitute for original signature
+verification. Packet and signer originals are bounded to 8 MiB and 64 KiB,
+respectively, and rechecked before construction returns.
+
+This shorter, unexecuted template reuses the four `PinnedFile` values from the
+preceding example as `proxy_ca_pin`, `client_certificate_pin`,
+`client_private_key_pin` and `interception_ca_pin`. The new digest placeholders
+are deliberately unusable. The nonce and any proxy authorization must come from
+their independent enrollment/provisioning workflow, not from untrusted packet
+fields or this example:
+
+```python
+with WorkloadProxyClient.from_signed_handoff(
+    packet=PinnedFile(
+        "/run/workload/enrollment.json", "sha256:<PACKET_64_HEX>"),
+    packet_signing_key=PinnedFile(
+        "/run/workload/enrollment-signer.pem", "sha256:<SIGNER_PEM_64_HEX>"),
+    expected_principal="billing-reader",
+    expected_nonce=independently_held_enrollment_nonce,
+    proxy_ip="192.0.2.10",  # independently selected literal transport address
+    proxy_ca=proxy_ca_pin,
+    client_certificate=client_certificate_pin,
+    client_private_key=client_private_key_pin,
+    interception_ca=interception_ca_pin,
+    proxy_authorization=provisioned_proxy_authorization,  # None when not required
+) as client:
+    response = client.request("GET", independently_authorized_read_url)
+```
+
+There are no caller overrides for proxy TLS name, port or proxy headers in this
+mode. Required provider headers are injected from the authenticated packet;
+request headers cannot change their values. HTTPS preserves the separate
+CONNECT/provider header copies. Plain HTTP emits equal signed copies once in
+its single absolute-form request head; unrelated caller-created overlaps still
+fail. A required proxy authorization is separately provisioned, not supplied as
+a provider credential or recovered from the packet.
+
+Before reading the private key, the factory checks the actual retained client
+chain against the signed mTLS selectors: every configured selector family must
+match, with any-match semantics within each SAN list. Leaf-certificate and SPKI
+hashes cover exact original DER, not PEM or reconstructed keys. The actual leaf
+must currently be valid. DNS/SPIFFE/URI matching is bounded; the local URI profile
+is a conservative canonical ASCII subset and rejects ambiguous normalization
+and `file:` URI SANs. An issuer selector requires a genuine leaf signature and
+one unique matching issuer SPKI from the supplied client chain, never either
+unrelated proxy/interception trust store. These are local compatibility checks,
+not proof that trusted ingress authenticated the workload or admitted its issuer.
+
+Signed mode also requires exactly one interception-CA certificate, whose original
+SPKI matches both signed CA pins; additional trust anchors are rejected. Outer
+proxy trust remains a separately admitted role. Matching a packet signature,
+certificate or CA pin is not fresh attestation, enrollment completion or
+permission to install a CA globally.
+
+Packet, proxy-token and optional install-session expiry cap one retained
+nonrenewing monotonic lifetime, with wall time forbidden from moving before
+admission. Each request's budget is clipped to that lifetime. Expiry requires
+renewed enrollment/provisioning and a new client; it does not authorize retries
+or retract already dispatched effects. The factory does not run packet scripts,
+firewall changes or canaries, and does not turn listed URLs into local route
+authorization. The gate still enforces its current policy; independent enrollment,
+egress, attestation and response-proof acceptance remain separate.
 
 ## Explicit client configuration example
 

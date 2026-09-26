@@ -3,7 +3,7 @@
 Status: source-implemented, unbuilt and unexecuted. Actual Docker stream capture
 and retained-file collection now precede a controller-owned terminal publication
 step. The fixed observer exchange client does not provide the still-missing
-observer server or genuine event/mapping acquisition; this is not a passing
+observer server or complete event/mapping acquisition; this is not a passing
 execution flow or production readiness. The separate
 [fixed supervisor](controller-body-launch.md) is also source-implemented.
 
@@ -28,7 +28,7 @@ signed command + retained container + original deadline
   -> private controller output files -> attach 101 and pending subscription
   -> start gated supervisor -> actual target custody -> observer handoff/ready
   -> root release / actual wait, alongside bounded stdout and stderr capture
-  -> observed exit + complete framed EOF + joined capture worker
+  -> admitted Docker wait report + complete framed EOF + joined capture worker
   -> collect retained streams/payloads and publish manifest [no terminal yet]
   -> fixed observer exchange returns original terminal bytes [server missing]
   -> genuine observer/static/scope admission and actual outcome/output joins
@@ -54,6 +54,45 @@ does not cancel later collection. Ordinary idle polling does not create a new
 deadline. Start, wait, capture and collection all use the earlier of the original
 operation deadline and signed command timeout; native work additionally retains
 its full 5700-second pre-start admission rule.
+
+`BodyCaptureV12::finish` now returns an opaque, non-cloneable
+`CompletedBodyCaptureV14` only after joining the actual framed-EOF worker.
+It retains the actual stdout/stderr writer files, completed metadata, descriptor
+flags/positions, originating container, creator PID and original deadline.
+Copied byte counts or digests cannot construct this owner. Output collection
+consumes it and retains it through finalization; this preserves the actual
+EOF-to-file custody handoff rather than accepting a caller-supplied receipt.
+
+## Runtime report and acquisition boundaries
+
+The fixed wait request still belongs to the controller's retained container.
+After requiring HTTP 200, the lifecycle passes the exact transfer-decoded body
+to [BodyRuntimeOutcomeV14](../data-plane/decision-gate-rs/src/body_runtime_outcome_contract_v14.rs).
+This ordinary parser accepts one complete JSON object, rejects duplicate/unknown
+fields and wrong types, and retains the original bytes and their raw SHA-256
+without re-encoding. The body is capped at 4 KiB. `StatusCode` must be an integer
+in `0..255`: this is the fixed Linux supervisor/body profile, not a universal
+Docker API limit. A nonzero code reports an unsuccessful body outcome.
+`Error` may be absent or null; any nonnull error object rejects admission,
+including an empty `Message`, and error strings are bounded to 1 KiB.
+Moby's API 1.45 type omits a nil error and declares an int64 status; the narrower
+profile deliberately rejects negative/infrastructure statuses rather than
+turning them into a normal outcome.
+([Pinned response type](https://github.com/moby/moby/blob/v26.1.0/api/types/container/wait_response.go))
+This batch does not publish the wait original into a durable evidence store.
+
+These observations are not interchangeable:
+
+| Observation | What it establishes | What it does not establish |
+| --- | --- | --- |
+| Docker wait body | The admitted runtime-reported code and exact original body | Native kernel final status, signal cause or container identity inside the body |
+| Framed attach EOF | The held subscription ended at a complete frame boundary and its capture worker joined | A successful process exit or a native wait result |
+| Regular-file length/hash | The bytes in the retained file at the checked point | Stream EOF, process termination or independent observation |
+| Kernel-observed final wait status | An actual final exit/signal observation acquired by the correct lifecycle owner | Something derivable from the other three observations or an early ptrace exit stop |
+
+The current initial observer stop is not that final wait observation. Its
+surviving terminal owner and complete lifecycle remain separate work; see the
+[observer lifecycle design](controller-body-observer-lifecycle-design.md).
 
 ## Fixed ownership and inventory
 
@@ -92,14 +131,26 @@ does not repair permissions or adopt existing control files. Shared
 serve both this collector and native PostgreSQL collection without weakening
 the native source/read-only checks.
 
-`CaptureOutputsV12::collect` re-reads and hashes completed stream files and joins
-their byte counts/digests to the capture worker's observations. It hashes every
+`CaptureOutputsV12::collect` consumes the actual `CompletedBodyCaptureV14` and
+expected container ID. It joins the capture's retained writer descriptors to
+the collector's read descriptors before and after re-reading completed streams,
+and compares their actual byte counts/digests. It hashes every
 signed payload file and publishes the measured manifest without requiring a
 terminal. Its `HeldBodyOutputsV12` retains the actual root/control/payload
-directory, file, stream and manifest descriptors; read-only measurement getters
+directory, file, stream and manifest descriptors and the opaque EOF owner;
+read-only measurement getters
 do not provide a transferable proof or a constructor from claimed measurements.
 Positional reads let later checks re-read the same original descriptors without
 consuming a shared file offset.
+
+The separate observer-side
+[HeldObserverOutputStartV14](../data-plane/decision-gate-rs/src/body_observer_output_start_v14.rs)
+acquires initial output/control/stream handles through actual target-root custody
+and the original mount policy. It checks the protected initial inventory and
+empty streams; retained verification permits subsequent writes while checking
+the same named anchors. This is not attach EOF, final-byte measurement, a complete
+tmpfs-profile admission or permission to produce a terminal, ready response or
+signature. Those observer-side handles do not replace the controller's EOF owner.
 
 The held owner keeps the original nonrenewed deadline and remaining signed
 capacity. Inode accounting includes the payload root, every payload directory
@@ -132,7 +183,8 @@ commitments, and compares actual stdout/stderr/manifest hashes. These structural
 checks are explicitly not observer-signature authority. The lifecycle must
 first authenticate the observer and independently join the execution scope.
 
-Finalization rechecks retained content, identities and exact inventories, then
+Finalization rechecks the retained capture owner, stream descriptor joins,
+content, identities and exact inventories, then
 exclusively creates root-owned `terminal.json` inside the control directory.
 It synchronizes and re-reads the actual publication, compares exact original
 bytes/hash/length, and rechecks the other originals and inventories before
@@ -148,7 +200,7 @@ These files are temporary tmpfs observations, not durable exported evidence or
 hostile-kernel assurance. A local flush or sync does not prove power-loss
 persistence, independent runtime authorship or complete descendant destruction.
 Controller publication is implemented; the actual independently measured
-observer server, launch/event/mapping acquisition and valid original response
+observer server, complete event/mapping lifecycle and valid original response
 production remain missing. Sending root-measured output fields is not authority
 for an observer to blindly sign them; independent observation/reconciliation
 still belongs to that missing service. Admitted image/invocation, immutable preparation,

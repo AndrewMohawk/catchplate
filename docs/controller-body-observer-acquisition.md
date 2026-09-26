@@ -290,6 +290,42 @@ a file digest establishes membership in an independently admitted runner or
 kernel closure. The snapshot covers this initial stopped task only, not later
 processes, address-space changes, transient code or complete execution history.
 
+## Independent pre-release output custody
+
+The actual stopped owner now acquires
+[HeldObserverOutputStartV14](../data-plane/decision-gate-rs/src/body_observer_output_start_v14.rs)
+after receiving the mandatory task originals and before returning stopped
+custody. It derives the destination only from the exact admitted launch context,
+not a new caller path or an assumed `/output`. The target's narrow root borrow
+joins that context to the actual gated target; the output owner then retains its
+own fresh root, complete no-follow directory chain, output/control directories
+and distinct read-only stdout/stderr descriptors. The existing nine-descriptor
+launch handoff is unchanged.
+
+This acquisition deliberately narrows paths to at most 4096 bytes and 32 literal
+components. Ancestors must be root-owned and not group/world writable; output
+must be payload-owned mode `0700` on a distinct tmpfs mount. The controller
+directory must be root-owned `0700` and both streams root-owned `0600`, regular,
+single-link and initially empty on that same mount. Bounded complete initial
+inventories permit only the control directory and its two streams. Full
+metadata brackets detect changes during this initial check. No manifest or
+terminal is accepted at this stage.
+
+The non-cloneable, thread-affine owner follows the actual stopped target through
+mapping/history acquisition and initial persistence. `verify_initial` continues
+to require gated target custody, zero-length streams and the closed inventories.
+Separate `verify_retained` checks only held/named node and mount anchors under
+the original root process/thread, deadline and stream capacities; it permits
+size and timestamp changes and does not require the target to remain alive.
+Any verification failure permanently poisons the owner.
+
+This is the selected source-owned acquisition seam, not an output feed or final
+measurement protocol. It does not establish attach EOF, writer closure, a
+kernel exit status, full tmpfs mount-profile admission or storage durability.
+The future continuous/terminal owner must make the explicit phase transition
+and independently measure final originals; initial checks cannot simply be
+disabled with a caller-supplied flag. No readiness, resume or signing follows.
+
 ## Deferred verification scope
 
 The held snapshot can also start an unsigned v14 history through
@@ -325,6 +361,12 @@ review is not a substitute for those checks. Required cases include:
   joins. File alias deduplication must not merge mapping ranges or enlarge the
   aggregate byte allowance; permission, immutability, identity, truncation and
   deadline failures must not yield a partial successful inventory.
+- Output acquisition through the actual held target root and context-selected
+  destination, including nondefault paths; wrong ownership, symlinks, mount
+  substitution, extra initial files, aliased/nonempty streams and deadline
+  failures must reject. Retained anchor checks after target death must not be
+  mistaken for stream EOF or final-output admission; failed verification must
+  remain poisoned.
 
 None of these runtime checks has been performed for this source checkpoint.
 

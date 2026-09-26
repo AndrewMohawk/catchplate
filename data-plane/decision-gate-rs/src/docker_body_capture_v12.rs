@@ -4,6 +4,9 @@
 //! and controller-only tmpfs files. This module neither creates paths nor
 //! manufactures runtime-observer evidence. A normal frame-boundary EOF must
 //! still be joined by the owner to its independently successful Docker wait.
+//! Completion retains the actual stream writers for a descriptor-to-descriptor
+//! output handoff; an ordinary digest/count receipt cannot construct that owner.
+//! Neither EOF nor file custody enrolls the daemon or proves a kernel outcome.
 
 use super::{
     boottime_now_ns_v11, parse_response_status, read_deadline_cancelled,
@@ -11,10 +14,10 @@ use super::{
     HTTP_HEAD_MAX_BYTES_V11, RELAY_CHUNK_BYTES_V11,
 };
 use sha2::{Digest as ShaDigest, Sha256};
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{Seek, Write};
 use std::net::Shutdown;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,7 +40,57 @@ pub struct BodyCaptureV12 {
     cancelled: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     completed: Arc<AtomicBool>,
-    worker: Option<JoinHandle<Result<BodyCaptureReceiptV12>>>,
+    worker: Option<JoinHandle<Result<FinishedCaptureV14>>>,
+    container_id: String,
+    deadline: u64,
+    owner_pid: libc::pid_t,
+}
+
+struct FinishedCaptureV14 {
+    stdout: FinishedFile,
+    stderr: FinishedFile,
+    receipt: BodyCaptureReceiptV12,
+}
+
+/// Created only by joining the real framed-EOF capture worker. No Clone,
+/// serialization, supplied-receipt constructor, File export or write API exists.
+pub(crate) struct CompletedBodyCaptureV14 {
+    finished: FinishedCaptureV14,
+    container_id: String,
+    deadline: u64,
+    owner_pid: libc::pid_t,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CompletedBodyCaptureV14 {
+    pub(crate) fn verify_for(&self, container_id: &str, deadline: u64) -> Result<()> {
+        let deadline = deadline.min(self.deadline);
+        require_live(deadline, &self.cancelled)?;
+        if container_id != self.container_id || unsafe { libc::getpid() } != self.owner_pid
+            || unsafe { libc::geteuid() } != 0 || unsafe { libc::getegid() } != 0 {
+            return Err(ControllerError::Rejected(
+                "completed Docker capture differs from its original container or controller",
+            ));
+        }
+        self.finished.stdout.verify(deadline, &self.cancelled)?;
+        self.finished.stderr.verify(deadline, &self.cancelled)?;
+        if self.finished.stdout.bytes != self.finished.receipt.stdout_bytes
+            || self.finished.stderr.bytes != self.finished.receipt.stderr_bytes {
+            return Err(ControllerError::Rejected("completed Docker capture byte identities differ"));
+        }
+        require_live(deadline, &self.cancelled)
+    }
+
+    pub(crate) fn stdout_sha256(&self) -> Digest { self.finished.receipt.stdout_sha256 }
+    pub(crate) fn stderr_sha256(&self) -> Digest { self.finished.receipt.stderr_sha256 }
+    pub(crate) fn stdout_bytes(&self) -> u64 { self.finished.receipt.stdout_bytes }
+    pub(crate) fn stderr_bytes(&self) -> u64 { self.finished.receipt.stderr_bytes }
+    pub(crate) fn deadline(&self) -> u64 { self.deadline }
+    // Crate-only borrowed descriptor numbers for the separate output owner's
+    // exact Leaf.matches_descriptor join. Ownership and all write APIs remain
+    // private; callers must not close, duplicate, seek or write these handles.
+    pub(crate) fn stdout_fd(&self) -> RawFd { self.finished.stdout.file.as_raw_fd() }
+    pub(crate) fn stderr_fd(&self) -> RawFd { self.finished.stderr.file.as_raw_fd() }
 }
 
 impl BodyCaptureV12 {
@@ -52,6 +105,7 @@ impl BodyCaptureV12 {
         deadline: u64,
         cancelled: Arc<AtomicBool>,
     ) -> Result<Self> {
+        let owner_pid = unsafe { libc::getpid() };
         let failed = Arc::new(AtomicBool::new(false));
         let completed = Arc::new(AtomicBool::new(false));
         let started = (|| {
@@ -114,6 +168,7 @@ impl BodyCaptureV12 {
         match started {
             Ok(worker) => Ok(Self {
                 stream, cancelled, failed, completed, worker: Some(worker),
+                container_id: container_id.to_owned(), deadline, owner_pid,
             }),
             Err(error) => {
                 cancelled.store(true, Ordering::Release);
@@ -152,20 +207,30 @@ impl BodyCaptureV12 {
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<BodyCaptureReceiptV12> {
+    pub(crate) fn finish(mut self) -> Result<CompletedBodyCaptureV14> {
         let worker = self.worker.take().ok_or(ControllerError::Rejected(
             "Docker body capture worker was already consumed",
         ))?;
         let result = worker.join().map_err(|_| {
             ControllerError::Rejected("Docker body capture worker panicked")
-        }).and_then(|result| result);
-        match result {
-            Ok(receipt) => {
-                // Taking the joined worker disarms Drop without cancelling a
-                // successfully completed capture or any subsequent owner work.
-                self.health()?;
-                Ok(receipt)
+        }).and_then(|result| result).and_then(|finished| {
+            // The worker has been joined exactly once. Include every later
+            // validation in the same result so errors still cancel/shutdown
+            // even though Drop no longer has a worker to consume.
+            self.health()?;
+            if !self.completed.load(Ordering::Acquire) {
+                return Err(ControllerError::Rejected("Docker capture did not complete its framed EOF"));
             }
+            let completed = CompletedBodyCaptureV14 {
+                finished, container_id: self.container_id.clone(), deadline: self.deadline,
+                owner_pid: self.owner_pid, cancelled: Arc::clone(&self.cancelled),
+            };
+            completed.verify_for(&self.container_id, self.deadline)?;
+            Ok(completed)
+        });
+        match result {
+            // Successful completion alone leaves the shared work uncancelled.
+            Ok(completed) => Ok(completed),
             Err(error) => {
                 self.cancelled.store(true, Ordering::Release);
                 let _ = self.stream.shutdown(Shutdown::Both);
@@ -212,6 +277,10 @@ struct FileIdentity {
 
 fn file_identity(file: &File) -> Result<(FileIdentity, u64)> {
     let metadata = file.metadata()?;
+    metadata_identity(&metadata)
+}
+
+fn metadata_identity(metadata: &Metadata) -> Result<(FileIdentity, u64)> {
     if !metadata.is_file() || metadata.mode() & 0o7777 != 0o600
         || metadata.uid() != 0 || metadata.gid() != 0 || metadata.nlink() != 1
     {
@@ -223,6 +292,41 @@ fn file_identity(file: &File) -> Result<(FileIdentity, u64)> {
         device: metadata.dev(), inode: metadata.ino(), mode: metadata.mode(),
         uid: metadata.uid(), gid: metadata.gid(), links: metadata.nlink(),
     }, metadata.len()))
+}
+
+struct FinishedFile {
+    file: File,
+    identity: FileIdentity,
+    bytes: u64,
+    mtime: i64,
+    mtime_ns: i64,
+    ctime: i64,
+    ctime_ns: i64,
+}
+
+impl FinishedFile {
+    fn verify(&self, deadline: u64, cancelled: &AtomicBool) -> Result<()> {
+        require_live(deadline, cancelled)?;
+        let metadata = self.file.metadata()?;
+        let (identity, length) = metadata_identity(&metadata)?;
+        if identity != self.identity || length != self.bytes
+            || metadata.mtime() != self.mtime || metadata.mtime_nsec() != self.mtime_ns
+            || metadata.ctime() != self.ctime || metadata.ctime_nsec() != self.ctime_ns {
+            return Err(ControllerError::Rejected("completed Docker capture file identity changed"));
+        }
+        let flags = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETFL) };
+        let descriptor_flags = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETFD) };
+        let position = unsafe { libc::lseek(self.file.as_raw_fd(), 0, libc::SEEK_CUR) };
+        if flags < 0 || descriptor_flags < 0 || position < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if !matches!(flags & libc::O_ACCMODE, libc::O_WRONLY | libc::O_RDWR)
+            || flags & libc::O_APPEND != 0 || descriptor_flags & libc::FD_CLOEXEC == 0
+            || position as u64 != self.bytes {
+            return Err(ControllerError::Rejected("completed Docker capture writer description changed"));
+        }
+        require_live(deadline, cancelled)
+    }
 }
 
 fn initial_file(file: &mut File) -> Result<FileIdentity> {
@@ -324,7 +428,7 @@ fn capture(
     per_stream_limit: u64,
     deadline: u64,
     cancelled: &AtomicBool,
-) -> Result<BodyCaptureReceiptV12> {
+) -> Result<FinishedCaptureV14> {
     let mut stdout_hash = Sha256::new();
     let mut stderr_hash = Sha256::new();
     let mut stdout_bytes = 0u64;
@@ -390,15 +494,16 @@ fn capture(
         }
         *total = next_total;
     }
-    finish_file(&mut stdout, &stdout_identity, stdout_bytes, deadline, cancelled)?;
-    finish_file(&mut stderr, &stderr_identity, stderr_bytes, deadline, cancelled)?;
+    let stdout = finish_file(stdout, &stdout_identity, stdout_bytes, deadline, cancelled)?;
+    let stderr = finish_file(stderr, &stderr_identity, stderr_bytes, deadline, cancelled)?;
     require_live(deadline, cancelled)?;
-    Ok(BodyCaptureReceiptV12 {
+    let receipt = BodyCaptureReceiptV12 {
         stdout_sha256: stdout_hash.finalize().into(),
         stderr_sha256: stderr_hash.finalize().into(),
         stdout_bytes,
         stderr_bytes,
-    })
+    };
+    Ok(FinishedCaptureV14 { stdout, stderr, receipt })
 }
 
 fn write_file(
@@ -422,19 +527,24 @@ fn write_file(
 }
 
 fn finish_file(
-    file: &mut File,
+    mut file: File,
     expected: &FileIdentity,
     bytes: u64,
     deadline: u64,
     cancelled: &AtomicBool,
-) -> Result<()> {
+) -> Result<FinishedFile> {
     require_live(deadline, cancelled)?;
     file.flush()?;
-    let (identity, length) = file_identity(file)?;
+    let metadata = file.metadata()?;
+    let (identity, length) = metadata_identity(&metadata)?;
     if &identity != expected || length != bytes || file.stream_position()? != bytes {
         return Err(ControllerError::Rejected(
             "Docker body capture file identity or final length changed",
         ));
     }
-    require_live(deadline, cancelled)
+    let finished = FinishedFile { file, identity, bytes,
+        mtime: metadata.mtime(), mtime_ns: metadata.mtime_nsec(),
+        ctime: metadata.ctime(), ctime_ns: metadata.ctime_nsec() };
+    finished.verify(deadline, cancelled)?;
+    Ok(finished)
 }

@@ -1,8 +1,8 @@
 //! Controller-owned stream capture and exact retained-FD payload collection.
 //!
 //! Streams and manifest are excluded from the payload manifest, not from the
-//! signed tmpfs byte/inode capacities. Capture receipts are compared to actual
-//! originals; neither those receipts nor this ordinary result assert runtime,
+//! signed tmpfs byte/inode capacities. Actual completed capture file custody
+//! is joined to these retained readers; neither that custody nor this result asserts runtime,
 //! signature, courier, destruction or durable-host-storage authority.
 //! Collection precedes terminal production. The retained owner, not a supplied
 //! measurement DTO, later publishes one structural terminal after genuine
@@ -11,6 +11,7 @@
 use super::{sha256, ControllerError, Digest, Result, MAX_BODY_RESULT_BYTES_V12,
     PRIVATE_DIND_BODY_RESULT_V12};
 use super::body_output_files_v12::{live, Directory, Leaf, Policy};
+use crate::docker_transport::docker_body_capture_v12::CompletedBodyCaptureV14;
 use crate::plan_protocol::{LogicalLane, RunnerExecutionBoundsV12};
 use crate::plan_protocol::body_output_contract_v12::{self as contract,
     OutputFileV12, CONTROL_DIRECTORY, STDOUT_NAME, STDERR_NAME, MANIFEST_NAME,
@@ -52,6 +53,8 @@ pub(super) struct HeldBodyOutputsV12 {
     remaining_inodes: u64,
     deadline: u64,
     owner_pid: libc::pid_t,
+    captured: CompletedBodyCaptureV14,
+    container_id: String,
 }
 
 pub(super) struct CaptureOutputsV12 {
@@ -135,6 +138,14 @@ fn checked_add(total: &mut u64, bytes: u64, maximum: u64) -> Result<()> {
     Ok(())
 }
 
+fn verify_capture_descriptors(captured: &CompletedBodyCaptureV14, container_id: &str,
+    stdout: &Leaf, stderr: &Leaf, deadline: u64) -> Result<()> {
+    captured.verify_for(container_id, deadline)?;
+    stdout.matches_descriptor(captured.stdout_fd(), deadline)?;
+    stderr.matches_descriptor(captured.stderr_fd(), deadline)?;
+    captured.verify_for(container_id, deadline)
+}
+
 impl CaptureOutputsV12 {
     pub(super) fn create(output_root: RawFd, uid: u32, gid: u32,
         deadline: u64) -> Result<Self> {
@@ -177,10 +188,12 @@ impl CaptureOutputsV12 {
     }
 
     pub(super) fn collect(mut self, expected_paths: &[String],
-        bounds: &RunnerExecutionBoundsV12, stdout: (Digest, u64), stderr: (Digest, u64),
+        bounds: &RunnerExecutionBoundsV12, captured: CompletedBodyCaptureV14,
+        expected_container_id: &str,
         deadline: u64) -> Result<HeldBodyOutputsV12> {
-        let deadline = deadline.min(self.deadline);
+        let deadline = deadline.min(self.deadline).min(captured.deadline());
         live(deadline)?;
+        captured.verify_for(expected_container_id, deadline)?;
         bounds.validate().map_err(contract_error)?;
         contract::validate_output_paths(expected_paths).map_err(contract_error)?;
         if self.writers.is_some() || bounds.user_uid != self.uid || bounds.user_gid != self.gid {
@@ -199,10 +212,12 @@ impl CaptureOutputsV12 {
         self.controls.inventory(&names(&[STDOUT_NAME, STDERR_NAME]), deadline)?;
         self.stdout.finish_controller_write(stream_limit, deadline)?;
         self.stderr.finish_controller_write(stream_limit, deadline)?;
+        verify_capture_descriptors(&captured, expected_container_id, &self.stdout, &self.stderr, deadline)?;
         let (stdout_sha256, _) = self.stdout.read(false, deadline)?;
         let (stderr_sha256, _) = self.stderr.read(false, deadline)?;
-        if (stdout_sha256, self.stdout.byte_count()) != stdout
-            || (stderr_sha256, self.stderr.byte_count()) != stderr {
+        verify_capture_descriptors(&captured, expected_container_id, &self.stdout, &self.stderr, deadline)?;
+        if stdout_sha256 != captured.stdout_sha256() || self.stdout.byte_count() != captured.stdout_bytes()
+            || stderr_sha256 != captured.stderr_sha256() || self.stderr.byte_count() != captured.stderr_bytes() {
             return Err(rejected("actual body streams differ from completed controller capture"));
         }
         let mut total = 0;
@@ -291,6 +306,7 @@ impl CaptureOutputsV12 {
         self.controls.inventory(&names(&[STDOUT_NAME, STDERR_NAME, MANIFEST_NAME]), deadline)?;
         self.root.inventory(&root_names, deadline)?;
         self.root.verify(deadline)?;
+        verify_capture_descriptors(&captured, expected_container_id, &self.stdout, &self.stderr, deadline)?;
         live(deadline)?;
         Ok(HeldBodyOutputsV12 {
             root: self.root, controls: self.controls,
@@ -300,6 +316,7 @@ impl CaptureOutputsV12 {
             remaining_terminal_bytes: bounds.output_bytes - total,
             remaining_inodes: bounds.output_inodes - (inodes - 1),
             deadline, owner_pid: unsafe { libc::getpid() },
+            captured, container_id: expected_container_id.to_owned(),
         })
     }
 }
@@ -341,10 +358,15 @@ impl HeldBodyOutputsV12 {
 
     fn recheck(&mut self, terminal_published: bool, deadline: u64) -> Result<()> {
         self.inventory(terminal_published, deadline)?;
+        verify_capture_descriptors(&self.captured, &self.container_id, &self.stdout, &self.stderr, deadline)?;
         let (stdout, _) = self.stdout.read(false, deadline)?;
         let (stderr, _) = self.stderr.read(false, deadline)?;
+        verify_capture_descriptors(&self.captured, &self.container_id, &self.stdout, &self.stderr, deadline)?;
         let (manifest, _) = self.manifest.read(false, deadline)?;
         if stdout != self.stdout_sha256 || stderr != self.stderr_sha256
+            || stdout != self.captured.stdout_sha256() || stderr != self.captured.stderr_sha256()
+            || self.stdout.byte_count() != self.captured.stdout_bytes()
+            || self.stderr.byte_count() != self.captured.stderr_bytes()
             || manifest != self.output_manifest_sha256
             || self.retained.len() != self.files.len() {
             return Err(rejected("held body control originals changed after collection"));
@@ -355,7 +377,8 @@ impl HeldBodyOutputsV12 {
                 return Err(rejected("held body payload original changed after collection"));
             }
         }
-        self.inventory(terminal_published, deadline)
+        self.inventory(terminal_published, deadline)?;
+        verify_capture_descriptors(&self.captured, &self.container_id, &self.stdout, &self.stderr, deadline)
     }
 
     /// Structural publication only. The lifecycle must independently admit the
@@ -410,6 +433,7 @@ impl HeldBodyOutputsV12 {
         }
         self.inventory(true, deadline)?;
         terminal.verify(deadline)?;
+        verify_capture_descriptors(&self.captured, &self.container_id, &self.stdout, &self.stderr, deadline)?;
         live(deadline)?;
         Ok(PublishedBodyOutputV12 {
             original_result: actual_original,

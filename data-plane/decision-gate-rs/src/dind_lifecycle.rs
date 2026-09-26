@@ -33,6 +33,9 @@ mod generation_cgroup_v12;
 #[path = "body_result_admission_v12.rs"]
 mod body_result_admission_v12;
 
+#[path = "body_runtime_outcome_contract_v14.rs"]
+mod body_runtime_outcome_contract_v14;
+
 #[path = "body_observer_exchange_v12.rs"]
 mod body_observer_exchange_v12;
 
@@ -49,6 +52,7 @@ use self::runner_output_storage_v12::RunnerOutputStorageV12;
 use self::body_output_v12::CaptureOutputsV12;
 use self::body_launch_storage_v12::HeldBodyLaunchV12;
 use self::body_target_v12::HeldBodyTargetV12;
+use self::body_runtime_outcome_contract_v14::BodyRuntimeOutcomeV14;
 use self::generation_cgroup_v12::HeldGenerationCgroupV12;
 use self::body_observer_exchange_v12::{BodyObserverExchangeV12, BodyObserverTerminalRequestV12};
 use crate::plan_protocol::body_launch_contract_v12::{
@@ -4334,13 +4338,18 @@ impl PrivateDindLifecycleV12 {
             body_deadline,
             Arc::clone(&cancelled),
         )?;
-        let wait_body = require_docker_success_v12(&wait, &[200])?;
-        let exit_status = wait_body
-            .get("StatusCode")
-            .and_then(Value::as_i64)
-            .ok_or(ControllerError::Invalid(
-                "Docker wait response lacks StatusCode",
-            ))?;
+        let (wait_status, wait_original) = docker_http_response_body_v12(&wait)?;
+        if wait_status != 200 {
+            return Err(ControllerError::Rejected("Docker body wait did not return HTTP200"));
+        }
+        // Parse the original transfer-decoded body, not a Value projection
+        // which discards duplicate keys. This fixed request binds the reported
+        // outcome to our container, but does not turn it into a kernel wait or
+        // independent observer attestation. Keep its exact bytes through the
+        // terminal reconciliation; they are not yet a durable signed original.
+        let runtime_outcome = BodyRuntimeOutcomeV14::parse_original(&wait_original)
+            .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?;
+        let actual_exit = runtime_outcome.exit_status();
         // Only observed EOF on a complete framed stream can produce these
         // hashes. Any earlier error cancels the HTTP wait and Drop joins the
         // capture worker; the existing outer abort path still owns teardown.
@@ -4361,7 +4370,7 @@ impl PrivateDindLifecycleV12 {
         // worker-written terminal or legacy filename is an evidence inlet.
         let native_observed = match (&body_contract.native_postgres, &native_inputs) {
             (Some(native), Some((artifacts, source))) => {
-                if exit_status != 0 {
+                if actual_exit != 0 {
                     return Err(ControllerError::Rejected(
                         "native PostgreSQL body did not exit successfully",
                     ));
@@ -4388,8 +4397,7 @@ impl PrivateDindLifecycleV12 {
         let outputs = captured_outputs.collect(
             &body_contract.expected_output_paths,
             &runner.identity.execution_bounds,
-            (captured.stdout_sha256, captured.stdout_bytes),
-            (captured.stderr_sha256, captured.stderr_bytes), body_deadline,
+            captured, &runner.id, body_deadline,
         )?;
         if let Some(native) = native_observed {
             let manifest_native = native_subset_sha256(outputs.files())
@@ -4400,8 +4408,6 @@ impl PrivateDindLifecycleV12 {
                 ));
             }
         }
-        let actual_exit = i32::try_from(exit_status)
-            .map_err(|_| ControllerError::Rejected("Docker body exit exceeds the signed result range"))?;
         let claims = BodyObserverTerminalRequestV12 {
             plan_id: operation.request.plan_id, lane: operation.request.lane,
             body_sha256: body_contract.body_sha256, command_sha256: runner.command_sha256,

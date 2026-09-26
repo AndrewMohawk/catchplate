@@ -51,6 +51,8 @@ mod body_observer_session_v14;
 mod body_observer_task_originals_v14;
 #[path = "body_observer_task_transport_v14.rs"]
 mod body_observer_task_transport_v14;
+#[path = "body_observer_output_start_v14.rs"]
+mod body_observer_output_start_v14;
 
 use crate::plan_protocol::{Digest, PlanProtocolError, PlanResult};
 use crate::plan_protocol::body_observer_contract_v12::BodyObserverLaunchV12;
@@ -60,6 +62,7 @@ use body_observer_target_v12::ReceivedBodyTargetV12;
 use body_observer_process_v12::HeldNamespaceWorkerV12;
 use body_observer_worker_contract_v12::{receive_stop, NamespaceWorkerStopV12};
 use body_observer_task_transport_v14::{receive_task_originals, ReceivedInitialTaskOriginalsV14};
+use body_observer_output_start_v14::HeldObserverOutputStartV14;
 pub(crate) use body_observer_snapshot_v12::StoppedBodyMappingSnapshotV12;
 pub(crate) use body_observer_history_acquire_v14::HeldInitialBodyHistoryV14;
 pub(crate) use body_observer_session_v14::BodyObservationSessionV14;
@@ -127,8 +130,12 @@ impl AcquiredBodyObserverLaunchV12 {
         // this exact actual child. No received-record DTO constructs custody.
         let task_originals = receive_task_originals(worker.control_fd(), worker.worker_pidfd(),
             worker.worker_pid(), &stop, deadline)?;
+        // Acquire independent output readers while the actual stopped target
+        // still owns its root. These handles survive its death, but neither a
+        // regular-file length nor retained custody establishes stream EOF.
+        let outputs = HeldObserverOutputStartV14::acquire(&target, &launch, deadline)?;
         let held = StoppedBodyObserverLaunchV12 { worker, target, channel, launch, stop,
-            task_originals, deadline };
+            task_originals, outputs, deadline };
         held.verify_stopped(deadline)?;
         Ok(held)
     }
@@ -145,6 +152,7 @@ pub(crate) struct StoppedBodyObserverLaunchV12 {
     launch: BodyObserverLaunchV12,
     stop: NamespaceWorkerStopV12,
     task_originals: ReceivedInitialTaskOriginalsV14,
+    outputs: HeldObserverOutputStartV14,
     deadline: u64,
 }
 
@@ -163,6 +171,7 @@ impl StoppedBodyObserverLaunchV12 {
         self.task_originals.verify_quiet(self.worker.control_fd(), self.worker.worker_pidfd(),
             self.worker.worker_pid(), deadline)?;
         self.target.verify_gated(deadline)?;
+        self.outputs.verify_initial(&self.target, &self.launch, deadline)?;
         actual_tracer(&self.target, self.worker.worker_pid(), deadline)?;
         self.worker.verify_live(deadline)?;
         self.channel.verify_pending(deadline)

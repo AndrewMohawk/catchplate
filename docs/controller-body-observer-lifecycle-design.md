@@ -246,11 +246,24 @@ Unjoined deaths, pending births, incomplete writes and unresolved MM lifetimes
 prohibit a successful terminal. Outer cgroup/namespace/storage destruction stays
 the controller's separate obligation.
 
+The controller now strictly admits the original transfer-decoded Docker wait
+body and retains it in memory through reconciliation. Its fixed container
+request and actual completed attach-capture owner strengthen controller-local
+outcome/output joins; they do not independently authenticate a kernel final
+status to the observer. Durable outcome-original transport and admission by a
+host-surviving terminal owner remain required. See [the distinct output and
+completion boundaries](controller-body-output.md).
+
 Before release, also retain independent output-root/stream/static-executable
-custody needed after process death. The current nine-descriptor handoff does
-not carry an output-root FD or independent stream feed: implement a fixed,
-source-owned acquisition seam or an explicitly versioned descriptor extension.
-Rehash actual retained stream/payload/manifest originals after completion and
+custody needed after process death. The selected source-owned output seam now
+acquires independent read descriptors through the actual held target root and
+its admitted context destination, without extending the nine-descriptor
+handoff. Those handles follow the stopped owner into initial persistence;
+separate retained-anchor checks can survive target death but are not an
+independent stream feed, EOF or final output measurement. See [pre-release
+output custody](controller-body-observer-acquisition.md#independent-pre-release-output-custody).
+The continuous terminal phase must still rehash actual retained
+stream/payload/manifest originals after completion and
 join the root's terminal request to them, actual exit outcome, original context,
 source/artifacts/proxy, and native inventory when present. No hash in a request
 authorizes signing itself.

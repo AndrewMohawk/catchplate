@@ -214,6 +214,22 @@ impl ReceivedBodyTargetV12 {
     pub(crate) fn pid_namespace_inode(&self) -> u64 { self.namespaces[2].identity.inode }
     pub(crate) fn deadline(&self) -> u64 { self.deadline }
 
+    /// Borrow only this still-gated target's retained root for the fixed
+    /// observer output acquisition. The caller must retain its own descriptor;
+    /// this is not a post-death live-target verifier or arbitrary path inlet.
+    pub(super) fn root_for_output(&self, launch: &BodyObserverLaunchV12,
+        deadline: u64) -> PlanResult<RawFd> {
+        launch.validate()?;
+        if launch.context.original_bytes()? != self.context_original
+            || launch.target_pid != self.host_pid || launch.target_start != self.start_ticks
+            || launch.target_pidfd_inode != self.pidfd_identity.inode
+            || deadline > launch.deadline_boottime_ns {
+            return Err(invalid("observer output scope differs from the actual held target"));
+        }
+        self.verify_gated(deadline)?;
+        Ok(self.root.as_raw_fd())
+    }
+
     /// Live includes ptrace/group-stop states T/t, but never zombie/dead state.
     pub(crate) fn verify_live(&self, deadline: u64) -> PlanResult<()> {
         self.scope(deadline)?;

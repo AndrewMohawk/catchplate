@@ -13,6 +13,8 @@ use super::body_observer_worker_contract_v12::{
 };
 use super::body_observer_wait_acquire_v14::acquire_initial_interrupt_stop;
 use super::body_observer_syscall_info_v14::{observe as observe_syscall_info, SyscallOperationV14};
+use super::body_observer_task_proc_v14::{parse_stat_original, parse_status_original, TaskStatusV14};
+use super::body_observer_task_acquire_v14::acquire_initial_task;
 use crate::plan_protocol::body_launch_contract_v12::{BodyLaunchContextV12, MAX_CONTEXT_BYTES_V12};
 use crate::plan_protocol::{PlanProtocolError, PlanResult};
 use std::ffi::{CStr, CString};
@@ -92,14 +94,22 @@ fn read_fd(fd: RawFd, maximum: usize, deadline: u64) -> PlanResult<Vec<u8>> {
     }
 }
 
-fn read_proc(parent: RawFd, name: &CStr, maximum: usize, deadline: u64) -> PlanResult<String> {
+fn read_proc_bytes(parent: RawFd, name: &CStr, maximum: usize, deadline: u64) -> PlanResult<Vec<u8>> {
     let fd = open_at(parent, name, false, false, deadline)?;
     filesystem(fd.as_raw_fd(), PROC_MAGIC)?;
     if stat(fd.as_raw_fd())?.st_mode & libc::S_IFMT != libc::S_IFREG {
         return Err(invalid("namespace worker proc observation is not regular"));
     }
-    String::from_utf8(read_fd(fd.as_raw_fd(), maximum, deadline)?)
+    read_fd(fd.as_raw_fd(), maximum, deadline)
+}
+
+fn read_proc(parent: RawFd, name: &CStr, maximum: usize, deadline: u64) -> PlanResult<String> {
+    String::from_utf8(read_proc_bytes(parent, name, maximum, deadline)?)
         .map_err(|_| invalid("namespace worker proc observation is not UTF-8"))
+}
+
+fn read_task_status(parent: RawFd, deadline: u64) -> PlanResult<TaskStatusV14> {
+    parse_status_original(&read_proc_bytes(parent, c"status", MAX_STATUS, deadline)?)
 }
 
 fn field<'a>(text: &'a str, name: &str) -> PlanResult<&'a str> {
@@ -117,29 +127,23 @@ fn number(value: &str) -> PlanResult<u32> {
     Ok(parsed)
 }
 
-fn namespace_pids(status: &str, host_pid: u32, local_pid: u32) -> PlanResult<()> {
-    let mut count = 0usize;
-    let mut last = 0;
-    for value in field(status, "NSpid:")?.split_ascii_whitespace() {
-        let pid = number(value)?;
-        if pid == 0 || (count == 0 && pid != host_pid) { return Err(invalid("namespace worker host PID view differs")); }
-        count += 1;
-        if count > 32 { return Err(invalid("namespace worker PID depth exceeds source bound")); }
-        last = pid;
+fn namespace_pids(status: &TaskStatusV14, host_pid: u32, local_pid: u32) -> PlanResult<()> {
+    let ids = status.namespace_tids();
+    if ids.first() != Some(&host_pid) { return Err(invalid("namespace worker host PID view differs")); }
+    if ids.len() < 2 || ids.last() != Some(&local_pid) {
+        return Err(invalid("namespace worker active PID view differs"));
     }
-    if count < 2 || last != local_pid { return Err(invalid("namespace worker active PID view differs")); }
     Ok(())
 }
 
 fn start_ticks(proc_fd: RawFd, host_pid: u32, deadline: u64) -> PlanResult<u64> {
-    let text = read_proc(proc_fd, c"stat", MAX_STAT, deadline)?;
-    let open = text.find('(').ok_or_else(|| invalid("namespace worker stat has no command"))?;
-    let close = text.rfind(')').ok_or_else(|| invalid("namespace worker stat has no command end"))?;
-    if close <= open || number(text[..open].trim())? != host_pid { return Err(invalid("namespace worker stat PID differs")); }
-    let mut fields = text[close + 1..].split_ascii_whitespace();
-    if matches!(fields.next(), None | Some("Z" | "X" | "x")) { return Err(invalid("namespace worker process is terminal")); }
-    fields.nth(18).and_then(|value| value.parse::<u64>().ok()).filter(|value| *value != 0)
-        .ok_or_else(|| invalid("namespace worker start time is invalid"))
+    let original = read_proc_bytes(proc_fd, c"stat", MAX_STAT, deadline)?;
+    let observed = parse_stat_original(&original)?;
+    if observed.pid() != host_pid { return Err(invalid("namespace worker stat PID differs")); }
+    if matches!(observed.state(), b'Z' | b'X' | b'x') {
+        return Err(invalid("namespace worker process is terminal"));
+    }
+    Ok(observed.start_ticks())
 }
 
 fn live_pidfd(fd: RawFd, deadline: u64) -> PlanResult<()> {
@@ -354,8 +358,8 @@ impl WorkerView {
         let mut expected: Vec<String> = inherited.iter().map(ToString::to_string).collect();
         expected.extend([proc_root.as_raw_fd(), own_proc.as_raw_fd(), fd_directory.as_raw_fd()].map(|fd| fd.to_string()));
         inventory(fd_directory, &expected, deadline)?;
-        let status = read_proc(own_proc.as_raw_fd(), c"status", MAX_STATUS, deadline)?;
-        let host_pid = number(field(&status, "Pid:")?)?;
+        let status = read_task_status(own_proc.as_raw_fd(), deadline)?;
+        let host_pid = status.host_tid();
         let start_ticks = start_ticks(own_proc.as_raw_fd(), host_pid, deadline)?;
         let namespace = pid_namespace(scope.target_pid_namespace_fd)?;
         if namespace.1 == 0 || namespace.1 != scope.target_pid_namespace_inode
@@ -380,10 +384,10 @@ impl WorkerView {
             || pid_namespace(scope.target_pid_namespace_fd)? != self.namespace {
             return Err(invalid("namespace worker actual process/namespace identity changed"));
         }
-        let own = read_proc(self.own_proc.as_raw_fd(), c"status", MAX_STATUS, deadline)?;
-        if number(field(&own, "Pid:")?)? != self.host_pid || number(field(&own, "Tgid:")?)? != self.host_pid
-            || number(field(&own, "PPid:")?)? != scope.parent_host_pid || number(field(&own, "Threads:")?)? != 1
-            || number(field(&own, "TracerPid:")?)? != 0
+        let own = read_task_status(self.own_proc.as_raw_fd(), deadline)?;
+        if own.host_tid() != self.host_pid || own.host_tgid() != self.host_pid
+            || own.host_ppid() != scope.parent_host_pid || own.threads() != 1
+            || own.tracer_pid() != 0
             || start_ticks(self.own_proc.as_raw_fd(), self.host_pid, deadline)? != self.start_ticks {
             return Err(invalid("namespace worker host process/parent identity changed"));
         }
@@ -393,19 +397,19 @@ impl WorkerView {
         if start_ticks(self.parent_proc.as_raw_fd(), scope.parent_host_pid, deadline)? != scope.parent_start_ticks {
             return Err(invalid("namespace worker original parent start time differs"));
         }
-        let target = read_proc(scope.target_proc_fd, c"status", MAX_STATUS, deadline)?;
+        let target = read_task_status(scope.target_proc_fd, deadline)?;
         let expected_tracer = if stopped { self.host_pid } else { 0 };
-        if number(field(&target, "Pid:")?)? != scope.target_host_pid
-            || number(field(&target, "Tgid:")?)? != scope.target_host_pid
-            || number(field(&target, "Threads:")?)? != 1
-            || number(field(&target, "TracerPid:")?)? != expected_tracer
+        if target.host_tid() != scope.target_host_pid
+            || target.host_tgid() != scope.target_host_pid
+            || target.threads() != 1
+            || target.tracer_pid() != expected_tracer
             || start_ticks(scope.target_proc_fd, scope.target_host_pid, deadline)? != scope.target_start_ticks
             || actual_pid_namespace(scope.target_proc_fd, deadline)? != self.namespace {
             return Err(invalid("namespace worker held init/tracer identity differs"));
         }
         namespace_pids(&target, scope.target_host_pid, 1)?;
-        let state = field(&target, "State:")?.split_ascii_whitespace().next();
-        if (stopped && state != Some("t")) || (!stopped && !matches!(state, Some("R" | "S" | "D" | "I"))) {
+        let state = target.state();
+        if (stopped && state != b't') || (!stopped && !matches!(state, b'R' | b'S' | b'D' | b'I')) {
             return Err(invalid("namespace worker init is not in its required gate/stop state"));
         }
         pidfd_scope(self.fdinfo.as_raw_fd(), scope.target_pidfd, scope.target_host_pid, deadline)?;
@@ -480,21 +484,26 @@ fn run(scope: &NamespaceWorkerScopeV12) -> PlanResult<()> {
     if !matches!(syscall_info.operation, SyscallOperationV14::None) {
         return Err(invalid("namespace worker initial interrupt unexpectedly reports a syscall phase"));
     }
+    let actual_task = acquire_initial_task(&initial_stop, scope)?;
+    if actual_task.tracer_host_tid() != worker.host_pid {
+        return Err(invalid("namespace worker actual task belongs to another tracer"));
+    }
     worker.verify(scope, true)?;
     let record = NamespaceWorkerStopV12 {
         version: WORKER_STOP_VERSION.to_owned(), context_sha256: scope.context_sha256,
-        host_target_pid: scope.target_host_pid, target_start_ticks: scope.target_start_ticks,
+        host_target_pid: actual_task.host_tid(), target_start_ticks: actual_task.start_ticks(),
         target_pidfd_inode: stat(scope.target_pidfd)?.st_ino,
-        target_pid_namespace_inode: worker.namespace.1, host_worker_pid: worker.host_pid,
+        target_pid_namespace_inode: actual_task.pid_namespace_inode(), host_worker_pid: worker.host_pid,
         namespace_worker_pid: worker.local_pid, worker_start_ticks: worker.start_ticks,
-        observed_at_boottime_ns: initial_stop.observed_at_boottime_ns(),
+        observed_at_boottime_ns: actual_task.observed_at_boottime_ns(),
         deadline_boottime_ns: scope.deadline_boottime_ns,
     };
-    initial_stop.verify_stopped(scope.deadline_boottime_ns)?;
+    actual_task.verify(&initial_stop, scope.deadline_boottime_ns)?;
     send_stop(scope.control_fd, scope.parent_pidfd, &record, scope.deadline_boottime_ns)?;
     // Keep the same-thread stop owner through the abort-only lifetime. No
     // continuation or journal event is inferred from the copied observations.
     let result = wait_for_abort(scope.control_fd, scope.parent_pidfd, scope.deadline_boottime_ns);
+    drop(actual_task);
     drop(initial_stop);
     result
 }

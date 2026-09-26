@@ -2,7 +2,7 @@
 
 Status: source-only, unbuilt and unexecuted. The receiver, descriptor-bound
 target acquisition, read-only gate snapshot and namespace-confined initial
-tracing stop with retained initial mapping custody are prerequisites for a future
+tracing stop with descriptor-backed task and mapping custody are prerequisites for a future
 observer, not an operational observer server or permission to release a body.
 No ready acknowledgement, continuous event acquisition or signed evidence is
 produced by these components.
@@ -130,6 +130,36 @@ not a guessed syscall phase. The
 [history guide](controller-body-observer-history.md#kernel-wait-observations-before-journal-events)
 explains the separate status classifier and the still-missing continuous producer.
 This does not widen the worker's target selection or private control protocol.
+
+After that genuine stop, the fixed helper calls
+[`acquire_initial_task`](../data-plane/decision-gate-rs/src/body_observer_task_acquire_v14.rs).
+The same-thread owner duplicates the source-held target proc directory rather
+than reopening a numeric target. It retains actual status/stat and PID-namespace
+descriptors, together with the worker's current-thread proc view. It joins the
+target's host TID/TGID and original start ticks, tracing-stop state, single-thread
+shape and namespace PID/TGID `1`; the target's actual `TracerPid` must identify
+the actual worker. Both namespace descriptors must match the retained namespace.
+Acquisition and revalidation bracket these reads with the genuine stop and
+descriptor checks under the original deadline. The worker retains this owner
+and rechecks it before sending its private stop record.
+
+The owner retains the before/after status and stat originals and compares their
+identity projections, not volatile counter bytes. The shared
+[raw proc parser](../data-plane/decision-gate-rs/src/body_observer_task_proc_v14.rs)
+offers separate status/stat parsing plus a joined identity parser. Status is
+bounded to 64 KiB, stat to 16 KiB and each ordered namespace vector to 32 IDs.
+Required identity fields are unique and canonical; the joined parser checks
+PID, parent, state and thread-count agreement and coherent thread-leader shape.
+Stat parsing validates the complete 52-field layout while retaining raw command
+bytes, including non-UTF8 bytes, `)` and newline. Unrelated status values such
+as `Name` do not require UTF-8. Parsing alone establishes neither descriptor
+provenance nor a stopped task.
+
+This initial task owner supplies no lifecycle event, address-space-sharing
+decision, completion outcome, ready response or signature. The proposed next
+cohesive session owner and its unresolved acquisition/storage/terminal boundaries
+are described in the [native observer lifecycle design](controller-body-observer-lifecycle-design.md);
+that design is not an implemented continuous producer.
 
 The private
 [stop contract](../data-plane/decision-gate-rs/src/body_observer_worker_contract_v12.rs)

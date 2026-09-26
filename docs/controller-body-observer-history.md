@@ -185,16 +185,22 @@ process custody, freshness or action authority.
 Structural consistency does not establish that all tasks/events were observed,
 that a shared address space was actually shared, or that mapped memory matched
 the backing file. The current worker still holds the initial stop and never
-resumes. There is no ongoing event transport, scheduler, durable event/snapshot
-store, independently admitted kernel-mapping policy, memory-integrity authority,
-terminal reconciliation/signing or serving lifecycle supplied by this model.
+resumes. The [integrated lifecycle design](controller-body-observer-lifecycle-design.md)
+defines the next cohesive owner: consume actual initial custody into a session
+with a same-thread scheduler, bounded birth/exec joins, actual stopped-task MM
+comparison and sharer barriers, admitted execution/mapping policy, and durable
+original-byte transport/store with acknowledgment before continuation. More
+decoded event variants alone do not close these dependencies.
 
-The next owner must acquire real descendant lifetimes, actual shared-address-
-space relationships, execution replacement and mapping changes without gaps.
-It must preserve originals and handle resource limits and ambiguity without
-silently omitting history. A separately versioned signed-evidence admission path
-must then join that evidence to policy and the genuine runtime/body results.
-Neither a closed replay nor `End` proves cgroup destruction or release readiness.
+Release also requires independently retained output custody and a host-surviving
+actual terminal-status source: the namespace-local worker cannot supply its own
+post-init-death completion. None of that session lifecycle, monitored resume,
+durable store, kernel-policy admission or terminal reconciliation/signing is
+implemented by this history model. The separately versioned signed consumer and
+serving owner remain required; v14 records cannot weaken or replace existing v13
+admission. Neither a closed replay nor `End` proves cgroup destruction or release
+readiness. The lifecycle design records the staged implementation and authority
+boundaries without activating them.
 
 Deferred frozen verification must cover original/canonical-byte rejection,
 scope/sequence/hash/time drift, shared-memory updates, distinct processes with

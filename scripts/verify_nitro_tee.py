@@ -1515,7 +1515,8 @@ def verify_tls_scope_envelope(
     return payload, sha256(canonical_json_bytes(document) + b"\n")
 
 
-def validate_cbor_encoding(raw: bytes, label: str) -> None:
+def validate_cbor_encoding(raw: bytes, label: str, *, native_profile: bool = False) -> None:
+    require(type(native_profile) is bool, "Nitro CBOR profile selector is invalid")
     cursor = 0
     items = 0
 
@@ -1563,6 +1564,13 @@ def validate_cbor_encoding(raw: bytes, label: str) -> None:
             previous_order: tuple[int, bytes] | None = None
             for _ in range(length):
                 key_start = cursor
+                if native_profile:
+                    # Native NSM encoders need not sort maps. Restrict map keys
+                    # before cbor2 materializes a dict so bool/integer or tagged
+                    # aliases cannot collapse into one key. Minimal integer and
+                    # UTF-8 text encodings then have unique original bytes.
+                    require(cursor < len(raw) and raw[cursor] >> 5 in {0, 1, 3},
+                            f"{label} native CBOR map key is not integer or text")
                 walk(depth + 1)
                 encoded_key = raw[key_start:cursor]
                 require(
@@ -1571,7 +1579,7 @@ def validate_cbor_encoding(raw: bytes, label: str) -> None:
                 )
                 order = (len(encoded_key), encoded_key)
                 require(
-                    previous_order is None or order > previous_order,
+                    native_profile or previous_order is None or order > previous_order,
                     f"{label} CBOR map keys are not in canonical order",
                 )
                 previous_order = order
@@ -1591,8 +1599,8 @@ def validate_cbor_encoding(raw: bytes, label: str) -> None:
     require(cursor == len(raw), f"{label} has trailing CBOR data")
 
 
-def parse_cbor_one(raw: bytes, label: str) -> Any:
-    validate_cbor_encoding(raw, label)
+def parse_cbor_one(raw: bytes, label: str, *, native_profile: bool = False) -> Any:
+    validate_cbor_encoding(raw, label, native_profile=native_profile)
     stream = io.BytesIO(raw)
     try:
         value = cbor2.CBORDecoder(stream).decode()
@@ -1889,7 +1897,7 @@ def _verify_nitro_document_common(
         expected_pcrs.get("PCR0") == expected_eif,
         "independently expected EIF digest does not map exactly to PCR0",
     )
-    cose = parse_cbor_one(raw, "Nitro attestation document")
+    cose = parse_cbor_one(raw, "Nitro attestation document", native_profile=native_profile)
     if native_profile:
         if isinstance(cose, CBORTag):
             require(cose.tag == 18, "native Nitro evidence has an unsupported COSE tag")
@@ -1904,9 +1912,9 @@ def _verify_nitro_document_common(
     require(isinstance(protected, bytes) and protected, "Nitro protected header is missing")
     require(unprotected == {}, "Nitro unprotected COSE headers are forbidden")
     require(isinstance(payload_raw, bytes) and isinstance(signature, bytes), "Nitro COSE payload/signature types are invalid")
-    protected_map = parse_cbor_one(protected, "Nitro protected header")
+    protected_map = parse_cbor_one(protected, "Nitro protected header", native_profile=native_profile)
     require(protected_map == {1: COSE_ALG_ES384}, "Nitro COSE protected header must contain only ES384")
-    payload = parse_cbor_one(payload_raw, "Nitro attestation payload")
+    payload = parse_cbor_one(payload_raw, "Nitro attestation payload", native_profile=native_profile)
     required_payload = {
         "module_id",
         "timestamp",

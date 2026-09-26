@@ -24,11 +24,14 @@ requires these six options together:
 Paths and digests are independently supplied configuration, not values learned
 from the server response. The executable profile is a static x86-64 ELF with no
 interpreter or dynamic dependency. The Python
-[response verifier](../scripts/verify_native_response_attestation.py) defines
-the verification protocol, but is not itself an executable admitted by this
-profile. An independently admitted packaged executable and its complete source/
-dependency closure remain prerequisites; this source batch does not supply or
-verify that build. There is no shell/interpreter fallback.
+[response verifier](../scripts/verify_native_response_attestation.py) is not
+itself an executable admitted by this profile. The
+[standalone Rust verifier and static packaging recipe](native-verifier.md) now
+supply the source producer for that artifact, with an explicit fixed native
+profile rather than blanket Python parity. A built, independently admitted
+executable, its digest and complete source/dependency closure remain
+prerequisites; the source recipe has not been built or runtime-validated. There
+is no shell/interpreter fallback.
 The [invocation adapter](../data-plane/decision-gate-rs/src/proof_client_native_verifier_v1.rs)
 bounds the executable original to 64 MiB, expectations to 16 KiB and trust roots
 to 1 MiB; verifier input/result caps remain 512 KiB/4 KiB.

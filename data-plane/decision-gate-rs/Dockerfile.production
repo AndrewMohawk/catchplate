@@ -126,12 +126,19 @@ RUN --network=none set -eu; \
     cp -R /source/data-plane/decision-gate-rs/src /src/src; \
     cp -R /source/data-plane/decision-gate-rs/trust /src/trust; \
     cp -R /source/schemas /schemas
-RUN --network=none cargo build --release --frozen --bin serverware-production-launcher \
+RUN --network=none cargo build --release --frozen \
+        --bin serverware-production-launcher --bin serverware-native-response-verifier \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0
+    && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
+    && test "$(readelf -l /src/target/release/serverware-native-response-verifier | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-response-verifier | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-response-verifier)" -le 67108864
 
 FROM scratch AS production-launcher-artifact
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher
+
+FROM scratch AS native-response-verifier-artifact
+COPY --from=launcher-build /src/target/release/serverware-native-response-verifier /serverware-native-response-verifier
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151
 
@@ -168,6 +175,7 @@ COPY --from=build /src/target/release/serverware-policy-custody-current-signatur
 COPY --from=build /src/target/release/serverware-policy-custody-cleanup-authorization-consumer /usr/local/bin/serverware-policy-custody-cleanup-authorization-consumer
 COPY --from=build /src/target/release/serverware-policy-custody-bounded-cleanup-helper /usr/local/bin/serverware-policy-custody-bounded-cleanup-helper
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-response-verifier /usr/local/libexec/serverware-native-response-verifier
 COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/serverware/policy-custody
 COPY --from=build --chown=65531:65530 --chmod=0710 /runtime-layout/serverware-custody /run/serverware-custody
 COPY --from=build --chown=65531:65530 --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody

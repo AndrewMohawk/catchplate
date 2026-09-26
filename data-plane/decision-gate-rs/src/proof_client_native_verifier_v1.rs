@@ -2,8 +2,9 @@
 //!
 //! The independently admitted static x86-64 ELF must implement the exact four
 //! configuration flags and stdin/stdout contract of
-//! scripts/verify_native_response_attestation.py. A packaged/admitted executable
-//! is not supplied by this adapter. There is no Python/interpreter fallback.
+//! scripts/verify_native_response_attestation.py. The separate Rust verifier
+//! now has a static production packaging target; this adapter still requires
+//! an independently admitted executable and pin. There is no interpreter fallback.
 //! Digests authenticate supplied bytes, not their release provenance. The child
 //! verdict remains local signature/quote evidence, not HTTP/exporter truth.
 //!

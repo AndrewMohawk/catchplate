@@ -152,7 +152,10 @@ use serverware_decision_gate::{
     RESPONSE_OBSERVATION_V2_MAX_OPERATION_MS,
     response_observation_v2_lifecycle_state_sha256,
 };
-use serverware_decision_gate::enclave_runtime_identity_v1::{CredentialRecipientV1, TlsAuthorityV1};
+use serverware_decision_gate::enclave_runtime_identity_v1::{
+    CredentialRecipientV1, QuotedMutualTlsIngressV1, TlsAuthorityV1,
+};
+use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
@@ -173,7 +176,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
@@ -3907,6 +3910,61 @@ trait ConfigureIoTimeout {
     fn configure_write_timeout(&self, timeout: Duration) -> io::Result<()>;
 }
 
+enum GateSocket {
+    Tcp(TcpStream),
+    Vsock(VsockStreamV1),
+}
+
+impl GateSocket {
+    fn client_ip(&self) -> Option<String> {
+        match self {
+            Self::Tcp(stream) => stream.peer_addr().ok().map(|address| address.ip().to_string()),
+            // A transport CID is not an IP or an authenticated principal. CIDR
+            // policy must see absence, never a manufactured parent/loopback IP.
+            Self::Vsock(_) => None,
+        }
+    }
+
+    fn clone_development_tcp_reader(&self) -> io::Result<TcpStream> {
+        match self {
+            Self::Tcp(stream) => stream.try_clone(),
+            Self::Vsock(_) => Err(io::Error::new(io::ErrorKind::Unsupported,
+                "vsock has no development raw-reader clone")),
+        }
+    }
+}
+
+impl ConfigureIoTimeout for GateSocket {
+    fn configure_read_timeout(&self, timeout: Duration) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.set_read_timeout(Some(timeout)),
+            Self::Vsock(stream) => stream.set_read_timeout(Some(timeout)),
+        }
+    }
+
+    fn configure_write_timeout(&self, timeout: Duration) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.set_write_timeout(Some(timeout)),
+            Self::Vsock(stream) => stream.set_write_timeout(Some(timeout)),
+        }
+    }
+}
+
+impl Read for GateSocket {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        match self { Self::Tcp(stream) => stream.read(buffer), Self::Vsock(stream) => stream.read(buffer) }
+    }
+}
+
+impl Write for GateSocket {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        match self { Self::Tcp(stream) => stream.write(buffer), Self::Vsock(stream) => stream.write(buffer) }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        match self { Self::Tcp(stream) => stream.flush(), Self::Vsock(stream) => stream.flush() }
+    }
+}
+
 impl ConfigureIoTimeout for TcpStream {
     fn configure_read_timeout(&self, timeout: Duration) -> io::Result<()> {
         self.set_read_timeout(Some(timeout))
@@ -3971,7 +4029,8 @@ impl<T: ConfigureIoTimeout + Write> TerminalDeadlineWrite for DeadlineIo<T> {
     }
 }
 
-impl TerminalDeadlineWrite for StreamOwned<ServerConnection, DeadlineIo<TcpStream>> {
+impl<T: ConfigureIoTimeout + Read + Write> TerminalDeadlineWrite
+    for StreamOwned<ServerConnection, DeadlineIo<T>> {
     fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
         self.sock.set_terminal_write_deadline(deadline);
     }
@@ -4101,8 +4160,8 @@ impl<T: ConfigureIoTimeout + Write> Write for DeadlineIo<T> {
 }
 
 enum DirectProxyStream {
-    DevelopmentRaw(DeadlineIo<TcpStream>),
-    MutualTls(StreamOwned<ServerConnection, DeadlineIo<TcpStream>>),
+    DevelopmentRaw(DeadlineIo<GateSocket>),
+    MutualTls(StreamOwned<ServerConnection, DeadlineIo<GateSocket>>),
 }
 
 impl DirectProxyStream {
@@ -4122,7 +4181,7 @@ impl DirectProxyStream {
 
     fn clone_raw_reader(&self) -> io::Result<TcpStream> {
         match self {
-            Self::DevelopmentRaw(stream) => stream.inner.try_clone(),
+            Self::DevelopmentRaw(stream) => stream.inner.clone_development_tcp_reader(),
             Self::MutualTls(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "outer TLS transport cannot be cloned for absolute-form streaming",
@@ -47669,6 +47728,21 @@ fn establish_direct_listener_stream(
     management_listener: bool,
     proxy_ingress: &ProxyIngressConfig,
 ) -> Result<(DirectProxyStream, Option<TrustedMtlsEvidence>), String> {
+    establish_gate_listener_stream(GateSocket::Tcp(stream), state, management_listener, proxy_ingress)
+}
+
+fn establish_gate_listener_stream(
+    stream: GateSocket,
+    state: &GateState,
+    management_listener: bool,
+    proxy_ingress: &ProxyIngressConfig,
+) -> Result<(DirectProxyStream, Option<TrustedMtlsEvidence>), String> {
+    // This check precedes every TLS/HTTP parse and any development/management
+    // branch. A CID never substitutes for the existing verified mTLS evidence.
+    if matches!(&stream, GateSocket::Vsock(_))
+        && (management_listener || !matches!(proxy_ingress, ProxyIngressConfig::MutualTls(_))) {
+        return Err("vsock proxy requires mutual TLS and cannot serve management".to_owned());
+    }
     let deadline_stream = DeadlineIo::new(
         stream,
         state.request_head_deadline,
@@ -47710,8 +47784,17 @@ fn handle_connection(
     management_listener: bool,
     proxy_ingress: ProxyIngressConfig,
 ) {
-    let client_ip = stream.peer_addr().ok().map(|addr| addr.ip().to_string());
-    let (mut stream, trusted_mtls_evidence) = match establish_direct_listener_stream(
+    handle_gate_connection(GateSocket::Tcp(stream), state, management_listener, proxy_ingress)
+}
+
+fn handle_gate_connection(
+    stream: GateSocket,
+    state: Arc<GateState>,
+    management_listener: bool,
+    proxy_ingress: ProxyIngressConfig,
+) {
+    let client_ip = stream.client_ip();
+    let (mut stream, trusted_mtls_evidence) = match establish_gate_listener_stream(
         stream,
         &state,
         management_listener,
@@ -48744,6 +48827,64 @@ fn required_proxy_tls_path(name: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(value))
 }
 
+/// Describe only the exact generated configuration held by the quoted owner.
+/// The distinct mode separates framed DER commitments from legacy PEM-file
+/// digests. It is deliberately not an admitted environment/verifier profile.
+fn materialize_native_proxy_ingress(
+    ingress: &QuotedMutualTlsIngressV1,
+    deadline: u64,
+) -> Result<(ProxyIngressConfig, ProxyIngressAttestation), String> {
+    ingress.verify_live(deadline)?;
+    let tls = ingress.tls();
+    let mut chain_digest = Sha256::new();
+    chain_digest.update(b"serverware/native-tls-server-chain/v1\0");
+    chain_digest.update((tls.certificate_chain().len() as u32).to_be_bytes());
+    for certificate in tls.certificate_chain() {
+        chain_digest.update((certificate.len() as u64).to_be_bytes());
+        chain_digest.update(certificate);
+    }
+    let attestation = ProxyIngressAttestation {
+        mode: "native-mtls-v1",
+        tls_protocol: Some("TLSv1.3"),
+        client_authentication: "mandatory-webpki",
+        server_leaf_certificate_sha256: Some(sha256_prefixed(tls.leaf_certificate_der())),
+        server_leaf_spki_sha256: Some(sha256_prefixed(tls.leaf_public_key_spki_der())),
+        server_certificate_chain_sha256: Some(format!("sha256:{}", hex::encode(chain_digest.finalize()))),
+        client_trust_bundle_sha256: Some(format!("sha256:{}", hex::encode(tls.client_trust_sha256()))),
+    };
+    let config = ProxyIngressConfig::MutualTls(Arc::new(ProxyIngressTlsConfig {
+        server_config: tls.server_config(),
+        client_trust_certificates: Arc::new(tls.client_trust_certificates().iter()
+            .cloned().map(CertificateDer::from).collect()),
+    }));
+    ingress.verify_live(deadline)?;
+    Ok((config, attestation))
+}
+
+/// Source-level ingress composition, not a complete enclave startup. The
+/// caller must separately construct/admit enclave-owned policy, inner TLS,
+/// broker, proof and egress state. No host state is promoted by this function.
+fn serve_native_vsock_proxy(
+    listener: VsockListenerV1,
+    state: Arc<GateState>,
+    ingress: QuotedMutualTlsIngressV1,
+    worker_count: usize,
+    queue_capacity: usize,
+    deadline: u64,
+) -> Result<(), String> {
+    let deadline = deadline.min(ingress.deadline());
+    let (config, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
+    if state.proxy_ingress_attestation.value() != attestation.value() {
+        return Err("native ingress state does not describe the held TLS configuration".to_owned());
+    }
+    ingress.verify_live(deadline)?;
+    let result = serve_vsock_proxy(listener, state, config, worker_count, queue_capacity, deadline);
+    // The private key owner remains alive until all scoped handlers have joined.
+    // It does not turn the original NSM response into independent admission.
+    drop(ingress);
+    result
+}
+
 fn load_proxy_ingress_config(
     is_production: bool,
 ) -> Result<(ProxyIngressConfig, ProxyIngressAttestation), String> {
@@ -49083,6 +49224,182 @@ fn bounded_duration_env(
     Ok(Duration::from_millis(value))
 }
 
+struct GateConnection {
+    socket: GateSocket,
+    // The only strong shutdown handle stays with queued/active work. The
+    // listener registry holds Weak entries, never historical live sockets.
+    shutdown_guard: Option<Arc<VsockShutdownV1>>,
+}
+
+struct VsockProxyLifetime {
+    stopped: AtomicBool,
+    sessions: Mutex<Vec<Weak<VsockShutdownV1>>>,
+    capacity: usize,
+}
+
+impl VsockProxyLifetime {
+    fn register(&self, stream: &VsockStreamV1) -> Result<Arc<VsockShutdownV1>, String> {
+        let handle = Arc::new(stream.shutdown_handle()
+            .map_err(|error| format!("retain vsock session shutdown custody: {error}"))?);
+        let mut sessions = self.sessions.lock()
+            .map_err(|_| "vsock session registry is poisoned".to_owned())?;
+        sessions.retain(|entry| entry.strong_count() != 0);
+        if self.stopped.load(Ordering::Acquire) || sessions.len() >= self.capacity {
+            let _ = handle.shutdown();
+            return Err("vsock proxy stopped or exceeded its bounded session inventory".to_owned());
+        }
+        sessions.push(Arc::downgrade(&handle));
+        Ok(handle)
+    }
+
+    fn stop(&self) -> Result<(), String> {
+        self.stopped.store(true, Ordering::Release);
+        // Cleanup must still close every retained session if a worker panicked
+        // while another operation poisoned this lock. Never skip later handles
+        // after a shutdown error; preserve the first error for the caller.
+        let mut failure = None;
+        let sessions = match self.sessions.lock() {
+            Ok(sessions) => sessions,
+            Err(poisoned) => {
+                failure = Some("vsock session registry is poisoned".to_owned());
+                poisoned.into_inner()
+            }
+        };
+        for handle in sessions.iter().filter_map(Weak::upgrade) {
+            if let Err(error) = handle.shutdown() {
+                if failure.is_none() { failure = Some(format!("shutdown vsock session: {error}")); }
+            }
+        }
+        match failure { Some(error) => Err(error), None => Ok(()) }
+    }
+}
+
+struct VsockProxyStopGuard(Arc<VsockProxyLifetime>);
+impl Drop for VsockProxyStopGuard {
+    fn drop(&mut self) { let _ = self.0.stop(); }
+}
+
+fn run_gate_connection_worker(
+    receiver: Arc<Mutex<Receiver<GateConnection>>>,
+    state: Arc<GateState>,
+    management_listener: bool,
+    proxy_ingress: ProxyIngressConfig,
+    lifetime: Option<&VsockProxyLifetime>,
+) -> Result<(), String> {
+    loop {
+        let connection = receiver.lock()
+            .map_err(|_| "connection receiver mutex poisoned".to_owned())?.recv();
+        let Ok(connection) = connection else { return Ok(()); };
+        if lifetime.is_some_and(|owner| owner.stopped.load(Ordering::Acquire)) {
+            drop(connection);
+            continue;
+        }
+        let GateConnection { socket, shutdown_guard } = connection;
+        match socket {
+            GateSocket::Tcp(stream) => handle_connection(stream, Arc::clone(&state),
+                management_listener, proxy_ingress.clone()),
+            socket @ GateSocket::Vsock(_) => handle_gate_connection(socket, Arc::clone(&state),
+                management_listener, proxy_ingress.clone()),
+        }
+        // Keep abort custody for the complete handler, including TLS and
+        // request authorization, then make its registry entry reclaimable.
+        drop(shutdown_guard);
+    }
+}
+
+/// Fixed, private serving join only. Startup must independently admit listener,
+/// identity, policy and mutual-TLS configuration; no environment switch exists.
+/// The original accept/session deadline closes all inbound sessions. Scoped
+/// workers are joined before return, including failures and queued work. An
+/// inbound shutdown does not interrupt unrelated upstream HTTP/DNS work: joins
+/// can await those existing bounded operations; this is not a hard watchdog.
+fn serve_vsock_proxy(
+    listener: VsockListenerV1,
+    state: Arc<GateState>,
+    proxy_ingress: ProxyIngressConfig,
+    worker_count: usize,
+    queue_capacity: usize,
+    deadline: u64,
+) -> Result<(), String> {
+    if !matches!(&proxy_ingress, ProxyIngressConfig::MutualTls(_)) {
+        return Err("vsock proxy requires actual mutual-TLS ingress".to_owned());
+    }
+    if !(1..=192).contains(&worker_count) || !(1..=4096).contains(&queue_capacity)
+        || (state.is_production && worker_count > 24) {
+        return Err("vsock proxy worker or queue count exceeds existing proxy bounds".to_owned());
+    }
+    thread::scope(|scope| {
+        let (sender, receiver) = mpsc::sync_channel::<GateConnection>(queue_capacity);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let capacity = worker_count + queue_capacity + 1;
+        let lifetime = Arc::new(VsockProxyLifetime { stopped: AtomicBool::new(false),
+            sessions: Mutex::new(Vec::with_capacity(capacity)), capacity });
+        // Declared after sender: unwind closes sessions before disconnecting
+        // the queue, and the enclosing thread scope still joins every worker.
+        let _stop_guard = VsockProxyStopGuard(Arc::clone(&lifetime));
+        let mut workers = Vec::with_capacity(worker_count);
+        let serving = (|| -> Result<(), String> {
+            for worker_index in 0..worker_count {
+                let receiver = Arc::clone(&receiver);
+                let state = Arc::clone(&state);
+                let ingress = proxy_ingress.clone();
+                let lifetime = Arc::clone(&lifetime);
+                let worker = thread::Builder::new().name(format!("vsock-proxy-worker-{worker_index}"))
+                    .spawn_scoped(scope, move || {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            run_gate_connection_worker(receiver, state, false, ingress, Some(&lifetime))
+                        }));
+                        let result = match result {
+                            Ok(result) => result,
+                            Err(_) => Err("vsock proxy worker panicked".to_owned()),
+                        };
+                        if result.is_err() { let _ = lifetime.stop(); }
+                        result
+                    }).map_err(|error| format!("spawn vsock proxy worker: {error}"))?;
+                workers.push(worker);
+            }
+            loop {
+                if lifetime.stopped.load(Ordering::Acquire) {
+                    return Err("vsock proxy worker lifecycle stopped".to_owned());
+                }
+                // Never substitute a polling-tick deadline: this exact bound
+                // is inherited by every accepted stream for its whole lifetime.
+                let stream = listener.accept(deadline)
+                    .map_err(|error| format!("vsock proxy accept ended: {error}"))?;
+                let shutdown_guard = lifetime.register(&stream)?;
+                let connection = GateConnection { socket: GateSocket::Vsock(stream),
+                    shutdown_guard: Some(shutdown_guard) };
+                match sender.try_send(connection) {
+                    Ok(()) => {}
+                    Err(mpsc::TrySendError::Full(rejected)) => {
+                        // No plaintext capacity response before mutual TLS.
+                        drop(rejected);
+                    }
+                    Err(mpsc::TrySendError::Disconnected(rejected)) => {
+                        drop(rejected);
+                        return Err("vsock proxy worker queue disconnected".to_owned());
+                    }
+                }
+            }
+        })();
+        let shutdown = lifetime.stop();
+        drop(sender);
+        let mut worker_failure = None;
+        for worker in workers {
+            let result = match worker.join() {
+                Ok(result) => result,
+                Err(_) => Err("vsock proxy worker join failed".to_owned()),
+            };
+            if let Err(error) = result {
+                if worker_failure.is_none() { worker_failure = Some(error); }
+            }
+        }
+        shutdown?;
+        if let Some(error) = worker_failure { return Err(error); }
+        serving
+    })
+}
+
 fn serve_listener(
     listener: TcpListener,
     state: Arc<GateState>,
@@ -49091,7 +49408,7 @@ fn serve_listener(
     worker_count: usize,
     queue_capacity: usize,
 ) -> Result<(), String> {
-    let (sender, receiver) = mpsc::sync_channel::<TcpStream>(queue_capacity);
+    let (sender, receiver) = mpsc::sync_channel::<GateConnection>(queue_capacity);
     let receiver = Arc::new(Mutex::new(receiver));
     let listener_name = if management_listener {
         "management"
@@ -49104,28 +49421,19 @@ fn serve_listener(
         let proxy_ingress = proxy_ingress.clone();
         thread::Builder::new()
             .name(format!("{listener_name}-worker-{worker_index}"))
-            .spawn(move || loop {
-                let stream = receiver
-                    .lock()
-                    .expect("connection receiver mutex poisoned")
-                    .recv();
-                match stream {
-                    Ok(stream) => {
-                        handle_connection(
-                            stream,
-                            Arc::clone(&state),
-                            management_listener,
-                            proxy_ingress.clone(),
-                        )
-                    }
-                    Err(_) => break,
+            .spawn(move || {
+                if let Err(error) = run_gate_connection_worker(receiver, state,
+                    management_listener, proxy_ingress, None) {
+                    eprintln!("{listener_name} worker stopped: {error}");
                 }
             })
             .map_err(|err| format!("spawn {listener_name} worker: {err}"))?;
     }
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => match sender.try_send(stream) {
+            Ok(stream) => match sender.try_send(GateConnection {
+                socket: GateSocket::Tcp(stream), shutdown_guard: None,
+            }) {
                 Ok(()) => {}
                 Err(mpsc::TrySendError::Full(rejected)) => {
                     if !management_listener
@@ -49139,7 +49447,7 @@ fn serve_listener(
                         json!({"error":"connection_capacity_exhausted"}),
                     );
                     let mut rejected = DeadlineIo::new(
-                        rejected,
+                        rejected.socket,
                         state.request_head_deadline,
                         state.response_write_deadline,
                     );

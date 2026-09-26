@@ -29,6 +29,24 @@ certificate/SPKI and `leaf_server_config` API do not export a private key.
 does not turn a mounted PEM key into enclave custody or production admission.
 No complete backend-memory-erasure claim follows from this interface.
 
+`mutual_tls_server_config` is a separate generated-only outer-server path: it
+rejects development-PEM authorities, issues a fresh leaf/key within the original
+CA interval, and installs TLS 1.3 only with mandatory `WebPkiClientVerifier`
+client authentication and HTTP/1.1 ALPN. `GeneratedMutualTlsV1` retains the actual
+configuration, leaf/CA DER chain, leaf SPKI and exact installed client-root DERs.
+Its certificate/key-byte accessors expose public material; the opaque rustls
+configuration is a serving capability. Roots must number 1..32, each at most
+64 KiB and together at most 1 MiB. Empty, duplicate, malformed or trailing-DER
+originals are rejected. This does not independently admit root provenance,
+host/SPIFFE authorization, supplied validity times or a CRL/revocation policy.
+
+The client-root commitment preserves caller order and original DER bytes:
+
+```text
+SHA256("serverware/mutual-tls-client-trust/v1\0"
+       || root_count:u32BE || (DER_length:u64BE || DER)* )
+```
+
 The [native NSM owner](../data-plane/decision-gate-rs/src/enclave_nsm_v1.rs)
 opens only `/dev/nsm`, retaining its root-owned misc-character-device identity,
 creator process and original boottime deadline. It sends only the fixed
@@ -56,13 +74,24 @@ domain `serverware/enclave-runtime-key-binding/v1`, one role byte, then seven
 4. SHA-256 of the actual CA certificate DER.
 5. SHA-256 of the actual CA public-key SPKI DER.
 6. SHA-256 of the actual key placed in the NSM public-key field.
-7. Original credential-request binding, or all zero bytes for the TLS-root role.
+7. Role-specific binding described below.
 
 Role `1` quotes the TLS-root SPKI; role `2` quotes the raw X25519 public key and
-requires a nonzero request binding. The nonce is a separate exact 32-byte NSM
-field. `RuntimeKeyQuoteV1` retains the original document, exact `user_data`,
-public key and nonce. Those bytes allow independent checking; neither a
-supplied commitment nor the returned quote is release/policy admission.
+requires the original nonzero credential-request binding. The seventh field is
+zero for role `1`. Role `3`, produced by `quote_mutual_tls_ingress`, quotes the
+actual fresh outer leaf SPKI and uses this seventh field:
+
+```text
+SHA256("serverware/native-tls13-mandatory-client-auth/v1\0"
+       || SHA256(actual_leaf_DER) || client_trust_sha256)
+```
+
+The original role `1`/`2` encodings are unchanged. The nonce is a separate exact
+32-byte NSM field. `RuntimeKeyQuoteV1` retains the original document, exact
+`user_data`, public key and nonce; `QuotedMutualTlsIngressV1` also retains the
+actual generated configuration and its original process/deadline scope. Those
+bytes allow independent checking; neither a supplied commitment nor the
+returned quote is release/policy admission.
 
 Lease quotation is deliberately two-phase. `prepare_lease_recipient(deadline)`
 creates an opaque `PendingCredentialRecipientV1`; its `public_key_bytes()`
@@ -79,14 +108,48 @@ The ordinary Rust gate reuses the recipient and TLS owners at its existing
 credential-lease and MITM-CA seams. Its existing optional external recipient
 attestation command remains unchanged; that path does not automatically select
 the native composition or put these new quotes into a lease request. That reuse
-does not relocate the gate into
-an enclave, authenticate NSM claims, change the credential-lease KDF, or replace
+does not relocate the gate into an enclave, authenticate NSM claims, change the
+credential-lease KDF, or replace
 the existing proof signer and rollback policy. This batch generates no new
 proof-signing identity and supplies no caller-dictionary signing API.
 
-A generated `Arc<rustls::ServerConfig>` can outlive the identity owner. Future
-serving must enforce active scope, session revocation and connection closure;
-key/config construction alone does not enforce those runtime transitions.
+A generated `Arc<rustls::ServerConfig>` can outlive the identity owner. The
+private serving join below retains the quoted owner through its workers;
+independent active-scope admission and revocation remain required. Key/config
+construction alone does not enforce those runtime transitions.
+
+## Bounded vsock ingress, not activation
+
+The [native vsock owner](../data-plane/decision-gate-rs/src/enclave_vsock_v1.rs)
+provides retained nonblocking inbound `AF_VSOCK` streams, exact configured peer
+CID comparison, original boottime deadlines, at most 64 KiB per I/O operation,
+and explicit shutdown custody. It has no outbound connector or generic raw-FD
+export. CID is routing scope, not client authentication: AWS Nitro's parent is
+CID `3`, distinct from Linux's generic `VMADDR_CID_HOST` value `2`.
+See the [AWS networking contract](https://docs.aws.amazon.com/enclaves/latest/user/enclave-networking.html)
+and [Linux vsock API](https://man7.org/linux/man-pages/man7/vsock.7.html).
+
+In the [gate](../data-plane/decision-gate-rs/src/main.rs),
+`materialize_native_proxy_ingress` derives the configuration and evidence roots
+from the same quoted owner. Its distinct `native-mtls-v1` metadata is not an
+accepted environment mode or external-verifier profile. The chain commitment
+uses SHA-256 over `serverware/native-tls-server-chain/v1` plus NUL, a `u32BE`
+count and each `u64BE` length plus original DER, in chain order. Leaf/SPKI hashes
+remain raw SHA-256; the client-root commitment is the framed digest above.
+`serve_native_vsock_proxy` consumes the quoted owner, requires exact state
+metadata equality, clips the serving deadline to the original quote deadline,
+and retains the owner until all scoped handlers join. It does not admit the
+other supplied gate state as enclave-owned.
+
+The private gate serving composition requires actual mutual TLS before HTTP
+handling, rejects management/development-raw use, and feeds genuine verified
+client-certificate evidence into the existing request path. Client IP remains
+unknown; CID is never translated into a parent or loopback IP identity. A
+bounded worker/queue inventory retains shutdown custody for queued
+and active sessions. Shutdown closes inbound sessions and joins workers, but
+that join may await existing bounded upstream HTTP/DNS I/O. It is **not** a
+hard syscall/whole-process watchdog or a proof that all work stops at the exact
+deadline. No CLI/environment mode activates this private composition.
 
 ## Deferred verification
 
@@ -94,7 +157,9 @@ The consolidated frozen phase must cover the real gate call sites as well as
 the new owners: unchanged authenticated envelope/KDF results and leaf-cache
 behavior; rejected non-contributory peers and process drift; generated CA/leaf
 validity bounds; exact CBOR field/framing/size rejection and permanent poison;
-pending-key substitution, deadline clipping and request/public-key joins.
+pending-key substitution, deadline clipping and request/public-key joins;
+mandatory outer client authentication, TLS-version/root-bundle rejection and
+exact role `3` joins; unknown-IP handling, bounded queues and session shutdown.
 
 Actual Nitro checks then need a fresh independent challenge, the original COSE
 document and genuine certificate/PCR/nonce/public-key/user-data verification
@@ -109,7 +174,7 @@ and [AWS request/response types](https://github.com/aws/aws-nitro-enclaves-nsm-a
 The full Rust TLS, policy, credential acquisition, injection, upstream TLS,
 response-validation and proof path must execute inside the admitted enclave.
 The parent must handle ciphertext and public evidence only. Still missing are
-the complete enclave serving composition, authenticated parent/enclave
+the independently admitted complete enclave serving composition and parent/enclave
 transport, real KMS RSA/`CiphertextForRecipient`/CMS integration, and removal of
 the host control-plane `keyB64`/plaintext-key paths. Native NSM access by itself
 does not close any of those gaps.

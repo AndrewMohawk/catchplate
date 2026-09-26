@@ -14,7 +14,7 @@ mod tls_authority_v1;
 mod credential_recipient_v1;
 
 pub use credential_recipient_v1::CredentialRecipientV1;
-pub use tls_authority_v1::TlsAuthorityV1;
+pub use tls_authority_v1::{GeneratedMutualTlsV1, TlsAuthorityV1};
 use enclave_nsm_v1::NsmDeviceV1;
 use rustls::ServerConfig;
 use sha2::{Digest, Sha256};
@@ -25,6 +25,8 @@ use zeroize::Zeroizing;
 const BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
 const TLS_ROOT: u8 = 1;
 const LEASE_RECIPIENT: u8 = 2;
+const MUTUAL_TLS_INGRESS: u8 = 3;
+const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
 
 /// Ordinary independently expected commitments must be admitted by the caller.
 /// Nonzero hashes alone establish neither signed release nor policy authority.
@@ -57,6 +59,30 @@ impl RuntimeKeyQuoteV1 {
     pub fn user_data(&self) -> &[u8] { &self.user_data }
     pub fn public_key(&self) -> &[u8] { &self.public_key }
     pub fn nonce(&self) -> &[u8; 32] { &self.nonce }
+}
+
+/// The generated outer TLS configuration and actual quote naming its leaf key.
+/// No remote PCR/release/nonce verification or authorization follows from it.
+pub struct QuotedMutualTlsIngressV1 {
+    tls: GeneratedMutualTlsV1,
+    quote: RuntimeKeyQuoteV1,
+    owner_pid: libc::pid_t,
+    deadline: u64,
+}
+
+impl QuotedMutualTlsIngressV1 {
+    pub fn quote(&self) -> &RuntimeKeyQuoteV1 { &self.quote }
+    pub fn tls(&self) -> &GeneratedMutualTlsV1 { &self.tls }
+    pub fn deadline(&self) -> u64 { self.deadline }
+
+    /// Local lifetime check only. Serving must retain this owner and enforce
+    /// connection cancellation; existing Arc configs do not revoke themselves.
+    pub fn verify_live(&self, deadline: u64) -> Result<(), String> {
+        if unsafe { libc::getpid() } != self.owner_pid {
+            return Err("native TLS ingress crossed its creating process".to_owned());
+        }
+        live(deadline.min(self.deadline))
+    }
 }
 
 /// Fresh one-use X25519 key and the NSM original naming its actual public key.
@@ -213,6 +239,27 @@ impl EnclaveRuntimeIdentityV1 {
         self.finish(deadline)?;
         Ok(QuotedCredentialRecipientV1 { recipient, deadline,
             quote: RuntimeKeyQuoteV1 { document, user_data, public_key, nonce } })
+    }
+
+    pub fn quote_mutual_tls_ingress(&mut self, host: &str, spiffe: Option<&str>,
+        roots: &[Vec<u8>], not_before: OffsetDateTime, not_after: OffsetDateTime,
+        nonce: [u8; 32], deadline: u64) -> Result<QuotedMutualTlsIngressV1, String> {
+        let deadline = self.begin(deadline)?;
+        let tls = self.authority.mutual_tls_server_config(host, spiffe, roots, not_before, not_after)?;
+        let public_key = tls.leaf_public_key_spki_der().to_vec();
+        // Bind both actual server certificate and actual installed client roots.
+        // TLS1.3/mandatory authentication are fixed by the generated constructor,
+        // not caller-selected flags or a supplied successful-verification DTO.
+        let mut binding = Sha256::new();
+        binding.update(INGRESS_BINDING_DOMAIN);
+        binding.update(Sha256::digest(tls.leaf_certificate_der()));
+        binding.update(tls.client_trust_sha256());
+        let user_data = self.binding(MUTUAL_TLS_INGRESS, &public_key, binding.finalize().into());
+        let document = self.nsm.attest(&public_key, &nonce, &user_data, deadline)?;
+        self.finish(deadline)?;
+        Ok(QuotedMutualTlsIngressV1 { tls,
+            quote: RuntimeKeyQuoteV1 { document, user_data, public_key, nonce },
+            owner_pid: self.owner_pid, deadline })
     }
 
     /// Creates only a TLS config. It authenticates no workload or route and

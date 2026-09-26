@@ -7,7 +7,7 @@
 use super::{
     Client, GateState, MitmAuthority, PinnedUpstreamClientCache,
     PolicyHighWater, PolicyShadowGenerationControl, PolicyTrustRootSource,
-    ProxyIngressAttestation, ResponseObservationV2Client, ResponseProofSigner,
+    ProxyIngressAttestation, ResponseObservationV2Client, ResponseProofSigningMaterial,
     ShadowRuntime, Snapshot, UpstreamClientConfig, UpstreamDispatchAuthority,
     UpstreamResolver, MAX_PINNED_UPSTREAM_CLIENTS, POLICY_TRUST_REFRESH_INTERVAL,
 };
@@ -54,9 +54,6 @@ pub(super) struct GateStateInputs {
     pub(super) binary_digest: String,
     pub(super) release_provenance_path: Option<String>,
     pub(super) image_signatures_path: Option<String>,
-    pub(super) response_proof_signer: ResponseProofSigner,
-    pub(super) response_proof_public_key_pem: String,
-    pub(super) response_proof_signing_key_id: String,
     pub(super) response_proof_attestation_command: Option<String>,
     pub(super) server_instance_id: Option<String>,
     pub(super) response_observation_v2_client: Option<ResponseObservationV2Client>,
@@ -71,6 +68,7 @@ pub(super) struct GateStateRuntime {
     pub(super) credential_lease_client: Client,
     pub(super) proxy_ingress_attestation: ProxyIngressAttestation,
     pub(super) mitm_authority: Option<MitmAuthority>,
+    pub(super) response_proof: ResponseProofSigningMaterial,
 }
 
 impl GateStateInputs {
@@ -154,10 +152,10 @@ impl GateStateInputs {
             binary_digest: self.binary_digest,
             release_provenance_path: self.release_provenance_path,
             image_signatures_path: self.image_signatures_path,
-            response_proof_signer: self.response_proof_signer,
+            response_proof_signer: runtime.response_proof.signer,
             response_observation_nonce_reservations: Mutex::new(HashMap::new()),
-            response_proof_public_key_pem: self.response_proof_public_key_pem,
-            response_proof_signing_key_id: self.response_proof_signing_key_id,
+            response_proof_public_key_pem: runtime.response_proof.public_key_pem,
+            response_proof_signing_key_id: runtime.response_proof.key_id,
             response_proof_attestation_command: self.response_proof_attestation_command,
             server_instance_id: self.server_instance_id,
             response_observation_v2_client: self.response_observation_v2_client,

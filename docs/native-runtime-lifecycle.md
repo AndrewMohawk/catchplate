@@ -13,6 +13,10 @@ settings)` now delegates to [native_runtime::run](../data-plane/decision-gate-rs
 It consumes the prepared object and requires sole ownership of its state before
 installing `NativeRuntimeLifetimeV1`; it does not copy an already shared legacy
 state or invoke environment-driven `main`.
+The [callable native startup](native-startup.md) now constructs the actual
+native owners and explicit shadow/v2 clients, performs preparation and binds
+the fixed-parent listener before handing both owners to this run. It adds no
+CLI/environment activation or independent admission.
 
 `NativeRuntimeSettingsV1::new` accepts 1–24 proxy workers, queue capacity
 1–4,096, policy interval 50 ms–60 s and audit interval 10 ms–60 s. These are

@@ -10,16 +10,16 @@ use super::{
     canonical_spiffe_id, validate_configured_control_plane_urls,
     validate_configured_internal_service_tokens, validate_internal_service_tokens,
     verifying_key_from_spki_pem_text, PolicyTrustRootSource, ResponseProofSigner,
+    ResponseProofSigningMaterial,
     AUDIT_INGEST_PATH, CREDENTIAL_LEASE_PATH, GRANT_CONSUME_PATH,
     POLICY_TRUST_ROOT_ATTESTATION_PATH, RATE_LIMIT_CONSUME_PATH,
     RELEASE_AUTHORIZATION_BASE_PATH,
 };
 use std::time::Duration;
 
-pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs) -> Result<(), String> {
-    if !inputs.is_production {
-        return Err("native bootstrap requires production configuration".to_owned());
-    }
+pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs,
+    proof: &ResponseProofSigningMaterial) -> Result<(), String> {
+    validate_native_gate_static_inputs(inputs)?;
     let shadow = inputs.policy_shadow_generation_control.as_ref()
         .ok_or("native bootstrap requires actual production shadow control")?;
     if !shadow.is_production() {
@@ -27,6 +27,36 @@ pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs) -> Result<()
     }
     if shadow.startup_request().is_some() {
         return Err("native bootstrap does not install pending shadow startup generations".to_owned());
+    }
+    let ResponseProofSigner::Custody(signer) = &proof.signer else {
+        return Err("native production requires an actual custody response proof signer".to_owned());
+    };
+    // Native custody is an actual retained owner in this address space, not a
+    // host UDS peer or UID-isolated process. Legacy UDS startup still enforces
+    // its separate UID. Neither construction supplies independent admission.
+    signer.transport.require_native()?;
+    if signer.public_key_pem != proof.public_key_pem || signer.key_id != proof.key_id {
+        return Err("native custody signer metadata does not match the supplied proof configuration".to_owned());
+    }
+    let (key, key_id) = verifying_key_from_spki_pem_text(
+        &signer.public_key_pem, "native custody response proof",
+    )?;
+    if key.as_bytes() != signer.verifying_key.as_bytes() || key_id != signer.key_id {
+        return Err("native custody signer key does not match its actual verifying key and ID".to_owned());
+    }
+    // The startup composition constructs this through the actual production
+    // hello. Presence alone in this lower-level preparation is not admission.
+    if inputs.response_observation_v2_client.is_none() {
+        return Err("native production requires the response-observation v2 client".to_owned());
+    }
+    Ok(())
+}
+
+/// Pure preflight for cold configuration, usable before opening NSM, generating
+/// keys or contacting startup services. Actual-owner checks remain separate.
+pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Result<(), String> {
+    if !inputs.is_production {
+        return Err("native bootstrap requires production configuration".to_owned());
     }
     if !inputs.policy_path.is_empty()
         || inputs.policy_high_water_path.is_some()
@@ -122,30 +152,6 @@ pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs) -> Result<()
     if !canonical_spiffe_id(instance) {
         return Err("native production instance ID must be a canonical SPIFFE ID".to_owned());
     }
-    let ResponseProofSigner::Custody(signer) = &inputs.response_proof_signer else {
-        return Err("native production requires an actual custody response proof signer".to_owned());
-    };
-    // Native custody is an actual retained owner in this address space, not a
-    // host UDS peer or UID-isolated process. Legacy UDS startup still enforces
-    // its separate UID. Neither construction supplies independent admission.
-    signer.transport.require_native()?;
-    if signer.public_key_pem != inputs.response_proof_public_key_pem
-        || signer.key_id != inputs.response_proof_signing_key_id
-    {
-        return Err("native custody signer metadata does not match the supplied proof configuration".to_owned());
-    }
-    let (key, key_id) = verifying_key_from_spki_pem_text(
-        &signer.public_key_pem, "native custody response proof",
-    )?;
-    if key.as_bytes() != signer.verifying_key.as_bytes() || key_id != signer.key_id {
-        return Err("native custody signer key does not match its actual verifying key and ID".to_owned());
-    }
-    // The existing client has no production-construction flag. Presence is the
-    // existing production startup guard, not fresh attestation or proof admission.
-    if inputs.response_observation_v2_client.is_none() {
-        return Err("native production requires the response-observation v2 client".to_owned());
-    }
-
     for (name, value, minimum, maximum) in [
         ("grant cache", inputs.grant_cache_max, 1, 1_000_000),
         ("credential lease cache", inputs.credential_lease_cache_max, 1, 1_000_000),

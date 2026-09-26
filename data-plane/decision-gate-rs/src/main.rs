@@ -15,6 +15,7 @@ mod native_runtime_lifetime;
 mod native_background_workers;
 mod native_lease_renewal;
 mod native_runtime;
+mod native_startup;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};
@@ -50464,15 +50465,17 @@ fn main() -> Result<(), String> {
         binary_digest,
         release_provenance_path,
         image_signatures_path,
-        response_proof_signer,
-        response_proof_public_key_pem,
-        response_proof_signing_key_id,
         response_proof_attestation_command,
         server_instance_id,
         response_observation_v2_client,
     }.into_state(GateStateRuntime {
         snapshot, upstream_resolver, audit_client, credential_lease_client,
         proxy_ingress_attestation, mitm_authority,
+        response_proof: ResponseProofSigningMaterial {
+            signer: response_proof_signer,
+            public_key_pem: response_proof_public_key_pem,
+            key_id: response_proof_signing_key_id,
+        },
     }));
     if let Some(control) =
         state.policy_shadow_generation_control.as_ref()

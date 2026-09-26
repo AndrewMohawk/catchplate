@@ -47,6 +47,22 @@ pub(super) fn initialize_response_observation_v2_client(
     )
 }
 
+pub(super) fn validate_response_observation_v2_client_config(
+    config: &ResponseObservationV2ClientConfig,
+) -> Result<(), String> {
+    client_transport::validate_response_observation_v2_client_config(config)
+}
+
+pub(super) fn initialize_response_observation_v2_client_from_config(
+    config: ResponseObservationV2ClientConfig,
+    absolute_deadline: u64,
+) -> Result<ResponseObservationV2Client, String> {
+    client_transport::initialize_response_observation_v2_client_from_config(
+        config,
+        absolute_deadline,
+    )
+}
+
 pub(super) fn start_response_observation_v2_health_probe(
     client: Option<ResponseObservationV2Client>,
 ) {

@@ -2283,6 +2283,23 @@ impl RuntimeAttestationVerification for FleetRuntimeAttestation {
     }
 }
 
+/// Explicit startup inputs, not a verified trust or activation token.
+///
+/// Paths and pins are admitted by `from_config` through the same retained-file
+/// and executable checks used by the environment-backed development entry.
+pub(crate) struct PolicyShadowGenerationConfig {
+    pub(crate) trust_manifest_path: PathBuf,
+    pub(crate) trust_manifest_sha256: Sha256Digest,
+    pub(crate) runtime_verifier: PinnedVerifierCommand,
+    pub(crate) webauthn_verifier: PinnedVerifierCommand,
+    pub(crate) publication_handoff: PinnedVerifierCommand,
+    pub(crate) custody_config_path: PathBuf,
+    pub(crate) startup_generation_path: Option<PathBuf>,
+    pub(crate) startup_generation_sha256: Option<Sha256Digest>,
+    pub(crate) startup_active_authorization_path: Option<PathBuf>,
+    pub(crate) startup_active_authorization_sha256: Option<Sha256Digest>,
+}
+
 pub(crate) struct PolicyShadowGenerationControl {
     is_production: bool,
     trust_manifest_sha256: Sha256Digest,
@@ -2346,13 +2363,76 @@ impl PolicyShadowGenerationControl {
             );
         }
 
-        let trust_path = required_absolute_env_path(
+        let config = PolicyShadowGenerationConfig {
+            trust_manifest_path: PathBuf::from(required_env(
+                TRUST_MANIFEST_PATH_ENV,
+            )?),
+            trust_manifest_sha256: Sha256Digest::parse(required_env(
+                TRUST_MANIFEST_SHA256_ENV,
+            )?).map_err(shadow_error)?,
+            runtime_verifier: configured_pinned_command_from_env(
+                RUNTIME_VERIFIER_COMMAND_ENV,
+                RUNTIME_VERIFIER_SHA256_ENV,
+            )?,
+            webauthn_verifier: configured_pinned_command_from_env(
+                WEBAUTHN_VERIFIER_COMMAND_ENV,
+                WEBAUTHN_VERIFIER_SHA256_ENV,
+            )?,
+            publication_handoff: configured_pinned_command_from_env(
+                PUBLICATION_HANDOFF_COMMAND_ENV,
+                PUBLICATION_HANDOFF_SHA256_ENV,
+            )?,
+            custody_config_path: PathBuf::from(required_env(
+                CUSTODY_CONFIG_PATH_ENV,
+            )?),
+            startup_generation_path: optional_env_path(
+                STARTUP_GENERATION_PATH_ENV,
+            ),
+            startup_generation_sha256: optional_env_digest(
+                STARTUP_GENERATION_SHA256_ENV,
+            )?,
+            startup_active_authorization_path: optional_env_path(
+                STARTUP_ACTIVE_AUTHORIZATION_PATH_ENV,
+            ),
+            startup_active_authorization_sha256: optional_env_digest(
+                STARTUP_ACTIVE_AUTHORIZATION_SHA256_ENV,
+            )?,
+        };
+        Self::from_config(is_production, policy_trust_is_attested, config)
+            .map(Some)
+    }
+
+    /// Admit explicit startup inputs without consulting the environment.
+    /// The caller's policy-trust classification is not created by this API;
+    /// signed generation and active-policy joins still occur at their existing
+    /// startup/installation boundaries.
+    pub(crate) fn from_config(
+        is_production: bool,
+        policy_trust_is_attested: bool,
+        config: PolicyShadowGenerationConfig,
+    ) -> Result<Arc<Self>, String> {
+        if is_production && !policy_trust_is_attested {
+            return Err(
+                "production policy-shadow generation control requires an attested policy trust root"
+                    .to_string(),
+            );
+        }
+        let PolicyShadowGenerationConfig {
+            trust_manifest_path,
+            trust_manifest_sha256,
+            runtime_verifier,
+            webauthn_verifier,
+            publication_handoff,
+            custody_config_path,
+            startup_generation_path,
+            startup_generation_sha256,
+            startup_active_authorization_path,
+            startup_active_authorization_sha256,
+        } = config;
+        let trust_path = normalized_absolute_path(
+            trust_manifest_path,
             TRUST_MANIFEST_PATH_ENV,
         )?;
-        let trust_manifest_sha256 = Sha256Digest::parse(required_env(
-            TRUST_MANIFEST_SHA256_ENV,
-        )?)
-        .map_err(shadow_error)?;
         let trust_bytes = read_immutable_artifact(
             &trust_path,
             MAX_TRUST_MANIFEST_BYTES,
@@ -2366,36 +2446,34 @@ impl PolicyShadowGenerationControl {
             is_production,
         )?);
 
-        let runtime_verifier =
-            configured_runtime_verifier_from_env()?;
-        verify_pinned_verifier_executable(&runtime_verifier)?;
-        let webauthn_verifier = configured_pinned_command_from_env(
-            WEBAUTHN_VERIFIER_COMMAND_ENV,
+        validate_configured_pinned_command(
+            &runtime_verifier,
+            RUNTIME_VERIFIER_SHA256_ENV,
+        )?;
+        validate_configured_pinned_command(
+            &webauthn_verifier,
             WEBAUTHN_VERIFIER_SHA256_ENV,
         )?;
-        verify_pinned_verifier_executable(&webauthn_verifier)?;
-        let publication_handoff = configured_pinned_command_from_env(
-            PUBLICATION_HANDOFF_COMMAND_ENV,
+        validate_configured_pinned_command(
+            &publication_handoff,
             PUBLICATION_HANDOFF_SHA256_ENV,
         )?;
-        verify_pinned_verifier_executable(&publication_handoff)?;
 
-        let custody_path =
-            required_absolute_env_path(CUSTODY_CONFIG_PATH_ENV)?;
+        let custody_path = normalized_absolute_path(
+            custody_config_path,
+            CUSTODY_CONFIG_PATH_ENV,
+        )?;
         let custody_config =
             immutable_config_identity(&custody_path, is_production)?;
 
-        let startup_path = optional_absolute_env_path(
-            STARTUP_GENERATION_PATH_ENV,
-        )?;
-        let startup_digest =
-            env::var(STARTUP_GENERATION_SHA256_ENV)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| Sha256Digest::parse(value))
-                .transpose()
-                .map_err(shadow_error)?;
-        let startup_request = match (startup_path, startup_digest) {
+        let startup_path = startup_generation_path
+            .map(|path| normalized_absolute_path(
+                path, STARTUP_GENERATION_PATH_ENV,
+            ))
+            .transpose()?;
+        let startup_request = match (
+            startup_path, startup_generation_sha256,
+        ) {
             (None, None) => None,
             (Some(path), Some(digest)) => Some(read_immutable_artifact(
                 &path,
@@ -2410,20 +2488,14 @@ impl PolicyShadowGenerationControl {
                 ))
             }
         };
-        let startup_authorization_path = optional_absolute_env_path(
-            STARTUP_ACTIVE_AUTHORIZATION_PATH_ENV,
-        )?;
-        let startup_authorization_digest = env::var(
-            STARTUP_ACTIVE_AUTHORIZATION_SHA256_ENV,
-        )
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| Sha256Digest::parse(value))
-        .transpose()
-        .map_err(shadow_error)?;
+        let startup_authorization_path = startup_active_authorization_path
+            .map(|path| normalized_absolute_path(
+                path, STARTUP_ACTIVE_AUTHORIZATION_PATH_ENV,
+            ))
+            .transpose()?;
         let startup_active_authorization = match (
             startup_authorization_path,
-            startup_authorization_digest,
+            startup_active_authorization_sha256,
         ) {
             (None, None) if !is_production => None,
             (None, None) => {
@@ -2463,7 +2535,7 @@ impl PolicyShadowGenerationControl {
             }
         };
 
-        Ok(Some(Arc::new(Self {
+        Ok(Arc::new(Self {
             is_production,
             trust_manifest_sha256,
             key_trust,
@@ -2477,7 +2549,7 @@ impl PolicyShadowGenerationControl {
             startup_request,
             startup_active_authorization,
             retained_generation: Mutex::new(None),
-        })))
+        }))
     }
 
     pub(crate) fn is_production(&self) -> bool {
@@ -5649,20 +5721,21 @@ fn required_env(name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{name} is required"))
 }
 
-fn required_absolute_env_path(name: &str) -> Result<PathBuf, String> {
-    normalized_absolute_path(PathBuf::from(required_env(name)?), name)
-}
-
-fn optional_absolute_env_path(
-    name: &str,
-) -> Result<Option<PathBuf>, String> {
+fn optional_env_path(name: &str) -> Option<PathBuf> {
     env::var(name)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .map(|path| normalized_absolute_path(path, name))
+}
+
+fn optional_env_digest(name: &str) -> Result<Option<Sha256Digest>, String> {
+    env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(Sha256Digest::parse)
         .transpose()
+        .map_err(shadow_error)
 }
 
 fn normalized_absolute_path(
@@ -5684,14 +5757,6 @@ fn normalized_absolute_path(
         ));
     }
     Ok(path)
-}
-
-fn configured_runtime_verifier_from_env(
-) -> Result<PinnedVerifierCommand, String> {
-    configured_pinned_command_from_env(
-        RUNTIME_VERIFIER_COMMAND_ENV,
-        RUNTIME_VERIFIER_SHA256_ENV,
-    )
 }
 
 fn configured_pinned_command_from_env(
@@ -5716,6 +5781,18 @@ fn configured_pinned_command_from_env(
         arguments: arguments.to_vec(),
         expected_sha256,
     })
+}
+
+fn validate_configured_pinned_command(
+    command: &PinnedVerifierCommand,
+    digest_label: &str,
+) -> Result<(), String> {
+    if !is_sha256_digest(&command.expected_sha256) {
+        return Err(format!(
+            "{digest_label} must be a lowercase SHA-256 digest"
+        ));
+    }
+    verify_pinned_verifier_executable(command)
 }
 
 fn immutable_config_identity(

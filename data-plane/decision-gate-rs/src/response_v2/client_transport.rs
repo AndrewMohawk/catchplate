@@ -211,14 +211,37 @@ fn response_observation_v2_role_keys(
                 "{RESPONSE_OBSERVATION_V2_ROLE_KEYS_ENV} must be canonical closed JSON"
             )
         })?;
-    if pins.is_empty() {
+    pins.sort_by(|left, right| left.role.cmp(&right.role));
+    let mut result = BTreeMap::new();
+    for pin in pins {
+        if result.insert(pin.role.clone(), pin).is_some() {
+            return Err(
+                "response-observation v2 role-key pin is duplicated"
+                    .to_string(),
+            );
+        }
+    }
+    validate_response_observation_v2_role_keys(
+        &result,
+        expected_root_sha256,
+        response_signer_key_sha256,
+        expected_generation_id,
+    )?;
+    Ok(Arc::new(result))
+}
+
+fn validate_response_observation_v2_role_keys(
+    result: &BTreeMap<String, V2PinnedRoleKeyV1>,
+    expected_root_sha256: &str,
+    response_signer_key_sha256: &str,
+    expected_generation_id: &str,
+) -> Result<(), String> {
+    if result.is_empty() {
         return Err(format!(
             "{RESPONSE_OBSERVATION_V2_ROLE_KEYS_ENV} must pin at least one authority role"
         ));
     }
-    pins.sort_by(|left, right| left.role.cmp(&right.role));
-    let mut result = BTreeMap::new();
-    for pin in pins {
+    for (role, pin) in result {
         let mut operations = pin.allowed_operations.clone();
         operations.sort();
         operations.dedup();
@@ -229,6 +252,7 @@ fn response_observation_v2_role_keys(
                     .to_string()
             })?;
         if pin.role.is_empty()
+            || role != &pin.role
             || pin.generation_id != expected_generation_id
             || pin.provider_id.is_empty()
             || pin.provider_generation == 0
@@ -252,7 +276,6 @@ fn response_observation_v2_role_keys(
                 .allowed_operations
                 .iter()
                 .any(|operation| operation.is_empty())
-            || result.insert(pin.role.clone(), pin).is_some()
         {
             return Err(
                 "response-observation v2 role-key pin is incomplete, duplicated, or inconsistent"
@@ -359,7 +382,7 @@ fn response_observation_v2_role_keys(
                 .to_string(),
         );
     }
-    Ok(Arc::new(result))
+    Ok(())
 }
 
 fn response_observation_v2_transparency_trust_pin(
@@ -378,11 +401,24 @@ fn response_observation_v2_transparency_trust_pin(
                 "{RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_ENV} must be canonical closed JSON"
             )
         })?;
+    validate_response_observation_v2_transparency_trust_pin(
+        &pin,
+        generation_id,
+        proof_pins_root_sha256,
+    )?;
+    Ok(Arc::new(pin))
+}
+
+fn validate_response_observation_v2_transparency_trust_pin(
+    pin: &ReleaseTransparencyTrustPinV2,
+    generation_id: &str,
+    proof_pins_root_sha256: &str,
+) -> Result<(), String> {
     let now = u64::try_from(now_epoch_ms()).map_err(|_| {
         "response-observation v2 transparency pin clock is invalid"
             .to_string()
     })?;
-    validate_release_transparency_trust_pin(&pin, now)
+    validate_release_transparency_trust_pin(pin, now)
         .map_err(|error| error.to_string())?;
     if pin.generation_id != generation_id
         || pin.proof_pins_root_sha256 != proof_pins_root_sha256
@@ -392,7 +428,7 @@ fn response_observation_v2_transparency_trust_pin(
                 .to_string(),
         );
     }
-    Ok(Arc::new(pin))
+    Ok(())
 }
 
 pub(super) fn response_observation_v2_client_config(
@@ -727,6 +763,133 @@ pub(super) fn response_observation_v2_client_config(
     }))
 }
 
+/// Configuration preflight only: no custody contact, verifier execution or
+/// health claim. The explicit constructor accepts only the production profile.
+pub(super) fn validate_response_observation_v2_client_config(
+    config: &ResponseObservationV2ClientConfig,
+) -> Result<(), String> {
+    validate_response_observation_v2_client_config_inner(config, true)
+}
+
+fn validate_response_observation_v2_client_config_inner(
+    config: &ResponseObservationV2ClientConfig,
+    require_production: bool,
+) -> Result<(), String> {
+    let socket_bytes = config.socket_path.as_os_str().as_bytes();
+    let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if !config.socket_path.is_absolute()
+        || socket_bytes.len() >= address.sun_path.len()
+        || socket_bytes.contains(&0)
+        || config.startup_timeout < Duration::from_millis(1)
+        || config.startup_timeout
+            > Duration::from_millis(MAX_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS)
+        || config.startup_timeout.subsec_nanos() % 1_000_000 != 0
+    {
+        return Err(
+            "response-observation v2 socket path or startup timeout is invalid"
+                .to_owned(),
+        );
+    }
+    if require_production
+        && (config.attestation_mode != V2AttestationMode::TeeHardware
+            || config.expected_uid == unsafe { libc::geteuid() })
+    {
+        return Err(
+            "explicit response-observation v2 startup requires hardware TEE mode and a distinct custody UID"
+                .to_owned(),
+        );
+    }
+    match (
+        config.attestation_mode,
+        config.tee_verifier.as_ref(),
+        config.tee_topology_profile,
+    ) {
+        (
+            V2AttestationMode::TeeHardware,
+            Some(verifier),
+            Some(ResponseObservationV2TeeTopologyProfile::LocalSingleNodeOneOfOne),
+        ) => verifier.validate()?,
+        (V2AttestationMode::TrustedHost, None, None) => {},
+        _ => return Err(
+            "response-observation v2 TEE verifier and topology must match the attestation mode"
+                .to_owned(),
+        ),
+    }
+    if config.generation_id.is_empty()
+        || config.generation_id.len() > 256
+        || config.generation_id.bytes().any(|byte| {
+            byte.is_ascii_control() || byte.is_ascii_whitespace()
+        })
+        || [
+            &config.signer_key_sha256,
+            &config.role_identity_root_sha256,
+            &config.proof_pins_root_sha256,
+            &config.expected_source_commit_sha256,
+            &config.expected_source_tree_sha256,
+        ].iter().any(|digest| !is_sha256_digest(digest))
+        || [
+            config.expected_trust_root_sha256.as_ref(),
+            config.expected_trust_checkpoint_sha256.as_ref(),
+        ].into_iter().flatten().any(|digest| !is_sha256_digest(digest))
+        || config.expected_provider_generation == Some(0)
+    {
+        return Err(
+            "response-observation v2 generation or independent digest pins are invalid"
+                .to_owned(),
+        );
+    }
+    validate_response_observation_v2_role_keys(
+        &config.role_keys,
+        &config.role_identity_root_sha256,
+        &config.signer_key_sha256,
+        &config.generation_id,
+    )?;
+    validate_response_observation_v2_transparency_trust_pin(
+        &config.transparency_trust_pin,
+        &config.generation_id,
+        &config.proof_pins_root_sha256,
+    )?;
+    let pin = &config.transparency_trust_pin;
+    if config.expected_provider_generation
+            .is_some_and(|generation| generation != pin.provider_generation)
+        || config.expected_trust_checkpoint_sha256.as_ref()
+            .is_some_and(|checkpoint| checkpoint != &pin.trust_checkpoint_sha256)
+        || config.minimum_revocation_epoch > pin.revocation_epoch
+        || config.role_keys.values().any(|role| {
+            role.provider_generation != pin.provider_generation
+        })
+    {
+        return Err(
+            "response-observation v2 independent provider and transparency pins disagree"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn initialize_response_observation_v2_client_from_config(
+    config: ResponseObservationV2ClientConfig,
+    absolute_deadline: u64,
+) -> Result<ResponseObservationV2Client, String> {
+    // Sample before validation; neither validation nor retries renew the
+    // original caller bound or the configured startup interval.
+    let started = ResponseObservationV2Deadline::now_boottime_ns()?;
+    if absolute_deadline <= started {
+        return Err("response-observation v2 startup deadline elapsed".to_owned());
+    }
+    validate_response_observation_v2_client_config(&config)?;
+    let timeout_ns = u64::try_from(config.startup_timeout.as_nanos())
+        .map_err(|_| "response-observation v2 startup timeout overflows")?;
+    let configured_deadline = started.checked_add(timeout_ns)
+        .ok_or("response-observation v2 startup deadline overflows")?;
+    initialize_response_observation_v2_client_until(
+        config,
+        ResponseObservationV2Deadline::from_absolute(
+            absolute_deadline.min(configured_deadline),
+        ),
+    )
+}
+
 pub(super) fn initialize_response_observation_v2_client(
     is_production: bool,
 ) -> Result<Option<ResponseObservationV2Client>, String> {
@@ -738,12 +901,32 @@ pub(super) fn initialize_response_observation_v2_client(
     let deadline = ResponseObservationV2Deadline::after(
         config.startup_timeout,
     )?;
+    validate_response_observation_v2_client_config_inner(&config, false)?;
+    initialize_response_observation_v2_client_until(config, deadline)
+        .map(Some)
+}
+
+fn initialize_response_observation_v2_client_until(
+    config: ResponseObservationV2ClientConfig,
+    deadline: ResponseObservationV2Deadline,
+) -> Result<ResponseObservationV2Client, String> {
     loop {
+        if deadline.expired() {
+            return Err("response-observation v2 startup deadline elapsed".to_owned());
+        }
         match response_observation_v2_hello_once(
             &config,
             deadline,
         ) {
             Ok(status) => {
+                if deadline.expired() {
+                    return Err("response-observation v2 startup hello completed after its deadline".to_owned());
+                }
+                validate_response_observation_v2_transparency_trust_pin(
+                    &config.transparency_trust_pin,
+                    &config.generation_id,
+                    &config.proof_pins_root_sha256,
+                )?;
                 if config
                     .transparency_trust_pin
                     .provider_generation
@@ -766,7 +949,10 @@ pub(super) fn initialize_response_observation_v2_client(
                             .to_string(),
                     );
                 }
-                return Ok(Some(ResponseObservationV2Client {
+                if deadline.expired() {
+                    return Err("response-observation v2 startup validation exceeded its deadline".to_owned());
+                }
+                let client = ResponseObservationV2Client {
                     socket_path: config.socket_path,
                     expected_uid: config.expected_uid,
                     boot_id: status.boot_id,
@@ -808,11 +994,15 @@ pub(super) fn initialize_response_observation_v2_client(
                     healthy: Arc::new(AtomicU64::new(
                         u64::from(status.providers_ready),
                     )),
-                }));
+                };
+                if deadline.expired() {
+                    return Err("response-observation v2 client construction exceeded its deadline".to_owned());
+                }
+                return Ok(client);
             }
             Err(error) if !deadline.expired() => {
                 let _ = error;
-                thread::sleep(Duration::from_millis(25));
+                thread::sleep(deadline.remaining()?.min(Duration::from_millis(25)));
             }
             Err(error) => {
                 return Err(format!(

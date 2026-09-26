@@ -4,6 +4,9 @@ Status: source-only, unbuilt and unexecuted. This composes actual retained nativ
 key/quote/transport owners with initial signed-policy acquisition before a new
 `GateState` is shared. It does not introduce a CLI or environment mode, admit
 configuration or activate a complete enclave deployment.
+The enclosing [callable native startup](native-startup.md) now generates and
+joins the actual owners, constructs explicit shadow/v2 clients and binds the
+fixed-parent listener only after this preparation succeeds.
 
 ## One owned startup lifetime
 
@@ -25,7 +28,7 @@ need actual serving cancellation; a copied `Arc` is not self-revoking.
 ## Actual initial acquisition, then fresh state
 
 The private [native gate constructor](../data-plane/decision-gate-rs/src/native_gate_bootstrap.rs)
-is `prepare_native_tls_gate_state(inputs, bootstrap, policy_bytes,
+is `prepare_native_tls_gate_state(inputs, proof, bootstrap, policy_bytes,
 expected_signing_key_id, control_plane_config, minimum_sequence,
 minimum_rollback_epoch)`. Its inputs are cold values, not a running or previously
 admitted host `GateState`.
@@ -41,8 +44,9 @@ The constructor requires a nonempty original policy of at most 8 MiB, a canonica
 expected signing-key digest and positive monotonic floors. It requires an
 unused attested control-plane trust source with the existing pinned verifier,
 then installs the retained native service transport **before** fetching trust.
-Cold inputs contain no snapshot, HTTP client, resolver, MITM authority or ingress
-material; these are separate `GateStateRuntime` fields, not host-ready placeholders.
+Cold inputs contain no snapshot, HTTP client, resolver, MITM authority, ingress
+material or proof signer; these are separate `GateStateRuntime` fields, not
+host-ready placeholders. The actual proof material is supplied separately.
 
 The trust request retains the existing nonce, genuine quote-verifier, TLS-peer
 SPKI, policy/response-key, policy digest and attested high-water joins. The
@@ -85,6 +89,8 @@ labels its result `native-unadmitted`, not production admission.
 These are checks of actual held material and configuration, not independent proof-key provenance;
 in particular, v2 client presence is not evidence that it was production-created
 or that its authority is native.
+The enclosing startup constructs it through the explicit production validator
+and actual hello; that still does not establish native authority or readiness.
 
 Cold resource checks preserve existing ranges: grant/lease caches 1..1,000,000;
 lease renewal workers 1..32, queue 1..65,536 and interval 50..1,000 ms; audit
@@ -132,7 +138,9 @@ listeners or install a daemon. The separate [owned native lifecycle](native-runt
 consumes the prepared object and actual listener, starts scoped policy/audit/
 lease/health work, checks readiness and serves with shared cancellation and
 joined shutdown. This callable run does not activate CLI startup or provision
-its inputs.
+its inputs. The [enclosing startup sequence](native-startup.md) now composes
+owner generation, this preparation, listener binding and that run without
+invoking the legacy entrypoint.
 
 Supplied configuration, service tokens, verifier/release pins, TLS roots and
 ordinary checkpoint values require independent admission. Existing proof and

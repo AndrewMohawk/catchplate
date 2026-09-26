@@ -37,6 +37,7 @@ pub(super) fn load_native_snapshot(bytes: &[u8], source: &PolicyTrustRootSource,
 /// The snapshot, HTTP clients, resolver and native authority are created here.
 pub(super) fn prepare_native_tls_gate_state(
     mut inputs: GateStateInputs,
+    proof: ResponseProofSigningMaterial,
     mut bootstrap: EnclaveBootstrapV1,
     policy_bytes: &[u8],
     expected_signing_key_id: &str,
@@ -44,7 +45,7 @@ pub(super) fn prepare_native_tls_gate_state(
     minimum_sequence: u64,
     minimum_rollback_epoch: u64,
 ) -> Result<NativeTlsGateV1, String> {
-    super::native_gate_inputs::validate_native_gate_inputs(&inputs)?;
+    super::native_gate_inputs::validate_native_gate_inputs(&inputs, &proof)?;
     if policy_bytes.is_empty() || policy_bytes.len() > MAX_NATIVE_POLICY_BYTES
         || !is_sha256_digest(expected_signing_key_id)
         || minimum_sequence == 0 || minimum_rollback_epoch == 0 {
@@ -93,7 +94,7 @@ pub(super) fn prepare_native_tls_gate_state(
     inputs.policy_shadow_generation_control.as_ref()
         .ok_or("native bootstrap requires production shadow control")?
         .authorize_startup_active_snapshot(&snapshot)?;
-    validate_response_proof_signer_policy_binding(&snapshot, &inputs.response_proof_signer)?;
+    validate_response_proof_signer_policy_binding(&snapshot, &proof.signer)?;
     if snapshot.policy_sequence < minimum_sequence || snapshot.rollback_epoch < minimum_rollback_epoch {
         return Err("native policy is below its supplied monotonic floors".to_owned());
     }
@@ -107,7 +108,7 @@ pub(super) fn prepare_native_tls_gate_state(
     if !Arc::ptr_eq(&relays, &held_relays) {
         return Err("native bootstrap lost its original relay owner".to_owned());
     }
-    let ResponseProofSigner::Custody(signer) = &inputs.response_proof_signer else {
+    let ResponseProofSigner::Custody(signer) = &proof.signer else {
         return Err("native bootstrap lost its custody signer".to_owned());
     };
     // Join the actual key's role-4 binding to this actual CA and complete scope,
@@ -119,6 +120,7 @@ pub(super) fn prepare_native_tls_gate_state(
         snapshot: Arc::new(snapshot), audit_client, credential_lease_client: credential_client,
         upstream_resolver: Arc::new(NativeConfiguredResolver(Arc::clone(&relays))),
         proxy_ingress_attestation: attestation, mitm_authority: Some(MitmAuthority::Native(identity)),
+        response_proof: proof,
     });
     state.native_policy_bytes = Some(Arc::from(policy_bytes));
     state.native_upstream_relays = Some(held_relays);

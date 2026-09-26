@@ -182,6 +182,8 @@ impl HeldBodyGateV12 {
 
     pub(crate) fn target(&self) -> &ReceivedBodyTargetV12 { &self.target }
 
+    pub(crate) fn into_target(self) -> ReceivedBodyTargetV12 { self.target }
+
     pub(crate) fn deadline(&self) -> u64 { self.deadline }
 
     pub(crate) fn verify_gated(&self, deadline: u64) -> PlanResult<()> {

@@ -207,8 +207,11 @@ impl ReceivedBodyTargetV12 {
     }
 
     pub(crate) fn host_pid(&self) -> u32 { self.host_pid }
+    pub(crate) fn start_ticks(&self) -> u64 { self.start_ticks }
     pub(crate) fn pidfd(&self) -> RawFd { self.pidfd.as_raw_fd() }
     pub(crate) fn proc_fd(&self) -> RawFd { self.proc.as_raw_fd() }
+    pub(crate) fn pid_namespace_fd(&self) -> RawFd { self.namespaces[2].fd.as_raw_fd() }
+    pub(crate) fn pid_namespace_inode(&self) -> u64 { self.namespaces[2].identity.inode }
     pub(crate) fn deadline(&self) -> u64 { self.deadline }
 
     /// Live includes ptrace/group-stop states T/t, but never zombie/dead state.

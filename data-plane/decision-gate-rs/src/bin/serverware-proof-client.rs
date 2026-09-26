@@ -31,6 +31,11 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 mod proof_client_native_verifier_v1;
 #[path = "../proof_client_native_session_v1.rs"]
 mod proof_client_native_session_v1;
+#[path = "../proof_client_native_transport_v1.rs"]
+mod proof_client_native_transport_v1;
+#[path = "../proof_client_native_io_v1.rs"]
+mod proof_client_native_io_v1;
+use proof_client_native_io_v1::CaptureIo;
 use proof_client_native_session_v1::NativeCaptureSessionV1;
 use proof_client_native_verifier_v1::NativeVerifierConfigV1;
 
@@ -109,6 +114,7 @@ struct ProxyEndpoint {
 enum ProxyTransport {
     DevelopmentRaw(TcpStream),
     MutualTls(StreamOwned<ClientConnection, TcpStream>),
+    NativeMutualTls(proof_client_native_transport_v1::NativeProxyTransportV1),
 }
 
 impl Read for ProxyTransport {
@@ -116,6 +122,7 @@ impl Read for ProxyTransport {
         match self {
             Self::DevelopmentRaw(stream) => stream.read(buffer),
             Self::MutualTls(stream) => stream.read(buffer),
+            Self::NativeMutualTls(stream) => stream.read(buffer),
         }
     }
 }
@@ -125,6 +132,7 @@ impl Write for ProxyTransport {
         match self {
             Self::DevelopmentRaw(stream) => stream.write(buffer),
             Self::MutualTls(stream) => stream.write(buffer),
+            Self::NativeMutualTls(stream) => stream.write(buffer),
         }
     }
 
@@ -132,6 +140,7 @@ impl Write for ProxyTransport {
         match self {
             Self::DevelopmentRaw(stream) => stream.flush(),
             Self::MutualTls(stream) => stream.flush(),
+            Self::NativeMutualTls(stream) => stream.flush(),
         }
     }
 }
@@ -692,7 +701,13 @@ fn parse_proxy_endpoint(
     {
         return Err("--proxy must contain only a host and port, without credentials".to_string());
     }
-    let host = parsed.host_str().ok_or("--proxy is missing a host")?;
+    // Url::host_str retains IPv6 brackets. Use the typed host so the socket
+    // address gets exactly one bracket pair and TLS receives the bare IP.
+    let host = match parsed.host().ok_or("--proxy is missing a host")? {
+        url::Host::Domain(host) => host.to_owned(),
+        url::Host::Ipv4(address) => address.to_string(),
+        url::Host::Ipv6(address) => address.to_string(),
+    };
     let port = parsed
         .port_or_known_default()
         .ok_or("--proxy is missing a port")?;
@@ -701,7 +716,7 @@ fn parse_proxy_endpoint(
     } else {
         format!("{host}:{port}")
     };
-    let server_name = configured_server_name.unwrap_or(host);
+    let server_name = configured_server_name.unwrap_or(&host);
     if server_name.is_empty()
         || server_name != server_name.trim()
         || server_name.len() > 253
@@ -7185,7 +7200,8 @@ fn finish_stream_collection<T: Read + Write>(
         nonce_bytes,
     } = pending;
     let proof_path = proof_target.display_path.clone();
-    let response = read_stream_response(&mut tls, staged_body.file_mut()?, args.max_stream_bytes)?;
+    let response = read_stream_response(&mut CaptureIo::new(&mut tls, native),
+        staged_body.file_mut()?, args.max_stream_bytes)?;
     staged_body.sync()?;
     let exporter = tls
         .conn
@@ -7331,7 +7347,7 @@ fn finish_observation_collection<T: Read + Write>(
 ) -> Result<Value, String> {
     let proof_path = proof_target.display_path.clone();
     let response = read_observation_response(
-        &mut tls,
+        &mut CaptureIo::new(&mut tls, native),
         staged_body.file_mut()?,
         args.max_observation_body_bytes,
     )
@@ -7536,7 +7552,10 @@ fn collect(mut args: Args) -> Result<Value, String> {
     };
     let timeout = Duration::from_secs(args.timeout_seconds);
     if let Some(native) = native.as_ref() { native.recheck()?; }
-    let mut proxy = connect_proxy(&args, timeout)?;
+    let mut proxy = match native.as_ref() {
+        Some(owner) => ProxyTransport::NativeMutualTls(owner.connect_proxy()?),
+        None => connect_proxy(&args, timeout)?,
+    };
     let mut connect = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");
     for (name, value) in &args.proxy_headers {
         connect.push_str(&format!("{name}: {value}\r\n"));
@@ -7561,9 +7580,13 @@ fn collect(mut args: Args) -> Result<Value, String> {
     } else {
         ClientConfig::builder()
     };
-    let config = builder
+    let mut config = builder
         .with_root_certificates(roots)
         .with_no_client_auth();
+    if native.is_some() {
+        config.resumption = rustls::client::Resumption::disabled();
+        config.enable_early_data = false;
+    }
     let server_name = ServerName::try_from(host.clone())
         .map_err(|_| format!("invalid TLS server name {host}"))?;
     let connection = ClientConnection::new(Arc::new(config), server_name)
@@ -7610,11 +7633,12 @@ fn collect(mut args: Args) -> Result<Value, String> {
             args.request_body.as_deref(),
         )?;
         if let Some(native) = native.as_ref() { native.recheck()?; }
-        tls.write_all(&prepared.head)
-            .and_then(|_| tls.write_all(&prepared.body))
-            .map_err(|err| format!("write observation request: {err}"))?;
-        tls.flush()
-            .map_err(|err| format!("flush observation request: {err}"))?;
+        {
+            let mut io = CaptureIo::new(&mut tls, native.as_ref());
+            io.write_all(&prepared.head).and_then(|_| io.write_all(&prepared.body))
+                .map_err(|err| format!("write observation request: {err}"))?;
+            io.flush().map_err(|err| format!("flush observation request: {err}"))?;
+        }
         let (staged_body, proof_target) =
             stream_outputs.ok_or("observation output staging was not initialized")?;
         return finish_observation_collection(
@@ -7641,10 +7665,12 @@ fn collect(mut args: Args) -> Result<Value, String> {
     }
     request.push_str("Connection: close\r\n\r\n");
     if let Some(native) = native.as_ref() { native.recheck()?; }
-    tls.write_all(request.as_bytes())
-        .map_err(|err| format!("write proof request: {err}"))?;
-    tls.flush()
-        .map_err(|err| format!("flush proof request: {err}"))?;
+    {
+        let mut io = CaptureIo::new(&mut tls, native.as_ref());
+        io.write_all(request.as_bytes())
+            .map_err(|err| format!("write proof request: {err}"))?;
+        io.flush().map_err(|err| format!("flush proof request: {err}"))?;
+    }
     if let Some((staged_body, proof_target)) = stream_outputs {
         return finish_stream_collection(
             &args,
@@ -7660,7 +7686,7 @@ fn collect(mut args: Args) -> Result<Value, String> {
             native.as_ref(),
         );
     }
-    let response = read_response(&mut tls)?;
+    let response = read_response(&mut CaptureIo::new(&mut tls, native.as_ref()))?;
     let exporter = tls
         .conn
         .export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&nonce_bytes))

@@ -65,6 +65,41 @@ for an empty request body.
 No environment switch silently selects native evidence or falls back to legacy
 verification when native verification fails.
 
+## Retained native proxy connection
+
+Native mode now requires `--proxy` to name a literal, concrete unicast IP and
+nonzero port. Private/loopback addresses are permitted; DNS, unspecified,
+multicast, broadcast and IPv6 scope selection are not. Use
+`--proxy-server-name` for an independently expected DNS certificate name when
+the connection address is an IP. Typed URL host handling keeps one IPv6 bracket
+pair in the socket address and passes the unbracketed IP to TLS. Non-native
+vendor/development connection selection is otherwise unchanged.
+
+The native session constructs its actual outer TLS configuration from the
+admitted, retained CA/client-certificate/private-key bytes, rather than reopening
+those paths later to create a different configuration. It retains ordinary
+WebPKI name and handshake-signature verification, mandatory client identity,
+TLS 1.3, disabled resumption/early data and the original input rechecks. This
+does not by itself attest the outer proxy CA or add the separate fresh-ingress
+bootstrap protocol to response capture.
+
+The [native proxy transport](../data-plane/decision-gate-rs/src/proof_client_native_transport_v1.rs)
+uses one fixed-address connect, capped at the lesser of three seconds and the
+session's remaining original deadline. It verifies the connected peer address,
+requires a full TLS 1.3 handshake and retains the creating process identity.
+The shared TCP owner recomputes timeouts before every actual call and rejects
+late results; each call is at most 16 KiB, with at most 2 GiB of encrypted bytes
+per direction over the complete capture. The wire limit includes both TLS
+layers and HTTP framing; existing, smaller application-body limits still apply.
+Pathological framing overhead may exhaust the wire bound before the body bound.
+The outer TLS application-output buffer is capped at 64 KiB.
+
+Cheap process/deadline checks also bracket inner plaintext reads/writes for
+buffered, streaming and observation capture. Thus already-buffered inner TLS
+data does not bypass the original acceptance deadline. These checks do not
+re-read input files per byte. No raw socket/descriptor accessor, resolver,
+alternate-address retry or new forwarding capability is exported.
+
 ## Actual capture before signed publication
 
 The native entrypoints `verify_native_runtime_proof`,
@@ -128,14 +163,28 @@ or a transactional pair visible atomically to every reader.
 
 The native session starts its acceptance deadline before admitting inputs and
 before network work, and rechecks retained inputs/deadline before signing and
-publication. These checks reject late evidence; they do not make blocking filesystem,
-DNS, socket, process-execution or reap operations interruptible, nor turn socket
-I/O timeouts into a hard total-time guarantee against stalled progress. An outer
-watchdog that owns cleanup is still required; this source profile makes no hard
-real-time completion guarantee.
+publication. Native socket and inner-plaintext operations now share that original
+nonrenewing deadline, with no native DNS call. This is still not a hard watchdog:
+blocking filesystem, kernel, process-execution or reap operations can return
+late, and already performed side effects cannot be undone by a post-check. An
+outer watchdog that owns cleanup remains required; this source profile makes
+no hard real-time completion guarantee.
 
 The native PKI profile supplies no vendor-CRL revocation proof. Independent
 configuration and release/PCR mapping, trust currentness, trusted time, nonce
 reservation, latest off-host witness/rollback custody, executable packaging and
 full native deployment remain separate requirements. Source-level capture
 acceptance is not a production-readiness or runtime-success claim.
+
+## Enrollment is a separate integration boundary
+
+Neither this signed response-capture profile nor the separate
+[native ingress capture](native-ingress-client.md) replaces a production
+enrollment receipt. Existing enrollment additionally binds a signed packet,
+assignment, install-session nonce, trust profile, independently signed launcher
+egress evidence and an authorized receipt signer. Its legacy query-nonce
+attestation transport is not interchangeable with native challenge-header mTLS.
+Ordinary application/service handoff still needs an explicit supported outer
+mTLS transport and client-identity provisioning; proxy/CA environment variables
+alone do not provide that configuration. The native captures remain supporting
+local evidence, not permission to install trust or start a workload.

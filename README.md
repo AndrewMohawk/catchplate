@@ -21,19 +21,19 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 **34 of 46 tracked source checkpoints landed · 12 open, including F08 in progress.**
 **Production acceptance: 0/6 verified.** Current source is unbuilt and unexecuted.
 
-**Active workflow: OIDC session activation — 12/16 detailed source steps landed.**
+**Active workflow: OIDC session activation — 13/16 detailed source steps landed.**
 Each numbered segment below maps to a named task: ✓ landed, NEXT open, — open.
 This counts the smallest currently named steps, so progress is visible before a
 larger milestone closes. Grouping parents are not counted again; these 16 steps
 all belong to F08, not the whole product. Counts are not effort percentages or an ETA.
 
-[![OIDC session activation: 12 of 16 detailed source steps landed; four remain. Completed: retained finalization checks, assertion verification, existing-cookie login, read proofs, encrypted originals, business effects, capacity adapter, signed originals, indexed writes, configured owner, root bootstrap, and private planner service. Next: fresh latest-head admission. Still open: custody and execution, public activation and recovery, and integrated portal flow. Source-only, not production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC session activation: 13 of 16 detailed source steps landed; three remain. Completed: retained finalization checks, assertion verification, existing-cookie login, read proofs, encrypted originals, business effects, capacity adapter, signed originals, indexed writes, configured owner, root bootstrap, private planner service, and fresh signed planning-state admission. Next: custody and protected execution. Still open: public activation and recovery, and integrated portal flow. Source-only, not production verification or action-time authorization.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
-Latest landed: [root-authenticated configuration and the private planner service](https://github.com/example/private-deployment).
-**Next:** independently fresh state admission before planning. **After that:**
-protected execution/token delivery, separately authorized public actions/recovery,
-and the integrated portal flow. Signed launch snapshots do not prove fresh state;
-planning does not authorize execution.
+Latest landed: [fresh signed state observations bound into plans and encrypted retention](https://github.com/example/private-deployment).
+**Next:** custody, protected one-use execution and committed token delivery.
+**After that:** separately authorized public actions/recovery and the integrated
+portal flow. Planning observes the admitted state owner; it does not authorize
+execution or replace an independently operated rollback witness.
 
 The [numbered checklist and commit evidence](docs/production-status.md#active-workflow-granular-source-steps)
 explain every segment. Broader work remains visible below:

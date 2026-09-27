@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1406" viewBox="0 0 1000 1406" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1606" viewBox="0 0 1000 1606" role="img" aria-labelledby="title description">
   <title id="title">Source implementation: 34 of 46 named checkpoints landed; 12 open, including F08 in progress with 3 of 6 child steps landed.</title>
-  <desc id="description">Six workstream cards list every parent checkpoint by name and stable ID. A check means landed source, an arrow means in progress, and a dash means open. Each bar has one segment per listed checkpoint, in list order. Evidence handoff: 10 of 10 landed. Historical recovery: 4 of 5 landed. Permissions and grants: 10 of 10 landed. Finalization and sessions: 7 of 8 landed. Workloads and native: 3 of 6 landed. Providers and operations: 0 of 7 landed. An expanded F08 bar names all six child steps: F08.1 retained finalization admission, F08.2 original assertion/CAS derivation and F08.3 existing login hardening are landed; F08.4 protected activation/token delivery is in progress; F08.5 public activation/recovery and F08.6 integrated portal flow remain open. F08 remains unchecked. All eight F07 completion and recovery substeps are landed within that parent. Child steps are not additional parent checkpoints. These are tracked source-integration counts, not whole-product or effort percentages. Source remains unbuilt, unexecuted and unprovisioned. Independent production acceptance remains 0 of 6 verified gates.</desc>
-  <rect x="1" y="1" width="998" height="1404" rx="16" fill="#0f172a" stroke="#475569"/>
+  <desc id="description">Six workstream cards list every parent checkpoint by name and stable ID. A check means landed source, an arrow means in progress, and a dash means open. Each bar has one segment per listed checkpoint, in list order. Evidence handoff: 10 of 10 landed. Historical recovery: 4 of 5 landed. Permissions and grants: 10 of 10 landed. Finalization and sessions: 7 of 8 landed. Workloads and native: 3 of 6 landed. Providers and operations: 0 of 7 landed. An expanded F08 bar names all six child steps: F08.1 retained finalization admission, F08.2 original assertion/CAS derivation and F08.3 existing login hardening are landed; F08.4 protected activation/token delivery is in progress; F08.5 public activation/recovery and F08.6 integrated portal flow remain open. Inside F08.4, a read proofs, b encrypted originals and c business effects are landed; d protected planning is in progress; e custody/execution is open. Planning details d.1 capacity adapter and d.2 signed-original mechanics are landed; d.3 indexed writes and d.4 configured owner are in progress, not yet committed; d.5 cold admission is open. Cold admission must independently admit configuration, keys and policy and authenticate current roots/heads before new planning; a reusable configured owner alone does not supply that authority. Action-time one-use execution remains in e. F08 remains unchecked at 3 of 6 child steps. All eight F07 completion and recovery substeps are landed within that parent. Child steps are not additional parent checkpoints. These are tracked source-integration counts, not whole-product or effort percentages. Source remains unbuilt, unexecuted and unprovisioned. Independent production acceptance remains 0 of 6 verified gates.</desc>
+  <rect x="1" y="1" width="998" height="1604" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="40" fill="#f8fafc" font-size="26" font-weight="700">Implementation, checkpoint by checkpoint</text>
     <text x="24" y="72" fill="#6ee7b7" font-size="21" font-weight="700">34 / 46 landed</text>
@@ -204,11 +204,48 @@
         <text x="482" y="170" fill="#e2e8f0">— F08.6 · Integrated portal &amp; active-login check</text>
       </g>
       <text x="20" y="209" fill="#cbd5e1" font-size="14">3 landed · 1 in progress · 2 open. The parent stays open until all six source steps land.</text>
-      <text x="20" y="236" fill="#94a3b8" font-size="13">Partial F08.4: read acquisition, capacity and signed-plan replay; execution is still open.</text>
+      <text x="20" y="236" fill="#94a3b8" font-size="13">F08.4 has its own drill-down below; partial planning progress does not close execution.</text>
     </g>
 
-    <text x="24" y="1337" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>
-    <text x="24" y="1362" fill="#cbd5e1" font-size="14">Independent production acceptance: 0 / 6 verified gates. Landed source is not a passing gate.</text>
-    <text x="24" y="1387" fill="#94a3b8" font-size="13">The linked tracker retains full checkpoint scope, commit evidence and all remaining work.</text>
+    <g transform="translate(24 1323)" aria-labelledby="f084-title">
+      <rect width="952" height="184" rx="12" fill="#172033" stroke="#475569"/>
+      <text id="f084-title" x="20" y="29" fill="#f8fafc" font-size="19" font-weight="700">Inside F08.4 · Protected activation</text>
+      <text x="932" y="29" text-anchor="end" fill="#6ee7b7" font-size="15" font-weight="700">3 / 5 pieces landed</text>
+      <g>
+        <rect x="20" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4a landed: read proofs</title></rect>
+        <rect x="204" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4b landed: encrypted-original helper, not durable custody</title></rect>
+        <rect x="388" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4c landed: business effects</title></rect>
+        <rect x="572" y="45" width="176" height="28" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4d in progress: protected planning</title></rect>
+        <rect x="756" y="45" width="176" height="28" rx="5" fill="#334155" stroke="#94a3b8"><title>F08.4e open: custody and execution</title></rect>
+      </g>
+      <g text-anchor="middle" font-size="13" font-weight="700">
+        <text x="108" y="64" fill="#0f172a">✓ a · Read proofs</text>
+        <text x="292" y="64" fill="#0f172a">✓ b · Encrypted originals</text>
+        <text x="476" y="64" fill="#0f172a">✓ c · Business effects</text>
+        <text x="660" y="64" fill="#fde68a">→ d · Protected planning</text>
+        <text x="844" y="64" fill="#e2e8f0">— e · Custody / execution</text>
+      </g>
+      <text x="20" y="103" fill="#fde68a" font-size="15" font-weight="700">d · Planner detail</text>
+      <text x="932" y="103" text-anchor="end" fill="#cbd5e1" font-size="13">2 landed · 2 in progress · 1 open</text>
+      <g>
+        <rect x="20" y="117" width="176" height="27" rx="5" fill="#34d399"><title>F08.4d.1 landed: full mutation and capacity adapter</title></rect>
+        <rect x="204" y="117" width="176" height="27" rx="5" fill="#34d399"><title>F08.4d.2 landed: signed-original production and verification mechanics</title></rect>
+        <rect x="388" y="117" width="176" height="27" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4d.3 in progress, not yet committed: indexed write evidence and after-roots</title></rect>
+        <rect x="572" y="117" width="176" height="27" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4d.4 in progress, not yet committed: configured owner and private retention</title></rect>
+        <rect x="756" y="117" width="176" height="27" rx="5" fill="#334155" stroke="#94a3b8"><title>F08.4d.5 open: independently admitted cold configuration, keys and policy plus authenticated current roots/heads before planning</title></rect>
+      </g>
+      <g text-anchor="middle" font-size="13" font-weight="700">
+        <text x="108" y="136" fill="#0f172a">✓ d.1 · Capacity</text>
+        <text x="292" y="136" fill="#0f172a">✓ d.2 · Signed originals</text>
+        <text x="476" y="136" fill="#fde68a">→ d.3 · Indexed writes</text>
+        <text x="660" y="136" fill="#fde68a">→ d.4 · Configured owner</text>
+        <text x="844" y="136" fill="#e2e8f0">— d.5 · Cold admission</text>
+      </g>
+      <text x="20" y="169" fill="#94a3b8" font-size="13">d.3 / d.4 are not yet committed. These pieces do not change the 46-parent or F08 3/6 counts.</text>
+    </g>
+
+    <text x="24" y="1537" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>
+    <text x="24" y="1562" fill="#cbd5e1" font-size="14">Independent production acceptance: 0 / 6 verified gates. Landed source is not a passing gate.</text>
+    <text x="24" y="1587" fill="#94a3b8" font-size="13">The linked tracker retains full checkpoint scope, commit evidence and all remaining work.</text>
   </g>
 </svg>

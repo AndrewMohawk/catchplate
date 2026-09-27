@@ -18,7 +18,7 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Named source checkpoints: 34 of 46 landed, 12 open including F08 in progress. Each workstream has a segmented bar and a named checklist. The detailed F08 bar shows six named steps: retained finalization admission, assertion verification and existing login hardening landed; protected activation execution in progress; public activation/recovery and integrated portal flow open. F08 is 3 of 6 child steps landed, not three extra parent milestones. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Named source checkpoints: 34 of 46 landed, 12 open including F08 in progress. F08 remains 3 of 6 child steps landed. The F08.4 drill-down shows read proofs, encrypted originals and business effects landed; protected planning in progress; custody/execution open. Within planning, capacity adapter and signed-original mechanics are landed; indexed writes and configured owner are in progress, not yet committed; cold admission is open. Named child steps do not add parent checkpoints. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 **34 of 46 tracked source checkpoints landed · 12 open, including F08 in progress.**
 Each segment has a named entry in the graphic: ✓ landed, → in progress, — open.
@@ -50,9 +50,16 @@ tracks each step, so partial progress stays visible before the parent closes:
 The [step-by-step evidence and remaining work](docs/production-status.md#f08-detail-oidc-session-activation)
 distinguish source prerequisites from the finished flow. These six steps belong
 to F08; they do not add to the 46 parent checkpoints.
-Within F08.4, the [latest source](https://github.com/example/private-deployment)
-adds read acquisition, full mutation/capacity accounting and signed-plan replay.
-Indexed write evidence, configured custody and execution remain open.
+
+The new [F08.4 drill-down](docs/production-status.md#f08-detail-oidc-session-activation)
+shows **read proofs, encrypted originals and business effects landed**;
+protected planning is in progress, and custody/execution is open. Within planning,
+the [capacity adapter and signed mechanics are landed](https://github.com/example/private-deployment);
+indexed writes and the configured owner are **in progress, not yet committed**.
+**Cold admission remains open:** independently admit cold configuration, keys and
+policy, and authenticate current roots/heads before planning. The reusable owner
+alone is not that authority; action-time one-use execution remains separate.
+These smaller pieces do not change either checkpoint count.
 
 **Production acceptance: 0/6 verified.** Full verification follows source freeze.
 Immutable dependencies and independently operated signing, Nitro/KMS and witness

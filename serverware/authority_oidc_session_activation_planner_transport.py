@@ -1,9 +1,10 @@
 """Closed private activation-planning exchange, not plan or caller admission.
 
-Raw8 carries only a fixed operation, assertion/pending-token originals and five
-subject IDs. Raw7 carries prepared originals/locators plus ciphertext or uncertainty.
-Lengths precede bodies, exact EOF is required, and the inherited deadline is
-never renewed. No parser, work allowance, retry or arbitrary endpoint exists.
+Legacy raw8 carries a fixed operation, assertion/pending-token originals and
+five subject IDs. Explicit bounded raw9 adds only a tightening epoch ceiling.
+Raw7 carries prepared originals/locators plus ciphertext or uncertainty.
+Lengths precede bodies, exact EOF is required, and inherited work/deadlines
+are never renewed. No parser, replacement allowance, retry or arbitrary endpoint exists.
 """
 from __future__ import annotations
 
@@ -15,11 +16,15 @@ from serverware import authority_revocation_writer_transport as io
 from serverware import authority_oidc_session_activation as assertion
 from serverware import authority_oidc_session_activation_plan_contract as plan
 from serverware import authority_oidc_session_activation_execution_bundle as bundle
+from serverware import authority_revocation_capability_production as production
 
 
 OPERATION = b"oidc.session.activate"
 REQUEST_MAGIC = b"SWOAPQ02"
 RESPONSE_MAGIC = b"SWOAPR02"
+BOUNDED_REQUEST_MAGIC = b"SWOAPQ03"
+BOUNDED_RESPONSE_MAGIC = b"SWOAPR03"
+MAX_DEADLINE_EPOCH_BYTES = 19
 LISTENER_PATH = "/run/serverware/oidc-session-activation/planner.sock"
 EXPECTED_PEER_UID = EXPECTED_PEER_GID = 0
 REQUEST_LIMITS = (len(OPERATION), assertion.MAX_ASSERTION_BYTES, 64,
@@ -34,7 +39,13 @@ RESPONSE_HEADER_BYTES = len(RESPONSE_MAGIC) + 8 * len(RESPONSE_LIMITS)
 # response body. Adding ciphertext must not enlarge the aggregate 64 MiB cap.
 MAX_RESPONSE_BYTES = min(sum(RESPONSE_LIMITS),
     MAX_BYTES - MAX_REQUEST_BYTES - REQUEST_HEADER_BYTES - RESPONSE_HEADER_BYTES)
+BOUNDED_REQUEST_LIMITS = (*REQUEST_LIMITS, MAX_DEADLINE_EPOCH_BYTES)
+BOUNDED_REQUEST_HEADER_BYTES = len(BOUNDED_REQUEST_MAGIC) + 8 * len(BOUNDED_REQUEST_LIMITS)
+BOUNDED_RESPONSE_HEADER_BYTES = len(BOUNDED_RESPONSE_MAGIC) + 8 * len(RESPONSE_LIMITS)
+MAX_BOUNDED_RESPONSE_BYTES = min(sum(RESPONSE_LIMITS), MAX_BYTES
+    - sum(BOUNDED_REQUEST_LIMITS) - BOUNDED_REQUEST_HEADER_BYTES - BOUNDED_RESPONSE_HEADER_BYTES)
 AuthorityTransportError = authority_transport.AuthorityTransportError
+capture = production.capability.capture
 _check_deadline, _recv_prefix = io._check_deadline, io._recv_prefix
 _URLSAFE = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
@@ -190,3 +201,167 @@ def _socket_request(endpoint, *, originals, deadline_ns):
     connection.close()
     _check_deadline(bound)
     return received
+
+
+def _deadline_epoch(raw):
+    if (type(raw) is not bytes or not 1 <= len(raw) <= MAX_DEADLINE_EPOCH_BYTES
+            or raw[:1] == b"0" or any(item < 48 or item > 57 for item in raw)):
+        raise AuthorityTransportError("activation planner deadline is not canonical positive ASCII")
+    value = int(raw)
+    if value > 2**63 - 1:
+        raise AuthorityTransportError("activation planner deadline exceeds its fixed integer bound")
+    return value
+
+
+def _bounded_request_lengths(lengths):
+    if type(lengths) is not tuple or len(lengths) != 9:
+        raise AuthorityTransportError("bounded activation planner request is not exact raw9")
+    _request_lengths(lengths[:8])
+    if type(lengths[8]) is not int or not 1 <= lengths[8] <= MAX_DEADLINE_EPOCH_BYTES:
+        raise AuthorityTransportError("bounded activation planner deadline frame exceeds its limit")
+
+
+def _recv_request_profile(connection, *, deadline_ns):
+    """Read only strict v2/raw8 or v3/raw9; epoch is a ceiling, not authority."""
+    prefix = _recv_prefix(connection, deadline_ns=deadline_ns)
+    if prefix == REQUEST_MAGIC:
+        return _recv_bodies(connection, response=False, deadline_ns=deadline_ns), None
+    if prefix != BOUNDED_REQUEST_MAGIC:
+        raise AuthorityTransportError("activation planner request profile differs")
+    header = io._recv_exact_until(connection, 9 * 8, deadline_ns=deadline_ns)
+    lengths = tuple(int.from_bytes(header[offset:offset + 8], "big")
+        for offset in range(0, len(header), 8))
+    _bounded_request_lengths(lengths)
+    values = tuple(io._recv_exact_until(connection, size, deadline_ns=deadline_ns) for size in lengths)
+    io._require_eof(connection, deadline_ns)
+    return _originals(values[:8], response=False), _deadline_epoch(values[8])
+
+
+def _send_bounded_response(connection, originals, *, deadline_ns):
+    held = _originals(originals, response=True)
+    if sum(len(raw) for raw in held) > MAX_BOUNDED_RESPONSE_BYTES:
+        raise AuthorityTransportError("bounded activation planner response exceeds the raw9 aggregate")
+    header = BOUNDED_RESPONSE_MAGIC + b"".join(len(raw).to_bytes(8, "big") for raw in held)
+    io._send_exact_until(connection, header, deadline_ns=deadline_ns)
+    for raw in held:
+        if raw:
+            io._send_exact_until(connection, raw, deadline_ns=deadline_ns)
+    _check_deadline(deadline_ns)
+
+
+def _socket_request_bounded(endpoint, *, originals, deadline_epoch_ns, deadline_ns,
+        work, current, maximum_response_bytes=None):
+    """One guarded v3 exchange; returned originals are still unverified.
+
+    The actual owner guard can only tighten numeric source/timeout ceilings.
+    All allocations are charged on the caller's work before native callbacks;
+    no request-selected endpoint, replacement clock or retry is available.
+    """
+    capture._SharedLedger(work)
+    path, timeout, uid, gid = _endpoint(endpoint)
+    held = _originals(originals, response=False)
+    if (type(deadline_epoch_ns) is not int or not 1 <= deadline_epoch_ns <= 2**63 - 1
+            or type(deadline_ns) is not int or deadline_ns <= 0 or not callable(current)):
+        raise AuthorityTransportError("bounded activation planner requires its original allowance and guard")
+    maximum = MAX_BOUNDED_RESPONSE_BYTES if maximum_response_bytes is None else maximum_response_bytes
+    if type(maximum) is not int or not 1 <= maximum <= MAX_BOUNDED_RESPONSE_BYTES:
+        raise AuthorityTransportError("activation planner response ceiling cannot widen the fixed source bound")
+    work.charge(input_bytes=2 * MAX_DEADLINE_EPOCH_BYTES + 2 * BOUNDED_REQUEST_HEADER_BYTES)
+    epoch_raw = str(deadline_epoch_ns).encode("ascii")
+    values = (*held, epoch_raw)
+    header = BOUNDED_REQUEST_MAGIC + b"".join(len(raw).to_bytes(8, "big") for raw in values)
+    previous_epoch = None
+
+    def check():
+        nonlocal previous_epoch
+        observed = current()
+        if (type(observed) is not int or observed <= 0 or observed >= deadline_epoch_ns
+                or previous_epoch is not None and observed < previous_epoch):
+            raise AuthorityTransportError("activation planner caller guard expired or reversed")
+        previous_epoch = observed
+        _check_deadline(deadline_ns)
+
+    check()
+    bound = min(deadline_ns, _deadline_ns(timeout))
+    work.charge(input_bytes=4096)
+    connection = None
+
+    def allocate():
+        nonlocal connection
+        # Retain the actual allocation before the stable-callback suffix can
+        # fail, so every already-created socket reaches mandatory cleanup.
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+
+    def call(operation):
+        check()
+        try:
+            return production._callback(work, lambda: io._call_until(connection, bound, operation))
+        finally:
+            check()
+
+    def send(raw):
+        work.charge(input_bytes=len(raw))
+        for offset in range(0, len(raw), io._CHUNK_BYTES):
+            chunk = raw[offset:offset + io._CHUNK_BYTES]
+            call(lambda: connection.sendall(chunk))
+
+    def receive(size):
+        if type(size) is not int or not 1 <= size <= MAX_BYTES:
+            raise AuthorityTransportError("bounded activation planner read length differs")
+        # Fixed buffer, transient chunks and immutable result are reserved
+        # before any body allocation or socket callback.
+        work.charge(input_bytes=3 * size)
+        check()
+        buffer = bytearray(size)
+        offset = 0
+        while offset < size:
+            count = min(size - offset, io._CHUNK_BYTES)
+            chunk = call(lambda: connection.recv(count))
+            if type(chunk) is not bytes or not 1 <= len(chunk) <= count:
+                raise AuthorityTransportError("bounded activation planner response closed early")
+            buffer[offset:offset + len(chunk)] = chunk
+            offset += len(chunk)
+        result = bytes(buffer)
+        check()
+        return result
+
+    try:
+        check()
+        production._callback(work, allocate)
+        check()
+        call(lambda: connection.connect(path))
+        actual_uid, actual_gid, _pid = call(lambda: authority_transport._peer_identity(connection))
+        if (actual_uid, actual_gid) != (uid, gid):
+            raise AuthorityTransportError("bounded activation planner listener peer differs")
+        send(header)
+        for raw in values:
+            send(raw)
+        call(lambda: connection.shutdown(socket.SHUT_WR))
+        if receive(8) != BOUNDED_RESPONSE_MAGIC:
+            raise AuthorityTransportError("bounded activation planner response profile differs")
+        lengths_raw = receive(8 * len(RESPONSE_LIMITS))
+        lengths = tuple(int.from_bytes(lengths_raw[offset:offset + 8], "big")
+            for offset in range(0, len(lengths_raw), 8))
+        _response_lengths(lengths)
+        if (sum(lengths) > maximum or sum(len(raw) for raw in values) + sum(lengths)
+                + BOUNDED_REQUEST_HEADER_BYTES + BOUNDED_RESPONSE_HEADER_BYTES > MAX_BYTES):
+            raise AuthorityTransportError("activation planner response exceeds the independently tightened aggregate")
+        received = tuple(receive(size) if size else b"" for size in lengths)
+        work.charge(input_bytes=1)
+        if call(lambda: connection.recv(1)) != b"":
+            raise AuthorityTransportError("bounded activation planner response has trailing bytes")
+        result = _originals(received, response=True)
+        check()
+    finally:
+        # Cleanup must run even after an expired guard. Never retry a failed
+        # close or return a response whose cleanup/currentness is uncertain.
+        if connection is not None:
+            try:
+                check()
+            finally:
+                try:
+                    connection.close()
+                finally:
+                    check()
+    _check_deadline(bound)
+    return result

@@ -1,0 +1,12 @@
+# Optional source overlay for explicit v7 post-permission activation planning.
+# Combine with the separately enabled activation-execution custody overlay.
+# This consumes an independently provisioned socket directory; it starts no planner.
+services:
+  serverware:
+    volumes:
+      - type: bind
+        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_PLANNER_SOCKET_DIR:?set preprovisioned activation planner socket directory}
+        target: /run/serverware/oidc-session-activation
+        read_only: true
+        bind:
+          create_host_path: false

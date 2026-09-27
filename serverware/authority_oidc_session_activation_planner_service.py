@@ -175,6 +175,7 @@ class _PlannerOwner:
 
     def _serve_connection(self, connection):
         from serverware import authority_oidc_session_activation_planner_transport as transport
+        from serverware import authority_successor_execution_window as window_policy
         from serverware import authority_webauthn_evidence_plan_clock as clock
         from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
@@ -190,8 +191,15 @@ class _PlannerOwner:
             lambda: transport.authority_transport._peer_identity(connection))
         if (peer_uid, peer_gid) != (delivery.PEER_UID, delivery.PEER_GID):
             raise ActivationPlannerRequestError("activation planner caller peer differs")
-        originals = transport._recv_request(connection, deadline_ns=deadline)
-        work.charge(input_bytes=sum(len(raw) for raw in originals))
+        originals, caller_epoch_deadline = transport._recv_request_profile(connection, deadline_ns=deadline)
+        work.charge(input_bytes=sum(len(raw) for raw in originals)
+            + (0 if caller_epoch_deadline is None else len(str(caller_epoch_deadline))))
+        if caller_epoch_deadline is not None:
+            # The extra original is only a ceiling. Preserve all three real
+            # opening samples, policy limits and the already inherited bound.
+            window = window_policy._narrow(window, deadline_epoch_ns=caller_epoch_deadline,
+                maximum_lifetime_ns=window[5], maximum_clock_skew_ns=window[6])
+            deadline = min(deadline, window[4])
         clock._check_on_work(window, work=work)
         self._live()
         if self._spent:
@@ -200,7 +208,10 @@ class _PlannerOwner:
         response, response_deadline = self._prepare_on_work(originals, live_window=window, deadline=deadline, work=work)
         self._live()
         clock._check_on_work(window, work=work)
-        transport._send_response(connection, response, deadline_ns=response_deadline)
+        if caller_epoch_deadline is None:
+            transport._send_response(connection, response, deadline_ns=response_deadline)
+        else:
+            transport._send_bounded_response(connection, response, deadline_ns=response_deadline)
         self._live()
         clock._check_on_work(window, work=work)
         transport._check_deadline(response_deadline)

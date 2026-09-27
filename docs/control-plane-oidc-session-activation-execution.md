@@ -2,9 +2,10 @@
 
 [`control_plane_oidc_session_activation_execution.py`](../serverware/control_plane_oidc_session_activation_execution.py)
 uses the actual control-plane owner and its distinct root-enrolled activation
-caller key. It supplies no planner callback, grant request, reservation, SQL,
-activation/recovery route or token release. Source remains unbuilt, unexecuted
-and unprovisioned.
+caller key. Its fixed [post-permission planning continuation](control-plane-oidc-session-activation-planning.md)
+now obtains genuine planner originals before signing. It supplies no arbitrary
+planner callback, grant request, reservation, SQL, activation/recovery route or
+token release. Source remains unbuilt, unexecuted and unprovisioned.
 
 ## Fixed owner and key custody
 
@@ -41,12 +42,23 @@ The original request body supplies assertion/approval originals only, never a
 plan, root, vector, actor or successful authority object.
 
 The actual assertion consumes its challenge and updates the target credential
-counter **before** this context becomes usable. A future fixed activation
-composition must obtain its genuine plan after that update, inside this same
-live context and cumulative allowance. There is no automatic planning callback
-or placeholder planner in this slice.
+counter **before** this context becomes usable. The fixed preparation method
+obtains its genuine plan after that update, inside this same live context and
+cumulative allowance. Its separate session-binding assertion comes from the
+existing `/api/auth/session/webauthn/options` action, not the registration or
+permission challenge. Generate the permission assertion before the binding
+assertion so actual authenticator counters can increase in that order.
 
-The sole effectful method is:
+The fixed connected preparation method is:
+
+```text
+prepare_authorization(*, assertion_bytes, expected_challenge_id)
+    -> (originals_raw2, expectations, before_vector_bytes, authorization_bytes)
+```
+
+It is one-use before the durable target-keyed pre-planner claim, calls the real
+bounded planner once, independently joins response originals to the actual
+target and root planner policy, and invokes the signing method once:
 
 ```text
 authorize(*, originals, expectations, before_vector_bytes)
@@ -75,19 +87,26 @@ actual owner and current session/credential checks. Returned floors cannot pass
 its current narrowed epoch/monotonic deadlines. Authorization expiry remains
 bounded by the original plan, pending session, caller policy and supplied
 processing window. The method tail-returns the genuine producer's original,
-not a successful verification carrier followed by weaker checks.
+not a successful verification carrier followed by weaker checks. Connected
+preparation retains stricter planner/scope/plan bounds inside the same context;
+the actual final clock check uses that narrowed skew as well as epoch and
+monotonic deadlines. Its newer observations survive into the next owner check
+and context exit. Pending-session and credential checks remain mandatory.
 
 ## Finite lifecycle and remaining boundary
 
 The active context is exact-parent-, PID- and thread-bound. Reentry, overlapping
-contexts, transfer, a second sign or use after exit fails. Failure or exit
+contexts, transfer, a second preparation/sign or use after exit fails. Failure or exit
 revokes the parent slot and releases acquired locks; borrowed keys and custody
 descriptors are never closed. No external API accepts this context or a prior
 permission result as authority. Assertion/approval consumption is not rolled
 back on a later failure, and no retry or replacement authorization is implied.
+The durable claim also prevents this retained finalization slot from silently
+starting another planner exchange after restart; it contains metadata only.
 
 An authorization is not an execution grant, current-root reservation, committed
-activation, token delivery or current authenticated session. Step 22 must still
-connect actual post-permission planning and public activation dispatch, and
-step 23 must separately authorize public recovery. Portal work and the six
-independent production acceptance gates remain open.
+activation, token delivery or current authenticated session. Step 22 remains
+partial: public routing and the actual grant/reservation/SQL/completion/release
+continuation are not connected here. Step 23 must separately authorize public
+recovery. Portal work and the six independent production acceptance gates
+remain open.

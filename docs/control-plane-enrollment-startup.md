@@ -14,7 +14,7 @@ Source `.180` adds an explicit [v5 public-only release configuration](control-pl
 and a [one-use private caller](control-plane-oidc-session-activation-release-client.md).
 The original v2 issuer contract below remains unchanged; v3/v4 execution and
 finalization retain their existing fields and reserved key slots. Explicit v5
-and v6 can configure this release lane, including when the separate issuer is disabled.
+through v7 can configure this release lane, including when the separate issuer is disabled.
 The actual startup owner must run as UID/GID 65532 and keeps the same runtime
 root, configuration, original receipt and inherited descriptor identities.
 The release component receives no private key and introduces no descriptor.
@@ -37,7 +37,7 @@ variable is `SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR`, with
 provisioned listener has mode 0660 and owner/group `65502:65532`, with searchable
 parent directories. A read-only directory bind permits connecting, not replacing
 the listener. Actual peer credentials and signed original response admission
-remain mandatory. Select this overlay only for an explicitly enabled v5/v6 release lane;
+remain mandatory. Select this overlay only for an explicitly enabled v5–v7 release lane;
 it neither creates the worker/socket nor mounts a release or signing key.
 The existing enrollment-only offline preparer is unchanged and does not compose
 this overlay. Any separately composed artifact still requires independent
@@ -45,7 +45,7 @@ immutable-release admission and frozen verification. No deployment is performed.
 
 ## Dedicated activation caller extension
 
-Uncommitted source `.181` adds the explicit [v6 activation caller configuration](control-plane-oidc-session-activation-execution-bootstrap.md).
+Source `.181` adds the explicit [v6 activation caller configuration](control-plane-oidc-session-activation-execution-bootstrap.md).
 The nullable lane is separate from the issuer, registration callers and public-only
 release client. The actual root entrypoint delivers only its fixed, independently
 inventoried FD205 from the provisioned activation caller-key path. Null v6 rejects
@@ -65,8 +65,39 @@ request and permission bytes with the original work/window/deadline to the
 lock-owned activation context. Fresh target permission precedes planning, and
 the context's post-plan signer is revoked on exit. No public permission-success
 object, renewed allowance, automatic grant dispatch or protected mutation is
-created by this cold configuration. These are source joins, not deployment or
-completion credit for step 21.
+created by this cold configuration. Step 21's permission/signing source is
+landed separately; configuration alone is neither permission nor deployment.
+
+## Post-permission planner extension
+
+Source `.182` adds explicit v7 planning configuration without another key or
+descriptor. The actual parent retains a root-signed planner bootstrap and a
+fixed planner endpoint; the activation caller lane must also be enabled.
+Older parent versions remain strict and do not acquire this new capability.
+
+The private `_prepare_oidc_session_activation_authorization` method first holds
+bounded immutable session-binding assertion bytes and the expected challenge
+identifier. It then enters genuine permission on the actual request and
+original work/window, makes the one-use durable pre-planner claim, and obtains
+and signs the exact post-permission plan. The session-binding assertion is
+distinct from the permission assertion. Existing
+`/api/auth/session/webauthn/options` supplies its unused challenge; the
+permission assertion must precede it in authenticator-counter order.
+Returned originals are not reusable permission or evidence of SQL execution.
+
+The optional
+[`docker-compose.oidc-session-activation-planning.yml`](../docker-compose.oidc-session-activation-planning.yml)
+overlay adds only a read-only, `create_host_path: false` socket-directory bind
+at `/run/serverware/oidc-session-activation`. Its required source variable is
+`SERVERWARE_OIDC_SESSION_ACTIVATION_PLANNER_SOCKET_DIR`. Combine it with the
+separately enabled activation-execution custody overlay. The bootstrap stays
+in the existing authority-trust mount; no planner, key, socket or production
+infrastructure is provisioned. The enrollment-only offline preparer is unchanged.
+
+This is partial step 22: the public dispatch route and complete
+grant/reservation/SQL/completion/consume/release composition are still open.
+No new public response or session cookie is emitted by this private method.
+Current source is unbuilt and unexecuted; production acceptance remains 0/6.
 
 ## Decision and trust boundary
 

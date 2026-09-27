@@ -2,7 +2,7 @@
 
 The dedicated root-enrolled key stays in the real control-plane owner. A
 configuration or scope result is never accepted by a public action as user
-permission, and this module opens no transport or protected SQL path.
+permission. Its fixed planning continuation opens no grant or protected SQL path.
 """
 from __future__ import annotations
 
@@ -160,7 +160,8 @@ class _ActivationPermission:
 
     __slots__ = ("_owner", "_request", "_original", "_window", "_deadline", "_work",
         "_pid", "_thread", "_state", "_locked", "_trust", "_scope", "_target", "_spent",
-        "_permission_epoch", "_session_expiry", "_inputs", "_seal")
+        "_permission_epoch", "_session_expiry", "_inputs", "_seal",
+        "_planning_spent", "_planning_bounds", "_planning_observed")
 
     def __init__(self, owner, request, permission_bytes, live_window, transport_deadline_ns, work):
         from serverware import control_plane_oidc_session_activation_permission as permission
@@ -177,6 +178,8 @@ class _ActivationPermission:
         self._scope, self._target, self._spent = None, None, False
         self._permission_epoch = None
         self._session_expiry = None
+        self._planning_spent, self._planning_bounds = False, None
+        self._planning_observed = None
         self._inputs = _PermissionInputs(owner, request, self._original, self._window,
             self._deadline, work, self._pid, self._thread)
         self._seal = self._inputs
@@ -203,6 +206,12 @@ class _ActivationPermission:
         scope = self._scope
         if type(scope) is not _Scope:
             _fail("activation permission lacks its actual same-call cold scope")
+        if epoch_floor is not None or monotonic_floor is not None:
+            shape._integer(epoch_floor, minimum=1)
+            shape._integer(monotonic_floor, minimum=1)
+        if self._planning_observed is not None:
+            epoch_floor = max(self._planning_observed[0], epoch_floor or 0)
+            monotonic_floor = max(self._planning_observed[1], monotonic_floor or 0)
         scope.current(epoch_floor, monotonic_floor)
         if self._target is not None:
             from serverware import control_plane_registration_finalization_completion_pending as pending
@@ -215,10 +224,26 @@ class _ActivationPermission:
         now = scope.current()
         if self._session_expiry is not None and now >= self._session_expiry:
             _fail("activation permission pending session expired")
+        if self._planning_bounds is not None:
+            window, bound = self._planning_bounds
+            observed = scope.continuity(now, self._planning_observed[1])
+            # The last real clock check uses the narrowed policy, including
+            # skew. Keep its newer floors for the next owner call; do not
+            # append a weaker original-window native suffix after this check.
+            now = clock._check_on_work(window, work=self._work)
+            monotonic = production._callback(self._work, time.monotonic_ns)
+            shape._integer(monotonic, minimum=1)
+            if (now < observed[0] or monotonic < observed[1]
+                    or now >= window[3] or monotonic >= bound):
+                _fail("activation permission planning clocks expired or reversed")
+            self._planning_observed = now, monotonic
+            self._identity()
         return now
 
     def _continuity(self, epoch_floor, monotonic_floor):
         self._current(epoch_floor, monotonic_floor)
+        if self._planning_bounds is not None:
+            return self._planning_observed
         # The final cold check absorbs this context's actual observations; no
         # independent time sample or renewed allowance is manufactured here.
         observed = self._scope.continuity(epoch_floor, monotonic_floor)
@@ -226,13 +251,29 @@ class _ActivationPermission:
             _fail("activation permission pending session expired")
         return observed
 
+    def _narrow_planning(self, window, deadline_ns):
+        """Keep the same opening and only reduce this active call's limits."""
+        self._identity()
+        narrowed = clock._validate(window)
+        shape._integer(deadline_ns, minimum=1)
+        prior, prior_deadline = (self._planning_bounds if self._planning_bounds is not None
+            else (self._scope.window, self._scope.deadline_ns))
+        if (narrowed[:3] != prior[:3] or any(narrowed[index] > prior[index] for index in (3, 4, 5, 6))
+                or deadline_ns > prior_deadline or deadline_ns > narrowed[4]):
+            _fail("activation planning replaced or widened the original allowance")
+        self._planning_bounds = narrowed, deadline_ns
+        if self._planning_observed is None:
+            self._planning_observed = narrowed[0], narrowed[2]
+
     def _revoke(self):
-        self._state, self._spent = "closed", True
+        self._state, self._spent, self._planning_spent = "closed", True, True
         if self._owner._activation_permission is self:
             self._owner._activation_permission = None
         trust, locked = self._trust, self._locked
         self._trust, self._locked = None, False
         self._target, self._scope = None, None
+        self._planning_bounds = None
+        self._planning_observed = None
         try:
             if trust is not None:
                 trust.__exit__(None, None, None)
@@ -339,16 +380,35 @@ class _ActivationPermission:
             # Fresh permission has already changed the credential counter.
             # The caller must obtain its genuine new plan inside this context;
             # no pre-permission plan is acquired, renewed or dispatched here.
-            signing_window = caller.window_policy._narrow(scope.window,
-                deadline_epoch_ns=self._session_expiry, maximum_lifetime_ns=scope.window[5],
-                maximum_clock_skew_ns=scope.window[6])
+            selected_window, selected_deadline = (self._planning_bounds
+                if self._planning_bounds is not None else (scope.window, scope.deadline_ns))
+            signing_window = caller.window_policy._narrow(selected_window,
+                deadline_epoch_ns=self._session_expiry, maximum_lifetime_ns=selected_window[5],
+                maximum_clock_skew_ns=selected_window[6])
             return caller._produce_on_work(**scope.common, caller_private_key=scope.private,
                 originals=held, expectations=owned, before_vector_bytes=before,
-                live_window=signing_window, transport_deadline_ns=min(scope.deadline_ns, signing_window[4]),
+                live_window=signing_window, transport_deadline_ns=min(selected_deadline, signing_window[4]),
                 work=work, _continuity=self._continuity)
         except BaseException:
             # A rejected foreign thread cannot close the creating thread's
             # locks; the real thread still owns mandatory context cleanup.
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+    def prepare_authorization(self, *, assertion_bytes, expected_challenge_id):
+        """Claim once, obtain a real post-permission plan, then sign originals."""
+        from serverware import control_plane_oidc_session_activation_planning as planning
+
+        try:
+            self._identity()
+            if self._state != "active" or self._spent is not False or self._planning_spent is not False:
+                _fail("activation permission preparation has already been spent")
+            original, challenge = planning._planning_inputs(assertion_bytes, expected_challenge_id)
+            self._planning_spent = True
+            return planning._prepare_on_permission(self,
+                assertion_bytes=original, expected_challenge_id=challenge)
+        except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:
                 self._revoke()
             raise

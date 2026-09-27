@@ -27,20 +27,21 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 **21/26 source steps landed · 1 active · 4 todo.** Fresh target-bound permission
 is source-landed in [d3f8469](https://github.com/example/private-deployment).
-Active: step 22, public activation dispatch (.182 composition uncommitted).
-The post-permission planner connection, token-free pre-planner claim and
-original authorization are underway. The [claim foundation](https://github.com/example/private-deployment)
-is committed, but no public dispatch endpoint or downstream execution/token/cookie
-flow is connected yet.
+Active: step 22, public activation dispatch (partial).
+[4fc61c3](https://github.com/example/private-deployment)
+connects root configuration, live permission, the [durable claim](https://github.com/example/private-deployment),
+the real private planner and original authorization. Still open: the public route,
+grant/reserve/SQL and completion/consume/release original continuation, and the
+cookie boundary. This increment does not complete step 22.
 
-[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch active in uncommitted .182 source; 23–26 recovery and portal work todo. Twenty-one landed, one active and four todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch active with committed .182 private planning; 23–26 recovery and portal work todo. Twenty-one landed, one active and four todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Public and portal checkpoints remain individually tracked:
 
 | Step / stable ID | Deliverable | Status |
 | --- | --- | --- |
 | 21 · F08.5.1 | Authorize the exact user/session/credential target, with fresh approval and dedicated caller-key custody | Landed · [d3f8469](https://github.com/example/private-deployment) |
-| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | In progress · uncommitted |
+| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | In progress · [private planning landed](https://github.com/example/private-deployment) |
 | 23 · F08.5.3 | Connect separately authorized recovery; a missing response never permits automatic activation retry | Todo |
 | 24 · F08.6.1 | Add explicit portal activate/recover controls bound to the exact retained target | Todo |
 | 25 · F08.6.2 | Require fresh action-bound portal approval; discard prompts when actor or target changes | Todo |

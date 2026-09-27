@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="544" viewBox="0 0 1000 544" role="img" aria-labelledby="consume-completion-title consume-completion-description">
+  <title id="consume-completion-title">Inside token-release row 14: 3 of 6 diagnostic source components landed, 0 in progress and 3 open. Row 14 remains in progress.</title>
+  <desc id="consume-completion-description">Six diagnostic components explain existing completion/recovery row 14 without adding milestones to the 16-unit, 26-leaf or 46-parent inventories. Stable IDs are F08.4e.7.c.12.1 through F08.4e.7.c.12.6. Source-landed components: 14.1 historical original replay; 14.2 completion-purpose custody; 14.3 commit observation and durable recovery. Open components: 14.4 cold resources and service is NEXT; 14.5 completion state and lookup route; 14.6 authenticated private response. Status words and symbols supplement color, and each component links to its closure criterion. Three landed, zero in progress and three open are diagnostic source counts, not effort estimates or additional parent completions. Parent row 14 remains IN PROGRESS. Overall token release is 13/16 landed, activation 19/26, project 34/46 and production 0/6 verified. Outside this view, row 15 exact committed-original token release and row 16 cold release response/handoff remain open. Historical facts do not renew execution, completion or release authority. Source only: unbuilt, unexecuted and unprovisioned. No whole-row completion, deployed service, token release or current-session claim.</desc>
+  <rect x="1" y="1" width="998" height="542" rx="16" fill="#0f172a" stroke="#475569"/>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">Inside row 14 · Consume completion / recovery</text>
+    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">3 / 6 source-landed</text>
+    <text x="278" y="71" fill="#cbd5e1" font-size="18">0 in progress · 3 open</text>
+    <text x="640" y="71" fill="#fbbf24" font-size="16" font-weight="700">Parent row 14: IN PROGRESS</text>
+    <text x="24" y="98" fill="#94a3b8" font-size="14">Diagnostic components only · no additional milestone or production acceptance credit</text>
+    <g font-size="16" font-weight="700" text-anchor="middle">
+      <a href="../production-status.md#consume-completion-and-recovery-detail">
+        <rect x="24" y="112" width="152" height="42" rx="5" fill="#34d399"><title>14.1 · F08.4e.7.c.12.1 · Historical original replay · SOURCE-LANDED · Read the criterion</title></rect>
+        <text x="100" y="139" fill="#052e26">✓ 14.1</text>
+      </a>
+      <a href="../production-status.md#consume-completion-and-recovery-detail">
+        <rect x="184" y="112" width="152" height="42" rx="5" fill="#34d399"><title>14.2 · F08.4e.7.c.12.2 · Completion-purpose custody · SOURCE-LANDED · Read the criterion</title></rect>
+        <text x="260" y="139" fill="#052e26">✓ 14.2</text>
+      </a>
+      <a href="../production-status.md#consume-completion-and-recovery-detail">
+        <rect x="344" y="112" width="152" height="42" rx="5" fill="#34d399"><title>14.3 · F08.4e.7.c.12.3 · Commit observation / durable recovery · SOURCE-LANDED · Read the criterion</title></rect>
+        <text x="420" y="139" fill="#052e26">✓ 14.3</text>
+      </a>
+      <a href="../production-status.md#consume-completion-and-recovery-detail">
+        <rect x="504" y="112" width="152" height="42" rx="5" fill="#172554" stroke="#60a5fa" stroke-width="2"><title>14.4 · F08.4e.7.c.12.4 · Cold resources / service · NEXT / OPEN · Not active or landed</title></rect>
+        <text x="580" y="139" fill="#bfdbfe">N 14.4</text>
+      </a>
+      <a href="../production-status.md#consume-completion-and-recovery-detail">
+        <rect x="664" y="112" width="152" height="42" rx="5" fill="#334155" stroke="#64748b"><title>14.5 · F08.4e.7.c.12.5 · Completion state / lookup route · OPEN</title></rect>
+        <text x="740" y="139" fill="#e2e8f0">○ 14.5</text>
+      </a>
+      <a href="../production-status.md#consume-completion-and-recovery-detail">
+        <rect x="824" y="112" width="152" height="42" rx="5" fill="#334155" stroke="#64748b"><title>14.6 · F08.4e.7.c.12.6 · Authenticated private response · OPEN</title></rect>
+        <text x="900" y="139" fill="#e2e8f0">○ 14.6</text>
+      </a>
+    </g>
+    <text x="24" y="181" fill="#6ee7b7" font-size="13">✓ LANDED = source complete</text>
+    <text x="354" y="181" fill="#93c5fd" font-size="13">N NEXT = queued / open</text>
+    <text x="669" y="181" fill="#cbd5e1" font-size="13">○ OPEN = remaining</text>
+
+    <g font-size="15" font-weight="600" fill="#f8fafc">
+      <text x="24" y="216">14.1 · Historical original replay</text>
+      <text x="24" y="262">14.2 · Completion-purpose custody</text>
+      <text x="24" y="308">14.3 · Commit observation / durable recovery</text>
+      <text x="24" y="354">14.4 · Cold resources / service</text>
+      <text x="24" y="400">14.5 · Completion state / lookup route</text>
+      <text x="24" y="446">14.6 · Authenticated private response</text>
+    </g>
+    <g font-size="13">
+      <text x="610" y="216" fill="#6ee7b7">✓ SOURCE-LANDED</text>
+      <text x="610" y="262" fill="#6ee7b7">✓ SOURCE-LANDED</text>
+      <text x="610" y="308" fill="#6ee7b7">✓ SOURCE-LANDED</text>
+      <text x="610" y="354" fill="#93c5fd">N NEXT / OPEN</text>
+      <text x="610" y="400" fill="#cbd5e1">○ OPEN</text>
+      <text x="610" y="446" fill="#cbd5e1">○ OPEN</text>
+      <a href="../production-status.md#consume-completion-and-recovery-detail" fill="#93c5fd" text-decoration="underline">
+        <text x="866" y="216">Criterion ↗</text><text x="866" y="262">Criterion ↗</text>
+        <text x="866" y="308">Criterion ↗</text><text x="866" y="354">Criterion ↗</text>
+        <text x="866" y="400">Criterion ↗</text><text x="866" y="446">Criterion ↗</text>
+      </a>
+    </g>
+    <g font-size="11" fill="#94a3b8">
+      <text x="24" y="235">F08.4e.7.c.12.1</text><text x="206" y="235">Original signatures, ciphertext and actual semantic/effects replay; real current processing clocks.</text>
+      <text x="24" y="281">F08.4e.7.c.12.2</text><text x="206" y="281">Fresh root-admitted completion purpose, independent identity and confined private keys.</text>
+      <text x="24" y="327">F08.4e.7.c.12.3</text><text x="206" y="327">Actual packet/commit readers, enrolled signing, first-exact retention and unchanged-original recovery.</text>
+      <text x="24" y="373">F08.4e.7.c.12.4</text><text x="206" y="373">Connect fixed key/FD, reader/TLS and journal delivery to the actual finite completion worker.</text>
+      <text x="24" y="419">F08.4e.7.c.12.5</text><text x="206" y="419">Admit a distinct completion peer and route exact completion plus known-original lookup.</text>
+      <text x="24" y="465">F08.4e.7.c.12.6</text><text x="206" y="465">Connect the bounded private response and genuine independent receiving-side original checks.</text>
+    </g>
+    <path d="M24 482H976" stroke="#334155"/>
+    <text x="24" y="498" fill="#93c5fd" font-size="13">NEXT within row 14: cold resources / service · Outside: OPEN 15 exact release · OPEN 16 cold handoff</text>
+    <text x="24" y="518" fill="#94a3b8" font-size="13">Nonadditive · token release 13/16 · activation 19/26 · project 34/46 · production 0/6 verified</text>
+    <text x="24" y="536" fill="#94a3b8" font-size="12">Source only · unbuilt / unexecuted / unprovisioned · no whole-row, token-release or current-session claim</text>
+  </g>
+</svg>

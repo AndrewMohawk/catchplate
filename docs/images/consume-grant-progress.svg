@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="444" viewBox="0 0 1000 444" role="img" aria-labelledby="grant-title grant-description">
   <title id="grant-title">Inside A11 consume-grant issuance: all 5 source substeps landed, 0 in progress, 0 open.</title>
-  <desc id="grant-description">All five source components inside A11, stable IDs F08.4e.7.c.9.11.1 through .5, landed in 4b421e2d26777b904ebe807fcd9dce367a8826f6: wire/signature contract, caller/root admission and derived claims, producer, independent verifier, and source integration/consumer join. A12 cold grant service landed in 8ac2374000de874efb1ededa1a65037d5460b18d; row 11 remains 12/12 landed. Token release is now 13/16 landed, 0 in progress and 3 open. Reservation/pending row 12 and one-use consume SQL row 13 land in bdaee247b937d5781c5ad0c75587eee861c9c3b0, extending 4d4091c and dd460ba foundations. Row 14 durable completion/recovery is NEXT/open; exact release and cold handoff remain open. Group c is 11/12 landed, 0 in progress and 1 open. Activation stays 19/26, project 34/46 and production acceptance 0/6 verified. The linked ledger preserves historical evidence. Nested counts are nonadditive; no test, runtime or plaintext-release claim. Source is unbuilt and unexecuted.</desc>
+  <desc id="grant-description">All five source components inside A11, stable IDs F08.4e.7.c.9.11.1 through .5, landed in 4b421e2d26777b904ebe807fcd9dce367a8826f6: wire/signature contract, caller/root admission and derived claims, producer, independent verifier, and source integration/consumer join. A12 cold grant service landed in 8ac2374000de874efb1ededa1a65037d5460b18d; row 11 remains 12/12 landed. Token release is 13/16 landed, 1 in progress and 2 other open. Rows 12–13 landed bdaee24 after 4d4091c and dd460ba. Row 14 completion/recovery is IN PROGRESS with partial libraries adaf15f; cold service, state route and response verification remain open, as do exact release and cold handoff. Group c is 11/12 landed, 1 in progress and 0 other open. Activation stays 19/26, project 34/46 and production acceptance 0/6 verified. The linked ledger preserves criteria and historical evidence. Nested counts are nonadditive; no test, runtime or plaintext-release claim. Source is unbuilt and unexecuted.</desc>
   <rect x="1" y="1" width="998" height="442" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">Inside A11 · Consume-grant issuance and verification</text>
@@ -33,8 +33,8 @@
       <text x="575" y="332">✓ LANDED · 4b421e2</text>
       <text x="575" y="372">✓ LANDED · 4b421e2</text>
     </g>
-    <text x="24" y="391" fill="#93c5fd" font-size="13">NEXT / OPEN: row 14 durable completion and recovery · no SQL retry or token release</text>
-    <text x="24" y="410" fill="#94a3b8" font-size="13">Nonadditive · row 11 12/12 LANDED · token release 13/16 (0 in progress, 3 open) · activation 19/26 · project 34/46</text>
+    <a href="../production-status.md#consume-completion-and-recovery-detail"><text x="24" y="391" fill="#fde68a" font-size="13">ACTIVE 14 completion/recovery · libraries adaf15f · cold service, state route and response open</text></a>
+    <text x="24" y="410" fill="#94a3b8" font-size="13">Nonadditive · row 11 12/12 LANDED · release 13/16 + 1 active + 2 open · activation 19/26 · project 34/46</text>
     <text x="24" y="432" fill="#94a3b8" font-size="13">Source only · unbuilt / unexecuted · production 0/6 verified · A12 cold grant service LANDED · 8ac2374</text>
   </g>
 </svg>

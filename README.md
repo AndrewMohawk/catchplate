@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -31,14 +33,14 @@ still fails closed pending activation support.
 <details>
 <summary>All 46 source checkpoints and the nested milestone bars</summary>
 
-[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 13/26 finer steps shown in the active-workflow bar below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 14/26 finer steps shown in the active-workflow bar below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 </details>
 
-**Current work: OIDC session activation — 13/26 detailed steps landed.**
+**Current work: OIDC session activation — 14/26 detailed steps landed; 12 unfinished (1 in progress, 11 other open).**
 ✓ Landed · → In progress · NEXT Open and next · — Open.
 
-[![OIDC activation: 26 named source steps, 13 landed and 13 unfinished. Step 14 encrypted execution bundle is in progress; step 15 private activation replay is next. Remaining steps separately track execution authorization, reservation, protected SQL, completion, token release, public permissions and dispatch, recovery, portal actions, fresh permission and session confirmation. Source-only, not production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: 26 named source steps, 14 landed and 12 unfinished. Step 14 encrypted execution bundle is landed; step 15 private activation replay and custody integration is in progress; step 16 execution authorization grant is next and open. Remaining steps separately track reservation, protected SQL, completion, token release, public permissions and dispatch, recovery, portal actions, fresh permission and session confirmation. Source-only, not production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 The previous three broad remaining segments are now **13 smaller tasks**—no
 completed work was lost or new product scope added. Each segment maps to a
@@ -46,8 +48,11 @@ completed work was lost or new product scope added. Each segment maps to a
 Grouping milestones are not counted twice; these 26 steps all belong to F08.
 Counts are not effort percentages or an ETA.
 
-**Now:** encrypted execution-bundle source is authored but not landed.
-**Next:** genuine private replay, then authorization, reservation, one-use SQL,
+**Landed:** encrypted execution-bundle codec and candidate preparation, plus
+partial receiving replay, in [918581b](https://github.com/example/private-deployment).
+**Now:** finish private replay/custody integration: independent cold custody,
+first-exact durable export/recovery and generic execution/SQL framing remain open.
+**Next:** execution authorization grant, then reservation, one-use SQL,
 completion and token delivery; separately authorized public and portal flows follow.
 
 Full verification follows source freeze. Immutable dependencies and independently

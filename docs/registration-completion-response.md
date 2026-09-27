@@ -106,9 +106,11 @@ particular, response-derived pins cannot supply a missing independent checkpoint
 
 ## Remaining integration and deferred verification
 
-Actual caller transport integration, durable retention/association of these
-response originals, present-purpose admission and any public action remain
-separate work. This receiver does not activate completion, public execution,
+The [private retained-original caller](control-plane-registration-handoff.md)
+now composes actual transport, this verifier and durable outcome association
+while original caller/grant authorization remains live. Historical caller
+recovery, present-purpose public admission and any public action remain separate
+work. This receiver does not activate public execution,
 credential finalization or session/workload enrollment. Finalization still
 requires its own genuine committed-evidence and exact signer-original joins.
 No production acceptance gate is closed.

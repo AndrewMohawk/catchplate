@@ -12,6 +12,8 @@ Registration execution-grant and signer-exchange records are retention-only fami
 they never admit attempted or observed markers or legacy forwarding.
 An ASSOCIATED marker commits only an exact local signer/grant relationship
 after both original records are durable; it supplies no verification or authority.
+Separate registration outcomes retain opaque originals under that association.
+A SQL-CLAIMED record burns only one local dispatch, never remote SQL permission.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -31,6 +33,7 @@ from serverware import control_plane_custody_observations as observations
 from serverware import control_plane_registration_execution_records as execution_records
 from serverware import control_plane_registration_signer_records as signer_records
 from serverware import control_plane_registration_associations as associations
+from serverware import control_plane_registration_outcome_records as outcome_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -42,7 +45,7 @@ _OBSERVATION_RESERVE = observations.MAX_OBSERVATION_BYTES
 _HEX = frozenset("0123456789abcdef")
 _READ_CHUNK = 1024 * 1024
 _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES,
-    signer_records.MAX_RECORD_BYTES)
+    signer_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES)
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY})
 
 
@@ -121,8 +124,9 @@ class CustodyJournal:
     Retention-only execution grants and signer exchanges reserve no delivery
     marker bytes. Complete preparations preflight both records and their final
     association without consuming another record's reserved marker capacity.
-    At most three times maximum_records published files are admitted, including
-    associations; old records are never rewritten or removed.
+    At most six times maximum_records published files are admitted, including
+    associations and fixed registration outcomes. Old records are never
+    rewritten or removed; legacy marker byte reservations remain intact.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -143,6 +147,7 @@ class CustodyJournal:
         self._closed = False
         self._entries = {}
         self._associations = {}
+        self._registration_outcomes = {}
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -236,11 +241,12 @@ class CustodyJournal:
         attempted = set()
         observed = set()
         associated = {}
+        registration_outcomes = {}
         count = 0
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
                 count += 1
-                if count > 3 * self._maximum_records:
+                if count > 6 * self._maximum_records:
                     raise CustodyJournalError("journal physical file limit exceeded")
                 name = entry.name
                 if name.startswith("prepared-"):
@@ -252,7 +258,10 @@ class CustodyJournal:
                 elif name.startswith("associated-"):
                     kind = "associated"
                 else:
-                    raise CustodyJournalError("journal contains an unknown or temporary file")
+                    kind = next((kind for kind in outcome_records.KINDS
+                        if name.startswith(kind + "-")), None)
+                    if kind is None:
+                        raise CustodyJournalError("journal contains an unknown or temporary file")
                 prefix = kind + "-"
                 suffix = name[len(prefix):]
                 if (not name.startswith(prefix) or len(suffix) != 64
@@ -262,7 +271,9 @@ class CustodyJournal:
                 maximum = (_MAX_RECORD_BYTES if kind == "prepared" else
                     _ATTEMPT_BYTES if kind == "attempted" else
                     observations.MAX_OBSERVATION_BYTES if kind == "observed" else
-                    associations.MAX_ASSOCIATION_BYTES)
+                    associations.MAX_ASSOCIATION_BYTES if kind == "associated" else
+                    outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
+                    outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
                     maximum_bytes=min(maximum, self._quota - self._used_bytes), synchronize=True)
                 self._used_bytes += len(encoded)
@@ -284,11 +295,18 @@ class CustodyJournal:
                     if observation.local_digest != digest or digest in observed:
                         raise CustodyJournalError("journal observation does not match its local record")
                     observed.add(digest)
-                else:
+                elif kind == "associated":
                     association = associations.decode(encoded)
                     if association.execution_digest != digest or digest in associated:
                         raise CustodyJournalError("association filename differs from its execution original")
                     associated[digest] = association
+                else:
+                    outcome = outcome_records.decode(encoded)
+                    by_kind = registration_outcomes.setdefault(digest, {})
+                    if (outcome.local_digest != digest or outcome.kind != kind or kind in by_kind):
+                        raise CustodyJournalError("registration outcome differs from its fixed filename")
+                    # Only bounded metadata is kept across the recovery scan.
+                    by_kind[kind] = (outcome.source_revision, outcome.digest)
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
         retention_only = {digest for digest, entry in prepared.items()
@@ -307,6 +325,9 @@ class CustodyJournal:
         for association in associated.values():
             _association_scope(association, self._entries)
         self._associations = associated
+        for digest, by_kind in registration_outcomes.items():
+            self._registration_outcome_scope(digest, by_kind)
+        self._registration_outcomes = registration_outcomes
         if self._stamp() != before:
             raise CustodyJournalError("journal directory changed during recovery")
         return before
@@ -358,6 +379,42 @@ class CustodyJournal:
         _association_scope(association, self._entries)
         return association, encoded
 
+    def _registration_outcome_scope(self, digest, by_kind):
+        association = self._associations.get(digest)
+        if association is None:
+            raise CustodyJournalError("registration outcome has no complete retained preparation")
+        _association_scope(association, self._entries)
+        if (any(kind not in outcome_records.KINDS or value[0] != association.source_revision
+                for kind, value in by_kind.items())
+                or "sql-claimed" in by_kind and "reservation" not in by_kind
+                or ("sql-outcome" in by_kind or "completion-outcome" in by_kind)
+                    and "sql-claimed" not in by_kind):
+            raise CustodyJournalError("registration outcome lacks its retained original prerequisites")
+
+    def _read_registration_outcomes(self, digest):
+        association, _ = self._read_association(digest)
+        self._load(digest)
+        self._load(association.signer_digest)
+        by_kind = self._registration_outcomes.get(digest, {})
+        self._registration_outcome_scope(digest, by_kind)
+        loaded = {}
+        for kind in outcome_records.KINDS:
+            if kind not in by_kind:
+                continue
+            name = _name(kind, digest)
+            maximum = (outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed"
+                else outcome_records.MAX_RECORD_BYTES)
+            encoded, identity = self._read_file(name, maximum_bytes=maximum)
+            outcome = outcome_records.decode(encoded)
+            if (identity != self._file_identities[name]
+                    or (outcome.source_revision, outcome.digest) != by_kind[kind]
+                    or outcome.kind != kind or outcome.local_digest != digest):
+                raise CustodyJournalError("registration outcome changed after admitted recovery")
+            loaded[kind] = outcome
+        return outcome_records.RegistrationOutcomes(association.source_revision, digest,
+            loaded.get("reservation"), loaded.get("sql-claimed"), loaded.get("sql-outcome"),
+            loaded.get("completion-outcome"))
+
     def _publish(self, kind, digest, encoded):
         name = _name(kind, digest)
         temporary = ".tmp-" + name
@@ -383,6 +440,7 @@ class CustodyJournal:
         marker_reserve = (0 if record.family in _RETENTION_ONLY_FAMILIES else
             _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
         if (len(self._entries) >= self._maximum_records
+                or len(self._file_identities) >= 6 * self._maximum_records
                 or len(encoded) + marker_reserve
                     > self._quota - self._used_bytes - self._reserved_bytes):
             raise CustodyJournalError("journal preparation capacity is exhausted")
@@ -462,7 +520,7 @@ class CustodyJournal:
                 if digest not in self._entries)
             required_bytes = sum(len(encoded) for _, encoded in missing) + len(association_encoded)
             if (len(self._entries) + len(missing) > self._maximum_records
-                    or len(self._file_identities) + len(missing) + 1 > 3 * self._maximum_records
+                    or len(self._file_identities) + len(missing) + 1 > 6 * self._maximum_records
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete preparation capacity is exhausted")
             try:
@@ -499,6 +557,99 @@ class CustodyJournal:
                 signer, _ = self._load(association.signer_digest)
                 self._require_ready()
                 return execution, signer
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def _append_registration_outcome(self, local_digest, kind, originals):
+        digest = _digest(local_digest)
+        held = outcome_records._originals(outcome_records._profile(kind), originals)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._associations:
+                raise CustodyJournalError("registration outcome requires a complete local preparation")
+            by_kind = self._registration_outcomes.get(digest, {})
+            if kind == "sql-claimed" and kind in by_kind:
+                raise CustodyJournalError("registration SQL dispatch was already claimed; repeat is forbidden")
+            try:
+                current = self._read_registration_outcomes(digest)
+                self._require_ready()
+            except BaseException:
+                self._io.poison()
+                raise
+            if kind == "sql-claimed" and current.reservation is None:
+                raise CustodyJournalError("registration SQL dispatch requires retained reservation originals")
+            if kind in ("sql-outcome", "completion-outcome") and current.sql_attempt is None:
+                raise CustodyJournalError("registration outcome requires an irreversible local SQL claim")
+            record, encoded = outcome_records.encode(kind, digest, held,
+                source_revision=current.source_revision)
+            if kind in by_kind:
+                existing = {"reservation": current.reservation, "sql-outcome": current.sql_outcome,
+                    "completion-outcome": current.completion_outcome}[kind]
+                if (existing.originals != record.originals or existing.digest != record.digest):
+                    self._io.poison()
+                    raise CustodyJournalError("registration outcome cannot replace its first exact originals")
+                self._require_ready()
+                return existing.digest
+            if (len(self._file_identities) >= 6 * self._maximum_records
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal registration outcome capacity is exhausted")
+            try:
+                self._require_ready()
+                self._publish(kind, digest, encoded)
+                self._used_bytes += len(encoded)
+                self._registration_outcomes.setdefault(digest, {})[kind] = (
+                    record.source_revision, record.digest)
+                self._registration_outcome_scope(digest, self._registration_outcomes[digest])
+                self._require_ready()
+                return record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def append_registration_reservation(self, local_digest, originals):
+        """Retain exact raw3 under a complete preparation, not a verified reserve."""
+        return self._append_registration_outcome(local_digest, "reservation", originals)
+
+    def claim_registration_sql_attempt(self, local_digest):
+        """Durably burn one local dispatch before send; never clear or repeat it.
+
+        A retained preparation and reservation are required, but neither their
+        presence nor this marker supplies permission to execute SQL. The caller
+        owns genuine original admission. Publication uncertainty is not retry
+        permission, and absence of a response does not establish nonexecution.
+        """
+        self._append_registration_outcome(local_digest, "sql-claimed", ())
+
+    def append_registration_sql_outcome(self, local_digest, originals):
+        """Retain the first exact raw4 response; its label is not authentication."""
+        return self._append_registration_outcome(local_digest, "sql-outcome", originals)
+
+    def append_registration_completion_outcome(self, local_digest, originals):
+        """Retain the first raw4, including uncertainty; never upgrade/overwrite.
+
+        A later genuinely acknowledged response requires a separate bounded
+        reconciliation design. This storage cannot replace an earlier response.
+        """
+        return self._append_registration_outcome(local_digest, "completion-outcome", originals)
+
+    def load_registration_outcomes(self, local_digest):
+        """Return opaque originals/IDs after rereading the exact associated pair.
+
+        No returned record is a proof, action token, live head, renewed lifetime
+        or permission to retry. Missing responses leave remote outcome unknown.
+        """
+        digest = _digest(local_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._associations:
+                raise CustodyJournalError("registration outcomes require a complete local preparation")
+            try:
+                result = self._read_registration_outcomes(digest)
+                self._require_ready()
+                return result
             except BaseException:
                 self._io.poison()
                 raise

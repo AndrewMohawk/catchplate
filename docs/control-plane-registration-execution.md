@@ -130,6 +130,11 @@ It opts into the separate [reservation handoff and explicit reserve actions](con
 without changing parent v3, FD203 or these public grant-preparation handlers.
 Nested v1 remains authorizer-only; no automatic upgrade or reserve send occurs.
 
+Explicit [nested v3](control-plane-registration-execution-handoff-bootstrap.md)
+adds independently pinned SQL/completion scope for the separate
+[retained-original handoff](control-plane-registration-handoff.md). Existing
+preparation routes remain grant-only; neither older profile is promoted.
+
 The complete bootstrap remains bounded to 4 MiB. The separate
 [`_produce_v3_on_work`](../serverware/control_plane_enrollment_bootstrap.py)
 producer signs this explicit version; parent v2 is not silently promoted. Actual

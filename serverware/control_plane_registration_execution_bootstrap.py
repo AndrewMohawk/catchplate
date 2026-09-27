@@ -6,6 +6,9 @@ enrollment originals and joins their caller/configuration/generation/key scope.
 The exact nested v1 profile remains authorizer-only. Opt-in nested v2 also pins
 the separate reserver endpoint and one independent state predecessor/fence;
 neither is inferred from an acknowledgment or recovered journal observation.
+Nested v3 additionally pins SQL/completion endpoints, the same operation's
+independent current pending scope and completion packet identity. No response
+advances those cold pins or automatically promotes an older profile.
 It does not deliver descriptors, read private keys, authenticate an actor,
 issue permission or open a transport. Returned material is owned data only.
 """
@@ -21,12 +24,17 @@ from serverware import authority_webauthn_evidence_policy as evidence_policy
 
 SCHEMA = "serverware.controlPlaneRegistrationExecution/v1"
 V2_SCHEMA = "serverware.controlPlaneRegistrationExecution/v2"
+V3_SCHEMA = "serverware.controlPlaneRegistrationExecution/v3"
 CALLER_KEY_FD = 203
 AUTHORIZER_SOCKET_PATH = "/run/serverware/registration-execution/authorizer.sock"
 RESERVER_SOCKET_PATH = "/run/serverware/registration-execution/reserver.sock"
+SQL_SOCKET_PATH = "/run/serverware/registration-execution/sql.sock"
+COMPLETION_SOCKET_PATH = "/run/serverware/registration-execution/completion.sock"
 _FIELDS = frozenset({"schema", "executionCallerPrivateKeyFd", "currentRootEnrollment",
     "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"})
 _V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "statePredecessor"})
+_V3_FIELDS = _V2_FIELDS | frozenset({"sqlEndpoint", "completionEndpoint",
+    "currentPending", "completionPacketDigest"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _ORIGINAL_LIMITS = (("currentRootEnrollment", caller.authorization.MAX_ENROLLMENT_BYTES),
@@ -49,6 +57,10 @@ class _ExecutionMaterial:
     authorizer_endpoint: tuple
     reservation_endpoint: tuple | None = None
     reservation_predecessor: tuple | None = None
+    sql_endpoint: tuple | None = None
+    completion_endpoint: tuple | None = None
+    current_pending: tuple | None = None
+    completion_packet_digest: str | None = None
 
 
 def _endpoint(value):
@@ -69,9 +81,10 @@ def _shape(value):
     if type(value) is not dict:
         raise RegistrationExecutionBootstrapError("control-plane registration execution scope is not an exact object")
     version = value.get("schema")
-    if type(version) is not str or version not in (SCHEMA, V2_SCHEMA):
+    if type(version) is not str or version not in (SCHEMA, V2_SCHEMA, V3_SCHEMA):
         raise RegistrationExecutionBootstrapError("control-plane registration execution profile is unsupported")
-    shape._object(value, _FIELDS if version == SCHEMA else _V2_FIELDS,
+    fields = _FIELDS if version == SCHEMA else _V2_FIELDS if version == V2_SCHEMA else _V3_FIELDS
+    shape._object(value, fields,
         "control-plane registration execution scope")
     shape._integer(value["executionCallerPrivateKeyFd"], 1023, minimum=32)
     if value["executionCallerPrivateKeyFd"] != CALLER_KEY_FD:
@@ -82,7 +95,7 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
-    if version == V2_SCHEMA:
+    if version in (V2_SCHEMA, V3_SCHEMA):
         _reserver_endpoint(value["reserverEndpoint"])
         predecessor = value["statePredecessor"]
         shape._object(predecessor, frozenset({"sequence", "headDigest", "nextFence"}),
@@ -92,6 +105,19 @@ def _shape(value):
         shape._integer(predecessor["nextFence"], minimum=1)
         if predecessor["sequence"] == 0 and predecessor["nextFence"] != 1:
             raise RegistrationExecutionBootstrapError("genesis reservation predecessor requires fence one")
+    if version == V3_SCHEMA:
+        _handoff_endpoint(value["sqlEndpoint"], SQL_SOCKET_PATH)
+        _handoff_endpoint(value["completionEndpoint"], COMPLETION_SOCKET_PATH)
+        pending = value["currentPending"]
+        shape._object(pending, frozenset({"sequence", "headDigest", "fence"}),
+            "independent registration execution current pending scope")
+        shape._integer(pending["sequence"], caller.authorization.MAX_RECORDS, minimum=1)
+        shape._digest(pending["headDigest"])
+        shape._integer(pending["fence"], minimum=1)
+        shape._digest(value["completionPacketDigest"])
+        if (pending["sequence"] != predecessor["sequence"] + 1
+                or pending["fence"] != predecessor["nextFence"]):
+            raise RegistrationExecutionBootstrapError("execution pending scope is not this cold reservation's successor")
 
 
 def _reserver_endpoint(value):
@@ -103,6 +129,20 @@ def _reserver_endpoint(value):
         if value[name] != 0:
             raise RegistrationExecutionBootstrapError("reserver listener must retain the fixed root peer identity")
     # The peer is the root socket activator, not the accepting UID 65514 child.
+    return value["socketPath"], value["requestTimeoutSeconds"], 0, 0
+
+
+def _handoff_endpoint(value, path):
+    if path not in (SQL_SOCKET_PATH, COMPLETION_SOCKET_PATH):
+        raise RegistrationExecutionBootstrapError("registration handoff endpoint purpose is not source fixed")
+    shape._object(value, _ENDPOINT_FIELDS, "registration SQL/completion handoff endpoint")
+    shape._literal(value["socketPath"], path)
+    shape._integer(value["requestTimeoutSeconds"], 30, minimum=1)
+    for name in ("listenerUid", "listenerGid"):
+        shape._integer(value[name], 2**32 - 2)
+        if value[name] != 0:
+            raise RegistrationExecutionBootstrapError("handoff listener must retain the fixed root peer identity")
+    # Pin the root manager's activated listener, not an asserted service UID.
     return value["socketPath"], value["requestTimeoutSeconds"], 0, 0
 
 
@@ -174,7 +214,8 @@ def _admit_on_work(*, registration_execution, configuration_payload,
             if caller_pin == pin:
                 raise RegistrationExecutionBootstrapError("execution caller key reuses another configured purpose")
         reservation_endpoint = reservation_predecessor = None
-        if value["schema"] == V2_SCHEMA:
+        sql_endpoint = completion_endpoint = current_pending = completion_packet_digest = None
+        if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
             # Read capacity only from genuine admission of this same original
             # enrollment. The parent's root signature, not these data fields,
             # is the prerequisite for selecting an independent predecessor.
@@ -191,9 +232,20 @@ def _admit_on_work(*, registration_execution, configuration_payload,
             reservation_endpoint = _reserver_endpoint(value["reserverEndpoint"])
             reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
                 predecessor["nextFence"])
+            if value["schema"] == V3_SCHEMA:
+                pending = value["currentPending"]
+                if pending["sequence"] >= current.payload["maxRecords"]:
+                    raise RegistrationExecutionBootstrapError("execution pending scope has no enrolled completion capacity")
+                # These are independently signed pins for ONE operation, not
+                # observations adopted from its reservation response/journal.
+                current_pending = (pending["sequence"], pending["headDigest"], pending["fence"])
+                completion_packet_digest = value["completionPacketDigest"]
+                sql_endpoint = _handoff_endpoint(value["sqlEndpoint"], SQL_SOCKET_PATH)
+                completion_endpoint = _handoff_endpoint(value["completionEndpoint"], COMPLETION_SOCKET_PATH)
         return _ExecutionMaterial(CALLER_KEY_FD, admitted.caller_public_key, current_raw,
             grant_raw, authorization_raw, _endpoint(value["authorizerEndpoint"]),
-            reservation_endpoint, reservation_predecessor)
+            reservation_endpoint, reservation_predecessor, sql_endpoint, completion_endpoint,
+            current_pending, completion_packet_digest)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RegistrationExecutionBootstrapError):
             raise

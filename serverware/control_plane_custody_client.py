@@ -489,6 +489,65 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while loading registration preparation")
         return pair
 
+    def append_registration_reservation(self, local_digest, originals):
+        """Retain bounded raw3; independent reserve authentication remains required."""
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_reservation(
+            binding.journal, local_digest, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining registration reservation")
+        return journal._digest(digest)
+
+    def claim_registration_sql_attempt(self, local_digest):
+        """Fsync the irreversible local claim before caller-owned SQL dispatch.
+
+        This owns no network send, remote permission or retry. Every repeated
+        claim fails, including after an uncertain send or a missing response.
+        """
+        binding = _snapshot(self)
+        journal.CustodyJournal.claim_registration_sql_attempt(binding.journal, local_digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed after registration SQL claim")
+
+    def append_registration_sql_outcome(self, local_digest, originals):
+        """Retain only the first exact raw4; do not infer remote commit from it."""
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_sql_outcome(
+            binding.journal, local_digest, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining registration SQL outcome")
+        return journal._digest(digest)
+
+    def append_registration_completion_outcome(self, local_digest, originals):
+        """Retain opaque raw4, never replace uncertainty with a later response."""
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_completion_outcome(
+            binding.journal, local_digest, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining registration completion outcome")
+        return journal._digest(digest)
+
+    def load_registration_outcomes(self, local_digest):
+        """Return bounded local originals/IDs; no successful carrier is admitted."""
+        from serverware import control_plane_registration_outcome_records as outcomes
+
+        digest = journal._digest(local_digest)
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.load_registration_outcomes(binding.journal, digest)
+        if (type(result) is not outcomes.RegistrationOutcomes or result.local_digest != digest):
+            raise CustodyClientError("registration outcomes differ from the requested local preparation")
+        for kind, record in zip(outcomes.KINDS, (result.reservation, result.sql_attempt,
+                result.sql_outcome, result.completion_outcome)):
+            if record is not None:
+                if (type(record) is not outcomes.RegistrationOutcomeRecord
+                        or record.local_digest != digest or record.kind != kind
+                        or record.source_revision != result.source_revision):
+                    raise CustodyClientError("registration outcome record scope differs")
+                journal._digest(record.digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while loading registration outcomes")
+        return result
+
     def append_and_forward_evidence(self, purpose, originals, *, deadline_ns=None):
         """Append actual raw6 durably, then attempt its forwarding exactly once.
 

@@ -11,6 +11,8 @@ grant originals undergo genuine local replay/signature/scope verification.
 The explicit nested-v2 reservation method can request a durable state reserve;
 v1 grant methods and existing public preparation routes cannot. No method here
 writes SQL, stores an execution-attempt marker or finalizes a credential.
+Nested-v3 scope also supplies fixed endpoints to the separate retained-original
+handoff module; it does not silently promote an older caller profile.
 No environment discovery, key fallback, automatic retry or renewal exists.
 """
 from __future__ import annotations
@@ -28,7 +30,7 @@ from serverware import authority_webauthn_evidence_custody_configuration as conf
 evidence, clock = issuance.evidence, issuance.clock
 
 
-def _scope(owner, *, deadline_epoch_ns, deadline_ns, work, _reservation=False):
+def _scope(owner, *, deadline_epoch_ns, deadline_ns, work, _endpoint_kind="authorizer"):
     """Hold actual cold inputs; returned local settings are not a proof token."""
     startup._require_pid()
     if type(owner) is not startup._EnrollmentOwner:
@@ -45,13 +47,19 @@ def _scope(owner, *, deadline_epoch_ns, deadline_ns, work, _reservation=False):
     shape._integer(deadline_epoch_ns, minimum=1)
     shape._integer(deadline_ns, minimum=1)
     deadline, inherited = deadline_epoch_ns, deadline_ns
-    if type(_reservation) is not bool:
+    if type(_endpoint_kind) is not str or _endpoint_kind not in (
+            "authorizer", "reserver", "sql", "completion"):
         raise startup.EnrollmentStartupError("registration execution purpose is not source-selected")
     endpoint = execution.authorizer_endpoint
-    if _reservation:
+    if _endpoint_kind == "reserver":
         if execution.reservation_endpoint is None or execution.reservation_predecessor is None:
             raise startup.EnrollmentStartupError("registration reservation is not independently cold-enabled")
         endpoint = execution.reservation_endpoint
+    elif _endpoint_kind in ("sql", "completion"):
+        if (execution.sql_endpoint is None or execution.completion_endpoint is None
+                or execution.current_pending is None or execution.completion_packet_digest is None):
+            raise startup.EnrollmentStartupError("registration handoff is not independently cold-enabled")
+        endpoint = execution.sql_endpoint if _endpoint_kind == "sql" else execution.completion_endpoint
     ledger = evidence.capture._SharedLedger(work)
     common = {
         "payload": issuance.configuration._ConfigurationCapture(ledger,
@@ -153,7 +161,7 @@ def _reserve_on_owner(owner, *, originals, deadline_epoch_ns, deadline_ns, work)
 
     held = reserve_wire._originals(originals, response=False)
     common, endpoint, _private, deadline, bound, live = _scope(owner,
-        deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work, _reservation=True)
+        deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work, _endpoint_kind="reserver")
     predecessor = owner._material.execution.reservation_predecessor
     # Authenticate the original permission/grant before any side-effecting
     # reserve request. Received signatures will be independently checked again

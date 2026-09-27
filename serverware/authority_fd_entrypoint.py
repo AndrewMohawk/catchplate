@@ -26,10 +26,13 @@ CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES = 4096
 CONTROL_PLANE_ENROLLMENT_KEY_NAME = "serverware-control-plane-enrollment-signing-key"
 CONTROL_PLANE_EXECUTION_SCHEMA = "serverware.controlPlaneRegistrationExecution/v1"
 CONTROL_PLANE_EXECUTION_V2_SCHEMA = "serverware.controlPlaneRegistrationExecution/v2"
+CONTROL_PLANE_EXECUTION_V3_SCHEMA = "serverware.controlPlaneRegistrationExecution/v3"
 CONTROL_PLANE_EXECUTION_KEY_NAME = "serverware-registration-execution-caller-key"
 CONTROL_PLANE_EXECUTION_KEY_FD = 203
 CONTROL_PLANE_EXECUTION_SOCKET = "/run/serverware/registration-execution/authorizer.sock"
 CONTROL_PLANE_RESERVATION_SOCKET = "/run/serverware/registration-execution/reserver.sock"
+CONTROL_PLANE_SQL_SOCKET = "/run/serverware/registration-execution/sql.sock"
+CONTROL_PLANE_COMPLETION_SOCKET = "/run/serverware/registration-execution/completion.sock"
 TRUSTED_HOST_LOCAL_WITNESS_STATE_PATH = (
     "/var/lib/serverware/authority-witness"
 )
@@ -453,12 +456,15 @@ def _control_plane_execution_key_slot(value, *, issuer_descriptor, bootstrap_des
         raise RuntimeError("registration execution caller key delivery scope is invalid")
     version = value.get("schema")
     if type(version) is not str or version not in (
-            CONTROL_PLANE_EXECUTION_SCHEMA, CONTROL_PLANE_EXECUTION_V2_SCHEMA):
+            CONTROL_PLANE_EXECUTION_SCHEMA, CONTROL_PLANE_EXECUTION_V2_SCHEMA,
+            CONTROL_PLANE_EXECUTION_V3_SCHEMA):
         raise RuntimeError("registration execution caller delivery profile is unsupported")
     fields = {"schema", "executionCallerPrivateKeyFd", "currentRootEnrollment",
         "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
-    if version == CONTROL_PLANE_EXECUTION_V2_SCHEMA:
+    if version in (CONTROL_PLANE_EXECUTION_V2_SCHEMA, CONTROL_PLANE_EXECUTION_V3_SCHEMA):
         fields.update(("reserverEndpoint", "statePredecessor"))
+    if version == CONTROL_PLANE_EXECUTION_V3_SCHEMA:
+        fields.update(("sqlEndpoint", "completionEndpoint", "currentPending", "completionPacketDigest"))
     if (set(value) != fields or type(value["executionCallerPrivateKeyFd"]) is not int
             or value["executionCallerPrivateKeyFd"] != CONTROL_PLANE_EXECUTION_KEY_FD
             or issuer_descriptor is None
@@ -476,8 +482,11 @@ def _control_plane_execution_key_slot(value, *, issuer_descriptor, bootstrap_des
                 or any(character not in alphabet for character in encoded)):
             raise RuntimeError("registration execution enrollment original exceeds its delivery bound")
     endpoints = (("authorizerEndpoint", CONTROL_PLANE_EXECUTION_SOCKET),)
-    if version == CONTROL_PLANE_EXECUTION_V2_SCHEMA:
+    if version in (CONTROL_PLANE_EXECUTION_V2_SCHEMA, CONTROL_PLANE_EXECUTION_V3_SCHEMA):
         endpoints += (("reserverEndpoint", CONTROL_PLANE_RESERVATION_SOCKET),)
+    if version == CONTROL_PLANE_EXECUTION_V3_SCHEMA:
+        endpoints += (("sqlEndpoint", CONTROL_PLANE_SQL_SOCKET),
+            ("completionEndpoint", CONTROL_PLANE_COMPLETION_SOCKET))
     for name, path in endpoints:
         endpoint = value[name]
         if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds",
@@ -488,7 +497,7 @@ def _control_plane_execution_key_slot(value, *, issuer_descriptor, bootstrap_des
                 or any(type(endpoint[field]) is not int or endpoint[field] != 0
                     for field in ("listenerUid", "listenerGid"))):
             raise RuntimeError("registration execution endpoint differs from its fixed delivery contract")
-    if version == CONTROL_PLANE_EXECUTION_V2_SCHEMA:
+    if version in (CONTROL_PLANE_EXECUTION_V2_SCHEMA, CONTROL_PLANE_EXECUTION_V3_SCHEMA):
         predecessor = value["statePredecessor"]
         if type(predecessor) is not dict or set(predecessor) != {"sequence", "headDigest", "nextFence"}:
             raise RuntimeError("registration reserve predecessor delivery scope is not closed")
@@ -502,6 +511,21 @@ def _control_plane_execution_key_slot(value, *, issuer_descriptor, bootstrap_des
                 or type(fence) is not int or not 1 <= fence <= 2**63 - 1
                 or sequence == 0 and fence != 1):
             raise RuntimeError("registration reserve predecessor exceeds its fixed delivery shape")
+    if version == CONTROL_PLANE_EXECUTION_V3_SCHEMA:
+        pending = value["currentPending"]
+        if type(pending) is not dict or set(pending) != {"sequence", "headDigest", "fence"}:
+            raise RuntimeError("registration execution pending delivery scope is not closed")
+        pending_sequence, pending_fence = pending["sequence"], pending["fence"]
+        if (type(pending_sequence) is not int or not 1 <= pending_sequence <= 1024
+                or type(pending_fence) is not int or not 1 <= pending_fence <= 2**63 - 1
+                or pending_sequence != sequence + 1 or pending_fence != fence):
+            raise RuntimeError("registration execution pending scope differs from its cold predecessor")
+        for digest in (pending["headDigest"], value["completionPacketDigest"]):
+            if (type(digest) is not str or len(digest) != 71 or not digest.startswith("sha256:")
+                    or any(character not in "0123456789abcdef" for character in digest[7:])):
+                raise RuntimeError("registration execution handoff pin is not canonical SHA-256")
+        # Actual enrollment capacity, signatures and original generation/key
+        # joins still belong to the child. No extra key or FD is delivered.
     return CONTROL_PLANE_EXECUTION_KEY_FD
 
 

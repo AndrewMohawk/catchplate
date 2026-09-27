@@ -308,8 +308,9 @@ def prepare_and_reserve_registration_execution(originals):
     Retain the exact signer/grant association before sending a reserve. Append
     or transport failure can follow durable effects; never retry preparation,
     signing or reservation automatically. Return (existing local grant ID,
-    original reserve/snapshot/ack tuple), not SQL execution or current-head
-    authority. Receipt originality does not prove it remains the pending head.
+    original reserve/snapshot/ack tuple) after retaining the exact authenticated
+    raw3, not SQL execution or current-head authority. Receipt originality does
+    not prove it remains the pending head.
     """
     from serverware import authority_webauthn_enrollment_issuer as issuer
     from serverware import control_plane_custody_client as custody_client
@@ -344,6 +345,10 @@ def prepare_and_reserve_registration_execution(originals):
         live()
         response = enrollment_startup._EnrollmentOwner._request_registration_reservation(
             enrollment, originals=prepared, deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+        # Retain the actual authenticated raw3 under its existing preparation.
+        # A late append is opaque custody, never renewed send permission.
+        callback(work, lambda: custody_client.ControlPlaneCustodyClient.append_registration_reservation(
+            custody, digest, response))
         live()
     except Exception as exc:
         # Keep the actual durable locator on ordinary post-retention failure;

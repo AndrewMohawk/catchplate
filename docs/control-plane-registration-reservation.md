@@ -201,3 +201,10 @@ activated here. No production acceptance gate is closed.
 The separate [registration SQL bridge](registration-execution-sql.md) now
 composes actual protected issuer/executor owners from original raw10/raw3 and
 independently current pending scope. These public reserve routes do not call it.
+
+The reserve continuation now also retains its authenticated raw3 under the
+actual signer/grant preparation before returning success. A retention failure
+is still an uncertain post-preparation outcome, never permission to reserve
+again. The separately opted-in [private retained-original handoff](control-plane-registration-handoff.md)
+can later request SQL or live completion after its own present-purpose admission;
+the public reserve routes do not call those actions or advance their cold pins.

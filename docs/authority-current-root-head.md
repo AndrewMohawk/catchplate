@@ -6,6 +6,11 @@ observation for `oidc.session.activate`. This is source-only, unbuilt and
 unexecuted. It is not the completion lookup protocol, a receipt, an execution
 grant or a successful-verification token.
 
+Delivery consumption uses a [separate head purpose and explicit state v7 peer](oidc-session-activation-delivery-state.md).
+It shares bounded protocol machinery, but has distinct schemas, operation,
+signature/query domains and transport frames. The activation defaults and
+historical APIs documented here do not accept consume observations.
+
 ## Exact originals
 
 The canonical query is at most 4 KiB and has exactly seven fields:

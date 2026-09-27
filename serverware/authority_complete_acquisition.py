@@ -3,7 +3,7 @@
 The caller owns one read-only MVCC transaction and its primary root capture.
 This worker retains actual head/frontier observations, fetches exact full rows,
 and replays genuine global primary membership and every range/row join in the
-explicit revocation, registration, OIDC activation or aggregate trust-stage family. Mode and
+explicit revocation, registration, OIDC activation/delivery or aggregate trust-stage family. Mode and
 stage withdrawal inventory are derived from owned arguments, never a caller-
 selected role subset or a separate allowance per withdrawn credential.
 It is not independent root/time authority or a transport admission capability.
@@ -77,12 +77,13 @@ class _CompleteQueryAcquisition:
             if (type(include_write_heads) is not bool
                     or type(operation) is not str or operation not in
                     (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
-                     complete.ACTIVATION_OPERATION)
+                     complete.ACTIVATION_OPERATION, complete.DELIVERY_OPERATION)
                     or type(work) is not _ValidationWork
                     or type(queries) is not tuple or not 1 <= len(queries) <= (
                         len(complete.ROLES) if operation == complete.OPERATION else
                         len(complete.REGISTRATION_ROLES) if operation == complete.REGISTRATION_OPERATION else
                         len(complete.ACTIVATION_ROLES) if operation == complete.ACTIVATION_OPERATION else
+                        len(complete.DELIVERY_ROLES) if operation == complete.DELIVERY_OPERATION else
                         complete.STAGE_MAX_ROWS)
                     or any(type(query) is not complete.CompleteIndexQuery for query in queries)
                     or any(type(getattr(query, "role", None)) is not str
@@ -99,7 +100,7 @@ class _CompleteQueryAcquisition:
             if (len(queries) != limits["query_count"] or len(queries) != len(roles)
                     or {query.role for query in queries} != set(roles)
                     or (operation in (complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
-                                      complete.ACTIVATION_OPERATION)
+                                      complete.ACTIVATION_OPERATION, complete.DELIVERY_OPERATION)
                         and tuple(query.role for query in queries) != roles)
                     or len({query.index_id for query in queries}) != limits["head_count"]):
                 raise CompleteAcquisitionError("complete acquisition role inventory differs from its actual family")

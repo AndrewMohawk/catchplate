@@ -10,6 +10,11 @@ adds a separately root-admitted peer and signed-operation restriction. The v1
 profile described below remains unchanged; v2 is not enabled by a socket ACL
 or environment setting.
 
+Later profiles retain this lifecycle with explicit additional fixed peers.
+[State v7](oidc-session-activation-delivery-state.md) adds UID/GID 65501 only
+for the separate consume-planning head protocol. Earlier signed profiles gain
+no new peers or purposes; no consume planner or socket ACL is provisioned here.
+
 ## Separate enrollment and startup authority
 
 The existing [current-root enrollment](authority-current-root-decisions.md)

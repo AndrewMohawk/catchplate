@@ -44,6 +44,19 @@ class _VerifiedCompletionResponse:
     state_receipt_digest: str
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _VerifiedDeliveryCompletion:
+    """Authentic same-call delivery identities, never a verifier input."""
+
+    completion: _VerifiedCompletionResponse
+    activation_plan_digest: str
+    delivery_id: str
+    delivery_scope_digest: str
+    delivery_row_digest: str
+    delivery_envelope_digest: str
+    live: object
+
+
 def _capture_on_work(*, plan_originals, reserve_request_bytes, reserve_receipt_bytes,
         snapshot_bytes, enrollment_bytes, authorization_bytes, authorization_enrollment_bytes,
         grant_bytes, grant_enrollment_bytes, expectations, planner_public_key, operation_public_key,
@@ -124,14 +137,14 @@ def _start_on_work(held, work):
     return current
 
 
-def _verify_on_work(*, response_originals, plan_originals,
+def _verify_originals_on_work(*, response_originals, plan_originals,
         reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes,
         enrollment_bytes, authorization_bytes, authorization_enrollment_bytes,
         grant_bytes, grant_enrollment_bytes, expectations, planner_public_key,
         operation_public_key, root_public_key, configuration_digest,
         expected_authorization_digest, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        historical_custody, live_window, transport_deadline_ns, work):
+        historical_custody, live_window, transport_deadline_ns, work, include_delivery):
     """Authenticate returned originals against actual historical pending replay."""
     returned = transport._originals(response_originals, response=True)
     held, total = _capture_on_work(plan_originals=plan_originals,
@@ -168,7 +181,8 @@ def _verify_on_work(*, response_originals, plan_originals,
         return first
 
     live()
-    admitted = admission._admit_on_work(originals=held["plan_originals"],
+    admit = admission._admit_for_delivery_on_work if include_delivery else admission._admit_on_work
+    actual_admission = admit(originals=held["plan_originals"],
         expectations=held["expectations"], planner_public_key=held["planner_public_key"],
         operation_public_key=held["operation_public_key"], enrollment_bytes=held["enrollment_bytes"],
         root_public_key=held["root_public_key"], reserve_request_bytes=held["reserve_request_bytes"],
@@ -181,6 +195,13 @@ def _verify_on_work(*, response_originals, plan_originals,
         grant_bytes=held["grant_bytes"], grant_enrollment_bytes=held["grant_enrollment_bytes"],
         configuration_digest=held["configuration_digest"], historical_custody=held["historical_custody"],
         live_window=held["live_window"], transport_deadline_ns=held["transport_deadline_ns"], work=work)
+    if include_delivery:
+        if type(actual_admission) is not admission._AdmittedDeliveryCompletion:
+            raise OidcSessionActivationCompletionResponseError(
+                "activation receiver requires actual original delivery admission")
+        admitted = actual_admission.admission
+    else:
+        admitted = actual_admission
     if type(admitted) is not admission._AdmittedCompletion:
         raise OidcSessionActivationCompletionResponseError("activation receiver requires actual original admission")
     live()
@@ -206,7 +227,58 @@ def _verify_on_work(*, response_originals, plan_originals,
     result = _VerifiedCompletionResponse(returned[2], returned[3],
         acknowledged.request_digest, acknowledged.receipt_digest)
     live()
+    if include_delivery:
+        result = _VerifiedDeliveryCompletion(result, actual_admission.activation_plan_digest,
+            actual_admission.delivery_id, actual_admission.delivery_scope_digest,
+            actual_admission.delivery_row_digest, actual_admission.delivery_envelope_digest, live)
+        live()
     return result
+
+
+def _verify_on_work(*, response_originals, plan_originals,
+        reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes,
+        enrollment_bytes, authorization_bytes, authorization_enrollment_bytes,
+        grant_bytes, grant_enrollment_bytes, expectations, planner_public_key,
+        operation_public_key, root_public_key, configuration_digest,
+        expected_authorization_digest, expected_database_id, expected_generation_digest,
+        expected_pending_sequence, expected_pending_head_digest, expected_fence,
+        historical_custody, live_window, transport_deadline_ns, work):
+    """Preserved original-only completion verification and four-field result."""
+    return _verify_originals_on_work(response_originals=response_originals, plan_originals=plan_originals,
+        reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
+        snapshot_bytes=snapshot_bytes, enrollment_bytes=enrollment_bytes, authorization_bytes=authorization_bytes,
+        authorization_enrollment_bytes=authorization_enrollment_bytes, grant_bytes=grant_bytes,
+        grant_enrollment_bytes=grant_enrollment_bytes, expectations=expectations,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        root_public_key=root_public_key, configuration_digest=configuration_digest,
+        expected_authorization_digest=expected_authorization_digest, expected_database_id=expected_database_id,
+        expected_generation_digest=expected_generation_digest, expected_pending_sequence=expected_pending_sequence,
+        expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+        historical_custody=historical_custody, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=False)
+
+
+def _verify_delivery_on_work(*, response_originals, plan_originals,
+        reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes,
+        enrollment_bytes, authorization_bytes, authorization_enrollment_bytes,
+        grant_bytes, grant_enrollment_bytes, expectations, planner_public_key,
+        operation_public_key, root_public_key, configuration_digest,
+        expected_authorization_digest, expected_database_id, expected_generation_digest,
+        expected_pending_sequence, expected_pending_head_digest, expected_fence,
+        historical_custody, live_window, transport_deadline_ns, work):
+    """Original-only suffix: verify completion and expose authentic delivery IDs."""
+    return _verify_originals_on_work(response_originals=response_originals, plan_originals=plan_originals,
+        reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
+        snapshot_bytes=snapshot_bytes, enrollment_bytes=enrollment_bytes, authorization_bytes=authorization_bytes,
+        authorization_enrollment_bytes=authorization_enrollment_bytes, grant_bytes=grant_bytes,
+        grant_enrollment_bytes=grant_enrollment_bytes, expectations=expectations,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        root_public_key=root_public_key, configuration_digest=configuration_digest,
+        expected_authorization_digest=expected_authorization_digest, expected_database_id=expected_database_id,
+        expected_generation_digest=expected_generation_digest, expected_pending_sequence=expected_pending_sequence,
+        expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+        historical_custody=historical_custody, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=True)
 
 
 def _request_on_work(endpoint, *, packet_digest, plan_originals,

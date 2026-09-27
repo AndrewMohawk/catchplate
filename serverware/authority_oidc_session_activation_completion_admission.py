@@ -29,6 +29,11 @@ evidence, clock = pending.evidence, pending.clock
 caller, grants, plan = exchange.caller, exchange.grants, exchange.plan
 OPERATION = exchange.OPERATION
 MAX_ORIGINAL_BYTES = pending.replay.MAX_ORIGINAL_BYTES
+DELIVERY_ROW_DOMAIN = "serverware.oidcSessionActivationDeliveryProvenanceRow/v1"
+DELIVERY_SCOPE_DOMAIN = "serverware.oidcSessionActivationDeliveryProvenanceScope/v1"
+_DELIVERY_FIELDS = frozenset({"id", "session_id", "old_token_digest", "new_token_digest",
+    "assertion_digest", "challenge_id", "credential_record_id", "encrypted_active_token",
+    "created_at", "expires_at", "consumed_at"})
 
 
 class OidcSessionActivationCompletionAdmissionError(ValueError):
@@ -45,13 +50,58 @@ class _AdmittedCompletion:
     live: object
 
 
-def _admit_on_work(*, originals, expectations, planner_public_key,
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _AdmittedDeliveryCompletion:
+    """Same-call original delivery identities; never an admitted input."""
+
+    admission: _AdmittedCompletion
+    activation_plan_digest: str
+    delivery_id: str
+    delivery_scope_digest: str
+    delivery_row_digest: str
+    delivery_envelope_digest: str
+
+
+def _delivery_identity_on_work(row, request, work):
+    """Bounded DATA hashing only; this helper does not authenticate a row."""
+    registration = plan.registration
+    registration._closed(row, _DELIVERY_FIELDS, "activation original delivery row")
+    values = request["arguments"]
+    identity = plan.core._deterministic_uuid(operation=OPERATION,
+        request_digest=request["requestDigest"], purpose=plan.transition.DELIVERY_PURPOSE, work=work)
+    registration._same((row["id"], row["session_id"], row["credential_record_id"], row["challenge_id"],
+        row["old_token_digest"], row["new_token_digest"], row["assertion_digest"]),
+        (identity, values["session_id"], values["credential_record_id"], values["challenge_id"],
+         values["old_token_digest"], values["new_token_digest"], values["assertion_digest"]), work,
+        "activation delivery original subject and rotation")
+    if row["consumed_at"] is not None:
+        raise OidcSessionActivationCompletionAdmissionError(
+            "activation original delivery was not an unconsumed insertion")
+    encoded = row["encrypted_active_token"]
+    registration._text(encoded, "activation original delivery ciphertext", len(delivery.STORED_PREFIX) + 134, work)
+    if len(encoded) != len(delivery.STORED_PREFIX) + 134 or not encoded.startswith(delivery.STORED_PREFIX):
+        raise OidcSessionActivationCompletionAdmissionError("activation original delivery ciphertext differs")
+    work.charge(input_bytes=len(encoded))
+    envelope = registration._encoded_original(encoded[len(delivery.STORED_PREFIX):],
+        delivery.ENVELOPE_BYTES, work, minimum=delivery.ENVELOPE_BYTES)
+    delivery._envelope(envelope, work)
+    scope = {"deliveryId": identity, "userId": values["user_id"], "sessionId": values["session_id"],
+        "credentialId": values["credential_id"], "credentialRecordId": values["credential_record_id"],
+        "challengeId": values["challenge_id"], "assertionDigest": values["assertion_digest"],
+        "oldTokenDigest": values["old_token_digest"], "newTokenDigest": values["new_token_digest"],
+        "createdAt": row["created_at"], "expiresAt": row["expires_at"]}
+    scope_digest = evidence.plan._frame(DELIVERY_SCOPE_DOMAIN, (registration._wire(scope, work),), work)
+    row_digest = evidence.plan._frame(DELIVERY_ROW_DOMAIN, (registration._wire(row, work),), work)
+    return identity, scope_digest, row_digest, plan.assertion._digest(envelope, work)
+
+
+def _admit_originals_on_work(*, originals, expectations, planner_public_key,
         operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
         authorization_bytes, authorization_enrollment_bytes, grant_bytes,
         grant_enrollment_bytes, configuration_digest, historical_custody,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, include_delivery):
     """Authenticate all originals once; return pending scope plus effects ID only."""
     # Lazy import avoids a bootstrap/owner/completion composition import cycle.
     from serverware import authority_oidc_session_activation_history_custody as custody
@@ -195,4 +245,63 @@ def _admit_on_work(*, originals, expectations, planner_public_key,
         (request["issuedAtEpochNs"], request["expiresAtEpochNs"]))
     result = _AdmittedCompletion(candidate, effects_digest, verified.authorization_digest, live)
     live()
+    if include_delivery:
+        work.prepare_scan(replayed.mutations)
+        original_delivery = None
+        for mutation in replayed.mutations:
+            if mutation["table"] != "oidc_session_activation_deliveries":
+                continue
+            if (original_delivery is not None or mutation["operation"] != "INSERT"
+                    or mutation["expectedRow"] is not None):
+                raise OidcSessionActivationCompletionAdmissionError(
+                    "activation history lacks its single original delivery insertion")
+            original_delivery = mutation["row"]
+        if original_delivery is None:
+            raise OidcSessionActivationCompletionAdmissionError(
+                "activation history has no original delivery insertion")
+        identities = _delivery_identity_on_work(original_delivery, replayed.request, work)
+        result = _AdmittedDeliveryCompletion(result, replayed.plan_digest, *identities)
+        live()
     return result
+
+
+def _admit_on_work(*, originals, expectations, planner_public_key,
+        operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
+        reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
+        expected_pending_sequence, expected_pending_head_digest, expected_fence,
+        authorization_bytes, authorization_enrollment_bytes, grant_bytes,
+        grant_enrollment_bytes, configuration_digest, historical_custody,
+        live_window, transport_deadline_ns, work):
+    """Preserved original-only pending completion API and private result."""
+    return _admit_originals_on_work(originals=originals, expectations=expectations,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+        reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
+        snapshot_bytes=snapshot_bytes, expected_database_id=expected_database_id,
+        expected_generation_digest=expected_generation_digest, expected_pending_sequence=expected_pending_sequence,
+        expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+        authorization_bytes=authorization_bytes, authorization_enrollment_bytes=authorization_enrollment_bytes,
+        grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
+        configuration_digest=configuration_digest, historical_custody=historical_custody,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=False)
+
+
+def _admit_for_delivery_on_work(*, originals, expectations, planner_public_key,
+        operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
+        reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
+        expected_pending_sequence, expected_pending_head_digest, expected_fence,
+        authorization_bytes, authorization_enrollment_bytes, grant_bytes,
+        grant_enrollment_bytes, configuration_digest, historical_custody,
+        live_window, transport_deadline_ns, work):
+    """Replay originals once; add only the authentic insertion's diagnostic IDs."""
+    return _admit_originals_on_work(originals=originals, expectations=expectations,
+        planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+        enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+        reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
+        snapshot_bytes=snapshot_bytes, expected_database_id=expected_database_id,
+        expected_generation_digest=expected_generation_digest, expected_pending_sequence=expected_pending_sequence,
+        expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+        authorization_bytes=authorization_bytes, authorization_enrollment_bytes=authorization_enrollment_bytes,
+        grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
+        configuration_digest=configuration_digest, historical_custody=historical_custody,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=True)

@@ -37,6 +37,7 @@ FINALIZATION_COMPLETE_PEER_UID = FINALIZATION_COMPLETE_PEER_GID = 65508
 ACTIVATION_PLANNER_PEER_UID = ACTIVATION_PLANNER_PEER_GID = 65507
 ACTIVATION_RESERVE_PEER_UID = ACTIVATION_RESERVE_PEER_GID = 65505
 ACTIVATION_COMPLETE_PEER_UID = ACTIVATION_COMPLETE_PEER_GID = 65503
+DELIVERY_PLANNER_PEER_UID = DELIVERY_PLANNER_PEER_GID = 65501
 ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, JOURNAL_FD = 198, 199, 200, 201, 202
 INHERITED_DESCRIPTORS = (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, JOURNAL_FD)
 LISTENER_PATH = "/run/serverware/current-root/state.sock"
@@ -61,6 +62,9 @@ LAUNCH_SCHEMA_V5 = "serverware.currentRootStateLaunch/v5"
 SCHEMA_V6 = "serverware.signedCurrentRootStateBootstrap/v6"
 PAYLOAD_SCHEMA_V6 = "serverware.currentRootStateBootstrap/v6"
 LAUNCH_SCHEMA_V6 = "serverware.currentRootStateLaunch/v6"
+SCHEMA_V7 = "serverware.signedCurrentRootStateBootstrap/v7"
+PAYLOAD_SCHEMA_V7 = "serverware.currentRootStateBootstrap/v7"
+LAUNCH_SCHEMA_V7 = "serverware.currentRootStateLaunch/v7"
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "role", "enrollmentBase64Url",
     "enrollmentBytesDigest", "enrollmentByteCount", "enrollmentDigest", "databaseId",
@@ -78,15 +82,18 @@ _LAUNCH_FIELDS_V3 = _LAUNCH_FIELDS_V2 | frozenset({"finalizationCompletePeerUid"
 _LAUNCH_FIELDS_V4 = _LAUNCH_FIELDS_V3 | frozenset({"activationPlannerPeerUid", "activationPlannerPeerGid"})
 _LAUNCH_FIELDS_V5 = _LAUNCH_FIELDS_V4 | frozenset({"activationReservePeerUid", "activationReservePeerGid"})
 _LAUNCH_FIELDS_V6 = _LAUNCH_FIELDS_V5 | frozenset({"activationCompletePeerUid", "activationCompletePeerGid"})
+_LAUNCH_FIELDS_V7 = _LAUNCH_FIELDS_V6 | frozenset({"deliveryPlannerPeerUid", "deliveryPlannerPeerGid"})
 _ENVELOPE_PAYLOADS = {SCHEMA: PAYLOAD_SCHEMA, SCHEMA_V2: PAYLOAD_SCHEMA_V2,
     SCHEMA_V3: PAYLOAD_SCHEMA_V3, SCHEMA_V4: PAYLOAD_SCHEMA_V4, SCHEMA_V5: PAYLOAD_SCHEMA_V5,
-    SCHEMA_V6: PAYLOAD_SCHEMA_V6}
+    SCHEMA_V6: PAYLOAD_SCHEMA_V6, SCHEMA_V7: PAYLOAD_SCHEMA_V7}
 _PAYLOAD_LAUNCHES = {PAYLOAD_SCHEMA: LAUNCH_SCHEMA, PAYLOAD_SCHEMA_V2: LAUNCH_SCHEMA_V2,
     PAYLOAD_SCHEMA_V3: LAUNCH_SCHEMA_V3, PAYLOAD_SCHEMA_V4: LAUNCH_SCHEMA_V4,
-    PAYLOAD_SCHEMA_V5: LAUNCH_SCHEMA_V5, PAYLOAD_SCHEMA_V6: LAUNCH_SCHEMA_V6}
+    PAYLOAD_SCHEMA_V5: LAUNCH_SCHEMA_V5, PAYLOAD_SCHEMA_V6: LAUNCH_SCHEMA_V6,
+    PAYLOAD_SCHEMA_V7: LAUNCH_SCHEMA_V7}
 _LAUNCH_PROFILES = {LAUNCH_SCHEMA: _LAUNCH_FIELDS, LAUNCH_SCHEMA_V2: _LAUNCH_FIELDS_V2,
     LAUNCH_SCHEMA_V3: _LAUNCH_FIELDS_V3, LAUNCH_SCHEMA_V4: _LAUNCH_FIELDS_V4,
-    LAUNCH_SCHEMA_V5: _LAUNCH_FIELDS_V5, LAUNCH_SCHEMA_V6: _LAUNCH_FIELDS_V6}
+    LAUNCH_SCHEMA_V5: _LAUNCH_FIELDS_V5, LAUNCH_SCHEMA_V6: _LAUNCH_FIELDS_V6,
+    LAUNCH_SCHEMA_V7: _LAUNCH_FIELDS_V7}
 
 
 class CurrentRootStateBootstrapError(ValueError):
@@ -119,21 +126,25 @@ def _launch_shape(value, work):
         ("completePeerUid", COMPLETE_PEER_UID), ("completePeerGid", COMPLETE_PEER_GID),
         ("rootPublicKeyFd", ROOT_FD), ("bootstrapFd", BOOTSTRAP_FD),
         ("listenerFd", LISTENER_FD), ("signingKeyFd", KEY_FD), ("journalDirectoryFd", JOURNAL_FD))
-    if schema in (LAUNCH_SCHEMA_V2, LAUNCH_SCHEMA_V3, LAUNCH_SCHEMA_V4, LAUNCH_SCHEMA_V5, LAUNCH_SCHEMA_V6):
+    if schema in (LAUNCH_SCHEMA_V2, LAUNCH_SCHEMA_V3, LAUNCH_SCHEMA_V4, LAUNCH_SCHEMA_V5,
+            LAUNCH_SCHEMA_V6, LAUNCH_SCHEMA_V7):
         fixed += (("finalizationReservePeerUid", FINALIZATION_RESERVE_PEER_UID),
             ("finalizationReservePeerGid", FINALIZATION_RESERVE_PEER_GID))
-    if schema in (LAUNCH_SCHEMA_V3, LAUNCH_SCHEMA_V4, LAUNCH_SCHEMA_V5, LAUNCH_SCHEMA_V6):
+    if schema in (LAUNCH_SCHEMA_V3, LAUNCH_SCHEMA_V4, LAUNCH_SCHEMA_V5, LAUNCH_SCHEMA_V6, LAUNCH_SCHEMA_V7):
         fixed += (("finalizationCompletePeerUid", FINALIZATION_COMPLETE_PEER_UID),
             ("finalizationCompletePeerGid", FINALIZATION_COMPLETE_PEER_GID))
-    if schema in (LAUNCH_SCHEMA_V4, LAUNCH_SCHEMA_V5, LAUNCH_SCHEMA_V6):
+    if schema in (LAUNCH_SCHEMA_V4, LAUNCH_SCHEMA_V5, LAUNCH_SCHEMA_V6, LAUNCH_SCHEMA_V7):
         fixed += (("activationPlannerPeerUid", ACTIVATION_PLANNER_PEER_UID),
             ("activationPlannerPeerGid", ACTIVATION_PLANNER_PEER_GID))
-    if schema in (LAUNCH_SCHEMA_V5, LAUNCH_SCHEMA_V6):
+    if schema in (LAUNCH_SCHEMA_V5, LAUNCH_SCHEMA_V6, LAUNCH_SCHEMA_V7):
         fixed += (("activationReservePeerUid", ACTIVATION_RESERVE_PEER_UID),
             ("activationReservePeerGid", ACTIVATION_RESERVE_PEER_GID))
-    if schema == LAUNCH_SCHEMA_V6:
+    if schema in (LAUNCH_SCHEMA_V6, LAUNCH_SCHEMA_V7):
         fixed += (("activationCompletePeerUid", ACTIVATION_COMPLETE_PEER_UID),
             ("activationCompletePeerGid", ACTIVATION_COMPLETE_PEER_GID))
+    if schema == LAUNCH_SCHEMA_V7:
+        fixed += (("deliveryPlannerPeerUid", DELIVERY_PLANNER_PEER_UID),
+            ("deliveryPlannerPeerGid", DELIVERY_PLANNER_PEER_GID))
     for name, expected in fixed:
         shape._integer(value[name], 2**32 - 2, minimum=1)
         if value[name] != expected:

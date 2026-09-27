@@ -1,4 +1,4 @@
-"""Separate original-byte latest-head observations for activation planning.
+"""Separate original-byte latest-head observations for fixed planning purposes.
 
 The unsigned query binds a caller-generated fresh unpredictable nonce, context
 and expected complete-vector identity. Only the real locked decision owner
@@ -12,6 +12,9 @@ ordinary data, not a reusable admission capability. The separate historical
 entrypoint uses real clocks only for its supplied current processing window
 and future-issue rejection; it never calls live verification at an old issue
 time. No I/O, random generation, new allowance or mutation is performed here.
+The default profile remains activation-only. A distinct delivery wrapper opts
+into consume-specific schemas, operation and signature/query domains; older
+activation and historical entrypoints do not infer that purpose from input.
 """
 from __future__ import annotations
 
@@ -41,6 +44,24 @@ PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "enrollmentDigest", "dat
     "contextDigest", "issuedAtEpochNs", "expiresAtEpochNs", "sequence", "headDigest",
     "vectorDigest", "fence", "pendingRequestDigest", "pendingDecisionDigest"})
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
+DELIVERY_OPERATION = "oidc.session.activation-delivery.consume"
+_DELIVERY_PROFILE = (
+    "serverware.policyAuthorityCurrentRootDeliveryHeadQuery/v1",
+    "serverware.policyAuthorityCurrentRootDeliveryHeadQueryIdentity/v1",
+    "serverware.signedPolicyAuthorityCurrentRootDeliveryHeadObservation/v1",
+    "serverware.policyAuthorityCurrentRootDeliveryHeadObservation/v1",
+)
+
+
+def _profile(operation):
+    # Callers select one source-fixed protocol, never a schema from the wire.
+    # All existing entrypoints remain activation-only unless the separate
+    # delivery wrapper explicitly selects its independently admitted purpose.
+    if type(operation) is str and operation == OPERATION:
+        return QUERY_SCHEMA, QUERY_IDENTITY_DOMAIN, OBSERVATION_SCHEMA, PAYLOAD_SCHEMA
+    if type(operation) is str and operation == DELIVERY_OPERATION:
+        return _DELIVERY_PROFILE
+    raise CurrentRootHeadError("current-root head operation is not source fixed")
 
 
 class CurrentRootHeadError(ValueError):
@@ -63,46 +84,49 @@ def _challenge(value):
         raise CurrentRootHeadError("head challenge must encode exactly 32 bytes as lower-case hex")
 
 
-def _query_shape(value):
+def _query_shape(value, *, operation=OPERATION):
+    query_schema = _profile(operation)[0]
     authorization.shape._object(value, QUERY_FIELDS, "current-root head query")
-    authorization.shape._literal(value["schema"], QUERY_SCHEMA)
+    authorization.shape._literal(value["schema"], query_schema)
     authorization.shape._literal(value["sourceRevision"], authorization.authority.SOURCE_REVISION)
-    authorization.shape._literal(value["operation"], OPERATION)
+    authorization.shape._literal(value["operation"], operation)
     for name in ("enrollmentDigest", "contextDigest", "expectedVectorDigest"):
         authorization.shape._digest(value[name])
     _challenge(value["challenge"])
 
 
-def _encode_query_on_work(*, enrollment_digest, context_digest, expected_vector_digest, challenge, work):
+def _encode_query_on_work(*, enrollment_digest, context_digest, expected_vector_digest, challenge, work,
+        operation=OPERATION):
     """Encode exact scalar originals; fresh randomness is the caller's duty."""
-    document = {"schema": QUERY_SCHEMA, "sourceRevision": authorization.authority.SOURCE_REVISION,
-        "enrollmentDigest": enrollment_digest, "operation": OPERATION, "challenge": challenge,
+    query_schema = _profile(operation)[0]
+    document = {"schema": query_schema, "sourceRevision": authorization.authority.SOURCE_REVISION,
+        "enrollmentDigest": enrollment_digest, "operation": operation, "challenge": challenge,
         "contextDigest": context_digest, "expectedVectorDigest": expected_vector_digest}
-    _query_shape(document)
+    _query_shape(document, operation=operation)
     return authorization.capability._wire(document, authorization.capture._SharedLedger(work),
         MAX_QUERY_BYTES, MAX_QUERY_NODES)
 
 
-def _decode_query_on_work(raw, *, work):
+def _decode_query_on_work(raw, *, work, operation=OPERATION):
     original = authorization._original(raw, MAX_QUERY_BYTES, "current-root head query")
     document = authorization.wire._decode_object(original, work=work,
         maximum_bytes=MAX_QUERY_BYTES, maximum_nodes=MAX_QUERY_NODES, maximum_depth=MAX_QUERY_DEPTH)
-    _query_shape(document)
+    _query_shape(document, operation=operation)
     authorization.capability._canonical(original, document,
         authorization.capture._SharedLedger(work), MAX_QUERY_BYTES, MAX_QUERY_NODES)
     return document
 
 
-def _query_digest_on_work(raw, work):
+def _query_digest_on_work(raw, work, *, operation=OPERATION):
     original = authorization._original(raw, MAX_QUERY_BYTES, "current-root head query")
-    _decode_query_on_work(original, work=work)
-    return authorization.plan._frame(QUERY_IDENTITY_DOMAIN, (original,), work)
+    _decode_query_on_work(original, work=work, operation=operation)
+    return authorization.plan._frame(_profile(operation)[1], (original,), work)
 
 
-def _payload_shape(payload):
+def _payload_shape(payload, *, operation=OPERATION):
     authorization.shape._object(payload, PAYLOAD_FIELDS, "current-root head observation")
-    authorization._source(payload, PAYLOAD_SCHEMA)
-    authorization.shape._literal(payload["operation"], OPERATION)
+    authorization._source(payload, _profile(operation)[3])
+    authorization.shape._literal(payload["operation"], operation)
     for name in ("enrollmentDigest", "producerMeasurementDigest", "queryDigest", "contextDigest",
             "headDigest", "vectorDigest"):
         authorization.shape._digest(payload[name])
@@ -127,17 +151,17 @@ def _payload_shape(payload):
         raise CurrentRootHeadError("observed genesis differs from its enrollment and empty pending state")
 
 
-def _envelope_shape(envelope):
+def _envelope_shape(envelope, *, operation=OPERATION):
     authorization.shape._object(envelope, _ENVELOPE_FIELDS, "signed current-root head observation")
-    authorization.shape._literal(envelope["schema"], OBSERVATION_SCHEMA)
+    authorization.shape._literal(envelope["schema"], _profile(operation)[2])
     authorization.shape._base64url(envelope["signatureBase64Url"], signature=True)
-    _payload_shape(envelope["payload"])
+    _payload_shape(envelope["payload"], operation=operation)
 
 
-def _read_observation(original, work):
+def _read_observation(original, work, *, operation=OPERATION):
     envelope = authorization.wire._decode_object(original, work=work,
         maximum_bytes=MAX_BYTES, maximum_nodes=MAX_NODES, maximum_depth=MAX_DEPTH)
-    _envelope_shape(envelope)
+    _envelope_shape(envelope, operation=operation)
     owned = _Capture(authorization.capture._SharedLedger(work), maximum_bytes=MAX_BYTES).visit(envelope)
     authorization.capability._canonical(original, owned,
         authorization.capture._SharedLedger(work), MAX_BYTES, MAX_NODES)
@@ -161,7 +185,7 @@ def _scope(payload, material, now_epoch_ns, work):
 
 
 def _verify_on_work(*, observation_bytes, query_bytes, enrollment_bytes,
-        root_public_key, now_epoch_ns, work):
+        root_public_key, now_epoch_ns, work, operation=OPERATION):
     """Authenticate originals; pending rejection and live continuity are caller duties."""
     original = authorization._original(observation_bytes, MAX_BYTES, "current-root head observation")
     original_query = authorization._original(query_bytes, MAX_QUERY_BYTES, "current-root head query")
@@ -171,17 +195,18 @@ def _verify_on_work(*, observation_bytes, query_bytes, enrollment_bytes,
     authorization._public(held_key)
     authorization.shape._integer(held_now, minimum=1)
     # Capture both graphs and all scalar/original inputs before key callbacks.
-    query = _decode_query_on_work(original_query, work=work)
-    envelope = _read_observation(original, work)
+    profile = _profile(operation)
+    query = _decode_query_on_work(original_query, work=work, operation=operation)
+    envelope = _read_observation(original, work, operation=operation)
     material = authorization._admit_enrollment_on_work(enrollment_bytes=original_enrollment,
         root_public_key=held_key, work=work)
     payload = envelope["payload"]
     _scope(payload, material, held_now, work)
-    authorization._verify_signature(envelope, OBSERVATION_SCHEMA,
+    authorization._verify_signature(envelope, profile[2],
         material.state_public_key, MAX_BYTES, work)
     authorization.plan._same(query["enrollmentDigest"], material.enrollment_digest, work,
         "head query original enrollment")
-    query_digest = authorization.plan._frame(QUERY_IDENTITY_DOMAIN, (original_query,), work)
+    query_digest = authorization.plan._frame(profile[1], (original_query,), work)
     for name, expected in (("queryDigest", query_digest), ("challenge", query["challenge"]),
             ("contextDigest", query["contextDigest"]), ("vectorDigest", query["expectedVectorDigest"]),
             ("operation", query["operation"])):
@@ -264,7 +289,7 @@ def _verify_historical_on_work(*, observation_bytes, query_bytes, enrollment_byt
 
 
 def _sign_on_work(*, payload, enrollment_bytes, root_public_key,
-        state_private_key, now_epoch_ns, work):
+        state_private_key, now_epoch_ns, work, operation=OPERATION):
     """Sign the actual owner's held state; never derive or admit posted state."""
     original_enrollment = authorization._original(enrollment_bytes,
         authorization.MAX_ENROLLMENT_BYTES, "current-root enrollment")
@@ -272,15 +297,16 @@ def _sign_on_work(*, payload, enrollment_bytes, root_public_key,
     authorization._public(held_root)
     authorization._private(held_private)
     authorization.shape._integer(held_now, minimum=1)
-    _payload_shape(payload)
+    observation_schema = _profile(operation)[2]
+    _payload_shape(payload, operation=operation)
     owned = _Capture(authorization.capture._SharedLedger(work), maximum_bytes=MAX_BYTES).visit(payload)
     material = authorization._admit_enrollment_on_work(enrollment_bytes=original_enrollment,
         root_public_key=held_root, work=work)
     _scope(owned, material, held_now, work)
     public_key = material.state_public_key
     authorization.keys._pair_on_work(held_private, public_key, work)
-    envelope = {"schema": OBSERVATION_SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
-    _envelope_shape(envelope)
+    envelope = {"schema": observation_schema, "payload": owned, "signatureBase64Url": "A" * 86}
+    _envelope_shape(envelope, operation=operation)
     unsigned_size, unsigned_nodes = work.measure(owned)
     envelope_size, envelope_nodes = work.measure(envelope)
     if max(unsigned_size, envelope_size) > MAX_BYTES or max(unsigned_nodes, envelope_nodes) > MAX_NODES:
@@ -288,7 +314,7 @@ def _sign_on_work(*, payload, enrollment_bytes, root_public_key,
     work.charge(input_bytes=4 * unsigned_size + envelope_size
         + authorization.production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=2 * unsigned_nodes + envelope_nodes)
-    frame_bytes = 2 * len(OBSERVATION_SCHEMA) + 9 + unsigned_size + 2 * 71
+    frame_bytes = 2 * len(observation_schema) + 9 + unsigned_size + 2 * 71
     if (work.limits.max_hashes - work.hash_work < 1
             or work.limits.max_input_bytes - work.input_bytes < frame_bytes + unsigned_size
             or work.limits.max_json_nodes - work.json_nodes < 4 + unsigned_nodes):
@@ -296,14 +322,14 @@ def _sign_on_work(*, payload, enrollment_bytes, root_public_key,
     unsigned = authorization.plan.core.canonical_bytes(owned)
     if len(unsigned) != unsigned_size:
         raise CurrentRootHeadError("current-root head observation changed after measurement")
-    message = authorization.plan._ascii(authorization.plan._frame(OBSERVATION_SCHEMA, (unsigned,), work), work)
+    message = authorization.plan._ascii(authorization.plan._frame(observation_schema, (unsigned,), work), work)
     signature = authorization.production._sign_and_verify(held_private, public_key, message, work)
     if (work.measure(owned) != (unsigned_size, unsigned_nodes)
             or authorization.plan.core.canonical_bytes(owned) != unsigned):
         raise CurrentRootHeadError("current-root head observation changed during signing")
     encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
     authorization.shape._base64url(encoded, signature=True)
-    result = authorization.plan.core.canonical_bytes({"schema": OBSERVATION_SCHEMA,
+    result = authorization.plan.core.canonical_bytes({"schema": observation_schema,
         "payload": owned, "signatureBase64Url": encoded})
     if len(result) != envelope_size:
         raise CurrentRootHeadError("current-root signed head observation changed after measurement")

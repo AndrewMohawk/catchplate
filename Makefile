@@ -1099,6 +1099,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_delivery_reads.py \
 	serverware/authority_transition_oidc_session_activation_delivery.py \
 	serverware/authority_oidc_session_activation_delivery_writes.py \
+	serverware/authority_oidc_session_activation_delivery_planning.py \
+	serverware/authority_oidc_session_activation_delivery_plan_contract.py \
+	serverware/authority_oidc_session_activation_delivery_plan.py \
+	serverware/authority_oidc_session_activation_delivery_plan_owner.py \
+	serverware/authority_oidc_session_activation_delivery_provenance.py \
+	serverware/authority_oidc_session_activation_delivery_state.py \
+	serverware/authority_current_root_delivery_head.py \
 	serverware/authority_successor_execution_window.py \
 	serverware/authority_oidc_session_activation_execution_store.py \
 	serverware/authority_oidc_session_activation_execution_export.py \
@@ -3067,6 +3074,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_delivery_reads.py \
 				serverware/authority_transition_oidc_session_activation_delivery.py \
 				serverware/authority_oidc_session_activation_delivery_writes.py \
+				serverware/authority_oidc_session_activation_delivery_planning.py \
+				serverware/authority_oidc_session_activation_delivery_plan_contract.py \
+				serverware/authority_oidc_session_activation_delivery_plan.py \
+				serverware/authority_oidc_session_activation_delivery_plan_owner.py \
+				serverware/authority_oidc_session_activation_delivery_provenance.py \
+				serverware/authority_oidc_session_activation_delivery_state.py \
+				serverware/authority_current_root_delivery_head.py \
 				serverware/authority_successor_execution_window.py \
 				serverware/authority_oidc_session_activation_execution_store.py \
 				serverware/authority_oidc_session_activation_execution_export.py \

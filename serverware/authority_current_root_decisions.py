@@ -30,6 +30,7 @@ import time
 
 from serverware import authority_current_root_authorization as authorization
 from serverware import authority_current_root_head as head_wire
+from serverware import authority_current_root_delivery_head as delivery_head_wire
 from serverware import authority_current_root_journal as storage
 from serverware import authority_current_root_lookup as lookup_wire
 from serverware import authority_current_root_vector as vector
@@ -453,9 +454,21 @@ class CurrentRootDecisionOwner:
         The caller must retain the fresh nonce/window and independently reject
         pending state; this is not off-host antirollback or execution authority.
         """
+        return CurrentRootDecisionOwner._observe_head(self, query_bytes,
+            transport_deadline_ns=transport_deadline_ns, delivery=False)
+
+    def observe_delivery_head(self, query_bytes, *, transport_deadline_ns=None):
+        """Fixed consume-planning purpose, with no activation-wire fallback."""
+        return CurrentRootDecisionOwner._observe_head(self, query_bytes,
+            transport_deadline_ns=transport_deadline_ns, delivery=True)
+
+    def _observe_head(self, query_bytes, *, transport_deadline_ns, delivery):
+        if type(delivery) is not bool:
+            raise CurrentRootDecisionError("current-root head purpose is not source fixed")
+        protocol = delivery_head_wire if delivery else head_wire
         if type(self) is not CurrentRootDecisionOwner:
             raise CurrentRootDecisionError("head observation requires the actual decision owner")
-        if type(query_bytes) is not bytes or not 2 <= len(query_bytes) <= head_wire.MAX_QUERY_BYTES:
+        if type(query_bytes) is not bytes or not 2 <= len(query_bytes) <= protocol.MAX_QUERY_BYTES:
             raise CurrentRootDecisionError("current-root head query exceeds its original-byte bound")
         if os.getpid() != self._pid:
             raise CurrentRootDecisionError("forked process cannot observe current-root head")
@@ -504,22 +517,22 @@ class CurrentRootDecisionOwner:
                 return instant
 
             live()
-            query = head_wire._decode_query_on_work(original, work=work)
+            query = protocol._decode_query_on_work(original, work=work)
             evidence.plan._same(query["enrollmentDigest"], pins[0], work,
                 "current-root head query names another enrollment")
             evidence.plan._same(query["expectedVectorDigest"], state[2], work,
                 "current-root head differs from the independently expected planning vector")
-            query_digest = head_wire._query_digest_on_work(original, work)
-            payload = {"schema": head_wire.PAYLOAD_SCHEMA,
+            query_digest = protocol._query_digest_on_work(original, work)
+            payload = {"schema": protocol.PAYLOAD_SCHEMA,
                 "sourceRevision": vector.authority.SOURCE_REVISION,
                 "enrollmentDigest": pins[0], "databaseId": pins[1], "generationDigest": pins[2],
-                "producerMeasurementDigest": pins[3], "operation": head_wire.OPERATION,
+                "producerMeasurementDigest": pins[3], "operation": protocol.OPERATION,
                 "queryDigest": query_digest, "challenge": query["challenge"],
                 "contextDigest": query["contextDigest"],
                 "issuedAtEpochNs": window[0], "expiresAtEpochNs": window[3],
                 "sequence": state[0], "headDigest": state[1], "vectorDigest": state[2], "fence": state[3],
                 "pendingRequestDigest": pending_request, "pendingDecisionDigest": pending_decision}
-            encoded = head_wire._sign_on_work(payload=payload, enrollment_bytes=enrollment,
+            encoded = protocol._sign_on_work(payload=payload, enrollment_bytes=enrollment,
                 root_public_key=root_key, state_private_key=state_key, now_epoch_ns=live(), work=work)
             live()
             return encoded

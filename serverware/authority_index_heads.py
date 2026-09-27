@@ -59,7 +59,24 @@ def _activation_ids(*, include_write_heads: bool) -> tuple[str, ...]:
 
 
 def _head_limit(operation: str) -> int:
+    if operation == complete.DELIVERY_OPERATION:
+        return 7
     return MAX_ACTIVATION_HEADS if operation == complete.ACTIVATION_OPERATION else MAX_HEADS
+
+
+def _delivery_ids() -> tuple[str, ...]:
+    """Exact consume inventory: all five writable profiles are also read heads."""
+    reads = {complete._role(complete.DELIVERY_OPERATION, name).index_id
+             for name in complete.DELIVERY_ROLES}
+    writes = {identifier
+        for table in authority_contract.operation_spec(complete.DELIVERY_OPERATION)["businessWrites"]
+        for identifier in projection.index_ids_for_table(table)}
+    delivery = set(projection.index_ids_for_table("oidc_session_activation_deliveries"))
+    if (len(delivery) != 5 or writes != delivery
+            or reads != delivery | {"oidc_session_token_digest", "webauthn_publication_status"}
+            or len(reads) != 7):
+        raise IndexHeadReadError("delivery counted source inventory changed")
+    return tuple(sorted(reads))
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +100,9 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
     API. Registration/staging read heads follow their rebound argument family;
     OIDC activation admits its seven read heads or fixed thirteen read/write
     heads only when the private transition owner requests the full write union.
-    a private transition owner can additionally require every
+    Delivery consumption has exactly seven read heads containing all five
+    potential write profiles, so its full mode keeps the same fixed union.
+    A private transition owner can additionally require every
     potential source-write profile. Completion has exact primary-key reads,
     not a complete-range family: its private writer must explicitly request
     every potential write head with no family arguments or queries. No
@@ -92,7 +111,7 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
     if (type(include_write_heads) is not bool
             or type(operation) is not str or not 1 <= len(operation) <= 128
             or operation not in (complete.OPERATION, complete.REGISTRATION_OPERATION,
-                                 complete.STAGE_OPERATION, complete.ACTIVATION_OPERATION,
+                                 complete.STAGE_OPERATION, complete.ACTIVATION_OPERATION, complete.DELIVERY_OPERATION,
                                  COMPLETION_OPERATION)):
         raise IndexHeadReadError("counted head operation has no declared source inventory")
     if operation == COMPLETION_OPERATION:
@@ -135,6 +154,8 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
     if operation == complete.ACTIVATION_OPERATION and result != _activation_ids(
             include_write_heads=include_write_heads):
         raise IndexHeadReadError("activation heads differ from their exact source union")
+    if operation == complete.DELIVERY_OPERATION and result != _delivery_ids():
+        raise IndexHeadReadError("delivery heads differ from their exact source union")
     if not roles or not 1 <= len(result) <= _head_limit(operation):
         raise IndexHeadReadError("counted head source inventory is not bounded")
     return result
@@ -150,6 +171,10 @@ def validate_head_trace_key(operation: str, key: Any, *, arguments=None, queries
         # collector bind either seven reads or the complete thirteen-head union.
         inventories = (_activation_ids(include_write_heads=False),
                        _activation_ids(include_write_heads=True))
+    elif operation == complete.DELIVERY_OPERATION and arguments is None and queries is None:
+        # The real collector still rebinds all seven roles to original intent
+        # and cutoff. Trace shape permits only that complete source inventory.
+        inventories = (_delivery_ids(),)
     elif operation in (complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION) and arguments is None and queries is None:
         # Trace markers carry no mode authority. The actual producer binds one
         # fixed mode/read-or-read-write inventory before SQL. Trace admission
@@ -256,13 +281,15 @@ def _read_index_heads_on_scope(cursor, *, operation, identities, trace, work, ac
     if (acquisition.cursor is not cursor or acquisition.trace is not trace or acquisition.work is not work
             or type(operation) is not str or operation not in (complete.OPERATION,
                 complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
-                complete.ACTIVATION_OPERATION, COMPLETION_OPERATION)
+                complete.ACTIVATION_OPERATION, complete.DELIVERY_OPERATION, COMPLETION_OPERATION)
             or type(getattr(trace, "operation", None)) is not str or trace.operation != operation
             or type(identities) is not tuple or not 1 <= len(identities) <= _head_limit(operation)):
         raise IndexHeadReadError("counted head source scope changed")
     if operation == complete.ACTIVATION_OPERATION and identities not in (
             _activation_ids(include_write_heads=False), _activation_ids(include_write_heads=True)):
         raise IndexHeadReadError("activation observed head inventory is not source fixed")
+    if operation == complete.DELIVERY_OPERATION and identities != _delivery_ids():
+        raise IndexHeadReadError("delivery observed head inventory is not source fixed")
     previous = None
     for identity in identities:
         if (type(identity) is not str or identity not in projection.INDEX_IDS

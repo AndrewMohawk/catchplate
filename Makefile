@@ -1087,6 +1087,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_execution_sql_entrypoint.py \
 	serverware/oidc_session_activation_execution_sql_launcher.py \
 	serverware/oidc_session_activation_execution_sql_runner.py \
+	serverware/oidc_session_activation_completion_bootstrap.py \
+	serverware/oidc_session_activation_completion_startup.py \
+	serverware/oidc_session_activation_completion_entrypoint.py \
+	serverware/oidc_session_activation_completion_launcher.py \
+	serverware/oidc_session_activation_completion_runner.py \
+	serverware/authority_oidc_session_activation_completion_transport.py \
+	serverware/authority_oidc_session_activation_completion_response.py \
 	serverware/authority_successor_execution_window.py \
 	serverware/authority_oidc_session_activation_execution_store.py \
 	serverware/authority_oidc_session_activation_execution_export.py \
@@ -3043,6 +3050,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_execution_sql_entrypoint.py \
 				serverware/oidc_session_activation_execution_sql_launcher.py \
 				serverware/oidc_session_activation_execution_sql_runner.py \
+				serverware/oidc_session_activation_completion_bootstrap.py \
+				serverware/oidc_session_activation_completion_startup.py \
+				serverware/oidc_session_activation_completion_entrypoint.py \
+				serverware/oidc_session_activation_completion_launcher.py \
+				serverware/oidc_session_activation_completion_runner.py \
+				serverware/authority_oidc_session_activation_completion_transport.py \
+				serverware/authority_oidc_session_activation_completion_response.py \
 				serverware/authority_successor_execution_window.py \
 				serverware/authority_oidc_session_activation_execution_store.py \
 				serverware/authority_oidc_session_activation_execution_export.py \

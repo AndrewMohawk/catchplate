@@ -1,10 +1,12 @@
 # Dedicated activation completion and recovery
 
-This `.155` checkpoint is **source-only, unbuilt and unexecuted**. It connects
-historical custody, original pending admission, actual protected readers,
-completion signing and durable original delivery in private library source.
-It is not an installed cold service, public action or completed session flow.
-F08.4e.6 remains in progress; no counted step or production gate closes.
+The `.155` private historical completion/recovery library is now connected to
+the `.156` dedicated cold source path. This code is **source-only, unbuilt,
+unexecuted and uninstalled**. Historical custody, original pending admission,
+actual protected readers, completion signing and first-exact durable delivery
+are composed with a fixed service and genuine private response verification.
+The step 19 source criterion closes with the `.156` commit, not a production
+gate, public action, token release or completed browser-session flow.
 
 ## Independent authority and actual originals
 
@@ -82,22 +84,51 @@ An expired never-accepted original cannot be replaced. The state owner still
 enforces its acceptance policy. Returned receipts are historical completion
 evidence, not a current session lease, token release or fresh user permission.
 
-## Still required before this step closes
+## Dedicated cold source connection
 
-The source composition needs dedicated cold completion signing-key/FD delivery,
-independently admitted custody/commit-reader DB/TLS configurations, journal
-checkpoint and actual service launch/transport. The state service must separately
-admit the activation completion/lookup peer and genuine operation under an
-explicit signed profile. Response framing and receiving verification must join
-the exact originals without presenting an unsigned outcome as completion.
+The [completion bootstrap](oidc-session-activation-completion-bootstrap.md)
+independently admits one packet/authorization/pending scope, the genuine
+historical original, enrolled completion signer, two actual read-only DB/TLS
+configurations and a separate completion-journal checkpoint. The fixed
+[seven-FD delivery](oidc-session-activation-completion-delivery.md) authenticates
+those originals before signing/AES keys, five pinned TLS files and journal
+access, then permanently drops to UID/GID 65503. No planner private signer or
+planner-journal key is delivered.
+
+The actual [cold service](oidc-session-activation-completion-service.md) constructs
+the historical owner, protected custody/commit readers, durable completion
+delivery and fixed state client. One work/window starts before peer and body
+reads; policy narrowing preserves its original samples and inherited bound.
+The service accepts only the root-pinned packet selector and invokes this
+dedicated `.155` recovery path. Its acknowledged response uses the actual
+durable signed completion and state ACK; failures expose closed uncertainty,
+not exceptions, invented originals or retry permission. One accepted connection
+is terminal, including invalid input; no automatic retry occurs.
+
+Separate [signed state v6](current-root-activation-completion-peer.md) admits
+65503 only for activation complete/lookup. Known lookup receipts require the
+genuinely authenticated original operation/action; `notRecorded` remains a
+nonce-bound state observation, not an inferred receipt or SQL noncommit.
+Earlier peer profiles remain unchanged. Socket/DB/key/service provisioning is
+still required; source declarations do not install these privileges.
+
+The [private response client and verifier](oidc-session-activation-completion-response.md)
+hold independent originals before one fixed exchange and genuinely replay
+historical pending admission under actual private custody, then verify both
+returned signatures, marker and canonical observation. The sender need not
+repeat that receiving replay merely to frame its already durable originals.
+Raw4 has no packet identity and establishes no latest-head or session lease.
 
 The generic activation completion APIs intentionally still reject. Current
 source/configuration/key-cohort checks remain strict; H05 cross-version
 historical authority is not implemented by this change. Trusted-host key
 ownership and matching query/catalog pins do not establish hostile-host
 custody, database identity, rollback resistance or off-host currentness.
-Protected token release, public permission/recovery and portal confirmation are
-separate open steps. Source totals remain **18/26 landed, 1 in progress, 7 other
-open**, with **34/46 parent checkpoints** and **0/6 production gates**.
+With the `.156` commit, step 19 closes at source level: **19/26 landed, 7 open**,
+with **34/46 parent checkpoints** and **0/6 production gates** unchanged.
+**Next is step 20: protected committed token release**, followed by public
+permission/recovery and portal steps 21–26. The private receiver's AES custody
+does not give a public/control-plane role those keys or satisfy fresh public
+permission. Handoff and browser/session confirmation remain separate.
 
 No build, test, import, parser, formatter, provisioning or runtime command was run.

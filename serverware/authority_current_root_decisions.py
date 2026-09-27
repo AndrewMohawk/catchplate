@@ -335,13 +335,17 @@ class CurrentRootDecisionOwner:
             live(request)
             return encoded
 
-    def lookup(self, query_bytes, *, transport_deadline_ns=None):
+    def lookup(self, query_bytes, *, transport_deadline_ns=None,
+            expected_operation=None, expected_request_action=None):
         """Sign a fresh observation without changing the journal or decisions.
 
         An accepted request returns its exact historical receipt, even when that
         receipt expired. The observation cannot renew its execution authority.
         notRecorded describes only this locked history, not SQL noncommit or
         permission to clear pending state, retry or choose an older checkpoint.
+        A cold purpose profile may additionally restrict known original receipts
+        by their actual authenticated operation/action. Unknown IDs still yield
+        only a non-authorizing state observation, never an invented receipt.
         """
         if type(self) is not CurrentRootDecisionOwner:
             raise CurrentRootDecisionError("current-root lookup requires the actual decision owner")
@@ -350,6 +354,11 @@ class CurrentRootDecisionOwner:
         if os.getpid() != self._pid:
             raise CurrentRootDecisionError("forked process cannot query current-root decisions")
         original, inherited = query_bytes, transport_deadline_ns
+        operation, action = expected_operation, expected_request_action
+        if operation is not None and (type(operation) is not str or operation not in authorization.OPERATIONS):
+            raise CurrentRootDecisionError("lookup expected operation is not source fixed")
+        if action is not None and (type(action) is not str or action not in ("reserve", "complete")):
+            raise CurrentRootDecisionError("lookup expected original action is not source fixed")
         work = _work()
         if inherited is not None:
             evidence.plan.contract._integer(inherited, minimum=1)
@@ -402,6 +411,16 @@ class CurrentRootDecisionOwner:
             prior = history.get(queried)
             receipt_wire, receipt_count, receipt_digest = None, 0, None
             if prior is not None:
+                if operation is not None or action is not None:
+                    _admitted, request, request_digest = authorization._verify_historical_request_on_work(
+                        request_bytes=prior[0], enrollment_bytes=enrollment,
+                        root_public_key=root_key, work=work)
+                    evidence.plan._same(request_digest, queried, work,
+                        "current-root lookup original differs from requested identity")
+                    if ((operation is not None and request["operation"] != operation)
+                            or (action is not None and request["action"] != action)):
+                        raise CurrentRootDecisionError("current-root lookup original is outside its admitted peer purpose")
+                    live()
                 receipt = prior[1]
                 receipt_wire = _encode_raw(receipt, MAX_RECEIPT_BYTES, work)
                 receipt_count = len(receipt)

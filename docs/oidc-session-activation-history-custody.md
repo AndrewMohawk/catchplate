@@ -3,7 +3,10 @@
 `OidcSessionActivationHistoryCustody` is a separate source-only owner for fixed
 purpose `completion-history`, process `oidc-session-activation-completion` and
 UID/GID 65503. It does not relabel or widen the three live receiving roles.
-No key delivery, provisioning, public route or runtime result is supplied here.
+The owner itself performs no key delivery or provisioning. The dedicated
+[completion delivery](oidc-session-activation-completion-delivery.md) and
+[cold service](oidc-session-activation-completion-service.md) now compose it in
+source; no public route, installation or runtime result is supplied.
 
 The constructor requires original `custody_bytes`, an independently held root
 public key and `expected_receiver_identity`, distinct original 32-byte bundle
@@ -74,9 +77,29 @@ It cannot be called recursively while the owner is in use. No successful result
 is accepted as authority at another input boundary, and no generic executor or
 live-plan result is produced.
 
-This private owner is one completion/reconciliation prerequisite. Actual cold
-key/FD delivery, pending and immutable commit admission, completion signing and
-durable state delivery must be composed separately. It neither retries SQL nor
-releases tokens, establishes current session state or resolves unknown historical
-source/configuration cohorts. Source is unbuilt and unexecuted; no tests or
-runtime verification were performed.
+## Dedicated completion composition
+
+The `.156` [completion bootstrap](oidc-session-activation-completion-bootstrap.md)
+independently pins one historical original, packet/authorization/pending scope,
+enrolled completion signer, two read-only reader configurations and local
+journal checkpoint. Seven fixed descriptors deliver the root/bootstrap,
+listener, completion key, journal and distinct bundle/delivery AES originals;
+five fixed TLS files support the protected readers after permanent UID/GID
+65503 drop. Actual startup constructs this exact owner, not a received material
+or successful proof object.
+
+The dedicated [completion/recovery library](oidc-session-activation-completion-recovery.md)
+uses real pending and immutable commit admission, completion signing, first-exact
+retention and signed state reconciliation. [State v6](current-root-activation-completion-peer.md)
+separately fixes activation complete/lookup to peer 65503. The
+[private response verifier](oidc-session-activation-completion-response.md)
+requires this actual historical owner and genuine original replay too; it is
+not a public AES handoff. Existing generic activation completion APIs still
+reject rather than acquiring a historical fallback.
+
+This closes step 19's source criterion when `.156` is committed; protected token
+release (step 20), public permission/recovery and portal confirmation remain
+open. The owner neither retries SQL nor releases tokens, establishes current
+session state or resolves unknown historical source/configuration cohorts.
+Source is unbuilt, unexecuted and uninstalled; no tests, provisioning or runtime
+verification were performed.

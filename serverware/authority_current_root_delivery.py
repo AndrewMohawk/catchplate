@@ -22,8 +22,9 @@ There is no loop, signer, database access, listener, cancellation record or
 implicit checkpoint. The state owner's independently current cold checkpoint
 remains required: nonce freshness is not host rollback resistance.
 
-Public operations spend the caller's original work/window. Cold replay uses one
-fixed allowance per source-bounded record, like the actual state owner. Physical
+Public operations spend the caller's original work/window. Cold replay defaults
+to one fixed allowance per source-bounded record; an explicitly supplied complete
+current allowance is instead shared cumulatively through recovery. Physical
 journal/transport work is not JSON/hash accounting and is not interruptible by
 a Python clock check; late failures never undo completed durability barriers.
 """
@@ -100,7 +101,8 @@ class CurrentRootCompletionDelivery:
     """
 
     def __init__(self, *, journal, enrollment_bytes, root_public_key,
-            expected_local_sequence, expected_local_head_digest):
+            expected_local_sequence, expected_local_head_digest,
+            live_window=None, work=None, transport_deadline_ns=None):
         if type(journal) is not storage.CurrentRootJournal:
             raise CurrentRootDeliveryError("completion delivery requires its actual separate journal")
         self._journal = journal
@@ -118,8 +120,30 @@ class CurrentRootCompletionDelivery:
             authorization.shape._integer(expected_local_sequence, storage.MAX_RECORDS)
             authorization.shape._digest(expected_local_head_digest)
             expected = expected_local_sequence, expected_local_head_digest
+            inherited = (live_window, work, transport_deadline_ns)
+            live = None
+            if any(value is not None for value in inherited):
+                if any(value is None for value in inherited):
+                    raise CurrentRootDeliveryError("completion cold allowance must be supplied completely")
+                evidence.capture._SharedLedger(work)
+                window = clock._validate(live_window)
+                authorization.shape._integer(transport_deadline_ns, minimum=1)
+                bound = min(window[4], transport_deadline_ns)
+                last_epoch, last_monotonic = window[0], window[2]
+
+                def live():
+                    nonlocal last_epoch, last_monotonic
+                    self._require_process()
+                    now = clock._check_on_work(window, work=work)
+                    monotonic = evidence.production._callback(work, time.monotonic_ns)
+                    authorization.shape._integer(monotonic, minimum=1)
+                    if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+                        raise CurrentRootDeliveryError("completion cold original interval expired or reversed")
+                    last_epoch, last_monotonic = now, monotonic
+
+                live()
             material = authorization._admit_enrollment_on_work(enrollment_bytes=original,
-                root_public_key=held_root, work=_cold_work())
+                root_public_key=held_root, work=_cold_work() if live is None else work)
             self._enrollment_bytes, self._root_public_key = original, held_root
             self._enrollment_digest = self._head_digest = material.enrollment_digest
             self._age = material.payload["maxControlAgeNs"]
@@ -128,10 +152,23 @@ class CurrentRootCompletionDelivery:
             if self._maximum_records != material.payload["maxRecords"]:
                 raise CurrentRootDeliveryError("delivery journal limit differs from its enrolled generation")
             # Only this owner's fixed original-byte replay reducer reaches I/O.
-            storage.CurrentRootJournal.recover(journal, self._recover_record)
+            if live is None:
+                storage.CurrentRootJournal.recover(journal, self._recover_record)
+            else:
+                def recover_record(sequence, original):
+                    live()
+                    self._recover_record_on_work(sequence, original, work)
+                    live()
+
+                live()
+                evidence.production._callback(work,
+                    lambda: storage.CurrentRootJournal.recover(journal, recover_record))
+                live()
             if (self._sequence, self._head_digest) != expected:
                 raise CurrentRootDeliveryError("delivery journal differs from independently current local checkpoint")
             self._require_ready()
+            if live is not None:
+                live()
         except BaseException:
             self._poison_and_close()
             raise
@@ -202,7 +239,9 @@ class CurrentRootCompletionDelivery:
         self._sequence, self._head_digest = record.sequence, record.record_digest
 
     def _recover_record(self, sequence, original):
-        work = _cold_work()
+        self._recover_record_on_work(sequence, original, _cold_work())
+
+    def _recover_record_on_work(self, sequence, original, work):
         record = records._decode_on_work(original, enrollment_bytes=self._enrollment_bytes,
             root_public_key=self._root_public_key, work=work)
         if record.sequence != sequence:

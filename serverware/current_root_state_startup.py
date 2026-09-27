@@ -343,7 +343,12 @@ def initialize_from_environment():
             decision = decisions.CurrentRootDecisionOwner(journal=journal, enrollment_bytes=enrollment,
                 root_public_key=root_key, state_private_key=private_key,
                 expected_sequence=sequence, expected_head_digest=head)
-            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V5:
+            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V6:
+                # V6 independently admits only activation completion/lookup.
+                # Older signed profiles never inherit the new caller identity.
+                serving = service.CurrentRootDecisionService._with_activation_completion(
+                    owner=decision, timeout_seconds=timeout)
+            elif launch["schema"] == bootstrap.LAUNCH_SCHEMA_V5:
                 # V5 adds a separate activation reserve identity. The actual
                 # owner must join both reserve and activation before history
                 # return or publication; planner access remains head-only.

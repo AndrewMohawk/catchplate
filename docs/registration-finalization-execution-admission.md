@@ -27,14 +27,14 @@ issued after the existing plan therefore cannot cover that plan. Neither
 backdating authorization nor rewriting the retained plan/grant timestamp is a
 continuation mechanism.
 
-The future dedicated path must first authenticate the present caller and
-finalization purpose, genuinely reconstruct the exact typed request/operation
-from signer originals and bounded sibling observations, and issue its original
-authorization. It must then produce a new live finalization plan bound to that
-same request before grant/reservation/protected execution. Older preparation
-remains retained history, not permission to start that sequence or automatically
-replan. If the request or live preconditions have changed, the new path must
-fail or require separate admission; it cannot relabel the old raw7.
+The separate [private cold caller path](control-plane-finalization-execution.md)
+now reconstructs the exact typed request/operation from signer originals and
+bounded sibling observations, issues its dedicated authorization at a current
+sample, then requests a new plan and genuinely joins the returned originals.
+It requires prior present-caller execution-purpose admission, which is not yet
+wired to a public route. Older preparation remains retained history, not
+permission to start that sequence or automatically replan. If the request or
+live preconditions have changed, the new path fails; it cannot relabel old raw7.
 
 ## Fixed original authority
 
@@ -118,12 +118,15 @@ committed v2 evidence, invalidates exact OIDC sibling challenges when applicable
 and appends audit. It **does not activate the OIDC session**: that session is
 read and validated, not mutated by this kernel.
 
-Still required are dedicated caller enrollment/request issuance under actual
-present-caller execution-purpose admission; its cold purpose/key owner;
-original grant production and durable finalization association; independently
-current predecessor/vector reservation and pending admission; and explicit
-protected SQL dispatch/completion orchestration with its irreversible attempt
-journal. Session activation remains a separate authenticated transition. The
+Dedicated [caller enrollment/request issuance](registration-finalization-authorization.md),
+an opt-in [cold purpose/key owner](control-plane-registration-finalization-custody.md),
+and original [grant production](registration-finalization-grant-production.md)
+are now source-implemented separately. Still required are the actual public
+present-caller execution-purpose admission, complete-vector acquisition and
+the cold authorizer service, durable finalization association, independently
+current reservation/pending admission, and protected SQL/completion orchestration
+with its irreversible attempt journal. Session activation remains a separate
+authenticated transition. The unchanged public
 [retained preparation facade](retained-registration-finalization.md) returns a
 raw7 locator only, and the excluded legacy authority dispatcher is not an
 execution fallback. Returning raw7 from this verifier is not an action token.

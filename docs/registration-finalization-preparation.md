@@ -84,5 +84,9 @@ and retain finalization raw7, but do not execute it or activate an OIDC browser
 session. The raw helper remains separate and supplies no replacement ceremony
 after expiry. The existing public `/prepare` endpoints continue to prepare
 evidence custody only; `/verify` remains on its existing legacy path.
+A separate [dedicated cold caller](control-plane-finalization-execution.md) now
+issues execution-purpose authorization before new planning and verifies returned
+originals. It is a private in-memory continuation, not a new public permission
+or durable grant/reservation/execution path.
 Independently operated production services, exact frozen builds and consolidated
 runtime verification remain outstanding.

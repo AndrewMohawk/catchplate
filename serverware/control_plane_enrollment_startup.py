@@ -13,6 +13,7 @@ Imports alone perform no authority admission or application initialization.
 """
 from __future__ import annotations
 
+import errno
 import fcntl
 import os
 import stat
@@ -121,6 +122,9 @@ def _continuity(owner):
     if (owner._execution_key_fd is not None and _descriptor_identity(
             owner._execution_key_fd, private=True) != owner._execution_key_identity):
         raise EnrollmentStartupError("registration execution caller key custody changed")
+    if (owner._finalization_key_fd is not None and _descriptor_identity(
+            owner._finalization_key_fd, private=True) != owner._finalization_key_identity):
+        raise EnrollmentStartupError("registration finalization caller key custody changed")
 
 
 def _response_spki(path, uid, work=None):
@@ -173,7 +177,8 @@ def _live(owner, *, work=None):
 class _EnrollmentOwner:
     __slots__ = ("_material", "_private_key", "_custody", "_binding", "_bootstrap_fd",
         "_bootstrap_identity", "_key_fd", "_key_identity", "_response_path", "_response_pin", "_closed",
-        "_execution_key", "_execution_key_fd", "_execution_key_identity")
+        "_execution_key", "_execution_key_fd", "_execution_key_identity",
+        "_finalization_key", "_finalization_key_fd", "_finalization_key_identity")
 
     def __init__(self):
         raise EnrollmentStartupError("enrollment owner requires fixed cold startup")
@@ -187,6 +192,33 @@ class _EnrollmentOwner:
     def execution_enabled(self):
         _live(self)
         return self._execution_key is not None
+
+    @property
+    def finalization_enabled(self):
+        _live(self)
+        return self._finalization_key is not None
+
+    def _authorize_registration_finalization(self, *, request_originals, response_originals,
+            sibling_challenge_ids, live_window, work, transport_deadline_ns=None):
+        """Private finalization-only continuation after fresh present permission."""
+        from serverware import control_plane_registration_finalization_execution as finalization
+
+        _require_pid()
+        with _LOCK:
+            return finalization._authorize_on_owner(self, request_originals=request_originals,
+                response_originals=response_originals, sibling_challenge_ids=sibling_challenge_ids,
+                live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+
+    def _request_registration_finalization_grant(self, *, originals, before_vector_bytes,
+            live_window, work, transport_deadline_ns=None):
+        """Exchange dedicated original finalization material once; never execute."""
+        from serverware import control_plane_registration_finalization_execution as finalization
+
+        _require_pid()
+        with _LOCK:
+            return finalization._request_on_owner(self, originals=originals,
+                before_vector_bytes=before_vector_bytes, live_window=live_window,
+                work=work, transport_deadline_ns=transport_deadline_ns)
 
     @property
     def reservation_enabled(self):
@@ -549,6 +581,18 @@ def initialize_from_environment():
                 material.issuer_policy, material.issuer_public_key)
             key, key_identity, response_path, response_pin = None, None, None, None
             execution_key, execution_fd, execution_identity = None, None, None
+            finalization_key, finalization_fd, finalization_identity = None, None, None
+            if (material.finalization_slot_reserved and material.finalization is None
+                    and 204 in inventory):
+                raise EnrollmentStartupError("disabled v4 finalization forbids its reserved inherited key slot")
+            if material.finalization_slot_reserved and material.finalization is None:
+                try:
+                    fcntl.fcntl(204, fcntl.F_GETFD)
+                except OSError as exc:
+                    if exc.errno != errno.EBADF:
+                        raise
+                else:
+                    raise EnrollmentStartupError("disabled v4 finalization has an undeclared open key slot")
             if policy is None:
                 if key_fd is not None or public_key is not None:
                     raise EnrollmentStartupError("disabled enrollment bootstrap contains issuer key material")
@@ -599,12 +643,37 @@ def initialize_from_environment():
                 execution_pin = issuer.evidence.keys._spki_on_work(execution.caller_public_key, work)
                 if execution_pin in (issuer_pin, response_pin):
                     raise EnrollmentStartupError("execution caller key reuses an enrollment or HTTP response key")
+            if material.finalization is not None:
+                finalization = material.finalization
+                finalization_fd = finalization.caller_private_key_fd
+                if (identity != (65532, 65532) or policy is None or key is None
+                        or not material.finalization_slot_reserved
+                        or finalization_fd != 204 or finalization_fd in (descriptor, key_fd, execution_fd)
+                        or finalization_fd not in inventory):
+                    raise EnrollmentStartupError("finalization caller key requires its distinct original admitted slot")
+                finalization_raw, finalization_identity = _read_original(finalization_fd, private=True)
+                if (not finalization_raw.startswith(b"-----BEGIN PRIVATE KEY-----\n")
+                        or not finalization_raw.endswith(b"-----END PRIVATE KEY-----\n")):
+                    raise EnrollmentStartupError("finalization caller key must be unencrypted PKCS8 PEM")
+                work.charge(input_bytes=len(finalization_raw))
+                finalization_key = issuer.evidence.production._callback(work,
+                    lambda: serialization.load_pem_private_key(finalization_raw, password=None))
+                del finalization_raw
+                if not isinstance(finalization_key, Ed25519PrivateKey):
+                    raise EnrollmentStartupError("finalization caller key must be Ed25519")
+                issuer.evidence.keys._pair_on_work(finalization_key, finalization.caller_public_key, work)
+                finalization_pin = issuer.evidence.keys._spki_on_work(finalization.caller_public_key, work)
+                if finalization_pin in (issuer_pin, response_pin,
+                        None if execution_key is None else execution_pin):
+                    raise EnrollmentStartupError("finalization caller key reuses another retained purpose key")
             if (material.configuration_digest != digest or _environment() != namespace
                     or (os.geteuid(), os.getegid()) != identity
                     or _descriptor_identity(descriptor, private=False) != original_identity
                     or key_fd is not None and _descriptor_identity(key_fd, private=True) != key_identity
                     or execution_fd is not None and _descriptor_identity(
                         execution_fd, private=True) != execution_identity
+                    or finalization_fd is not None and _descriptor_identity(
+                        finalization_fd, private=True) != finalization_identity
                     or custody.require_started() is not custody_owner
                     or client._snapshot(custody_owner) is not binding):
                 raise EnrollmentStartupError("enrollment startup inputs changed during admission")
@@ -616,6 +685,8 @@ def initialize_from_environment():
             owner._key_fd, owner._key_identity, owner._closed = key_fd, key_identity, False
             owner._execution_key, owner._execution_key_fd = execution_key, execution_fd
             owner._execution_key_identity = execution_identity
+            owner._finalization_key, owner._finalization_key_fd = finalization_key, finalization_fd
+            owner._finalization_key_identity = finalization_identity
             owner._response_path, owner._response_pin = response_path, response_pin
             _owner, _state = owner, "started"
             return owner
@@ -660,3 +731,4 @@ def close():
             owner._closed = True
             owner._private_key, owner._material = None, None
             owner._execution_key = None
+            owner._finalization_key = None

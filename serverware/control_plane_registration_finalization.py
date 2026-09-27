@@ -1,4 +1,4 @@
-"""Explicit retained-registration finalization PREPARATION, never success.
+"""Explicit retained-registration finalization preparation, never success.
 
 Present finalization-purpose permission must be admitted separately by the
 real application before this facade. A local execution/evidence-admission ID
@@ -6,13 +6,15 @@ is only a locator. Actual cold owners, joined live signer/grant replay and
 genuine stored acknowledged completion are required before the existing LIVE
 finalization planner/custody path can prepare and durably retain raw7.
 
-No recovery, completion-service request, evidence SQL dispatch, signing,
-transition forwarding or finalization execution is performed. Returned IDs
-locate original preparations; they do not assert a registered credential,
-active session, current root, one-use effect or permission to retry.
-This path does not issue the dedicated finalization execution authorization.
-That authorization must precede a production plan's issue time; a later fresh
-authorization cannot make this prepared-only raw7 executable retroactively.
+The unchanged public preparation path performs no recovery, service request for
+completion, evidence SQL dispatch, signing or transition forwarding. Its local
+raw7 locator does not assert execution permission or a registered credential.
+A separate PRIVATE execution-purpose continuation admits a dedicated cold
+caller key, signs authorization, then creates a NEW plan and returns original
+raw8 in memory. Its present-purpose application admission and durable grant
+association are not yet wired to a public route. Neither continuation reserves,
+executes finalization or activates a session. An older preparation cannot be
+authorized retroactively, and failures never imply permission to retry.
 """
 from __future__ import annotations
 
@@ -29,7 +31,7 @@ class RetainedRegistrationFinalizationError(preparation.RegistrationPreparationE
     pass
 
 
-def _prepare_on_owner(owner, digest, *, expected_user_id, expected_session_id,
+def _retained_on_owner(owner, digest, *, expected_user_id, expected_session_id,
         live_window, work):
     """Continue only under the actual owner's lock and the same current work."""
     window = clock._validate(live_window)
@@ -93,7 +95,8 @@ def _prepare_on_owner(owner, digest, *, expected_user_id, expected_session_id,
     if any(type(raw) is not bytes or not 2 <= len(raw) <= maximum
             for raw, maximum in zip(enrollments, maxima)):
         raise RetainedRegistrationFinalizationError("retained finalization enrollments are not bounded originals")
-    if sum(len(raw) for raw in (*held, *signer, *reserved, *returned, *enrollments)) > evidence.authority.MAX_RESULT_BYTES:
+    original_bytes = sum(len(raw) for raw in (*held, *signer, *reserved, *returned, *enrollments))
+    if original_bytes > evidence.authority.MAX_RESULT_BYTES:
         raise RetainedRegistrationFinalizationError("retained finalization originals exceed their aggregate bound")
     current()
     # The local association is not user ownership or a grant/signature join.
@@ -115,6 +118,15 @@ def _prepare_on_owner(owner, digest, *, expected_user_id, expected_session_id,
         expected_pending_sequence=pending[0], expected_pending_head_digest=pending[1], expected_fence=pending[2],
         deadline_epoch_ns=window[3], transport_deadline_ns=bound, work=work)
     current()
+    return signer, window, bound, current, original_bytes
+
+
+def _prepare_on_owner(owner, digest, *, expected_user_id, expected_session_id,
+        live_window, work):
+    signer, window, bound, current, _original_bytes = _retained_on_owner(owner, digest,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        live_window=live_window, work=work)
+    current()
     finalization_digest = preparation._prepare_registration_finalization_on_work(
         request_originals=signer[:8], response_originals=signer[8:], live_window=window,
         transport_deadline_ns=bound, work=work)
@@ -129,6 +141,26 @@ def prepare_retained_registration_finalization(local_digest, *, expected_user_id
     There is no manufactured legacy raw6 evidence record. Both outputs are
     local locators only; the second is the actual appended transition raw7.
     """
+    return _prepare_retained(local_digest, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, authorized=False)
+
+
+def prepare_authorized_retained_registration_finalization(local_digest, *, expected_user_id,
+        expected_session_id):
+    """Private new-purpose continuation returning (evidence locator, raw8).
+
+    The real application must FIRST admit the present caller/session and the
+    separate finalization execution purpose; existing preparation permission
+    is insufficient. No public route calls this entrypoint. Authentic retained
+    ownership and stored completion are replayed again before authorization.
+    Raw8 is authorization plus a new verified raw7, not a grant or stored
+    association. No automatic retry, reserve, SQL or session activation occurs.
+    """
+    return _prepare_retained(local_digest, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, authorized=True)
+
+
+def _prepare_retained(local_digest, *, expected_user_id, expected_session_id, authorized):
     from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
     startup._require_pid()
@@ -141,6 +173,10 @@ def prepare_retained_registration_finalization(local_digest, *, expected_user_id
             or not callback(work, lambda: owner.sql_handoff_enabled)
             or callback(work, subjects.custody_startup.require_started) is not owner._custody):
         raise RetainedRegistrationFinalizationError("retained finalization requires both cold-enabled owners")
+    if type(authorized) is not bool:
+        raise RetainedRegistrationFinalizationError("retained finalization purpose is not source-selected")
+    if authorized and not callback(work, lambda: owner.finalization_enabled):
+        raise RetainedRegistrationFinalizationError("dedicated finalization caller is not cold-enabled")
     material, binding = owner._material, owner._binding
     window = clock._open_on_work(deadline_epoch_ns=binding.attestation_interval[1],
         maximum_lifetime_ns=min(binding.maximum_deadline_ns, evidence.authority.VERIFIER_RESPONSE_MAX_AGE_NS),
@@ -150,5 +186,16 @@ def prepare_retained_registration_finalization(local_digest, *, expected_user_id
         if owner._material is not material or owner._binding is not binding:
             raise RetainedRegistrationFinalizationError("retained finalization startup changed before preparation")
         clock._check_on_work(window, work=work)
+        if authorized:
+            from serverware import control_plane_registration_finalization_execution as finalization
+
+            signer, retained_window, bound, current, original_bytes = _retained_on_owner(owner, digest,
+                expected_user_id=user_id, expected_session_id=session_id, live_window=window, work=work)
+            current()
+            originals = finalization._prepare_on_owner(owner, signer_originals=signer,
+                live_window=retained_window, transport_deadline_ns=bound, work=work,
+                retained_original_bytes=original_bytes)
+            current()
+            return digest, originals
         return _prepare_on_owner(owner, digest, expected_user_id=user_id,
             expected_session_id=session_id, live_window=window, work=work)

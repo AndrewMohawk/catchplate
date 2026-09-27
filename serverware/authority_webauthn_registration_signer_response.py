@@ -105,14 +105,16 @@ def _finalization_request_on_work(arguments, envelope_bytes, work):
 
 
 def _verify_on_configuration_core(*, finalization, sibling_challenge_ids, execution=False,
-        handoff_subject=False,
+        handoff_subject=False, finalization_issuance=False,
         payload, configuration_digest, generation, runtime_role_identities,
         request_originals, response_originals, work):
     """One genuine replay; only the fixed output derivation differs."""
     ledger = evidence.capture._SharedLedger(work)
     if (type(finalization) is not bool or type(execution) is not bool
-            or type(handoff_subject) is not bool
-            or execution and finalization or handoff_subject and (execution or finalization)
+            or type(handoff_subject) is not bool or type(finalization_issuance) is not bool
+            or execution and (finalization or finalization_issuance)
+            or handoff_subject and (execution or finalization or finalization_issuance)
+            or finalization_issuance and not finalization
             or type(sibling_challenge_ids) is not list
             or len(sibling_challenge_ids) > production.registration.MAX_SIBLINGS
             or not finalization and sibling_challenge_ids
@@ -275,7 +277,7 @@ def _verify_on_configuration_core(*, finalization, sibling_challenge_ids, execut
         source_request.MAX_CONTEXT_BYTES, source_request.MAX_CONTEXT_NODES)
     evidence.capability._canonical(request_bytes, request, ledger,
         authority.MAX_REQUEST_BYTES, source_request.MAX_CONTEXT_NODES)
-    if not execution and not handoff_subject:
+    if not execution and not handoff_subject and not finalization_issuance:
         return request, returned_inputs
 
     # The dedicated execution-request issuer needs the actual configured keys
@@ -317,9 +319,17 @@ def _verify_on_configuration_core(*, finalization, sibling_challenge_ids, execut
         live()
         return subject, original_expires, inherited_deadline, live
 
-    custody = admission.configuration._capture_on_work(purpose="registration",
-        payload=owned_payload, configuration_digest=digest, generation=owned_generation,
-        runtime_role_identities=owned_runtime, work=work)
+    if finalization_issuance:
+        from serverware import authority_webauthn_transition_custody_configuration as finalization_configuration
+        custody = finalization_configuration._capture_on_work(operation=production.registration.OPERATION,
+            payload=owned_payload, configuration_digest=digest, generation=owned_generation,
+            runtime_role_identities=owned_runtime, work=work)
+        evidence.plan._same(custody.pins[6][4], signer_spki, work,
+            "finalization request evidence key differs from actual signer replay")
+    else:
+        custody = admission.configuration._capture_on_work(purpose="registration",
+            payload=owned_payload, configuration_digest=digest, generation=owned_generation,
+            runtime_role_identities=owned_runtime, work=work)
     evidence.plan._same(custody.generation_digest, generation_digest, work,
         "execution request source generation changed")
     # All actual role pins come from this same root-admitted configuration,
@@ -392,5 +402,22 @@ def _verify_finalization_on_configuration(*, payload, configuration_digest, gene
     """
     return _verify_on_configuration_core(finalization=True, sibling_challenge_ids=sibling_challenge_ids,
         payload=payload, configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, request_originals=request_originals,
+        response_originals=response_originals, work=work)
+
+
+def _verify_finalization_execution_request_on_configuration(*, payload, configuration_digest,
+        generation, runtime_role_identities, request_originals, response_originals,
+        sibling_challenge_ids, work):
+    """Actual finalization request and original limits for its distinct issuer.
+
+    No historical issue instant is a new signature time. This fixed branch
+    retains real finalization configuration and original lifetime/key facts;
+    the dedicated caller issuer must use its actual current clock before any
+    future finalization plan. Existing pair-returning APIs remain unchanged.
+    """
+    return _verify_on_configuration_core(finalization=True, finalization_issuance=True,
+        sibling_challenge_ids=sibling_challenge_ids, payload=payload,
+        configuration_digest=configuration_digest, generation=generation,
         runtime_role_identities=runtime_role_identities, request_originals=request_originals,
         response_originals=response_originals, work=work)

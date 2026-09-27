@@ -30,6 +30,13 @@ request, issue its dedicated authorization **before** producing a new live plan,
 then perform grant/reservation/execution. Backdating, retiming and automatic
 replanning are forbidden. See [original execution admission](registration-finalization-execution-admission.md).
 
+A separate [private execution-purpose continuation](control-plane-finalization-execution.md)
+now shares the genuine retained ownership/completion preflight, then uses a
+dedicated cold caller to authorize **before** requesting and verifying a new
+plan. It returns original authorization/raw7 in memory, not this facade's
+durable raw7 locator. Its public permission, grant transport/retention and
+execution are not yet connected; existing public preparation never selects it.
+
 ## Required retained state and verification
 
 Both actual cold enrollment/custody owners and their original attestation must
@@ -82,8 +89,9 @@ authenticated an old completion. As in the existing preparation API, an opaque
 durable append may finish after the preparation window; that retains bytes
 without renewing any authority.
 
-Separate finalization execution authorization, reservation, actual atomic
-credential finalization and authenticated outcome handling remain required.
+The separate caller issuer is source-implemented, but public finalization
+execution permission, grant transport/retention, independent reservation,
+actual atomic credential finalization and outcome handling remain required.
 OIDC browser-session activation is a separate operation, not an effect of the
 registration-finalize kernel.
 This facade does not invent or call missing execution authority. A response

@@ -21,6 +21,8 @@ CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnroll
 CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v2"
 CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v3"
 CONTROL_PLANE_ENROLLMENT_V3_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v3"
+CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v4"
+CONTROL_PLANE_ENROLLMENT_V4_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v4"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
 CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES = 4096
 CONTROL_PLANE_ENROLLMENT_KEY_NAME = "serverware-control-plane-enrollment-signing-key"
@@ -33,6 +35,10 @@ CONTROL_PLANE_EXECUTION_SOCKET = "/run/serverware/registration-execution/authori
 CONTROL_PLANE_RESERVATION_SOCKET = "/run/serverware/registration-execution/reserver.sock"
 CONTROL_PLANE_SQL_SOCKET = "/run/serverware/registration-execution/sql.sock"
 CONTROL_PLANE_COMPLETION_SOCKET = "/run/serverware/registration-execution/completion.sock"
+CONTROL_PLANE_FINALIZATION_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v1"
+CONTROL_PLANE_FINALIZATION_KEY_NAME = "serverware-registration-finalization-caller-key"
+CONTROL_PLANE_FINALIZATION_KEY_FD = 204
+CONTROL_PLANE_FINALIZATION_SOCKET = "/run/serverware/registration-finalization-authorizer.sock"
 TRUSTED_HOST_LOCAL_WITNESS_STATE_PATH = (
     "/var/lib/serverware/authority-witness"
 )
@@ -529,8 +535,47 @@ def _control_plane_execution_key_slot(value, *, issuer_descriptor, bootstrap_des
     return CONTROL_PLANE_EXECUTION_KEY_FD
 
 
-def _control_plane_enrollment_key_slots(descriptor: int) -> tuple[int | None, int | None]:
-    """Project exact v2/v3 slots; only the child admits root authority and keys."""
+def _control_plane_finalization_key_slot(value, *, issuer_descriptor, bootstrap_descriptor):
+    """Fixed v4 delivery shape only; no root or finalization-purpose admission."""
+    if issuer_descriptor == CONTROL_PLANE_FINALIZATION_KEY_FD:
+        raise RuntimeError("v4 reserves the finalization key slot independently of enablement")
+    if value is None:
+        return None
+    fields = {"schema", "finalizationCallerPrivateKeyFd", "currentRootEnrollment",
+        "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
+    if (type(value) is not dict or set(value) != fields
+            or value["schema"] != CONTROL_PLANE_FINALIZATION_SCHEMA
+            or type(value["finalizationCallerPrivateKeyFd"]) is not int
+            or value["finalizationCallerPrivateKeyFd"] != CONTROL_PLANE_FINALIZATION_KEY_FD
+            or issuer_descriptor is None
+            or CONTROL_PLANE_FINALIZATION_KEY_FD == bootstrap_descriptor):
+        raise RuntimeError("finalization caller key delivery scope is invalid")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    for name, maximum in (("currentRootEnrollment", 128 * 1024),
+            ("grantEnrollment", 16 * 1024), ("authorizationEnrollment", 16 * 1024)):
+        original = value[name]
+        if type(original) is not dict or set(original) != {"base64Url", "byteCount"}:
+            raise RuntimeError("finalization enrollment record is not closed")
+        encoded, size = original["base64Url"], original["byteCount"]
+        if (type(size) is not int or not 2 <= size <= maximum or type(encoded) is not str
+                or len(encoded) != (4 * size + 2) // 3
+                or any(character not in alphabet for character in encoded)):
+            raise RuntimeError("finalization enrollment original exceeds its delivery bound")
+    endpoint = value["authorizerEndpoint"]
+    if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds",
+            "listenerUid", "listenerGid"}
+            or type(endpoint["socketPath"]) is not str
+            or endpoint["socketPath"] != CONTROL_PLANE_FINALIZATION_SOCKET
+            or type(endpoint["requestTimeoutSeconds"]) is not int
+            or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
+            or any(type(endpoint[name]) is not int or endpoint[name] != 0
+                for name in ("listenerUid", "listenerGid"))):
+        raise RuntimeError("finalization endpoint differs from its fixed delivery contract")
+    return CONTROL_PLANE_FINALIZATION_KEY_FD
+
+
+def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
+    """Project closed v2/v3/v4 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -548,16 +593,21 @@ def _control_plane_enrollment_key_slots(descriptor: int) -> tuple[int | None, in
         value = json.loads(original)
         if (type(value) is not dict or set(value) != {"schema", "payload", "signatureBase64Url"}
                 or value["schema"] not in (CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
+        is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
         payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
             "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
-        if is_v3:
+        if is_v3 or is_v4:
             payload_fields.add("registrationExecution")
+        if is_v4:
+            payload_fields.add("registrationFinalization")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V3_PAYLOAD_SCHEMA if is_v3
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V4_PAYLOAD_SCHEMA if is_v4
+                    else CONTROL_PLANE_ENROLLMENT_V3_PAYLOAD_SCHEMA if is_v3
                     else CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap payload is not closed")
         signature = value["signatureBase64Url"]
@@ -582,14 +632,22 @@ def _control_plane_enrollment_key_slots(descriptor: int) -> tuple[int | None, in
         if target is not None and (type(target) is not int or not 32 <= target <= 1023):
             raise RuntimeError("control-plane enrollment key descriptor is outside its exact range")
         execution_target = (_control_plane_execution_key_slot(payload["registrationExecution"],
-            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 else None)
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 or is_v4 else None)
+        finalization_target = (_control_plane_finalization_key_slot(payload["registrationFinalization"],
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v4 else None)
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:
             raise RuntimeError("control-plane enrollment bootstrap is not original canonical JSON")
     except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
         raise RuntimeError("control-plane enrollment bootstrap is invalid") from exc
-    return target, execution_target
+    return target, execution_target, finalization_target, is_v4
+
+
+def _control_plane_enrollment_key_slots(descriptor: int) -> tuple[int | None, int | None]:
+    """Preserve the existing two-slot projection API and old profile behavior."""
+    slots = _control_plane_enrollment_purpose_slots(descriptor)
+    return slots[0], slots[1]
 
 
 def _control_plane_enrollment_key_slot(descriptor: int) -> int | None:
@@ -618,14 +676,35 @@ def _open_control_plane_registration_execution_key(bootstrap_descriptor: int, *,
         source_name=CONTROL_PLANE_EXECUTION_KEY_NAME, occupied_descriptors=occupied_descriptors)
 
 
+def _open_control_plane_registration_finalization_key(bootstrap_descriptor: int, *,
+        occupied_descriptors: set[int]) -> int | None:
+    """Deliver only v4's independent key; a disabled v4 must leave FD204 absent."""
+    slots = _control_plane_enrollment_purpose_slots(bootstrap_descriptor)
+    target, reserved = slots[2], slots[3]
+    if reserved and target is None:
+        if CONTROL_PLANE_FINALIZATION_KEY_FD in occupied_descriptors:
+            raise RuntimeError("disabled v4 finalization has an occupied reserved key slot")
+        try:
+            fcntl.fcntl(CONTROL_PLANE_FINALIZATION_KEY_FD, fcntl.F_GETFD)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+        else:
+            raise RuntimeError("disabled v4 finalization has an undeclared open key slot")
+    return _open_control_plane_purpose_key(bootstrap_descriptor, target=target,
+        source_name=CONTROL_PLANE_FINALIZATION_KEY_NAME, occupied_descriptors=occupied_descriptors)
+
+
 def _open_control_plane_purpose_key(bootstrap_descriptor: int, *, target,
         source_name: str, occupied_descriptors: set[int]) -> int | None:
-    if source_name not in (CONTROL_PLANE_ENROLLMENT_KEY_NAME, CONTROL_PLANE_EXECUTION_KEY_NAME):
+    if source_name not in (CONTROL_PLANE_ENROLLMENT_KEY_NAME, CONTROL_PLANE_EXECUTION_KEY_NAME,
+            CONTROL_PLANE_FINALIZATION_KEY_NAME):
         raise RuntimeError("control-plane private-key source is not a fixed purpose")
     if target is None:
         return None
     if (type(target) is not int or not 32 <= target <= 1023 or target == bootstrap_descriptor
-            or source_name == CONTROL_PLANE_EXECUTION_KEY_NAME and target != CONTROL_PLANE_EXECUTION_KEY_FD):
+            or source_name == CONTROL_PLANE_EXECUTION_KEY_NAME and target != CONTROL_PLANE_EXECUTION_KEY_FD
+            or source_name == CONTROL_PLANE_FINALIZATION_KEY_NAME and target != CONTROL_PLANE_FINALIZATION_KEY_FD):
         raise RuntimeError("control-plane private-key target differs from its fixed purpose")
     if target in occupied_descriptors:
         raise RuntimeError("control-plane enrollment key descriptor is already assigned")
@@ -1385,6 +1464,10 @@ def _normal_main(role: str) -> int:
                 enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
             if execution_key is not None:
                 descriptors.append(execution_key)
+            finalization_key = _open_control_plane_registration_finalization_key(
+                enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
+            if finalization_key is not None:
+                descriptors.append(finalization_key)
             environment["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
             _drop_identity(role)
             os.execve(

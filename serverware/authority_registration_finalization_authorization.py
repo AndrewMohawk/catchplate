@@ -2,8 +2,9 @@
 
 Evidence-admission authorizations and enrollment-signing grants have different
 schemas, purposes and signature domains and cannot enter this path. The root
-must independently enroll this caller for finalization. No producer, key
-provisioning, present-actor authentication or cold owner is supplied here.
+must independently enroll this caller for finalization. The root enrollment
+producer and fixed request-signing suffix do not provision keys, authenticate
+the present actor or supply a cold owner.
 
 Only parameter-pure original signature, root-enrollment and key-separation
 primitives are shared with the evidence-execution verifier. Its fixed purpose
@@ -21,6 +22,7 @@ from serverware import authority_registration_execution_authorization as primiti
 grants, authorization, capture, plan, shape, clock = (
     primitives.grants, primitives.authorization, primitives.capture,
     primitives.plan, primitives.shape, primitives.clock)
+keys, production = primitives.keys, primitives.production
 OPERATION = "webauthn.registration.finalize"
 PURPOSE = "authorize-registration-finalization"
 ENROLLMENT_SCHEMA = "serverware.signedPolicyAuthorityRegistrationFinalizationAuthorizationEnrollment/v1"
@@ -46,6 +48,13 @@ _SCOPE_FIELDS = ("configurationDigest", "databaseId", "generationDigest",
 
 class RegistrationFinalizationAuthorizationError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _Enrollment:
+    payload: dict
+    enrollment_digest: str
+    caller_public_key: object
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -114,6 +123,93 @@ def _read(raw, *, enrollment, work):
     return owned
 
 
+def _admit_enrollment_on_work(*, authorization_enrollment_bytes, current_root_enrollment_bytes,
+        grant_enrollment_bytes, root_public_key, configuration_digest,
+        planner_public_key, evidence_public_key, work):
+    """Authenticate the original finalization delegation without a live request."""
+    capture._SharedLedger(work)
+    raw = authorization._original(authorization_enrollment_bytes, MAX_ENROLLMENT_BYTES,
+        "finalization caller enrollment")
+    current_raw = authorization._original(current_root_enrollment_bytes,
+        authorization.MAX_ENROLLMENT_BYTES, "finalization current-root enrollment")
+    grant_raw = authorization._original(grant_enrollment_bytes,
+        grants.MAX_ENROLLMENT_BYTES, "finalization grant enrollment")
+    config, root, planner, evidence_key = (configuration_digest, root_public_key,
+        planner_public_key, evidence_public_key)
+    shape._digest(config)
+    enrolled = _read(raw, enrollment=True, work=work)
+    primitives._signature(enrolled, root, MAX_ENROLLMENT_BYTES, work)
+    current, grant, forbidden = primitives._base(current_root_enrollment_bytes=current_raw,
+        grant_enrollment_bytes=grant_raw, root_public_key=root,
+        planner_public_key=planner, evidence_public_key=evidence_key, work=work)
+    policy = enrolled["payload"]
+    for name, expected in (("configurationDigest", config),
+            ("databaseId", current.payload["databaseId"]), ("generationDigest", current.payload["generationDigest"]),
+            ("currentRootEnrollmentDigest", current.enrollment_digest),
+            ("grantEnrollmentDigest", grant.enrollment_digest),
+            ("audienceSpkiDigest", grant.payload["authorizer"]["spkiDigest"])):
+        plan._same(policy[name], expected, work, "finalization caller enrollment " + name)
+    caller = authorization._role_key(policy["callerKey"], work)
+    primitives._separate(caller, forbidden, work)
+    primitives._unchanged(raw, enrolled, MAX_ENROLLMENT_BYTES, work)
+    identity = plan._frame(ENROLLMENT_IDENTITY_DOMAIN, (raw,), work)
+    return _Enrollment(policy, identity, caller)
+
+
+def _produce_enrollment_on_work(*, current_root_enrollment_bytes, grant_enrollment_bytes,
+        root_private_key, root_public_key, configuration_digest, caller_public_key,
+        caller_measurement_digest, caller_id, planner_public_key, evidence_public_key,
+        maximum_age_ns, maximum_clock_skew_ns, work):
+    """Root delegates finalization only; identity and policy admission is external."""
+    capture._SharedLedger(work)
+    root_private, root, caller = root_private_key, root_public_key, caller_public_key
+    config, measurement, identity = configuration_digest, caller_measurement_digest, caller_id
+    age, skew = maximum_age_ns, maximum_clock_skew_ns
+    authorization._private(root_private)
+    authorization._public(caller)
+    shape._digest(config)
+    shape._digest(measurement)
+    authorization._token(identity)
+    shape._integer(age, grants.authority.VERIFIER_RESPONSE_MAX_AGE_NS, minimum=1)
+    shape._integer(skew, grants.authority.VERIFIER_MAX_CLOCK_SKEW_NS)
+    current, grant, forbidden = primitives._base(current_root_enrollment_bytes=current_root_enrollment_bytes,
+        grant_enrollment_bytes=grant_enrollment_bytes, root_public_key=root,
+        planner_public_key=planner_public_key, evidence_public_key=evidence_public_key, work=work)
+    spki = primitives._separate(caller, forbidden, work)
+    work.charge(input_bytes=authorization.MAX_PEM_BYTES)
+    pem = production._callback(work, lambda: caller.public_bytes(
+        authorization.Encoding.PEM, authorization.PublicFormat.SubjectPublicKeyInfo))
+    if type(pem) is not bytes or not 1 <= len(pem) <= authorization.MAX_PEM_BYTES or not pem.isascii():
+        raise RegistrationFinalizationAuthorizationError("finalization caller key did not export bounded PEM")
+    work.charge(input_bytes=len(pem))
+    payload = {"schema": ENROLLMENT_PAYLOAD_SCHEMA, "sourceRevision": grants.authority.SOURCE_REVISION,
+        "purpose": PURPOSE, "operation": OPERATION, "configurationDigest": config,
+        "databaseId": current.payload["databaseId"], "generationDigest": current.payload["generationDigest"],
+        "currentRootEnrollmentDigest": current.enrollment_digest, "grantEnrollmentDigest": grant.enrollment_digest,
+        "callerId": identity, "callerKey": {"publicKeyPem": pem.decode("ascii"),
+            "spkiDigest": spki, "measurementDigest": measurement},
+        "audienceSpkiDigest": grant.payload["authorizer"]["spkiDigest"],
+        "maximumAgeNs": age, "maximumClockSkewNs": skew}
+    _shape(payload, enrollment=True)
+    authorization._role_key(payload["callerKey"], work)
+    from serverware import authority_registration_finalization_signing as signing
+    original = signing._sign(payload=payload, private_key=root_private, public_key=root,
+        enrollment=True, work=work)
+    _admit_enrollment_on_work(authorization_enrollment_bytes=original,
+        current_root_enrollment_bytes=current_root_enrollment_bytes,
+        grant_enrollment_bytes=grant_enrollment_bytes, root_public_key=root,
+        configuration_digest=config, planner_public_key=planner_public_key,
+        evidence_public_key=evidence_public_key, work=work)
+    return original
+
+
+def _sign_request_on_work(*, payload, private_key, public_key, work):
+    """Fixed private suffix; only the genuine original-replay issuer owns admission."""
+    from serverware import authority_registration_finalization_signing as signing
+    return signing._sign(payload=payload, private_key=private_key, public_key=public_key,
+        enrollment=False, work=work)
+
+
 def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes,
         current_root_enrollment_bytes, grant_enrollment_bytes, root_public_key,
         configuration_digest, planner_public_key, evidence_public_key,
@@ -139,11 +235,9 @@ def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes,
         shape._integer(inherited, minimum=1)
     bound = window[4] if inherited is None else min(window[4], inherited)
     envelope = _read(original, enrollment=False, work=work)
-    enrolled = _read(enrollment_raw, enrollment=True, work=work)
-    policy, payload = enrolled["payload"], envelope["payload"]
+    payload = envelope["payload"]
     issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
-    maximum_age, skew = policy["maximumAgeNs"], policy["maximumClockSkewNs"]
-    authorization._interval(payload, maximum_age)
+    maximum_age = skew = None
     last_epoch, last_monotonic = window[0], window[2]
 
     def live():
@@ -152,28 +246,24 @@ def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes,
         monotonic = primitives.production._callback(work, time.monotonic_ns)
         shape._integer(monotonic, minimum=1)
         if (now < last_epoch or monotonic < last_monotonic or monotonic >= bound
-                or issued > now + skew or now - issued > maximum_age or now >= expires):
+                or now >= expires or maximum_age is not None
+                    and (issued > now + skew or now - issued > maximum_age)):
             raise RegistrationFinalizationAuthorizationError("finalization authorization expired or clocks reversed")
         last_epoch, last_monotonic = now, monotonic
 
     live()
-    primitives._signature(enrolled, root, MAX_ENROLLMENT_BYTES, work)
-    current, grant, forbidden = primitives._base(current_root_enrollment_bytes=current_raw,
-        grant_enrollment_bytes=grant_raw, root_public_key=root,
+    material = _admit_enrollment_on_work(authorization_enrollment_bytes=enrollment_raw,
+        current_root_enrollment_bytes=current_raw, grant_enrollment_bytes=grant_raw,
+        root_public_key=root, configuration_digest=config,
         planner_public_key=planner, evidence_public_key=evidence_key, work=work)
-    for name, expected in (("configurationDigest", config),
-            ("databaseId", current.payload["databaseId"]), ("generationDigest", current.payload["generationDigest"]),
-            ("currentRootEnrollmentDigest", current.enrollment_digest),
-            ("grantEnrollmentDigest", grant.enrollment_digest),
-            ("audienceSpkiDigest", grant.payload["authorizer"]["spkiDigest"])):
-        plan._same(policy[name], expected, work, "finalization caller enrollment " + name)
-    caller = authorization._role_key(policy["callerKey"], work)
-    primitives._separate(caller, forbidden, work)
+    policy, caller = material.payload, material.caller_public_key
+    maximum_age, skew = policy["maximumAgeNs"], policy["maximumClockSkewNs"]
+    authorization._interval(payload, maximum_age)
+    live()
     primitives._signature(envelope, caller, MAX_AUTHORIZATION_BYTES, work)
     for name in _SCOPE_FIELDS:
         plan._same(payload[name], policy[name], work, "finalization request " + name)
-    enrollment_digest = plan._frame(ENROLLMENT_IDENTITY_DOMAIN, (enrollment_raw,), work)
-    plan._same(payload["authorizationEnrollmentDigest"], enrollment_digest, work,
+    plan._same(payload["authorizationEnrollmentDigest"], material.enrollment_digest, work,
         "finalization request caller enrollment")
     plan._same(payload["callerMeasurementDigest"], policy["callerKey"]["measurementDigest"], work,
         "finalization request caller measurement")
@@ -181,9 +271,8 @@ def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes,
         (OPERATION.encode("ascii"), payload["requestDigest"].encode("ascii")), work)
     plan._same(payload["operationId"], operation_id, work, "finalization request actual operation identity")
     identity = plan._frame(REQUEST_IDENTITY_DOMAIN, (original,), work)
-    primitives._unchanged(enrollment_raw, enrolled, MAX_ENROLLMENT_BYTES, work)
     primitives._unchanged(original, envelope, MAX_AUTHORIZATION_BYTES, work)
     live()
     return _VerifiedAuthorization(payload["requestDigest"], operation_id, identity,
-        policy["databaseId"], policy["generationDigest"], current.enrollment_digest,
-        grant.enrollment_digest, issued, expires, maximum_age, skew, last_epoch, last_monotonic)
+        policy["databaseId"], policy["generationDigest"], policy["currentRootEnrollmentDigest"],
+        policy["grantEnrollmentDigest"], issued, expires, maximum_age, skew, last_epoch, last_monotonic)

@@ -14,8 +14,10 @@ This is source-only integration, unbuilt and unexecuted. The existing legacy
 This prepared-only path does not issue finalization execution authorization.
 That authorization must precede the signed plan's issue time; a fresh permission
 obtained afterward cannot authorize this existing raw7 retroactively. The
-production authorization-before-planning path still needs integration, without
-backdating, expiry renewal or automatic replanning.
+[private authorization-before-planning continuation](control-plane-finalization-execution.md)
+is now source-implemented separately, but is not invoked by these endpoints.
+Its own public permission, grant transport/retention and execution still need
+integration, without backdating, expiry renewal or automatic replanning.
 
 ## Separate present permission
 

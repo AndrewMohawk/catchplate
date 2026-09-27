@@ -38,6 +38,8 @@ SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v2"
 PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v2"
 V3_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v3"
 V3_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v3"
+V4_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v4"
+V4_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v4"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_NODES = capture.MAX_TOTAL_JSON_NODES
 MAX_DEPTH = capture.MAX_JSON_DEPTH
@@ -47,6 +49,7 @@ _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "configurationDigest",
     "configurationPayload", "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"})
 _V3_PAYLOAD_FIELDS = _PAYLOAD_FIELDS | frozenset({"registrationExecution"})
+_V4_PAYLOAD_FIELDS = _V3_PAYLOAD_FIELDS | frozenset({"registrationFinalization"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _GENERATION_FIELDS = frozenset(configuration._GENERATION_FIELDS)
 _NUMBER_BYTES = frozenset(b"0123456789.eE+-")
@@ -69,6 +72,8 @@ class _EnrollmentMaterial:
     issuer_public_key: object | None
     signer_endpoint: tuple | None
     execution: object | None = None
+    finalization: object | None = None
+    finalization_slot_reserved: bool = False
 
 
 def _preflight(raw, work):
@@ -195,6 +200,40 @@ def _v3_shape(value):
     _v3_payload_shape(value["payload"])
 
 
+def _v4_payload_shape(value):
+    from serverware import control_plane_registration_execution_bootstrap as execution
+    from serverware import control_plane_registration_finalization_bootstrap as finalization
+
+    shape = capability.shape
+    shape._object(value, _V4_PAYLOAD_FIELDS, "v4 enrollment bootstrap payload")
+    shape._literal(value["schema"], V4_PAYLOAD_SCHEMA)
+    shape._literal(value["sourceRevision"], authority.SOURCE_REVISION)
+    shape._digest(value["configurationDigest"])
+    shape._object(value["generation"], _GENERATION_FIELDS, "v4 enrollment bootstrap generation")
+    if type(value["configurationPayload"]) is not dict or type(value["runtimeRoleIdentities"]) is not dict:
+        raise EnrollmentBootstrapError("v4 bootstrap configuration and runtime identities are not exact objects")
+    execution._shape(value["registrationExecution"])
+    finalization._shape(value["registrationFinalization"])
+    descriptor = value["issuerPrivateKeyFd"]
+    if descriptor is not None:
+        shape._integer(descriptor, 1023, minimum=32)
+        if descriptor == finalization.CALLER_KEY_FD:
+            raise EnrollmentBootstrapError("v4 reserves the finalization caller key descriptor")
+    if value["registrationExecution"] is not None:
+        shape._integer(descriptor, 1023, minimum=32)
+        if descriptor == execution.CALLER_KEY_FD:
+            raise EnrollmentBootstrapError("enrollment and execution caller key descriptors must differ")
+    if value["registrationFinalization"] is not None:
+        shape._integer(descriptor, 1023, minimum=32)
+
+
+def _v4_shape(value):
+    capability.shape._object(value, _ENVELOPE_FIELDS, "v4 enrollment bootstrap envelope")
+    capability.shape._literal(value["schema"], V4_SCHEMA)
+    capability.shape._base64url(value["signatureBase64Url"], signature=True)
+    _v4_payload_shape(value["payload"])
+
+
 def _canonical(raw, value, work):
     encoded = configuration._configuration_wire(value, capture._SharedLedger(work))
     work.charge(input_bytes=len(raw) + len(encoded))
@@ -267,6 +306,24 @@ def _v3_material(payload, expected_digest, root_public_key, work):
         material.signer_endpoint, held_execution)
 
 
+def _v4_material(payload, expected_digest, root_public_key, work):
+    from serverware import control_plane_registration_finalization_bootstrap as finalization
+
+    material = _v3_material(payload, expected_digest, root_public_key, work)
+    held_finalization = finalization._admit_on_work(
+        registration_finalization=payload["registrationFinalization"],
+        configuration_payload=material.configuration_payload,
+        configuration_digest=material.configuration_digest, generation=material.generation,
+        runtime_role_identities=material.runtime_role_identities,
+        runtime_root_public_key=root_public_key, issuer_public_key=material.issuer_public_key,
+        execution_caller_public_key=(None if material.execution is None
+            else material.execution.caller_public_key), work=work)
+    return _EnrollmentMaterial(material.configuration_payload, material.generation,
+        material.runtime_role_identities, material.configuration_digest,
+        material.issuer_private_key_fd, material.issuer_policy, material.issuer_public_key,
+        material.signer_endpoint, material.execution, held_finalization, True)
+
+
 def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         expected_configuration_digest, work):
     """Authenticate exact originals before using their configuration or FD."""
@@ -280,17 +337,22 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         capability.shape._digest(expected)
         envelope = _decode(original, work)
         is_v3 = type(envelope) is dict and envelope.get("schema") == V3_SCHEMA
-        if is_v3:
+        is_v4 = type(envelope) is dict and envelope.get("schema") == V4_SCHEMA
+        if is_v4:
+            _v4_shape(envelope)
+        elif is_v3:
             _v3_shape(envelope)
         else:
             _shape(envelope)
         _canonical(original, envelope, work)
         payload = envelope["payload"]
         payload_bytes = configuration._configuration_wire(payload, capture._SharedLedger(work))
-        capability._signature(key, envelope["signatureBase64Url"], V3_SCHEMA if is_v3 else SCHEMA,
+        capability._signature(key, envelope["signatureBase64Url"],
+            V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
             payload_bytes, capture._SharedLedger(work))
         _canonical(original, envelope, work)
-        material = (_v3_material(payload, expected, key, work) if is_v3
+        material = (_v4_material(payload, expected, key, work) if is_v4
+            else _v3_material(payload, expected, key, work) if is_v3
             else _material(payload, expected, work))
         _canonical(original, envelope, work)
         return material
@@ -425,3 +487,56 @@ def _produce_v3_on_work(*, configuration_payload, generation, runtime_role_ident
         if isinstance(exc, EnrollmentBootstrapError):
             raise
         raise EnrollmentBootstrapError("v3 enrollment bootstrap production failed") from exc
+
+
+def _produce_v4_on_work(*, configuration_payload, generation, runtime_role_identities,
+        configuration_digest, issuer_private_key_fd, signer_endpoint, registration_execution,
+        registration_finalization, runtime_root_private_key, runtime_root_public_key, work):
+    """Produce explicit v4 originals; never create or provision either caller key."""
+    try:
+        ledger = capture._SharedLedger(work)
+        private_key, public_key = runtime_root_private_key, runtime_root_public_key
+        digest, descriptor = configuration_digest, issuer_private_key_fd
+        if (not isinstance(private_key, Ed25519PrivateKey)
+                or not isinstance(public_key, Ed25519PublicKey)):
+            raise EnrollmentBootstrapError("v4 bootstrap production requires the actual admitted root pair")
+        capability.shape._digest(digest)
+        capability.shape._bounded_object(generation, 24, "v4 bootstrap provisioner launch context")
+        payload = configuration._ConfigurationCapture(ledger, maximum_bytes=MAX_BYTES).visit({
+            "schema": V4_PAYLOAD_SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
+            "configurationDigest": digest, "configurationPayload": configuration_payload,
+            "generation": {name: generation[name] for name in configuration._GENERATION_FIELDS},
+            "runtimeRoleIdentities": runtime_role_identities, "issuerPrivateKeyFd": descriptor,
+            "signerEndpoint": signer_endpoint, "registrationExecution": registration_execution,
+            "registrationFinalization": registration_finalization})
+        _v4_payload_shape(payload)
+        envelope = {"schema": V4_SCHEMA, "payload": payload, "signatureBase64Url": "A" * 86}
+        _v4_shape(envelope)
+        original = configuration._configuration_wire(payload, capture._SharedLedger(work))
+        _v4_material(payload, digest, public_key, work)
+        keys._pair_on_work(private_key, public_key, work)
+        _canonical(original, payload, work)
+        payload_size, payload_nodes = _measure(payload, work)
+        envelope_size, envelope_nodes = _measure(envelope, work)
+        work.charge(input_bytes=3 * payload_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
+            json_nodes=payload_nodes + envelope_nodes)
+        frame_bytes = 2 * len(V4_SCHEMA) + 9 + payload_size + 2 * 71
+        if (work.limits.max_hashes - work.hash_work < 1
+                or work.limits.max_input_bytes - work.input_bytes < frame_bytes + payload_size
+                or work.limits.max_json_nodes - work.json_nodes < 4 + payload_nodes):
+            raise EnrollmentBootstrapError("v4 bootstrap cannot reserve its signature output")
+        message = plan._ascii(plan._frame(V4_SCHEMA, (original,), work), work)
+        signature = production._sign_and_verify(private_key, public_key, message, work)
+        if _measure(payload, work) != (payload_size, payload_nodes) or _encode(payload) != original:
+            raise EnrollmentBootstrapError("v4 bootstrap payload changed during signing")
+        encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+        capability.shape._base64url(encoded, signature=True)
+        envelope["signatureBase64Url"] = encoded
+        result = _encode(envelope)
+        if len(result) != envelope_size:
+            raise EnrollmentBootstrapError("v4 bootstrap output changed after reservation")
+        return result
+    except (KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, EnrollmentBootstrapError):
+            raise
+        raise EnrollmentBootstrapError("v4 enrollment bootstrap production failed") from exc

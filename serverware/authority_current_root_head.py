@@ -219,6 +219,13 @@ def _verify_on_work(*, observation_bytes, query_bytes, enrollment_bytes,
 
 def _verify_historical_with_enrollment_on_work(*, observation_bytes, query_bytes,
         enrollment_bytes, root_public_key, live_window, transport_deadline_ns, work):
+    return _historical_originals_on_work(observation_bytes=observation_bytes, query_bytes=query_bytes,
+        enrollment_bytes=enrollment_bytes, root_public_key=root_public_key, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, operation=OPERATION)
+
+
+def _historical_originals_on_work(*, observation_bytes, query_bytes,
+        enrollment_bytes, root_public_key, live_window, transport_deadline_ns, work, operation):
     """Private same-call original facts, never accepted as another API's proof.
 
     Enrollment and observation intervals are checked algebraically, while
@@ -226,6 +233,7 @@ def _verify_historical_with_enrollment_on_work(*, observation_bytes, query_bytes
     Expiry of the observation does not renew it or constrain this new, already
     supplied processing window. No caller clock or successful carrier enters.
     """
+    _query_schema, query_domain, observation_schema, _payload_schema = _profile(operation)
     authorization.capture._SharedLedger(work)
     original = authorization._original(observation_bytes, MAX_BYTES, "historical current-root head observation")
     original_query = authorization._original(query_bytes, MAX_QUERY_BYTES, "historical current-root head query")
@@ -238,8 +246,8 @@ def _verify_historical_with_enrollment_on_work(*, observation_bytes, query_bytes
     bound = min(window[4], transport_deadline_ns)
     # Own both original graphs before key or clock callbacks; all later
     # comparisons refer only to these captured immutable-original inputs.
-    query = _decode_query_on_work(original_query, work=work)
-    envelope = _read_observation(original, work)
+    query = _decode_query_on_work(original_query, work=work, operation=operation)
+    envelope = _read_observation(original, work, operation=operation)
     last_epoch, last_monotonic = window[0], window[2]
 
     def current():
@@ -260,13 +268,13 @@ def _verify_historical_with_enrollment_on_work(*, observation_bytes, query_bytes
     # The same enrolled role, generation, positive bounded original interval,
     # capacity and true genesis checks as live admission, without _fresh().
     _original_scope(payload, material, work)
-    authorization._verify_signature(envelope, OBSERVATION_SCHEMA,
+    authorization._verify_signature(envelope, observation_schema,
         material.state_public_key, MAX_BYTES, work)
     if payload["issuedAtEpochNs"] > current() + material.payload["maxClockSkewNs"]:
         raise CurrentRootHeadError("historical head observation is issued in the current future")
     authorization.plan._same(query["enrollmentDigest"], material.enrollment_digest, work,
         "historical head query original enrollment")
-    query_digest = authorization.plan._frame(QUERY_IDENTITY_DOMAIN, (original_query,), work)
+    query_digest = authorization.plan._frame(query_domain, (original_query,), work)
     for name, expected in (("queryDigest", query_digest), ("challenge", query["challenge"]),
             ("contextDigest", query["contextDigest"]), ("vectorDigest", query["expectedVectorDigest"]),
             ("operation", query["operation"])):

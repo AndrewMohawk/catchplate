@@ -2,7 +2,8 @@
 
 Only canonical, clock-independent shape and enrolled signature machinery is
 shared. The schema, signature domain, query digest and operation all differ.
-No historical observation, generic operation, execution or release API exists.
+Historical admission authenticates this fixed original purpose only; it is not
+a fresh observation, generic operation, execution or release authority.
 """
 from serverware import authority_current_root_head as shared
 
@@ -39,3 +40,11 @@ def _sign_on_work(*, payload, enrollment_bytes, root_public_key,
     return shared._sign_on_work(payload=payload, enrollment_bytes=enrollment_bytes,
         root_public_key=root_public_key, state_private_key=state_private_key,
         now_epoch_ns=now_epoch_ns, work=work, operation=OPERATION)
+
+
+def _verify_historical_with_enrollment_on_work(*, observation_bytes, query_bytes,
+        enrollment_bytes, root_public_key, live_window, transport_deadline_ns, work):
+    return shared._historical_originals_on_work(observation_bytes=observation_bytes,
+        query_bytes=query_bytes, enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, operation=OPERATION)

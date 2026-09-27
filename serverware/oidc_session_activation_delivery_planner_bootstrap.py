@@ -5,6 +5,10 @@ fresh history purpose, state snapshot, keys and resources. The closed v2 profile
 also pins separate execution-export custody; it has no v1 fallback. This module
 neither delivers descriptors nor opens a listener. No received material is
 accepted as authority.
+
+The separately named historical verifier authenticates the same original v2
+scope as data for fresh completion custody. It returns a distinct result and
+does not call the live launch guard or renew either original interval.
 """
 from __future__ import annotations
 
@@ -84,6 +88,11 @@ class _PlannerMaterial:
     attestation_interval: tuple
     opening_sample: tuple
     execution_bundle_key_digest: str
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalPlannerMaterial(_PlannerMaterial):
+    """Original signed planning data, not a live constructor result."""
 
 
 def _fail(message):
@@ -231,7 +240,10 @@ def _planner_key(payload, configured, nested, root, work):
         expected_spki=payload["planner"]["spkiDigest"])
 
 
-def _material(payload, original, custody, root, window, bound, opening, current, work):
+def _material(payload, original, custody, root, window, bound, opening, current, work,
+        *, historical=False):
+    if type(historical) is not bool:
+        _fail("consume bootstrap internal history selector is not exact")
     configured, generation = configuration._capture_configuration_on_work(payload=payload["configurationPayload"],
         configuration_digest=payload["configurationDigest"], generation=payload["generation"], work=work)
     configuration._capture_runtime_role_identities_on_work(runtime_role_identities=payload["runtimeRoleIdentities"],
@@ -248,7 +260,8 @@ def _material(payload, original, custody, root, window, bound, opening, current,
     if len(custody) != pin["byteCount"]:
         _fail("consume history original length differs")
     plan._same(_sha(custody, work), pin["bytesDigest"], work, "consume history original digest differs")
-    nested = history._verify_consume_on_work(custody_bytes=custody, root_public_key=root,
+    verifier = history._verify_historical_consume_on_work if historical else history._verify_consume_on_work
+    nested = verifier(custody_bytes=custody, root_public_key=root,
         work=work, live_window=window, transport_deadline_ns=bound)
     current()
     plan._same((payload["configurationDigest"], generation["digest"], payload["runtimeClosureDigest"],
@@ -304,7 +317,8 @@ def _material(payload, original, custody, root, window, bound, opening, current,
     read_identity = (selected["databaseRole"], selected["clientDn"], selected["clientSerial"], selected["issuerDn"],
         *(payload["planner"]["identity"][name] for name in shared._IDENTITY_FIELDS))
     current()
-    return _PlannerMaterial(payload, original, custody, nested, request, planner,
+    material_type = _HistoricalPlannerMaterial if historical else _PlannerMaterial
+    return material_type(payload, original, custody, nested, request, planner,
         (dsn, selected["connectTimeoutSeconds"], read_identity, payload["maximumClockSkewNs"]),
         state_original, state_digest, vector, identity, shared._state_endpoint(payload["stateEndpoint"]),
         (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening, payload["executionBundleKeyDigest"])
@@ -346,6 +360,48 @@ def _verify_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
         if isinstance(exc, OidcSessionActivationDeliveryPlannerBootstrapError):
             raise
         raise OidcSessionActivationDeliveryPlannerBootstrapError("consume planner bootstrap admission failed") from exc
+
+
+def _verify_historical_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
+        live_window, transport_deadline_ns, work):
+    """Original v2 planner/history data; never renew either old launch."""
+    try:
+        original, custody, root = bootstrap_bytes, history_custody_bytes, root_public_key
+        if (type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES
+                or type(custody) is not bytes or not 2 <= len(custody) <= history.MAX_BYTES):
+            _fail("historical consume planner requires bounded immutable originals")
+        authorization._public(root)
+        window = clock._validate(live_window)
+        shape._integer(transport_deadline_ns, minimum=1)
+        bound = min(window[4], transport_deadline_ns)
+        current = shared._processing(window, bound, work)
+        current()
+        envelope = shared.codec._decode(original, work)
+        shape._object(envelope, shared._ENVELOPE_FIELDS, "historical signed consume bootstrap")
+        shape._literal(envelope["schema"], SCHEMA)
+        shape._base64url(envelope["signatureBase64Url"], signature=True)
+        if type(envelope["payload"]) is not dict:
+            _fail("historical consume bootstrap payload is not an exact object")
+        shared.codec._canonical(original, envelope, work)
+        unsigned = configuration._configuration_wire(envelope["payload"], capture._SharedLedger(work))
+        current()
+        capability._signature(root, envelope["signatureBase64Url"], SCHEMA, unsigned, capture._SharedLedger(work))
+        current()
+        payload = envelope["payload"]
+        _payload(payload, work)
+        if payload["issuedAtEpochNs"] > current():
+            _fail("historical consume planner is future-issued")
+        opening = clock._sample_on_work(work)
+        current()
+        result = _material(payload, original, custody, root, window, bound, opening, current, work,
+            historical=True)
+        shared.codec._canonical(original, envelope, work)
+        current()
+        return result
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, OidcSessionActivationDeliveryPlannerBootstrapError):
+            raise
+        raise OidcSessionActivationDeliveryPlannerBootstrapError("historical consume planner admission failed") from exc
 
 
 def _produce_on_work(*, payload, history_custody_bytes, root_private_key, root_public_key,

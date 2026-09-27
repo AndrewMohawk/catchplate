@@ -102,8 +102,30 @@ def _capture(context, *, request, scope, old_token_bytes, business_before_roots,
         head_observation_bytes, activation_originals, activation_expectations, activation_scope,
         activation_planner_public_key, operation_public_key, historical_custody,
         live_window, transport_deadline_ns, work):
+    return _capture_originals(context, request=request, scope=scope, old_token_bytes=old_token_bytes,
+        business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+        before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
+        expected_counted_heads=expected_counted_heads, write_proof_bytes=write_proof_bytes,
+        state_enrollment_bytes=state_enrollment_bytes, state_root_public_key=state_root_public_key,
+        complete_root_vector_bytes=complete_root_vector_bytes, head_query_bytes=head_query_bytes,
+        head_observation_bytes=head_observation_bytes, activation_originals=activation_originals,
+        activation_expectations=activation_expectations, activation_scope=activation_scope,
+        activation_planner_public_key=activation_planner_public_key, operation_public_key=operation_public_key,
+        historical_custody=historical_custody, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, historical=False)
+
+
+def _capture_originals(context, *, request, scope, old_token_bytes, business_before_roots,
+        authorization_before_roots, before_proofs, read_heads, query_frontiers,
+        expected_counted_heads, write_proof_bytes, state_enrollment_bytes,
+        state_root_public_key, complete_root_vector_bytes, head_query_bytes,
+        head_observation_bytes, activation_originals, activation_expectations, activation_scope,
+        activation_planner_public_key, operation_public_key, historical_custody,
+        live_window, transport_deadline_ns, work, historical):
     """Detach all graphs and hold originals/keys before native/hash/clock work."""
     ledger = evidence.capture._SharedLedger(work)
+    if type(historical) is not bool:
+        _fail("consume capture must use a fixed live or historical entrypoint")
     if (type(context) is not core.KernelContext or context.operation != contract.OPERATION
             or context.verified_webauthn_evidence is not None
             or type(context.database_now) is not datetime or context.database_now.tzinfo is not timezone.utc):
@@ -155,9 +177,20 @@ def _capture(context, *, request, scope, old_token_bytes, business_before_roots,
     for name, maximum in (("deliveryId", 128), ("userId", 1024), ("sessionId", 128),
             ("credentialId", 1366), ("credentialRecordId", 1024), ("challengeId", 1024)):
         registration._text(expected[name], name, maximum, work)
-    window = windows._narrow(window, deadline_epoch_ns=expected["deadlineEpochNs"],
-        maximum_lifetime_ns=expected["maximumPlanAgeNs"],
-        maximum_clock_skew_ns=expected["maximumClockSkewNs"])
+    if historical:
+        registration._integer(expected["deadlineEpochNs"], "original consume deadline", 1)
+        registration._integer(expected["maximumPlanAgeNs"], "original consume age", 1,
+            contract.authority.VERIFIER_RESPONSE_MAX_AGE_NS)
+        registration._integer(expected["maximumClockSkewNs"], "original consume skew", 0,
+            contract.authority.VERIFIER_MAX_CLOCK_SKEW_NS)
+        if window[5] > expected["maximumPlanAgeNs"] or window[6] > expected["maximumClockSkewNs"]:
+            _fail("historical consume processing exceeds independent policy")
+        custody.OidcSessionActivationHistoryCustody.require_consume_completion_on_work(owner, work=work)
+    else:
+        custody.OidcSessionActivationHistoryCustody._require_live_consume_history_on_work(owner, work=work)
+        window = windows._narrow(window, deadline_epoch_ns=expected["deadlineEpochNs"],
+            maximum_lifetime_ns=expected["maximumPlanAgeNs"],
+            maximum_clock_skew_ns=expected["maximumClockSkewNs"])
     bound = min(bound, window[4])
     if type(actual) is not dict or actual.get("operation") != contract.OPERATION:
         _fail("consume plan requires the distinct typed consume operation")

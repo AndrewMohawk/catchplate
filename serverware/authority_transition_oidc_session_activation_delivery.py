@@ -46,6 +46,25 @@ class _FullTransition:
     valid_until_epoch_ns: int
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalFullTransition:
+    transition: core.KernelTransition
+    live: Callable[[], int]
+    valid_until_epoch_ns: int
+    historical_plan_interval: tuple
+
+
+def _historical_interval(value):
+    if type(value) is not tuple or len(value) != 2:
+        _fail("consume history requires an exact original plan interval")
+    issued, expires = value
+    registration._integer(issued, "original consume plan issue", 1)
+    registration._integer(expires, "original consume plan expiry", 1)
+    if issued >= expires:
+        _fail("original consume plan interval is empty")
+    return value
+
+
 def _fail(message):
     raise OidcSessionActivationDeliveryConsumptionError(message)
 
@@ -197,13 +216,15 @@ def _rows_on_work(context, values, old_token, policy, trust_policy, now_ns, work
     return selected_delivery, row, trust_digest, envelope_digest, min(delivery_expires, session_expires, provider_expires)
 
 
-def _full_transition_with_liveness_on_work(context, *, old_token_bytes,
+def _full_original_transition_on_work(context, *, old_token_bytes,
         expected_delivery_id, expected_user_id, expected_session_id, expected_credential_id,
         expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
         business_before_roots, authorization_before_roots, before_proofs, read_heads, query_frontiers,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, historical_plan_interval):
     """Reverify original current proofs and possession, then derive three effects."""
     ledger = registration.capture._SharedLedger(work)
+    historical = (None if historical_plan_interval is None
+        else _historical_interval(historical_plan_interval))
     if (type(context) is not core.KernelContext or context.operation != OPERATION
             or type(context.selected_rows) is not tuple or len(context.selected_rows) != MAX_SELECTED_ROWS
             or context.verified_webauthn_evidence is not None):
@@ -244,7 +265,8 @@ def _full_transition_with_liveness_on_work(context, *, old_token_bytes,
     current = core.KernelContext(OPERATION, values, admitted.selected_rows, database_now,
         owned["requestDigest"], query_reads=admitted.query_reads)
     last_epoch, last_monotonic = window[0], window[2]
-    valid_until = min(window[3], window[0] + bound - window[1])
+    processing_until = min(window[3], window[0] + bound - window[1])
+    valid_until = processing_until if historical is None else historical[1]
 
     def live():
         nonlocal last_epoch, last_monotonic
@@ -252,9 +274,11 @@ def _full_transition_with_liveness_on_work(context, *, old_token_bytes,
         monotonic = registration.evidence.production._callback(work, time.monotonic_ns)
         registration._integer(monotonic, "activation delivery monotonic sample", 1)
         if (epoch < last_epoch or monotonic < last_monotonic or monotonic >= bound
-                or epoch >= valid_until):
+                or epoch >= processing_until or (historical is None and epoch >= valid_until)):
             _fail("activation delivery consumption window expired or reversed")
-        if not window[0] - window[6] <= now_ns <= epoch + window[6] or now_ns >= valid_until:
+        if (historical is None and not window[0] - window[6] <= now_ns <= epoch + window[6]
+                or historical is not None and now_ns > epoch + window[6]
+                or now_ns >= valid_until):
             _fail("activation delivery database time is outside its current processing scope")
         last_epoch, last_monotonic = epoch, monotonic
         return epoch
@@ -262,7 +286,9 @@ def _full_transition_with_liveness_on_work(context, *, old_token_bytes,
     live()
     selected_delivery, row, trust_digest, envelope_digest, row_expiry = _rows_on_work(
         current, values, token, owned["policy"], owned["trust"], now_ns, work)
-    valid_until = min(valid_until, row_expiry)
+    if historical is not None and historical[1] > row_expiry:
+        _fail("historical consume plan outlived its actual original delivery/session")
+    valid_until = min(valid_until, row_expiry) if historical is None else row_expiry
     live()
     audit_id = core._deterministic_uuid(operation=OPERATION, request_digest=current.request_digest,
         purpose=AUDIT_PURPOSE, work=work)
@@ -324,9 +350,42 @@ def _full_transition_with_liveness_on_work(context, *, old_token_bytes,
     work.prepare_encoding(result)
     transition = core.KernelTransition(mutations=tuple(ordered), result=result, work_units=total_work)
     live()
-    completed = _FullTransition(transition, live, valid_until)
+    completed = (_FullTransition(transition, live, valid_until) if historical is None else
+        _HistoricalFullTransition(transition, live, valid_until, historical))
     live()
     return completed
+
+
+def _full_transition_with_liveness_on_work(context, *, old_token_bytes,
+        expected_delivery_id, expected_user_id, expected_session_id, expected_credential_id,
+        expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
+        business_before_roots, authorization_before_roots, before_proofs, read_heads, query_frontiers,
+        live_window, transport_deadline_ns, work):
+    return _full_original_transition_on_work(context, old_token_bytes=old_token_bytes,
+        expected_delivery_id=expected_delivery_id, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, expected_credential_id=expected_credential_id,
+        expected_credential_record_id=expected_credential_record_id, expected_challenge_id=expected_challenge_id,
+        authn_policy=authn_policy, trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, historical_plan_interval=None)
+
+
+def _full_transition_historical_on_work(context, *, old_token_bytes,
+        expected_delivery_id, expected_user_id, expected_session_id, expected_credential_id,
+        expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
+        business_before_roots, authorization_before_roots, before_proofs, read_heads, query_frontiers,
+        historical_plan_interval, live_window, transport_deadline_ns, work):
+    """Replay original semantics; the original expiry never becomes a clock."""
+    interval = _historical_interval(historical_plan_interval)
+    return _full_original_transition_on_work(context, old_token_bytes=old_token_bytes,
+        expected_delivery_id=expected_delivery_id, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, expected_credential_id=expected_credential_id,
+        expected_credential_record_id=expected_credential_record_id, expected_challenge_id=expected_challenge_id,
+        authn_policy=authn_policy, trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, historical_plan_interval=interval)
 
 
 def _full_transition_on_work(context, *, old_token_bytes,

@@ -63,6 +63,21 @@ class _ReplayedWrites:
     valid_until_epoch_ns: int
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _HistoricalReplayedWrites:
+    transition: core.KernelTransition
+    write_proof_bytes: bytes
+    write_proof_digest: str
+    transition_bytes: bytes
+    transition_digest: str
+    business_after_roots: tuple
+    authorization_after_roots: tuple
+    counted_after_heads: tuple
+    live: Callable[[], int]
+    valid_until_epoch_ns: int
+    historical_plan_interval: tuple
+
+
 def _fail(message):
     raise OidcSessionActivationDeliveryWriteError(message)
 
@@ -186,18 +201,20 @@ def _decode_on_work(original, *, work):
     return decoded
 
 
-def _replay_on_work(context, *, old_token_bytes, expected_delivery_id,
+def _replay_originals_on_work(context, *, old_token_bytes, expected_delivery_id,
         expected_user_id, expected_session_id, expected_credential_id,
         expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
         business_before_roots, authorization_before_roots, before_proofs,
         read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, historical_plan_interval):
     """Derive actual current consumption and indexed effects from originals.
 
     All roots, counted heads, policy and subject expectations are independent
     inputs, not learned from the write proof. No successful transition enters.
     """
     ledger = batch._SharedLedger(work)
+    historical = (None if historical_plan_interval is None
+        else consumption._historical_interval(historical_plan_interval))
     if (type(context) is not core.KernelContext or context.operation != OPERATION
             or context.verified_webauthn_evidence is not None
             or type(expected_counted_heads) is not tuple or len(expected_counted_heads) != HEAD_COUNT
@@ -228,7 +245,7 @@ def _replay_on_work(context, *, old_token_bytes, expected_delivery_id,
         monotonic = registration.evidence.production._callback(work, time.monotonic_ns)
         registration._integer(monotonic, "delivery consumption monotonic sample", 1)
         if (now < checked or now < last_epoch or monotonic < last_monotonic or monotonic >= bound
-                or (full is not None and now >= full.valid_until_epoch_ns)):
+                or (historical is None and full is not None and now >= full.valid_until_epoch_ns)):
             _fail("delivery consumption indexed replay expired or clocks reversed")
         last_epoch, last_monotonic = now, monotonic
         return now
@@ -249,16 +266,25 @@ def _replay_on_work(context, *, old_token_bytes, expected_delivery_id,
     live()
     current = core.KernelContext(OPERATION, owned["arguments"], owned["selected_rows"], database_now,
         owned["request_digest"], query_reads=records)
-    full = consumption._full_transition_with_liveness_on_work(current,
+    # These two source-fixed workers receive original inputs, not a supplied
+    # transition or callback. Historical expiry remains algebraic metadata.
+    worker = (consumption._full_transition_with_liveness_on_work if historical is None
+        else consumption._full_transition_historical_on_work)
+    extra = {} if historical is None else {"historical_plan_interval": historical}
+    full = worker(current,
         old_token_bytes=old, expected_delivery_id=scope["delivery"], expected_user_id=scope["user"],
         expected_session_id=scope["session"], expected_credential_id=scope["credential"],
         expected_credential_record_id=scope["record"], expected_challenge_id=scope["challenge"],
         authn_policy=scope["policy"], trust_policy=scope["trust"],
         business_before_roots=owned["business_before_roots"], authorization_before_roots=owned["authorization_before_roots"],
         before_proofs=owned["before_proofs"], read_heads=heads, query_frontiers=frontiers,
-        live_window=window, transport_deadline_ns=bound, work=work)
-    if type(full) is not consumption._FullTransition or type(full.transition) is not core.KernelTransition:
+        live_window=window, transport_deadline_ns=bound, work=work, **extra)
+    expected_type = consumption._FullTransition if historical is None else consumption._HistoricalFullTransition
+    if type(full) is not expected_type or type(full.transition) is not core.KernelTransition:
         _fail("delivery consumption returned another semantic result family")
+    if historical is not None and (full.historical_plan_interval != historical
+            or historical[1] > full.valid_until_epoch_ns):
+        _fail("historical indexed consumption changed or exceeded its original lifetime")
     live()
     actual = full.transition
     actual_ids = tuple(sorted(identity for table in {item["table"] for item in actual.mutations}
@@ -295,8 +321,45 @@ def _replay_on_work(context, *, old_token_bytes, expected_delivery_id,
         _fail("delivery consumption indexed commitment exceeds its source byte ceiling")
     digest = registration.evidence.plan._frame(TRANSITION_DOMAIN, (original,), work)
     live()
-    result = _ReplayedWrites(actual, write_proof_bytes, proof_digest, original, digest,
+    result_type = _ReplayedWrites if historical is None else _HistoricalReplayedWrites
+    suffix = () if historical is None else (historical,)
+    result = result_type(actual, write_proof_bytes, proof_digest, original, digest,
         calculated.primary.business_after_roots, calculated.primary.authorization_after_roots,
-        after_heads, live, full.valid_until_epoch_ns)
+        after_heads, live, full.valid_until_epoch_ns, *suffix)
     live()
     return result
+
+
+def _replay_on_work(context, *, old_token_bytes, expected_delivery_id,
+        expected_user_id, expected_session_id, expected_credential_id,
+        expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
+        business_before_roots, authorization_before_roots, before_proofs,
+        read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
+        live_window, transport_deadline_ns, work):
+    return _replay_originals_on_work(context, old_token_bytes=old_token_bytes,
+        expected_delivery_id=expected_delivery_id, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, expected_credential_id=expected_credential_id,
+        expected_credential_record_id=expected_credential_record_id, expected_challenge_id=expected_challenge_id,
+        authn_policy=authn_policy, trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, expected_counted_heads=expected_counted_heads,
+        write_proof_bytes=write_proof_bytes, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, historical_plan_interval=None)
+
+
+def _replay_historical_on_work(context, *, old_token_bytes, expected_delivery_id,
+        expected_user_id, expected_session_id, expected_credential_id,
+        expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
+        business_before_roots, authorization_before_roots, before_proofs,
+        read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
+        historical_plan_interval, live_window, transport_deadline_ns, work):
+    interval = consumption._historical_interval(historical_plan_interval)
+    return _replay_originals_on_work(context, old_token_bytes=old_token_bytes,
+        expected_delivery_id=expected_delivery_id, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, expected_credential_id=expected_credential_id,
+        expected_credential_record_id=expected_credential_record_id, expected_challenge_id=expected_challenge_id,
+        authn_policy=authn_policy, trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, expected_counted_heads=expected_counted_heads,
+        write_proof_bytes=write_proof_bytes, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, historical_plan_interval=interval)

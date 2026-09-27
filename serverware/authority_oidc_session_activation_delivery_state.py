@@ -5,7 +5,8 @@ independent subject/policy scope and complete root vector. Both plan producers
 and receivers repeat signature verification and exact projection. This is an
 observation by the enrolled state owner, not a lock, off-host witness, caller
 permission, SQL commit or authority to decrypt. No replacement work/window,
-nonce generation, transport, historical admission or successful input is used.
+nonce generation, transport or successful input is used. The distinct historical
+entry authenticates original observation facts, never current state authority.
 """
 from __future__ import annotations
 
@@ -141,4 +142,57 @@ def _verify_on_work(*, request, scope, old_token_bytes, complete_root_vector_byt
         _fail("delivery planning cannot admit an outstanding state reservation")
     if now >= min(payload["expiresAtEpochNs"], owned["scope"]["deadlineEpochNs"]):
         _fail("delivery planning observation or independent scope has expired")
+    return payload
+
+
+def _verify_historical_on_work(*, request, scope, old_token_bytes, complete_root_vector_bytes,
+        query_bytes, observation_bytes, enrollment_bytes, root_public_key,
+        historical_plan_interval, live_window, transport_deadline_ns, work):
+    """Authenticate original state and its possible original planning overlap.
+
+    The composing plan receiver authenticates the interval's plan signature.
+    Neither endpoint of that interval is passed to a live verifier or clock.
+    """
+    from serverware import oidc_session_activation_delivery as lifetime
+
+    ledger = evidence.capture._SharedLedger(work)
+    original_query = _original(query_bytes, head.MAX_QUERY_BYTES, "historical query")
+    original_observation = _original(observation_bytes, head.MAX_BYTES, "historical observation")
+    original_enrollment = _original(enrollment_bytes, head.authorization.MAX_ENROLLMENT_BYTES,
+        "historical enrollment")
+    original_vector = _original(complete_root_vector_bytes, vector.MAX_BYTES, "historical vector")
+    key = root_public_key
+    head.authorization._public(key)
+    interval = writes.consumption._historical_interval(historical_plan_interval)
+    old = assertion._token(old_token_bytes, work)
+    owned = assertion._Capture(ledger, maximum_bytes=assertion.MAX_CONTEXT_BYTES).visit({
+        "request": request, "scope": scope})
+    context_digest = _context_digest_on_work(request=owned["request"], scope=owned["scope"],
+        old_token_bytes=old, complete_root_vector_bytes=original_vector, work=work)
+    issued, expires = interval
+    expected = owned["scope"]
+    if expires - issued > expected["maximumPlanAgeNs"] or expires > expected["deadlineEpochNs"]:
+        _fail("historical consume interval exceeds independently admitted scope")
+    query = head._decode_query_on_work(original_query, work=work)
+    vector_digest = vector.framing._frame(vector.IDENTITY_DOMAIN, (original_vector,), work)
+    registration._same(query["contextDigest"], context_digest, work, "historical consume context")
+    registration._same(query["expectedVectorDigest"], vector_digest, work, "historical consume vector")
+    window, current = lifetime._window(live_window, transport_deadline_ns, work)
+    if issued > current() + expected["maximumClockSkewNs"]:
+        _fail("historical consume plan is issued in the current future")
+    payload, enrollment = head._verify_historical_with_enrollment_on_work(
+        observation_bytes=original_observation, query_bytes=original_query,
+        enrollment_bytes=original_enrollment, root_public_key=key,
+        live_window=window, transport_deadline_ns=transport_deadline_ns, work=work)
+    if payload["pendingRequestDigest"] is not None or payload["pendingDecisionDigest"] is not None:
+        _fail("historical consume planning observation contained a reservation")
+    # A plan records its processing opening; observation can follow that
+    # opening. Require actual original overlap, not fictitious old-clock use.
+    observed_issue, observed_expiry = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
+    lower = max(issued, observed_issue - enrollment.payload["maxClockSkewNs"])
+    upper = min(expires, observed_expiry, observed_issue + enrollment.payload["maxControlAgeNs"] + 1)
+    if lower >= upper or expires > observed_expiry:
+        _fail("historical consume plan exceeded its actual original observation")
+    if issued > current() + expected["maximumClockSkewNs"]:
+        _fail("historical consume issue changed relative to the current clock")
     return payload

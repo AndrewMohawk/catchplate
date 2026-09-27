@@ -2,8 +2,9 @@
 
 The original planner bootstrap is genuine historical evidence, not present
 receiving authority. A distinct root-signed outer purpose authorizes one fixed
-completion, consume-planning or consume-grant process for a fresh bounded
-interval. Both consume purposes bind the exact original request. No live consumer is widened,
+completion or fixed consume process for a fresh bounded interval. Each consume
+purpose binds the exact original request. The distinct v6 consume-completion
+purpose cannot enter live planning, grant, reserve or SQL admission. No live consumer is widened,
 no expired launch is renewed, and no incoming successful material is accepted.
 This module performs no key delivery, filesystem, transport, signing of
 completion, SQL, token release or historical-cohort resolution.
@@ -51,6 +52,11 @@ CONSUME_SQL_ISSUER_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCust
 CONSUME_SQL_ISSUER_CONSUMER_ROLE = "consume-sql-issuer-history"
 CONSUME_SQL_ISSUER_PROCESS_MODE = "oidc-session-activation-delivery-execution-sql"
 CONSUME_SQL_ISSUER_SERVICE_UID = CONSUME_SQL_ISSUER_SERVICE_GID = 65498
+CONSUME_COMPLETION_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v6"
+CONSUME_COMPLETION_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v6"
+CONSUME_COMPLETION_CONSUMER_ROLE = "consume-completion-history"
+CONSUME_COMPLETION_PROCESS_MODE = "oidc-session-activation-delivery-completion"
+CONSUME_COMPLETION_SERVICE_UID = CONSUME_COMPLETION_SERVICE_GID = 65497
 MAX_CONSUME_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_BYTES = 8 * 1024 * 1024
 MAX_NODES, MAX_DEPTH = 256, 4
@@ -83,6 +89,11 @@ class _HistoryCustodyMaterial:
     attestation_interval: tuple
     opening_sample: tuple
     consume_request_bytes: bytes | None
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalPlanningMaterial(_HistoryCustodyMaterial):
+    """Authenticated expired v2 data, never a fresh process grant."""
 
 
 def _fail(message):
@@ -146,6 +157,10 @@ def _purpose_profile(purpose):
         return (CONSUME_SQL_ISSUER_SCHEMA, CONSUME_SQL_ISSUER_PAYLOAD_SCHEMA, CONSUME_OPERATION,
             CONSUME_SQL_ISSUER_CONSUMER_ROLE, CONSUME_SQL_ISSUER_PROCESS_MODE,
             CONSUME_SQL_ISSUER_SERVICE_UID, CONSUME_SQL_ISSUER_SERVICE_GID)
+    if purpose == CONSUME_COMPLETION_CONSUMER_ROLE:
+        return (CONSUME_COMPLETION_SCHEMA, CONSUME_COMPLETION_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+            CONSUME_COMPLETION_CONSUMER_ROLE, CONSUME_COMPLETION_PROCESS_MODE,
+            CONSUME_COMPLETION_SERVICE_UID, CONSUME_COMPLETION_SERVICE_GID)
     _fail("historical custody purpose is not a supported fixed profile")
 
 
@@ -157,7 +172,8 @@ def _profile(consume):
 def _requires_consume_request(purpose):
     _purpose_profile(purpose)
     return purpose in (CONSUME_CONSUMER_ROLE, CONSUME_GRANT_CONSUMER_ROLE,
-        CONSUME_RESERVE_CONSUMER_ROLE, CONSUME_SQL_ISSUER_CONSUMER_ROLE)
+        CONSUME_RESERVE_CONSUMER_ROLE, CONSUME_SQL_ISSUER_CONSUMER_ROLE,
+        CONSUME_COMPLETION_CONSUMER_ROLE)
 
 
 def _payload_shape(payload, *, consume=False):
@@ -400,6 +416,66 @@ def _verify_consume_grant_on_work(*, custody_bytes, root_public_key, work, live_
     return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
         work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
         purpose=CONSUME_GRANT_CONSUMER_ROLE)
+
+
+def _verify_historical_consume_on_work(*, custody_bytes, root_public_key, work,
+        live_window, transport_deadline_ns):
+    """Verify original v2 planning scope as data under a real current allowance."""
+    try:
+        original, root = custody_bytes, root_public_key
+        if type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES:
+            _fail("historical consume planning custody requires bounded immutable bytes")
+        authorization._public(root)
+        window = clock._validate(live_window)
+        shape._integer(transport_deadline_ns, minimum=1)
+        bound = min(window[4], transport_deadline_ns)
+        current = planner_bootstrap._processing(window, bound, work)
+        current()
+        envelope = _decode(original, work)
+        shape._object(envelope, _ENVELOPE_FIELDS, "historical consume planning custody")
+        shape._literal(envelope["schema"], CONSUME_SCHEMA)
+        shape._base64url(envelope["signatureBase64Url"], signature=True)
+        if type(envelope["payload"]) is not dict:
+            _fail("historical planning custody payload is not an exact object")
+        _canonical(original, envelope, work)
+        unsigned = _wire(envelope["payload"], work)
+        current()
+        capability._signature(root, envelope["signatureBase64Url"], CONSUME_SCHEMA,
+            unsigned, capture._SharedLedger(work))
+        current()
+        payload = envelope["payload"]
+        _payload_for_purpose(payload, purpose=CONSUME_CONSUMER_ROLE)
+        if payload["issuedAtEpochNs"] > current():
+            _fail("historical planning custody is future-issued")
+        planner = _admit_planner(payload, root, window, bound, work, current)
+        request = _admit_consume_request(payload, work, current)
+        opening = clock._sample_on_work(work)
+        current()
+        result = _HistoricalPlanningMaterial(original, planner, CONSUME_CONSUMER_ROLE,
+            CONSUME_PROCESS_MODE, CONSUME_SERVICE_UID, CONSUME_SERVICE_GID,
+            payload["receiverIdentity"], payload["bundleKeyDigest"], payload["deliveryKeyDigest"],
+            (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening, request)
+        _canonical(original, envelope, work)
+        current()
+        return result
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, OidcSessionActivationHistoryCustodyBootstrapError):
+            raise
+        raise OidcSessionActivationHistoryCustodyBootstrapError("historical planning custody admission failed") from exc
+
+
+def _verify_consume_completion_on_work(*, custody_bytes, root_public_key, work,
+        live_window, transport_deadline_ns):
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=CONSUME_COMPLETION_CONSUMER_ROLE)
+
+
+def _produce_consume_completion_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=CONSUME_COMPLETION_CONSUMER_ROLE)
 
 
 def _produce_on_work(*, payload, root_private_key, root_public_key, work,

@@ -1,5 +1,3 @@
-> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
-
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -21,48 +19,45 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 **34 of 46 tracked source checkpoints landed · 12 open, including F08 in progress.**
 **Production acceptance: 0/6 verified.** Current source is unbuilt and unexecuted.
 
-**Active workflow: OIDC session activation — 13/16 detailed source steps landed.**
-Each numbered segment below maps to a named task: ✓ landed, NEXT open, — open.
-This counts the smallest currently named steps, so progress is visible before a
-larger milestone closes. Grouping parents are not counted again; these 16 steps
-all belong to F08, not the whole product. Counts are not effort percentages or an ETA.
+[![Project source checkpoints: evidence handoff 10/10 landed; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 7/8; workloads and native 3/6; providers and operations 0/7. Every segment has a stable ID. Twelve checkpoints remain open, including F08 in progress. Source counts, not product readiness.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-[![OIDC session activation: 13 of 16 detailed source steps landed; three remain. Completed: retained finalization checks, assertion verification, existing-cookie login, read proofs, encrypted originals, business effects, capacity adapter, signed originals, indexed writes, configured owner, root bootstrap, private planner service, and fresh signed planning-state admission. Next: custody and protected execution. Still open: public activation and recovery, and integrated portal flow. Source-only, not production verification or action-time authorization.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
-
-Latest landed: [fresh signed state observations bound into plans and encrypted retention](https://github.com/example/private-deployment).
-**Next:** custody, protected one-use execution and committed token delivery.
-**After that:** separately authorized public actions/recovery and the integrated
-portal flow. Planning observes the admitted state owner; it does not authorize
-execution or replace an independently operated rollback witness.
-
-The [numbered checklist and commit evidence](docs/production-status.md#active-workflow-granular-source-steps)
-explain every segment. Broader work remains visible below:
-
-| Workstream | Landed source | Still to do |
-| --- | --- | --- |
-| Evidence handoff · 10/10 | Reserve, protected SQL, signed completion, retained originals | Current-release verification remains separate |
-| Historical recovery · 4/5 | Original-signature replay and recovery within the configured cohort | Resolve historical authority across source/configuration/key changes |
-| Permissions and grants · 10/10 | Separate permissions, grant issuance, retention and portal actions | Current-release verification remains separate |
-| Finalization and sessions · 7/8 | Reservation, one-use SQL, signed completion/recovery and activation prerequisites | Protected OIDC activation, token delivery and integrated portal workflow |
-| Workloads and native · 3/6 | TLS-bound attestation, identity authoring, signed-handoff client | Provision service identities, finish native enrollment and enclave integration |
-| Providers and operations · 0/7 | Lower-level adapters and tooling exist; these integration closures remain open | OAuth ownership/custody, revocation, protected side effects, publication recovery, RBAC rollback protection, telemetry |
+**Still to do across the project:** historical authority (1 checkpoint), session
+activation (1), workload/native integration (3), and providers/operations (7).
+The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
+names each scope. Landed source does not imply current executability: the
+[shared execution replay integration](docs/production-status.md#current-integration-boundary)
+still fails closed pending activation support.
 
 <details>
 <summary>All 46 source checkpoints and the nested milestone bars</summary>
 
-[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with finer steps shown in the active-workflow bar above. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 13/26 finer steps shown in the active-workflow bar below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 </details>
+
+**Current work: OIDC session activation — 13/26 detailed steps landed.**
+✓ Landed · → In progress · NEXT Open and next · — Open.
+
+[![OIDC activation: 26 named source steps, 13 landed and 13 unfinished. Step 14 encrypted execution bundle is in progress; step 15 private activation replay is next. Remaining steps separately track execution authorization, reservation, protected SQL, completion, token release, public permissions and dispatch, recovery, portal actions, fresh permission and session confirmation. Source-only, not production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+
+The previous three broad remaining segments are now **13 smaller tasks**—no
+completed work was lost or new product scope added. Each segment maps to a
+[named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
+Grouping milestones are not counted twice; these 26 steps all belong to F08.
+Counts are not effort percentages or an ETA.
+
+**Now:** encrypted execution-bundle source is authored but not landed.
+**Next:** genuine private replay, then authorization, reservation, one-use SQL,
+completion and token delivery; separately authorized public and portal flows follow.
 
 Full verification follows source freeze. Immutable dependencies and independently
 operated signing, Nitro/KMS and witness services remain prerequisites; the
 services are not provisioned.
 
-[Open the full tracker →](docs/production-status.md) for every checkpoint, committed
-evidence, a [breakdown of all 12 open milestones](docs/production-status.md#remaining-work-breakdown)
-and the separate production release gates.
+[Open the full tracker →](docs/production-status.md) for checkpoint evidence and
+the [six separate production gates](docs/production-status.md#remaining-production-gates).
 
-<!-- Update README counts/descriptions, production-status.md evidence/checklists, activation-progress.svg and implementation-progress.svg together. The active bar counts deepest named F08 leaves exactly once, excluding grouping parents; document any inventory/denominator change. Every segment needs a visible number, named status and linked evidence. NEXT is open, not an active or completed claim. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg and implementation-progress.svg together. The active bar counts deepest named F08 leaves exactly once, excluding grouping parents; document any inventory/denominator change. Every segment needs a visible number, named status and linked evidence. NEXT is open, not an active or completed claim. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

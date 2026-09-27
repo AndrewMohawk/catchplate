@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="418" viewBox="0 0 1000 418" role="img" aria-labelledby="project-title project-description">
+  <title id="project-title">Whole-project source checkpoints: 34 of 46 landed; 12 open, including one in progress. Production acceptance: 0 of 6 verified.</title>
+  <desc id="project-description">Six workstream rows show every stable parent ID once. A check means landed source, an arrow means in progress and still open, and a dash means open. Evidence handoff: E01 through E10 landed, 10 of 10. Historical recovery: H01 through H04 landed; H05 cross-version historical authority open, 4 of 5. Permissions and grants: G01 through G10 landed, 10 of 10. Finalization and sessions: F01 through F07 landed; F08 OIDC session activation in progress and open, 7 of 8. Workloads and native: N01 through N03 landed; N04 service identity provisioning and channels, N05 native enrollment and trust installation, and N06 full enclave TLS/proxy/credential path open, 3 of 6. Providers and operations: O01 cross-deployment OAuth ownership, O02 provider issuance in measured custody, O03 public durable credential revocation, O04 protected provider/filesystem effects, O05 policy-publication crash recovery, O06 witnessed RBAC rollback protection, and O07 mTLS and signed sequenced telemetry all open, 0 of 7. Each segment title supplies its exact short task name. These are committed source checkpoint counts, not whole-product completion or effort percentages. Source is unbuilt, unexecuted and unprovisioned; all six production acceptance gates remain unverified.</desc>
+  <rect x="1" y="1" width="998" height="416" rx="16" fill="#0f172a" stroke="#475569"/>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="24" y="34" fill="#f8fafc" font-size="25" font-weight="700">Whole-project source checkpoints</text>
+    <text x="976" y="34" text-anchor="end" fill="#fde68a" font-size="15" font-weight="700">0 / 6 production verified</text>
+    <text x="24" y="64" fill="#6ee7b7" font-size="21" font-weight="700">34 / 46 landed</text>
+    <text x="220" y="64" fill="#cbd5e1" font-size="17">12 open, including 1 in progress</text>
+    <text x="24" y="88" fill="#6ee7b7" font-size="13">✓ Landed source</text>
+    <text x="190" y="88" fill="#fde68a" font-size="13">→ In progress, still open</text>
+    <text x="405" y="88" fill="#e2e8f0" font-size="13">— Open</text>
+    <text x="976" y="88" text-anchor="end" fill="#94a3b8" font-size="13">One segment per named parent checkpoint</text>
+
+    <g aria-label="Evidence handoff: 10 of 10 landed, zero open">
+      <text x="24" y="122" fill="#f8fafc" font-size="16" font-weight="600">Evidence handoff</text>
+      <text x="24" y="139" fill="#cbd5e1" font-size="12">10 / 10 landed · 0 open</text>
+      <g fill="#34d399">
+        <rect x="288" y="108" width="60" height="32" rx="5"><title>E01 · Reserve service &amp; signed originals · LANDED</title></rect>
+        <rect x="356" y="108" width="60" height="32" rx="5"><title>E02 · Reservation handoff &amp; original checks · LANDED</title></rect>
+        <rect x="424" y="108" width="60" height="32" rx="5"><title>E03 · Public reserve permission · LANDED</title></rect>
+        <rect x="492" y="108" width="60" height="32" rx="5"><title>E04 · Protected issuance &amp; one-use execution · LANDED</title></rect>
+        <rect x="560" y="108" width="60" height="32" rx="5"><title>E05 · Isolated SQL &amp; durable attempt journal · LANDED</title></rect>
+        <rect x="628" y="108" width="60" height="32" rx="5"><title>E06 · Completion recovery &amp; durable delivery · LANDED</title></rect>
+        <rect x="696" y="108" width="60" height="32" rx="5"><title>E07 · Pinned commit-reader catalog · LANDED</title></rect>
+        <rect x="764" y="108" width="60" height="32" rx="5"><title>E08 · Completion/state signatures &amp; replay · LANDED</title></rect>
+        <rect x="832" y="108" width="60" height="32" rx="5"><title>E09 · Cold SQL/completion &amp; retained outcomes · LANDED</title></rect>
+        <rect x="900" y="108" width="60" height="32" rx="5"><title>E10 · Durable signer/preparation association · LANDED</title></rect>
+      </g>
+      <g fill="#052e26" font-size="12" font-weight="700" text-anchor="middle">
+        <text x="318" y="129">✓ E01</text><text x="386" y="129">✓ E02</text>
+        <text x="454" y="129">✓ E03</text><text x="522" y="129">✓ E04</text>
+        <text x="590" y="129">✓ E05</text><text x="658" y="129">✓ E06</text>
+        <text x="726" y="129">✓ E07</text><text x="794" y="129">✓ E08</text>
+        <text x="862" y="129">✓ E09</text><text x="930" y="129">✓ E10</text>
+      </g>
+    </g>
+
+    <g aria-label="Historical recovery: 4 of 5 landed, one open">
+      <text x="24" y="164" fill="#f8fafc" font-size="16" font-weight="600">Historical recovery</text>
+      <text x="24" y="181" fill="#cbd5e1" font-size="12">4 / 5 landed · 1 open</text>
+      <g fill="#34d399">
+        <rect x="288" y="150" width="128" height="32" rx="5"><title>H01 · Historical caller signatures &amp; scope · LANDED</title></rect>
+        <rect x="424" y="150" width="128" height="32" rx="5"><title>H02 · Historical plan authentication &amp; replay · LANDED</title></rect>
+        <rect x="560" y="150" width="128" height="32" rx="5"><title>H03 · Historical completion-original checks · LANDED</title></rect>
+        <rect x="696" y="150" width="128" height="32" rx="5"><title>H04 · Ownership, permission &amp; reconciliation · LANDED</title></rect>
+      </g>
+      <rect x="832" y="150" width="128" height="32" rx="5" fill="#334155" stroke="#94a3b8"><title>H05 · Cross-version historical authority · OPEN</title></rect>
+      <g fill="#052e26" font-size="12" font-weight="700" text-anchor="middle">
+        <text x="352" y="171">✓ H01</text><text x="488" y="171">✓ H02</text>
+        <text x="624" y="171">✓ H03</text><text x="760" y="171">✓ H04</text>
+        <text x="896" y="171" fill="#e2e8f0">— H05</text>
+      </g>
+    </g>
+
+    <g aria-label="Permissions and grants: 10 of 10 landed, zero open">
+      <text x="24" y="206" fill="#f8fafc" font-size="16" font-weight="600">Permissions and grants</text>
+      <text x="24" y="223" fill="#cbd5e1" font-size="12">10 / 10 landed · 0 open</text>
+      <g fill="#34d399">
+        <rect x="288" y="192" width="60" height="32" rx="5"><title>G01 · Evidence SQL/completion permissions · LANDED</title></rect>
+        <rect x="356" y="192" width="60" height="32" rx="5"><title>G02 · Explicit handoff portal controls · LANDED</title></rect>
+        <rect x="424" y="192" width="60" height="32" rx="5"><title>G03 · Retained finalization preparation · LANDED</title></rect>
+        <rect x="492" y="192" width="60" height="32" rx="5"><title>G04 · Finalization authorization &amp; grant checks · LANDED</title></rect>
+        <rect x="560" y="192" width="60" height="32" rx="5"><title>G05 · Dedicated caller &amp; cold key lifecycle · LANDED</title></rect>
+        <rect x="628" y="192" width="60" height="32" rx="5"><title>G06 · Authorization before new planning · LANDED</title></rect>
+        <rect x="696" y="192" width="60" height="32" rx="5"><title>G07 · Full-vector grant transport &amp; verification · LANDED</title></rect>
+        <rect x="764" y="192" width="60" height="32" rx="5"><title>G08 · Isolated finalization authorizer · LANDED</title></rect>
+        <rect x="832" y="192" width="60" height="32" rx="5"><title>G09 · One-read roots &amp; signed plan projections · LANDED</title></rect>
+        <rect x="900" y="192" width="60" height="32" rx="5"><title>G10 · Retained grants, permission &amp; portal · LANDED</title></rect>
+      </g>
+      <g fill="#052e26" font-size="12" font-weight="700" text-anchor="middle">
+        <text x="318" y="213">✓ G01</text><text x="386" y="213">✓ G02</text>
+        <text x="454" y="213">✓ G03</text><text x="522" y="213">✓ G04</text>
+        <text x="590" y="213">✓ G05</text><text x="658" y="213">✓ G06</text>
+        <text x="726" y="213">✓ G07</text><text x="794" y="213">✓ G08</text>
+        <text x="862" y="213">✓ G09</text><text x="930" y="213">✓ G10</text>
+      </g>
+    </g>
+
+    <g aria-label="Finalization and sessions: 7 of 8 landed, one open and in progress">
+      <text x="24" y="248" fill="#f8fafc" font-size="16" font-weight="600">Finalization and sessions</text>
+      <text x="24" y="265" fill="#cbd5e1" font-size="12">7 / 8 landed · 1 open (in progress)</text>
+      <g fill="#34d399">
+        <rect x="288" y="234" width="77" height="32" rx="5"><title>F01 · Reserve computation &amp; returned checks · LANDED</title></rect>
+        <rect x="373" y="234" width="77" height="32" rx="5"><title>F02 · Isolated reserver &amp; durable delivery · LANDED</title></rect>
+        <rect x="458" y="234" width="77" height="32" rx="5"><title>F03 · State peer &amp; signed-operation checks · LANDED</title></rect>
+        <rect x="543" y="234" width="77" height="32" rx="5"><title>F04 · Reserve permission, storage &amp; portal · LANDED</title></rect>
+        <rect x="628" y="234" width="77" height="32" rx="5"><title>F05 · Independently pinned pending state · LANDED</title></rect>
+        <rect x="713" y="234" width="77" height="32" rx="5"><title>F06 · Protected finalization SQL &amp; outcomes · LANDED</title></rect>
+        <rect x="798" y="234" width="77" height="32" rx="5"><title>F07 · Completion/recovery &amp; public portal · LANDED</title></rect>
+      </g>
+      <rect x="883" y="234" width="77" height="32" rx="5" fill="#422006" stroke="#fbbf24"><title>F08 · OIDC session activation · IN PROGRESS, STILL OPEN</title></rect>
+      <g fill="#052e26" font-size="12" font-weight="700" text-anchor="middle">
+        <text x="326.5" y="255">✓ F01</text><text x="411.5" y="255">✓ F02</text>
+        <text x="496.5" y="255">✓ F03</text><text x="581.5" y="255">✓ F04</text>
+        <text x="666.5" y="255">✓ F05</text><text x="751.5" y="255">✓ F06</text>
+        <text x="836.5" y="255">✓ F07</text><text x="921.5" y="255" fill="#fde68a">→ F08</text>
+      </g>
+    </g>
+
+    <g aria-label="Workloads and native: 3 of 6 landed, three open">
+      <text x="24" y="290" fill="#f8fafc" font-size="16" font-weight="600">Workloads and native</text>
+      <text x="24" y="307" fill="#cbd5e1" font-size="12">3 / 6 landed · 3 open</text>
+      <g fill="#34d399">
+        <rect x="288" y="276" width="105" height="32" rx="5"><title>N01 · TLS-bound native client attestation · LANDED</title></rect>
+        <rect x="401" y="276" width="105" height="32" rx="5"><title>N02 · Workload mTLS identity editor · LANDED</title></rect>
+        <rect x="514" y="276" width="105" height="32" rx="5"><title>N03 · Signed-handoff Python workload client · LANDED</title></rect>
+      </g>
+      <g fill="#334155" stroke="#94a3b8">
+        <rect x="627" y="276" width="105" height="32" rx="5"><title>N04 · Service identity provisioning &amp; channels · OPEN</title></rect>
+        <rect x="740" y="276" width="105" height="32" rx="5"><title>N05 · Native enrollment &amp; trust installation · OPEN</title></rect>
+        <rect x="853" y="276" width="105" height="32" rx="5"><title>N06 · Full enclave TLS/proxy/credential path · OPEN</title></rect>
+      </g>
+      <g font-size="12" font-weight="700" text-anchor="middle">
+        <text x="340.5" y="297" fill="#052e26">✓ N01</text><text x="453.5" y="297" fill="#052e26">✓ N02</text>
+        <text x="566.5" y="297" fill="#052e26">✓ N03</text><text x="679.5" y="297" fill="#e2e8f0">— N04</text>
+        <text x="792.5" y="297" fill="#e2e8f0">— N05</text><text x="905.5" y="297" fill="#e2e8f0">— N06</text>
+      </g>
+    </g>
+
+    <g aria-label="Providers and operations: zero of 7 landed, seven open">
+      <text x="24" y="332" fill="#f8fafc" font-size="16" font-weight="600">Providers and operations</text>
+      <text x="24" y="349" fill="#cbd5e1" font-size="12">0 / 7 landed · 7 open</text>
+      <g fill="#334155" stroke="#94a3b8">
+        <rect x="288" y="318" width="89" height="32" rx="5"><title>O01 · Cross-deployment OAuth ownership · OPEN</title></rect>
+        <rect x="385" y="318" width="89" height="32" rx="5"><title>O02 · Provider issuance in measured custody · OPEN</title></rect>
+        <rect x="482" y="318" width="89" height="32" rx="5"><title>O03 · Public durable credential revocation · OPEN</title></rect>
+        <rect x="579" y="318" width="89" height="32" rx="5"><title>O04 · Protected provider/filesystem effects · OPEN</title></rect>
+        <rect x="676" y="318" width="89" height="32" rx="5"><title>O05 · Policy-publication crash recovery · OPEN</title></rect>
+        <rect x="773" y="318" width="89" height="32" rx="5"><title>O06 · Witnessed RBAC rollback protection · OPEN</title></rect>
+        <rect x="870" y="318" width="89" height="32" rx="5"><title>O07 · mTLS &amp; signed sequenced telemetry · OPEN</title></rect>
+      </g>
+      <g fill="#e2e8f0" font-size="12" font-weight="700" text-anchor="middle">
+        <text x="332.5" y="339">— O01</text><text x="429.5" y="339">— O02</text>
+        <text x="526.5" y="339">— O03</text><text x="623.5" y="339">— O04</text>
+        <text x="720.5" y="339">— O05</text><text x="817.5" y="339">— O06</text>
+        <text x="914.5" y="339">— O07</text>
+      </g>
+    </g>
+
+    <text x="24" y="377" fill="#cbd5e1" font-size="13">Source-only · unbuilt, unexecuted, unprovisioned · landed source is not verified production readiness</text>
+    <text x="24" y="400" fill="#94a3b8" font-size="12">Counts track named source scopes, not whole-product or effort percentages. Open can include partial implementation.</text>
+  </g>
+</svg>

@@ -1,116 +1,161 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="712" viewBox="0 0 1000 712" role="img" aria-labelledby="activation-title activation-description">
-  <title id="activation-title">OIDC activation detail: 13 of 16 source leaves landed; 3 remain. Custody and protected execution are next and still open.</title>
-  <desc id="activation-description">Each equal-width segment corresponds to one disjoint deepest leaf of the existing F08 checklist, in the numbered order shown below. Landed: 01 F08.1 retained finalization admission; 02 F08.2 original assertion and CAS derivation; 03 F08.3 existing-cookie and login hardening; 04 F08.4a original read proofs; 05 F08.4b encrypted originals; 06 F08.4c business effects; 07 F08.4d.1 mutation and capacity adapter; 08 F08.4d.2 signed-original mechanics; 09 F08.4d.3 indexed write evidence; 10 F08.4d.4 configured owner and private retention; 11 F08.4d.5a root-authenticated configuration and snapshot; 12 F08.4d.5b fixed private service and key delivery; 13 F08.4d.5c fresh latest-head admission. Next, still open and not claimed active: 14 F08.4e custody and protected execution. Other open leaves: 15 F08.5 target-bound public activation and recovery; 16 F08.6 integrated post-finalization portal flow. Protected planning has 5 of 5 source pieces landed, including 3 of 3 cold-admission pieces; F08.4 has 4 of 5 pieces landed. The direct F08 count remains 3 of 6 and the parent count remains 34 of 46. These are source checklist counts, not effort estimates or whole-project percentages. Source remains unbuilt, unexecuted and unprovisioned; no production gate is closed. The local signed head observation does not supply off-host antirollback, action-time one-use execution or session activation.</desc>
-  <rect x="1" y="1" width="998" height="710" rx="16" fill="#0f172a" stroke="#475569"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="884" viewBox="0 0 1000 884" role="img" aria-labelledby="activation-title activation-description">
+  <title id="activation-title">OIDC activation: 13 of 26 source leaves landed; 1 in progress and 12 other open. Private activation replay is next.</title>
+  <desc id="activation-description">The 26 numbered segments map to the named checklist below: the first thirteen are landed, encrypted execution bundle at step 14 is authored but uncommitted and in progress, private activation replay at step 15 is next and still open, and steps 16 through 26 are open. Every item has a stable ID and a written status, so color is not required. The former sixteen-leaf inventory becomes twenty-six by splitting three open scopes into thirteen leaves; no completed work is lost and no parent checkpoint is added. Parent progress remains 34 of 46; production remains 0 of 6 verified. These source-only counts are not a percentage, effort estimate or ETA. Source is unbuilt, unexecuted and unprovisioned. A sampled local signed head is not off-host or atomic action-time authority.</desc>
+  <rect x="1" y="1" width="998" height="882" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
-    <text x="24" y="40" fill="#f8fafc" font-size="26" font-weight="700">OIDC activation · current-focus detail</text>
-    <text x="24" y="76" fill="#6ee7b7" font-size="24" font-weight="700">13 / 16 landed</text>
-    <text x="225" y="76" fill="#cbd5e1" font-size="18">3 remaining, including the next open step</text>
-    <text x="24" y="101" fill="#94a3b8" font-size="14">One segment per deepest F08 leaf. Numbers match the named checklist below.</text>
+    <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">OIDC activation · granular source workflow</text>
+    <text x="24" y="71" fill="#6ee7b7" font-size="23" font-weight="700">13 / 26 landed</text>
+    <text x="235" y="70" fill="#cbd5e1" font-size="17">1 in progress + 12 other open</text>
+    <text x="24" y="95" fill="#94a3b8" font-size="13">One segment per named leaf · checklist count, not a percentage, effort estimate or ETA</text>
 
-    <g font-size="17" font-weight="700" text-anchor="middle">
+    <g font-size="12" font-weight="700" text-anchor="middle">
       <g fill="#34d399">
-        <rect x="24" y="120" width="52" height="44" rx="7"><title>01 · F08.1 · Retained finalization admission · LANDED</title></rect>
-        <rect x="84" y="120" width="52" height="44" rx="7"><title>02 · F08.2 · Original assertion and CAS derivation · LANDED</title></rect>
-        <rect x="144" y="120" width="52" height="44" rx="7"><title>03 · F08.3 · Existing-cookie and login hardening · LANDED</title></rect>
-        <rect x="204" y="120" width="52" height="44" rx="7"><title>04 · F08.4a · Original read proofs · LANDED</title></rect>
-        <rect x="264" y="120" width="52" height="44" rx="7"><title>05 · F08.4b · Encrypted originals · LANDED</title></rect>
-        <rect x="324" y="120" width="52" height="44" rx="7"><title>06 · F08.4c · Business effects · LANDED</title></rect>
-        <rect x="384" y="120" width="52" height="44" rx="7"><title>07 · F08.4d.1 · Mutation and capacity adapter · LANDED</title></rect>
-        <rect x="444" y="120" width="52" height="44" rx="7"><title>08 · F08.4d.2 · Signed-original mechanics · LANDED</title></rect>
-        <rect x="504" y="120" width="52" height="44" rx="7"><title>09 · F08.4d.3 · Indexed write evidence · LANDED</title></rect>
-        <rect x="564" y="120" width="52" height="44" rx="7"><title>10 · F08.4d.4 · Configured owner and private retention · LANDED</title></rect>
-        <rect x="624" y="120" width="52" height="44" rx="7"><title>11 · F08.4d.5a · Root-authenticated configuration and snapshot · LANDED</title></rect>
-        <rect x="684" y="120" width="52" height="44" rx="7"><title>12 · F08.4d.5b · Fixed private service and key delivery · LANDED</title></rect>
-        <rect x="744" y="120" width="52" height="44" rx="7"><title>13 · F08.4d.5c · Fresh latest-head admission · LANDED</title></rect>
+        <rect x="24" y="112" width="32" height="44" rx="5"><title>01 · F08.1 · Retained finalization admission · LANDED</title></rect>
+        <rect x="60" y="112" width="32" height="44" rx="5"><title>02 · F08.2 · Assertion and CAS derivation · LANDED</title></rect>
+        <rect x="96" y="112" width="32" height="44" rx="5"><title>03 · F08.3 · Cookie binding and truthful login · LANDED</title></rect>
+        <rect x="132" y="112" width="32" height="44" rx="5"><title>04 · F08.4a · Complete original read proofs · LANDED</title></rect>
+        <rect x="168" y="112" width="32" height="44" rx="5"><title>05 · F08.4b · Encrypted token originals · LANDED</title></rect>
+        <rect x="204" y="112" width="32" height="44" rx="5"><title>06 · F08.4c · Business transition effects · LANDED</title></rect>
+        <rect x="240" y="112" width="32" height="44" rx="5"><title>07 · F08.4d.1 · Full mutation and capacity adapter · LANDED</title></rect>
+        <rect x="276" y="112" width="32" height="44" rx="5"><title>08 · F08.4d.2 · Signed-original mechanics · LANDED</title></rect>
+        <rect x="312" y="112" width="32" height="44" rx="5"><title>09 · F08.4d.3 · Indexed write evidence · LANDED</title></rect>
+        <rect x="348" y="112" width="32" height="44" rx="5"><title>10 · F08.4d.4 · Configured owner and private retention · LANDED</title></rect>
+        <rect x="384" y="112" width="32" height="44" rx="5"><title>11 · F08.4d.5a · Root-authenticated config and snapshot · LANDED</title></rect>
+        <rect x="420" y="112" width="32" height="44" rx="5"><title>12 · F08.4d.5b · Private service and key delivery · LANDED</title></rect>
+        <rect x="456" y="112" width="32" height="44" rx="5"><title>13 · F08.4d.5c · Fresh latest-head admission · LANDED</title></rect>
       </g>
-      <rect x="804" y="120" width="52" height="44" rx="7" fill="#422006" stroke="#fbbf24" stroke-width="2"><title>14 · F08.4e · Custody and protected execution · NEXT, STILL OPEN</title></rect>
+      <rect x="492" y="112" width="32" height="44" rx="5" fill="#fbbf24"><title>14 · F08.4e.1 · Encrypted execution bundle · IN PROGRESS, authored and uncommitted</title></rect>
+      <rect x="528" y="112" width="32" height="44" rx="5" fill="#0f172a" stroke="#60a5fa" stroke-width="2"><title>15 · F08.4e.2 · Private activation replay · NEXT, OPEN, not active</title></rect>
       <g fill="#334155" stroke="#94a3b8">
-        <rect x="864" y="120" width="52" height="44" rx="7"><title>15 · F08.5 · Target-bound public activation and recovery · OPEN</title></rect>
-        <rect x="924" y="120" width="52" height="44" rx="7"><title>16 · F08.6 · Integrated post-finalization portal flow · OPEN</title></rect>
+        <rect x="564" y="112" width="32" height="44" rx="5"><title>16 · F08.4e.3 · Execution authorization grant · OPEN</title></rect>
+        <rect x="600" y="112" width="32" height="44" rx="5"><title>17 · F08.4e.4 · Reservation and pending admission · OPEN</title></rect>
+        <rect x="636" y="112" width="32" height="44" rx="5"><title>18 · F08.4e.5 · One-use protected SQL · OPEN</title></rect>
+        <rect x="672" y="112" width="32" height="44" rx="5"><title>19 · F08.4e.6 · Completion and reconciliation · OPEN</title></rect>
+        <rect x="708" y="112" width="32" height="44" rx="5"><title>20 · F08.4e.7 · Protected token release · OPEN</title></rect>
+        <rect x="744" y="112" width="32" height="44" rx="5"><title>21 · F08.5.1 · Target-bound permission · OPEN</title></rect>
+        <rect x="780" y="112" width="32" height="44" rx="5"><title>22 · F08.5.2 · Public activation dispatch · OPEN</title></rect>
+        <rect x="816" y="112" width="32" height="44" rx="5"><title>23 · F08.5.3 · Public recovery dispatch · OPEN</title></rect>
+        <rect x="852" y="112" width="32" height="44" rx="5"><title>24 · F08.6.1 · Explicit portal actions · OPEN</title></rect>
+        <rect x="888" y="112" width="32" height="44" rx="5"><title>25 · F08.6.2 · Fresh portal permission · OPEN</title></rect>
+        <rect x="924" y="112" width="32" height="44" rx="5"><title>26 · F08.6.3 · Truthful session confirmation · OPEN</title></rect>
       </g>
       <g fill="#052e26">
-        <text x="50" y="148">01</text><text x="110" y="148">02</text>
-        <text x="170" y="148">03</text><text x="230" y="148">04</text>
-        <text x="290" y="148">05</text><text x="350" y="148">06</text>
-        <text x="410" y="148">07</text><text x="470" y="148">08</text>
-        <text x="530" y="148">09</text><text x="590" y="148">10</text>
-        <text x="650" y="148">11</text><text x="710" y="148">12</text>
-        <text x="770" y="148">13</text>
+        <text x="40" y="131">01</text><text x="76" y="131">02</text><text x="112" y="131">03</text>
+        <text x="148" y="131">04</text><text x="184" y="131">05</text><text x="220" y="131">06</text>
+        <text x="256" y="131">07</text><text x="292" y="131">08</text><text x="328" y="131">09</text>
+        <text x="364" y="131">10</text><text x="400" y="131">11</text><text x="436" y="131">12</text><text x="472" y="131">13</text>
+        <text x="40" y="148">✓</text><text x="76" y="148">✓</text><text x="112" y="148">✓</text>
+        <text x="148" y="148">✓</text><text x="184" y="148">✓</text><text x="220" y="148">✓</text>
+        <text x="256" y="148">✓</text><text x="292" y="148">✓</text><text x="328" y="148">✓</text>
+        <text x="364" y="148">✓</text><text x="400" y="148">✓</text><text x="436" y="148">✓</text><text x="472" y="148">✓</text>
       </g>
-      <text x="830" y="148" fill="#fde68a">14</text>
+      <g fill="#422006"><text x="508" y="131">14</text><text x="508" y="148">→</text></g>
+      <g fill="#93c5fd"><text x="544" y="131">15</text><text x="544" y="148">N</text></g>
       <g fill="#e2e8f0">
-        <text x="890" y="148">15</text>
-        <text x="950" y="148">16</text>
+        <text x="580" y="131">16</text><text x="616" y="131">17</text><text x="652" y="131">18</text>
+        <text x="688" y="131">19</text><text x="724" y="131">20</text><text x="760" y="131">21</text>
+        <text x="796" y="131">22</text><text x="832" y="131">23</text><text x="868" y="131">24</text>
+        <text x="904" y="131">25</text><text x="940" y="131">26</text>
+        <text x="580" y="148">—</text><text x="616" y="148">—</text><text x="652" y="148">—</text>
+        <text x="688" y="148">—</text><text x="724" y="148">—</text><text x="760" y="148">—</text>
+        <text x="796" y="148">—</text><text x="832" y="148">—</text><text x="868" y="148">—</text>
+        <text x="904" y="148">—</text><text x="940" y="148">—</text>
       </g>
     </g>
-    <text x="24" y="191" fill="#6ee7b7" font-size="14" font-weight="700">✓ LANDED · 01–13</text>
-    <text x="230" y="191" fill="#fde68a" font-size="14" font-weight="700">NEXT, STILL OPEN · 14</text>
-    <text x="505" y="191" fill="#e2e8f0" font-size="14" font-weight="700">OPEN · 15–16</text>
-    <text x="976" y="191" text-anchor="end" fill="#94a3b8" font-size="13">Source counts, not an effort estimate</text>
-
-    <rect x="24" y="214" width="464" height="402" rx="12" fill="#172033" stroke="#475569"/>
-    <rect x="512" y="214" width="464" height="402" rx="12" fill="#172033" stroke="#475569"/>
-
-    <g font-size="15" font-weight="600" fill="#f8fafc">
-      <text x="84" y="244">Retained finalization admission</text>
-      <text x="84" y="292">Assertion &amp; CAS derivation</text>
-      <text x="84" y="340">Cookie binding &amp; truthful login</text>
-      <text x="84" y="388">Complete original read proofs</text>
-      <text x="84" y="436">Encrypted token originals</text>
-      <text x="84" y="484">Business transition effects</text>
-      <text x="84" y="532">Full mutation &amp; capacity adapter</text>
-      <text x="84" y="580">Signed-original mechanics</text>
-      <text x="572" y="244">Indexed write evidence</text>
-      <text x="572" y="292">Configured owner &amp; private retention</text>
-      <text x="572" y="340">Root-authenticated config &amp; snapshot</text>
-      <text x="572" y="388">Private service &amp; key delivery</text>
-      <text x="572" y="436">Fresh latest-head admission</text>
-    </g>
-    <g font-size="13" fill="#6ee7b7">
-      <text x="84" y="264">F08.1 · ✓ LANDED</text>
-      <text x="84" y="312">F08.2 · ✓ LANDED</text>
-      <text x="84" y="360">F08.3 · ✓ LANDED</text>
-      <text x="84" y="408">F08.4a · ✓ LANDED</text>
-      <text x="84" y="456">F08.4b · ✓ LANDED</text>
-      <text x="84" y="504">F08.4c · ✓ LANDED</text>
-      <text x="84" y="552">F08.4d.1 · ✓ LANDED</text>
-      <text x="84" y="600">F08.4d.2 · ✓ LANDED</text>
-      <text x="572" y="264">F08.4d.3 · ✓ LANDED</text>
-      <text x="572" y="312">F08.4d.4 · ✓ LANDED</text>
-      <text x="572" y="360">F08.4d.5a · ✓ LANDED</text>
-      <text x="572" y="408">F08.4d.5b · ✓ LANDED</text>
-      <text x="572" y="456">F08.4d.5c · ✓ LANDED</text>
-    </g>
-    <g font-size="15" font-weight="700" text-anchor="middle" fill="#6ee7b7">
-      <text x="54" y="251">01</text><text x="54" y="299">02</text>
-      <text x="54" y="347">03</text><text x="54" y="395">04</text>
-      <text x="54" y="443">05</text><text x="54" y="491">06</text>
-      <text x="54" y="539">07</text><text x="54" y="587">08</text>
-      <text x="542" y="251">09</text><text x="542" y="299">10</text>
-      <text x="542" y="347">11</text><text x="542" y="395">12</text>
-      <text x="542" y="443">13</text>
+    <g font-size="13" font-weight="700">
+      <text x="24" y="181" fill="#6ee7b7">✓ LANDED · 01–13</text>
+      <text x="245" y="181" fill="#fde68a">→ IN PROGRESS · 14</text>
+      <text x="503" y="181" fill="#93c5fd">N = NEXT, OPEN · 15</text>
+      <text x="757" y="181" fill="#cbd5e1">— OPEN · 16–26</text>
     </g>
 
-    <rect x="524" y="468" width="440" height="44" rx="7" fill="#422006" stroke="#b45309"/>
-    <text x="542" y="491" text-anchor="middle" fill="#fde68a" font-size="15" font-weight="700">14</text>
-    <text x="572" y="485" fill="#fef3c7" font-size="15" font-weight="600">Custody &amp; protected execution</text>
-    <text x="572" y="504" fill="#fde68a" font-size="13" font-weight="700">F08.4e · NEXT · OPEN, not yet active</text>
-    <g font-size="15" font-weight="600" fill="#e2e8f0">
-      <text x="572" y="532">Target-bound public activation &amp; recovery</text>
-      <text x="572" y="580">Integrated portal / current-auth flow</text>
+    <rect x="24" y="200" width="464" height="576" rx="12" fill="#172033" stroke="#475569"/>
+    <rect x="512" y="200" width="464" height="576" rx="12" fill="#172033" stroke="#475569"/>
+    <text x="42" y="227" fill="#6ee7b7" font-size="16" font-weight="700">LANDED SOURCE · 13</text>
+    <text x="530" y="227" fill="#e2e8f0" font-size="16" font-weight="700">NOT LANDED · 13</text>
+    <g font-size="14" font-weight="600" fill="#f8fafc">
+      <text x="74" y="254">Retained finalization admission</text>
+      <text x="74" y="294">Assertion &amp; CAS derivation</text>
+      <text x="74" y="334">Cookie binding &amp; truthful login</text>
+      <text x="74" y="374">Complete original read proofs</text>
+      <text x="74" y="414">Encrypted token originals</text>
+      <text x="74" y="454">Business transition effects</text>
+      <text x="74" y="494">Full mutation &amp; capacity adapter</text>
+      <text x="74" y="534">Signed-original mechanics</text>
+      <text x="74" y="574">Indexed write evidence</text>
+      <text x="74" y="614">Configured owner &amp; private retention</text>
+      <text x="74" y="654">Root-authenticated config &amp; snapshot</text>
+      <text x="74" y="694">Private service &amp; key delivery</text>
+      <text x="74" y="734">Fresh latest-head admission</text>
     </g>
-    <g font-size="13" fill="#cbd5e1">
-      <text x="572" y="552">F08.5 · — OPEN</text>
-      <text x="572" y="600">F08.6 · — OPEN</text>
+    <g font-size="12" fill="#6ee7b7">
+      <text x="74" y="271">F08.1 · ✓ LANDED</text>
+      <text x="74" y="311">F08.2 · ✓ LANDED</text>
+      <text x="74" y="351">F08.3 · ✓ LANDED</text>
+      <text x="74" y="391">F08.4a · ✓ LANDED</text>
+      <text x="74" y="431">F08.4b · ✓ LANDED</text>
+      <text x="74" y="471">F08.4c · ✓ LANDED</text>
+      <text x="74" y="511">F08.4d.1 · ✓ LANDED</text>
+      <text x="74" y="551">F08.4d.2 · ✓ LANDED</text>
+      <text x="74" y="591">F08.4d.3 · ✓ LANDED</text>
+      <text x="74" y="631">F08.4d.4 · ✓ LANDED</text>
+      <text x="74" y="671">F08.4d.5a · ✓ LANDED</text>
+      <text x="74" y="711">F08.4d.5b · ✓ LANDED</text>
+      <text x="74" y="751">F08.4d.5c · ✓ LANDED</text>
     </g>
-    <g font-size="15" font-weight="700" text-anchor="middle" fill="#cbd5e1">
-      <text x="542" y="539">15</text>
-      <text x="542" y="587">16</text>
+    <g font-size="14" font-weight="700" text-anchor="middle" fill="#6ee7b7">
+      <text x="48" y="261">01</text><text x="48" y="301">02</text><text x="48" y="341">03</text>
+      <text x="48" y="381">04</text><text x="48" y="421">05</text><text x="48" y="461">06</text>
+      <text x="48" y="501">07</text><text x="48" y="541">08</text><text x="48" y="581">09</text>
+      <text x="48" y="621">10</text><text x="48" y="661">11</text><text x="48" y="701">12</text><text x="48" y="741">13</text>
     </g>
 
-    <text x="24" y="644" fill="#cbd5e1" font-size="14">Source-only · unbuilt, unexecuted, unprovisioned · no production gate closed</text>
-    <text x="24" y="669" fill="#94a3b8" font-size="13">These 16 leaves explain F08; they do not add to the 46 parent checkpoints or imply a whole-project percentage.</text>
-    <text x="24" y="691" fill="#94a3b8" font-size="13">A local signed head observation is not off-host anti-rollback or action-time one-use execution.</text>
+    <rect x="522" y="236" width="444" height="40" rx="6" fill="#422006"/>
+    <rect x="522" y="278" width="444" height="39" rx="6" fill="#0f172a" stroke="#60a5fa"/>
+    <g font-size="14" font-weight="600">
+      <text x="562" y="254" fill="#fef3c7">Encrypted execution bundle</text>
+      <text x="562" y="294" fill="#dbeafe">Private activation replay</text>
+    </g>
+    <text x="562" y="271" fill="#fde68a" font-size="12">F08.4e.1 · → IN PROGRESS · authored, uncommitted</text>
+    <text x="562" y="311" fill="#93c5fd" font-size="12">F08.4e.2 · NEXT · OPEN, not active</text>
+    <text x="536" y="261" text-anchor="middle" fill="#fde68a" font-size="14" font-weight="700">14</text>
+    <text x="536" y="301" text-anchor="middle" fill="#93c5fd" font-size="14" font-weight="700">15</text>
+    <g font-size="14" font-weight="600" fill="#e2e8f0">
+      <text x="562" y="334">Execution authorization grant</text>
+      <text x="562" y="374">Reservation and pending admission</text>
+      <text x="562" y="414">One-use protected SQL</text>
+      <text x="562" y="454">Completion and reconciliation</text>
+      <text x="562" y="494">Protected token release</text>
+      <text x="562" y="534">Target-bound permission</text>
+      <text x="562" y="574">Public activation dispatch</text>
+      <text x="562" y="614">Public recovery dispatch</text>
+      <text x="562" y="654">Explicit portal actions</text>
+      <text x="562" y="694">Fresh portal permission</text>
+      <text x="562" y="734">Truthful session confirmation</text>
+    </g>
+    <g font-size="12" fill="#cbd5e1">
+      <text x="562" y="351">F08.4e.3 · — OPEN</text>
+      <text x="562" y="391">F08.4e.4 · — OPEN</text>
+      <text x="562" y="431">F08.4e.5 · — OPEN</text>
+      <text x="562" y="471">F08.4e.6 · — OPEN</text>
+      <text x="562" y="511">F08.4e.7 · — OPEN</text>
+      <text x="562" y="551">F08.5.1 · — OPEN</text>
+      <text x="562" y="591">F08.5.2 · — OPEN</text>
+      <text x="562" y="631">F08.5.3 · — OPEN</text>
+      <text x="562" y="671">F08.6.1 · — OPEN</text>
+      <text x="562" y="711">F08.6.2 · — OPEN</text>
+      <text x="562" y="751">F08.6.3 · — OPEN</text>
+    </g>
+    <g font-size="14" font-weight="700" text-anchor="middle" fill="#cbd5e1">
+      <text x="536" y="341">16</text><text x="536" y="381">17</text><text x="536" y="421">18</text>
+      <text x="536" y="461">19</text><text x="536" y="501">20</text><text x="536" y="541">21</text>
+      <text x="536" y="581">22</text><text x="536" y="621">23</text><text x="536" y="661">24</text>
+      <text x="536" y="701">25</text><text x="536" y="741">26</text>
+    </g>
+
+    <text x="24" y="801" fill="#cbd5e1" font-size="14">Source-only · unbuilt, unexecuted, unprovisioned · parent checkpoints 34/46 · production verified 0/6</text>
+    <text x="24" y="824" fill="#94a3b8" font-size="13">16 → 26 leaves: three open scopes expanded into thirteen; no completed work lost and no new parent added.</text>
+    <text x="24" y="846" fill="#94a3b8" font-size="13">IN PROGRESS is not landed. NEXT is still open, not active. F08 remains unfinished.</text>
+    <text x="24" y="867" fill="#94a3b8" font-size="13">A sampled local signed head is not off-host anti-rollback or atomic action-time execution authority.</text>
   </g>
 </svg>

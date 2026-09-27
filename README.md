@@ -25,18 +25,18 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 ### Current workflow: session activation
 
-**20/26 source steps landed · 1 active · 5 todo.** Protected token release and
-private handoff are source-landed in [5719d50](https://github.com/example/private-deployment).
-Active: step 21, fresh permission for the exact activation target (.181 source uncommitted).
+**21/26 source steps landed · 0 active · 5 todo.** Fresh target-bound permission
+is source-landed in [d3f8469](https://github.com/example/private-deployment).
+Next is step 22: connect explicit public activation dispatch.
 
-[![Session activation's 26 named source steps: 01–20 landed; 21 target-bound permission in progress, .181 uncommitted; 22–26 public activation, recovery and portal work todo. Twenty landed, one active and five todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch NEXT/todo; 23–26 recovery and portal work todo. Twenty-one landed, zero active and five todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
-The six steps after protected release remain individually tracked:
+Public and portal checkpoints remain individually tracked:
 
-| Step / stable ID | Remaining deliverable | Status |
+| Step / stable ID | Deliverable | Status |
 | --- | --- | --- |
-| 21 · F08.5.1 | Authorize the exact user/session/credential target, with fresh approval and dedicated caller-key custody | In progress · uncommitted |
-| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | Todo |
+| 21 · F08.5.1 | Authorize the exact user/session/credential target, with fresh approval and dedicated caller-key custody | Landed · [d3f8469](https://github.com/example/private-deployment) |
+| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | Next / todo |
 | 23 · F08.5.3 | Connect separately authorized recovery; a missing response never permits automatic activation retry | Todo |
 | 24 · F08.6.1 | Add explicit portal activate/recover controls bound to the exact retained target | Todo |
 | 25 · F08.6.2 | Require fresh action-bound portal approval; discard prompts when actor or target changes | Todo |
@@ -47,7 +47,7 @@ The six steps after protected release remain individually tracked:
 
 The existing 11 release/handoff substeps have **11 landed · 0 active · 0 todo**.
 
-[![All eleven release and handoff substeps are source-landed: 15.1–15.6 exact release/recovery and 16.1–16.5 cold construction, service, transport, independent verification and authorized private handoff. Private handoff landed in 5719d50. No active or open components remain inside this detail; step 21 public permission is active and uncommitted; portal and dispatch steps 22–26 remain open. No runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
+[![All eleven release and handoff substeps are source-landed: 15.1–15.6 exact release/recovery and 16.1–16.5 cold construction, service, transport, independent verification and authorized private handoff. Private handoff landed in 5719d50. No active or open components remain inside this detail; step 21 target-bound permission is also landed, while dispatch and portal steps 22–26 remain open. No runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
 
 | Status | Handoff substep | Evidence |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ effort percentages, or an ETA.
 | ID | Remaining checkpoint | Source status |
 | --- | --- | --- |
 | H05 | Historical authority across configuration/key changes | Todo |
-| F08 | Session activation: public permissions, activation/recovery and portal/session flow (steps 21–26 above) | In progress |
+| F08 | Session activation: public activation/recovery and portal/session flow (steps 22–26 above) | In progress |
 | N04 | Workload identity provisioning and authenticated channels | Todo |
 | N05 | Native enrollment, verified CA installation and proxy setup | Todo |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
@@ -92,7 +92,7 @@ partial code. Landed does not mean tested, deployed, or production-ready.
 <summary>Deeper checkpoints and completed-work evidence</summary>
 
 - [All 46 project checkpoints and their evidence](docs/production-status.md#next-source-milestones)
-- [Session activation: 20/26 steps landed](docs/production-status.md#active-workflow-granular-source-steps)
+- [Session activation: 21/26 steps landed](docs/production-status.md#active-workflow-granular-source-steps)
 - [Token release: 16/16 units landed](docs/production-status.md#token-release-implementation-detail)
 - [Release and handoff: 11/11 substeps landed](docs/production-status.md#exact-release-and-handoff-detail)
 - [Completion/recovery: 6/6](docs/production-status.md#consume-completion-and-recovery-detail), [reservation/SQL: 6/6](docs/production-status.md#consume-reservation-and-sql-detail), [consume authorization: 12/12](docs/production-status.md#consume-authorization-substeps), [grant issuance: 5/5](docs/production-status.md#consume-grant-issuance-detail)

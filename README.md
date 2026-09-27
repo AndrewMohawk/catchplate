@@ -45,23 +45,24 @@ defines each scope and its dependencies. Open items can already contain partial 
 
 ### Protected token release: remaining source work
 
-**14/16 units landed · 1 in progress · 1 open. Next: committed-original verification (15.2).**
+**14/16 units landed · 1 in progress · 1 open. Next: completion-to-release proof (15.3).**
 
-[![Protected token release: units 01–14 landed; 15 exact committed-original token release is in progress with fresh intent authentication landed, and 16 cold release response and handoff remains open. Each segment has a task name and source status. These are source checkpoints, not runtime token release or production readiness.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![Protected token release: units 01–14 landed; 15 exact committed-original token release is in progress with fresh intent authentication and committed-original verification landed, and 16 cold release response and handoff remains open. Each segment has a task name and source status. These are source checkpoints, not runtime token release or production readiness.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
-**Zoom into the two unfinished units — 1/11 named substeps landed, 10 still open:**
+**Zoom into the two unfinished units — 2/11 named substeps landed, 9 still open:**
 
-[![Exact release and private handoff: 15.1 fresh release authorization is source-landed; 15.2 committed-original verification is NEXT/open. Completion-to-release proof, durable exact outcome, guarded token opening and uncertain-outcome recovery remain open. All five cold private-handoff components remain open. One of eleven nested source components landed; parent progress remains 14/16, not production readiness.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
+[![Exact release and private handoff: 15.1 fresh release authorization and 15.2 committed-original verification are source-landed; 15.3 completion-to-release proof is NEXT/open. Durable exact outcome, guarded token opening and uncertain-outcome recovery remain open. All five cold private-handoff components remain open. Two of eleven nested source components landed; parent progress remains 14/16, not production readiness.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
 
 Each segment has a stable ID and a [specific completion criterion](docs/production-status.md#exact-release-and-handoff-detail).
 As a substep lands, its segment turns green and gains commit evidence; the
 enclosing unit closes only when all its criteria are met. This subdivision adds
 no new scope or completed work: token release stays **14/16**, not 14/27.
 
-**Most recently completed:** substep **15.1**, fresh private release-intent
-authentication — separately enrolled signing, original verification and actual
-custody-side admission [committed in c26c9e7](https://github.com/example/private-deployment).
-This verifies intent and old-token possession; it does not release the new token.
+**Most recently completed:** substep **15.2**, original packet/effects replay,
+commit-marker/vector observation after normal close, signed completion/ACK and
+exact target verification [committed in b7be5cb](https://github.com/example/private-deployment).
+The authenticated bridge into release-purpose custody remains next; verified
+originals do not authorize plaintext token release.
 
 <details>
 <summary>Completed source detail: completion/recovery 6/6, reservation/SQL 6/6, authorization 12/12 and grant issuance 5/5</summary>

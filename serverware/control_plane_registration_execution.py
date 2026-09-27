@@ -8,8 +8,10 @@ substitutes. Public custody-only routes do not invoke this continuation.
 
 One inherited work allowance and absolute deadline cover each call. Received
 grant originals undergo genuine local replay/signature/scope verification.
-Nothing here writes SQL, reserves a root, stores a one-use marker or finalizes
-a credential. No environment discovery, key fallback, retry or renewal exists.
+The explicit nested-v2 reservation method can request a durable state reserve;
+v1 grant methods and existing public preparation routes cannot. No method here
+writes SQL, stores an execution-attempt marker or finalizes a credential.
+No environment discovery, key fallback, automatic retry or renewal exists.
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ from serverware import authority_webauthn_evidence_custody_configuration as conf
 evidence, clock = issuance.evidence, issuance.clock
 
 
-def _scope(owner, *, deadline_epoch_ns, deadline_ns, work):
+def _scope(owner, *, deadline_epoch_ns, deadline_ns, work, _reservation=False):
     """Hold actual cold inputs; returned local settings are not a proof token."""
     startup._require_pid()
     if type(owner) is not startup._EnrollmentOwner:
@@ -43,7 +45,13 @@ def _scope(owner, *, deadline_epoch_ns, deadline_ns, work):
     shape._integer(deadline_epoch_ns, minimum=1)
     shape._integer(deadline_ns, minimum=1)
     deadline, inherited = deadline_epoch_ns, deadline_ns
+    if type(_reservation) is not bool:
+        raise startup.EnrollmentStartupError("registration execution purpose is not source-selected")
     endpoint = execution.authorizer_endpoint
+    if _reservation:
+        if execution.reservation_endpoint is None or execution.reservation_predecessor is None:
+            raise startup.EnrollmentStartupError("registration reservation is not independently cold-enabled")
+        endpoint = execution.reservation_endpoint
     ledger = evidence.capture._SharedLedger(work)
     common = {
         "payload": issuance.configuration._ConfigurationCapture(ledger,
@@ -130,3 +138,38 @@ def _request_on_owner(owner, *, authorization_bytes, request_originals,
     live()
     transport._check_deadline(bound)
     return grant
+
+
+def _reserve_on_owner(owner, *, originals, deadline_epoch_ns, deadline_ns, work):
+    """Exchange exact raw10 once; independently authenticate returned raw3.
+
+    The actual application must first admit its present caller and permission
+    to reserve. Only nested-v2 cold material supplies endpoint/predecessor pins.
+    Even authentic returned originals are not independently current pending
+    authority, permission to execute SQL or a credential-finalization result.
+    """
+    from serverware import authority_registration_reservation_transport as reserve_wire
+    from serverware import authority_registration_reservation_response as reserve_response
+
+    held = reserve_wire._originals(originals, response=False)
+    common, endpoint, _private, deadline, bound, live = _scope(owner,
+        deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work, _reservation=True)
+    predecessor = owner._material.execution.reservation_predecessor
+    # Authenticate the original permission/grant before any side-effecting
+    # reserve request. Received signatures will be independently checked again
+    # with the actual returned computation and state acknowledgment afterward.
+    receiving._verify_on_configuration(**common, authorization_bytes=held[0],
+        request_originals=held[1:4], response_originals=held[4:8],
+        before_vector_bytes=held[8], grant_bytes=held[9], deadline_epoch_ns=deadline,
+        transport_deadline_ns=bound, work=work)
+    live()
+    returned = evidence.production._callback(work,
+        lambda: reserve_wire._socket_request(endpoint, originals=held, deadline_ns=bound))
+    live()
+    response = reserve_response._verify_on_configuration(**common, originals=held,
+        response_originals=returned, expected_predecessor_sequence=predecessor[0],
+        expected_predecessor_head_digest=predecessor[1], expected_fence=predecessor[2],
+        deadline_epoch_ns=deadline, transport_deadline_ns=bound, work=work)
+    live()
+    reserve_wire._check_deadline(bound)
+    return response

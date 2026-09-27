@@ -30,6 +30,14 @@ class RegistrationPreparationError(ValueError):
     pass
 
 
+class RegistrationReservationOutcomeError(RegistrationPreparationError):
+    """Retained preparation locator only; the reservation outcome is unknown."""
+
+    def __init__(self, local_digest):
+        super().__init__("registration preparation retained; reservation outcome is not established")
+        self.local_digest = local_digest
+
+
 def prepare_registration_evidence(originals):
     """Return actual (evidence envelope, evidence-admit request, input bytes)."""
     from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
@@ -283,6 +291,62 @@ def prepare_and_retain_registration_execution_grant(originals):
         originals, _ValidationWork(QueryReadValidationLimits()))
     return custody_client.ControlPlaneCustodyClient.append_registration_preparation(
         custody, prepared, signer_originals=signer_originals)
+
+
+def prepare_and_reserve_registration_execution(originals):
+    """Private new-purpose preparation through one genuine reservation exchange.
+
+    The actual application must separately authenticate the present caller and
+    permission to reserve; existing public grant-only handlers do not call this
+    entrypoint. Nested-v2 cold scope is mandatory before preparation starts.
+    One work allowance and the original preparation window cover the exchange.
+
+    Retain the exact signer/grant association before sending a reserve. Append
+    or transport failure can follow durable effects; never retry preparation,
+    signing or reservation automatically. Return (existing local grant ID,
+    original reserve/snapshot/ack tuple), not SQL execution or current-head
+    authority. Receipt originality does not prove it remains the pending head.
+    """
+    from serverware import authority_webauthn_enrollment_issuer as issuer
+    from serverware import control_plane_custody_client as custody_client
+    from serverware import control_plane_custody_startup as custody_startup
+    from serverware import control_plane_enrollment_startup as enrollment_startup
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    work = _ValidationWork(QueryReadValidationLimits())
+    callback = issuer.evidence.production._callback
+    enrollment = callback(work, enrollment_startup.require_started)
+    if (type(enrollment) is not enrollment_startup._EnrollmentOwner
+            or not callback(work, lambda: enrollment.reservation_enabled)):
+        raise RegistrationPreparationError("registration reservation is not independently cold-enabled")
+    material = enrollment._material
+    custody, prepared, signer_originals, window = _prepare_registration_execution_grant_on_work(originals, work)
+    clock = issuer.authorization.clock
+
+    def live():
+        clock._check_on_work(window, work=work)
+        if (callback(work, enrollment_startup.require_started) is not enrollment
+                or enrollment._material is not material
+                or callback(work, custody_startup.require_started) is not custody):
+            raise RegistrationPreparationError("registration reservation cold owners changed")
+        clock._check_on_work(window, work=work)
+
+    live()
+    # The actual bounded journal owns all three publications. Retention is
+    # opaque and may outlive the grant, but such expiry forbids the next send.
+    digest = callback(work, lambda: custody_client.ControlPlaneCustodyClient.append_registration_preparation(
+        custody, prepared, signer_originals=signer_originals))
+    try:
+        live()
+        response = enrollment_startup._EnrollmentOwner._request_registration_reservation(
+            enrollment, originals=prepared, deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+        live()
+    except Exception as exc:
+        # Keep the actual durable locator on ordinary post-retention failure;
+        # neither it nor this error permits replaying the signing workflow.
+        # Cancellation and process-termination exceptions still propagate.
+        raise RegistrationReservationOutcomeError(digest) from exc
+    return digest, response
 
 
 def prepare_registration_finalization(*, request_originals, response_originals):

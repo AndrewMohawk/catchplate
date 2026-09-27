@@ -3,6 +3,9 @@
 The parent authenticates the complete original v3 envelope under its already
 admitted runtime root. This module additionally authenticates all three actual
 enrollment originals and joins their caller/configuration/generation/key scope.
+The exact nested v1 profile remains authorizer-only. Opt-in nested v2 also pins
+the separate reserver endpoint and one independent state predecessor/fence;
+neither is inferred from an acknowledgment or recovered journal observation.
 It does not deliver descriptors, read private keys, authenticate an actor,
 issue permission or open a transport. Returned material is owned data only.
 """
@@ -17,10 +20,13 @@ from serverware import authority_webauthn_evidence_policy as evidence_policy
 
 
 SCHEMA = "serverware.controlPlaneRegistrationExecution/v1"
+V2_SCHEMA = "serverware.controlPlaneRegistrationExecution/v2"
 CALLER_KEY_FD = 203
 AUTHORIZER_SOCKET_PATH = "/run/serverware/registration-execution/authorizer.sock"
+RESERVER_SOCKET_PATH = "/run/serverware/registration-execution/reserver.sock"
 _FIELDS = frozenset({"schema", "executionCallerPrivateKeyFd", "currentRootEnrollment",
     "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"})
+_V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "statePredecessor"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _ORIGINAL_LIMITS = (("currentRootEnrollment", caller.authorization.MAX_ENROLLMENT_BYTES),
@@ -41,6 +47,8 @@ class _ExecutionMaterial:
     grant_enrollment_bytes: bytes
     authorization_enrollment_bytes: bytes
     authorizer_endpoint: tuple
+    reservation_endpoint: tuple | None = None
+    reservation_predecessor: tuple | None = None
 
 
 def _endpoint(value):
@@ -58,8 +66,13 @@ def _endpoint(value):
 def _shape(value):
     if value is None:
         return
-    shape._object(value, _FIELDS, "control-plane registration execution scope")
-    shape._literal(value["schema"], SCHEMA)
+    if type(value) is not dict:
+        raise RegistrationExecutionBootstrapError("control-plane registration execution scope is not an exact object")
+    version = value.get("schema")
+    if type(version) is not str or version not in (SCHEMA, V2_SCHEMA):
+        raise RegistrationExecutionBootstrapError("control-plane registration execution profile is unsupported")
+    shape._object(value, _FIELDS if version == SCHEMA else _V2_FIELDS,
+        "control-plane registration execution scope")
     shape._integer(value["executionCallerPrivateKeyFd"], 1023, minimum=32)
     if value["executionCallerPrivateKeyFd"] != CALLER_KEY_FD:
         raise RegistrationExecutionBootstrapError("registration execution caller key FD is not source fixed")
@@ -69,6 +82,28 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
+    if version == V2_SCHEMA:
+        _reserver_endpoint(value["reserverEndpoint"])
+        predecessor = value["statePredecessor"]
+        shape._object(predecessor, frozenset({"sequence", "headDigest", "nextFence"}),
+            "independent registration reservation predecessor")
+        shape._integer(predecessor["sequence"], caller.authorization.MAX_RECORDS)
+        shape._digest(predecessor["headDigest"])
+        shape._integer(predecessor["nextFence"], minimum=1)
+        if predecessor["sequence"] == 0 and predecessor["nextFence"] != 1:
+            raise RegistrationExecutionBootstrapError("genesis reservation predecessor requires fence one")
+
+
+def _reserver_endpoint(value):
+    shape._object(value, _ENDPOINT_FIELDS, "registration execution reserver endpoint")
+    shape._literal(value["socketPath"], RESERVER_SOCKET_PATH)
+    shape._integer(value["requestTimeoutSeconds"], 30, minimum=1)
+    for name in ("listenerUid", "listenerGid"):
+        shape._integer(value[name], 2**32 - 2)
+        if value[name] != 0:
+            raise RegistrationExecutionBootstrapError("reserver listener must retain the fixed root peer identity")
+    # The peer is the root socket activator, not the accepting UID 65514 child.
+    return value["socketPath"], value["requestTimeoutSeconds"], 0, 0
 
 
 def _admit_on_work(*, registration_execution, configuration_payload,
@@ -138,8 +173,27 @@ def _admit_on_work(*, registration_execution, configuration_payload,
             work.prepare_comparison(caller_pin, pin)
             if caller_pin == pin:
                 raise RegistrationExecutionBootstrapError("execution caller key reuses another configured purpose")
+        reservation_endpoint = reservation_predecessor = None
+        if value["schema"] == V2_SCHEMA:
+            # Read capacity only from genuine admission of this same original
+            # enrollment. The parent's root signature, not these data fields,
+            # is the prerequisite for selecting an independent predecessor.
+            current = caller.authorization._admit_enrollment_on_work(enrollment_bytes=current_raw,
+                root_public_key=root, work=work)
+            plan._same(current.enrollment_digest, admitted.payload["currentRootEnrollmentDigest"], work,
+                "reservation predecessor enrollment differs from actual caller enrollment")
+            predecessor = value["statePredecessor"]
+            if predecessor["sequence"] > current.payload["maxRecords"]:
+                raise RegistrationExecutionBootstrapError("reservation predecessor exceeds enrolled capacity")
+            if predecessor["sequence"] == 0:
+                plan._same(predecessor["headDigest"], current.enrollment_digest, work,
+                    "reservation independent genesis head differs")
+            reservation_endpoint = _reserver_endpoint(value["reserverEndpoint"])
+            reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
+                predecessor["nextFence"])
         return _ExecutionMaterial(CALLER_KEY_FD, admitted.caller_public_key, current_raw,
-            grant_raw, authorization_raw, _endpoint(value["authorizerEndpoint"]))
+            grant_raw, authorization_raw, _endpoint(value["authorizerEndpoint"]),
+            reservation_endpoint, reservation_predecessor)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RegistrationExecutionBootstrapError):
             raise

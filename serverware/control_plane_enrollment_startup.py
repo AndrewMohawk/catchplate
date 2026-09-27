@@ -188,6 +188,13 @@ class _EnrollmentOwner:
         _live(self)
         return self._execution_key is not None
 
+    @property
+    def reservation_enabled(self):
+        _live(self)
+        execution = None if self._material is None else self._material.execution
+        return (self._execution_key is not None and execution is not None
+            and execution.reservation_endpoint is not None and execution.reservation_predecessor is not None)
+
     def _authorize_registration_execution(self, *, request_originals, response_originals,
             deadline_epoch_ns, deadline_ns, work):
         """Private continuation after real present caller/purpose admission.
@@ -216,6 +223,21 @@ class _EnrollmentOwner:
                 request_originals=request_originals, response_originals=response_originals,
                 before_vector_bytes=before_vector_bytes, deadline_epoch_ns=deadline_epoch_ns,
                 deadline_ns=deadline_ns, work=work)
+
+    def _request_registration_reservation(self, *, originals,
+            deadline_epoch_ns, deadline_ns, work):
+        """Private new-purpose reserve exchange, not public execution authority.
+
+        Caller/session authorization precedes this method. The returned raw3
+        is genuine original data, not independent currentness or SQL permission.
+        Existing grant-only public preparation handlers never invoke it.
+        """
+        from serverware import control_plane_registration_execution as execution
+
+        _require_pid()
+        with _LOCK:
+            return execution._reserve_on_owner(self, originals=originals,
+                deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work)
 
     def request_registration_evidence(self, originals, *, source_originals,
             verified_at, deadline_epoch_ns, work, deadline_ns=None):

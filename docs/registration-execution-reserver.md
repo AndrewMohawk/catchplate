@@ -148,6 +148,11 @@ remains a separate prerequisite.
 Root/key/FD/account/socket/ACL/journal provisioning and independent checkpoint
 admission remain external. Source packaging is uninstalled, and the public
 preparation handlers are not connected to this reserver by this slice.
+The [opt-in private control-plane handoff](control-plane-registration-reservation.md)
+now composes complete preparation retention, one reserve exchange and genuine
+raw3 verification under one original work/window. It requires nested caller
+scope v2 and independent predecessor pins; nested v1 and public preparation
+behavior stay unchanged. Returned acknowledgment is not a current-head lease.
 Protected SQL issuance/execution, completion and credential finalization still
 require their separate authorities and actual owners.
 

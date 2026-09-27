@@ -25,9 +25,11 @@ CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
 CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES = 4096
 CONTROL_PLANE_ENROLLMENT_KEY_NAME = "serverware-control-plane-enrollment-signing-key"
 CONTROL_PLANE_EXECUTION_SCHEMA = "serverware.controlPlaneRegistrationExecution/v1"
+CONTROL_PLANE_EXECUTION_V2_SCHEMA = "serverware.controlPlaneRegistrationExecution/v2"
 CONTROL_PLANE_EXECUTION_KEY_NAME = "serverware-registration-execution-caller-key"
 CONTROL_PLANE_EXECUTION_KEY_FD = 203
 CONTROL_PLANE_EXECUTION_SOCKET = "/run/serverware/registration-execution/authorizer.sock"
+CONTROL_PLANE_RESERVATION_SOCKET = "/run/serverware/registration-execution/reserver.sock"
 TRUSTED_HOST_LOCAL_WITNESS_STATE_PATH = (
     "/var/lib/serverware/authority-witness"
 )
@@ -447,10 +449,17 @@ def _control_plane_execution_key_slot(value, *, issuer_descriptor, bootstrap_des
     """Closed v3 delivery projection, not signature or purpose admission."""
     if value is None:
         return None
-    if (type(value) is not dict or set(value) != {"schema", "executionCallerPrivateKeyFd",
-            "currentRootEnrollment", "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
-            or value["schema"] != CONTROL_PLANE_EXECUTION_SCHEMA
-            or type(value["executionCallerPrivateKeyFd"]) is not int
+    if type(value) is not dict:
+        raise RuntimeError("registration execution caller key delivery scope is invalid")
+    version = value.get("schema")
+    if type(version) is not str or version not in (
+            CONTROL_PLANE_EXECUTION_SCHEMA, CONTROL_PLANE_EXECUTION_V2_SCHEMA):
+        raise RuntimeError("registration execution caller delivery profile is unsupported")
+    fields = {"schema", "executionCallerPrivateKeyFd", "currentRootEnrollment",
+        "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
+    if version == CONTROL_PLANE_EXECUTION_V2_SCHEMA:
+        fields.update(("reserverEndpoint", "statePredecessor"))
+    if (set(value) != fields or type(value["executionCallerPrivateKeyFd"]) is not int
             or value["executionCallerPrivateKeyFd"] != CONTROL_PLANE_EXECUTION_KEY_FD
             or issuer_descriptor is None
             or CONTROL_PLANE_EXECUTION_KEY_FD in (issuer_descriptor, bootstrap_descriptor)):
@@ -466,15 +475,33 @@ def _control_plane_execution_key_slot(value, *, issuer_descriptor, bootstrap_des
                 or len(encoded) != (4 * size + 2) // 3
                 or any(character not in alphabet for character in encoded)):
             raise RuntimeError("registration execution enrollment original exceeds its delivery bound")
-    endpoint = value["authorizerEndpoint"]
-    if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds",
-            "listenerUid", "listenerGid"}
-            or endpoint["socketPath"] != CONTROL_PLANE_EXECUTION_SOCKET
-            or type(endpoint["requestTimeoutSeconds"]) is not int
-            or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
-            or any(type(endpoint[name]) is not int or endpoint[name] != 0
-                for name in ("listenerUid", "listenerGid"))):
-        raise RuntimeError("registration execution endpoint differs from its fixed delivery contract")
+    endpoints = (("authorizerEndpoint", CONTROL_PLANE_EXECUTION_SOCKET),)
+    if version == CONTROL_PLANE_EXECUTION_V2_SCHEMA:
+        endpoints += (("reserverEndpoint", CONTROL_PLANE_RESERVATION_SOCKET),)
+    for name, path in endpoints:
+        endpoint = value[name]
+        if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds",
+                "listenerUid", "listenerGid"}
+                or type(endpoint["socketPath"]) is not str or endpoint["socketPath"] != path
+                or type(endpoint["requestTimeoutSeconds"]) is not int
+                or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
+                or any(type(endpoint[field]) is not int or endpoint[field] != 0
+                    for field in ("listenerUid", "listenerGid"))):
+            raise RuntimeError("registration execution endpoint differs from its fixed delivery contract")
+    if version == CONTROL_PLANE_EXECUTION_V2_SCHEMA:
+        predecessor = value["statePredecessor"]
+        if type(predecessor) is not dict or set(predecessor) != {"sequence", "headDigest", "nextFence"}:
+            raise RuntimeError("registration reserve predecessor delivery scope is not closed")
+        sequence, head, fence = predecessor["sequence"], predecessor["headDigest"], predecessor["nextFence"]
+        # Match the source shape only: current-root MAX_RECORDS is 1024 and
+        # its fence is positive I63. Enrolled capacity and the actual genesis
+        # enrollment digest remain the child's cryptographic admission gates.
+        if (type(sequence) is not int or not 0 <= sequence <= 1024
+                or type(head) is not str or len(head) != 71 or not head.startswith("sha256:")
+                or any(character not in "0123456789abcdef" for character in head[7:])
+                or type(fence) is not int or not 1 <= fence <= 2**63 - 1
+                or sequence == 0 and fence != 1):
+            raise RuntimeError("registration reserve predecessor exceeds its fixed delivery shape")
     return CONTROL_PLANE_EXECUTION_KEY_FD
 
 

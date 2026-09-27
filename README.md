@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -43,14 +45,14 @@ defines each scope and its dependencies. Open items can already contain partial 
 
 ### Now building: consume authorization and issuance
 
-**3/12 substeps landed · 3 in progress · 6 open.** This zooms into the active
+**8/12 substeps landed · 0 in progress · 4 open.** This zooms into the active
 token-release task so smaller source milestones are visible before that task closes.
 
-[![Consume authorization and issuance: 01 dedicated authorizer enrollment, 02 post-plan caller control and 03 encrypted-original format landed in f6dd3cb. 04 durable ciphertext storage, 05 verified retained export and 06 root-controlled key/store delivery are in progress and uncommitted. 07 cold planner connection, 08 private export service, 09 receiving-purpose custody, 10 independent original replay, 11 grant issuance and 12 cold grant service are open. Three landed, three in progress, six open. Source only, not production verification.](docs/images/consume-authorization-progress.svg)](docs/production-status.md#consume-authorization-substeps)
+[![Consume authorization and issuance: 01 dedicated authorizer enrollment, 02 post-plan caller control and 03 encrypted-original format landed in f6dd3cb. 04 durable ciphertext storage, 05 verified retained export, 06 root-controlled key/store delivery, 07 cold planner connection and 08 private export service landed in 0ef6024. 09 receiving-purpose custody, 10 independent original replay, 11 grant issuance and 12 cold grant service are open. Eight landed, zero in progress, four open; row 11 itself remains in progress. Source only, not production verification.](docs/images/consume-authorization-progress.svg)](docs/production-status.md#consume-authorization-substeps)
 
-**Working on now:** durable encrypted storage, verified export and root-controlled
-key/storage delivery. **Next:** cold planner/service wiring, independent receiving
-custody and replay, then actual grant issuance and its isolated service.
+**Just landed:** [durable ciphertext export and its cold planner/service connection](https://github.com/example/private-deployment).
+**Next:** A09 receiving-purpose custody → A10 independent original replay →
+A11 actual grant issuance → A12 isolated grant service. Row 11 remains in progress.
 
 The [12-substep checklist](docs/production-status.md#consume-authorization-substeps)
 gives every segment a stable ID, completion criterion and commit evidence.
@@ -72,11 +74,11 @@ are still open. The full activation workflow remains **19/26 landed**.
 
 **OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 10 landed, 1 in progress and 5 other open. Row 11 has committed authorization foundations, not completed issuance. Next within it: encrypted export, independent receiving replay and actual issuance/cold service. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 10 landed, 1 in progress and 5 other open. Row 11 has committed authorization foundations and private encrypted export, not completed issuance. Its twelve substeps show eight landed and four open: receiving custody, independent replay, actual issuance and cold grant service. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 **Protected token release — 10/16 landed; 1 in progress and 5 other open.**
 
-[![Protected token release: units 01–10 landed, 11 consume authorization and issuance in progress, 12–16 open. Unit 11 is expanded above into 12 substeps: 3 landed, 3 in progress and 6 open. Source counts only.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![Protected token release: units 01–10 landed, 11 consume authorization and issuance in progress, 12–16 open. Unit 11 is expanded above into 12 substeps: 8 landed, 0 in progress and 4 open. Source counts only.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).

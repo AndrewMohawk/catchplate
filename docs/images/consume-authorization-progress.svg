@@ -1,38 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="518" viewBox="0 0 1000 518" role="img" aria-labelledby="consume-title consume-description">
-  <title id="consume-title">Consume authorization and issuance: 3 of 12 substeps landed, 3 in progress, 6 open.</title>
-  <desc id="consume-description">A01 authorizer enrollment, A02 post-plan caller control and A03 encrypted-original format are committed in f6dd3cba33fc64670fa78c5dc1bd225b3bb54ef8. A04 durable ciphertext storage, A05 verified retained export and A06 root-controlled key and storage delivery are in progress and uncommitted. A07 cold planner connection, A08 private export service, A09 receiving-purpose custody, A10 independent original-proof replay, A11 actual consume-grant issuance and A12 cold consume-grant service are open. Each numbered segment has a visible name and status below, with full stable IDs and completion criteria in the linked tracker. These twelve substeps are inside token-release row 11, not new project milestones. Token release remains 10/16, activation 19/26 and project 34/46 source-landed. Counts are not additive or effort percentages. Source is unbuilt and unexecuted. Production acceptance remains 0/6 verified.</desc>
+  <title id="consume-title">Consume authorization and issuance: 8 of 12 substeps landed, 0 in progress, 4 open.</title>
+  <desc id="consume-description">A01 authorizer enrollment, A02 post-plan caller control and A03 encrypted-original format are committed in f6dd3cba33fc64670fa78c5dc1bd225b3bb54ef8. A04 durable ciphertext storage, A05 verified retained export, A06 root-controlled key and storage delivery, A07 cold planner connection and A08 private export service are committed in 0ef6024f5d0cf56e865fa39ee767ac57739055e0. A09 independent receiving-purpose custody is NEXT/open, followed by A10 independent original-proof replay, A11 actual consume-grant issuance and A12 cold consume-grant service. Eight substeps are landed, none are in progress and four remain open. Each numbered segment has a visible name and status below, with full stable IDs and completion criteria in the linked tracker. These twelve substeps are inside token-release row 11, not new project milestones. Token release remains 10/16, activation 19/26 and project 34/46 source-landed. Counts are not additive or effort percentages. Source is unbuilt and unexecuted. Production acceptance remains 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="516" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">Consume authorization and issuance · row 11</text>
-    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">3 / 12 landed</text>
-    <text x="228" y="71" fill="#cbd5e1" font-size="18">3 in progress · 6 open</text>
+    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">8 / 12 landed</text>
+    <text x="228" y="71" fill="#cbd5e1" font-size="18">0 in progress · 4 open</text>
     <text x="24" y="98" fill="#94a3b8" font-size="14">One segment per named substep · committed source, not an estimate of remaining effort</text>
 
     <g fill="#34d399">
       <rect x="24" y="112" width="72" height="38" rx="5"><title>A01 · Consume-only authorizer enrollment · LANDED · f6dd3cb</title></rect>
       <rect x="104" y="112" width="72" height="38" rx="5"><title>A02 · Post-plan caller control and exact bindings · LANDED · f6dd3cb</title></rect>
       <rect x="184" y="112" width="72" height="38" rx="5"><title>A03 · Encrypted-original format · LANDED · f6dd3cb</title></rect>
-    </g>
-    <g fill="#422006" stroke="#fbbf24" stroke-width="2">
-      <rect x="264" y="112" width="72" height="38" rx="5"><title>A04 · Durable first-exact ciphertext storage · IN PROGRESS · uncommitted</title></rect>
-      <rect x="344" y="112" width="72" height="38" rx="5"><title>A05 · Verified retained export · IN PROGRESS · uncommitted</title></rect>
-      <rect x="424" y="112" width="72" height="38" rx="5"><title>A06 · Root-controlled key and storage delivery · IN PROGRESS · uncommitted</title></rect>
+      <rect x="264" y="112" width="72" height="38" rx="5"><title>A04 · Durable first-exact ciphertext storage · LANDED · 0ef6024</title></rect>
+      <rect x="344" y="112" width="72" height="38" rx="5"><title>A05 · Verified retained export · LANDED · 0ef6024</title></rect>
+      <rect x="424" y="112" width="72" height="38" rx="5"><title>A06 · Root-controlled key and storage delivery · LANDED · 0ef6024</title></rect>
+      <rect x="504" y="112" width="72" height="38" rx="5"><title>A07 · Cold planner export connection · LANDED · 0ef6024</title></rect>
+      <rect x="584" y="112" width="72" height="38" rx="5"><title>A08 · Private export protocol and service · LANDED · 0ef6024</title></rect>
     </g>
     <g fill="#334155" stroke="#94a3b8">
-      <rect x="504" y="112" width="72" height="38" rx="5"><title>A07 · Cold planner export connection · OPEN</title></rect>
-      <rect x="584" y="112" width="72" height="38" rx="5"><title>A08 · Private export protocol and service · OPEN</title></rect>
-      <rect x="664" y="112" width="72" height="38" rx="5"><title>A09 · Receiving-purpose key custody · OPEN</title></rect>
+      <rect x="664" y="112" width="72" height="38" rx="5" stroke="#fbbf24" stroke-width="2"><title>A09 · Independent receiving-purpose key custody · NEXT / OPEN</title></rect>
       <rect x="744" y="112" width="72" height="38" rx="5"><title>A10 · Independent original-proof replay · OPEN</title></rect>
       <rect x="824" y="112" width="72" height="38" rx="5"><title>A11 · Consume-grant issuance · OPEN</title></rect>
       <rect x="904" y="112" width="72" height="38" rx="5"><title>A12 · Cold consume-grant service · OPEN</title></rect>
     </g>
     <g font-size="15" font-weight="700" text-anchor="middle">
       <g fill="#052e26"><text x="60" y="137">A01</text><text x="140" y="137">A02</text><text x="220" y="137">A03</text></g>
-      <g fill="#fde68a"><text x="300" y="137">A04</text><text x="380" y="137">A05</text><text x="460" y="137">A06</text></g>
-      <g fill="#e2e8f0"><text x="540" y="137">A07</text><text x="620" y="137">A08</text><text x="700" y="137">A09</text><text x="780" y="137">A10</text><text x="860" y="137">A11</text><text x="940" y="137">A12</text></g>
+      <g fill="#052e26"><text x="300" y="137">A04</text><text x="380" y="137">A05</text><text x="460" y="137">A06</text><text x="540" y="137">A07</text><text x="620" y="137">A08</text></g>
+      <g fill="#e2e8f0"><text x="700" y="137">A09</text><text x="780" y="137">A10</text><text x="860" y="137">A11</text><text x="940" y="137">A12</text></g>
     </g>
     <text x="24" y="177" fill="#6ee7b7" font-size="13">✓ LANDED = committed source</text>
-    <text x="330" y="177" fill="#fde68a" font-size="13">→ IN PROGRESS = uncommitted here</text>
+    <text x="330" y="177" fill="#fde68a" font-size="13">→ NEXT = open, not yet landed</text>
     <text x="675" y="177" fill="#cbd5e1" font-size="13">— OPEN = still to finish</text>
 
     <g fill="#f8fafc" font-size="16" font-weight="600">
@@ -54,22 +52,20 @@
         <text x="24" y="228">✓ LANDED · f6dd3cb · dedicated role contract</text>
         <text x="24" y="272">✓ LANDED · f6dd3cb · not public/user permission</text>
         <text x="24" y="316">✓ LANDED · f6dd3cb · codec, not durable export</text>
+        <text x="24" y="360">✓ LANDED · 0ef6024 · first-exact ciphertext storage</text>
+        <text x="24" y="404">✓ LANDED · 0ef6024 · genuinely replayed retained export</text>
+        <text x="24" y="448">✓ LANDED · 0ef6024 · root-pinned key / directory delivery</text>
+        <text x="512" y="228">✓ LANDED · 0ef6024 · actual cold exporter ownership</text>
+        <text x="512" y="272">✓ LANDED · 0ef6024 · bounded ciphertext handoff</text>
       </g>
-      <g fill="#fde68a">
-        <text x="24" y="360">→ IN PROGRESS · uncommitted storage source</text>
-        <text x="24" y="404">→ IN PROGRESS · uncommitted exporter source</text>
-        <text x="24" y="448">→ IN PROGRESS · uncommitted delivery source</text>
-      </g>
+      <text x="512" y="316" fill="#fde68a">→ NEXT / OPEN · independent receiver configuration / key</text>
       <g fill="#cbd5e1">
-        <text x="512" y="228">— OPEN · construct, join and own the exporter</text>
-        <text x="512" y="272">— OPEN · bounded, expiry-clipped ciphertext handoff</text>
-        <text x="512" y="316">— OPEN · independent receiver configuration / key</text>
         <text x="512" y="360">— OPEN · authenticate and replay actual originals</text>
         <text x="512" y="404">— OPEN · issue and verify the actual bound grant</text>
         <text x="512" y="448">— OPEN · isolated receiver / signer / private service</text>
       </g>
     </g>
-    <text x="24" y="482" fill="#fde68a" font-size="13">NOW: A04–A06 · NEXT: cold export wiring → receiving custody / replay → grant issuance / service</text>
+    <text x="24" y="482" fill="#fde68a" font-size="13">NEXT: A09 independent receiving custody → A10 original replay → A11 grant → A12 cold grant service</text>
     <text x="24" y="505" fill="#94a3b8" font-size="13">Inside row 11 · token release 10/16 · activation 19/26 · project 34/46 · production 0/6 verified</text>
   </g>
 </svg>

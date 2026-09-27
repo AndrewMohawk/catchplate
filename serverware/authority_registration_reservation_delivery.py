@@ -83,8 +83,30 @@ def _live_guard(live_window, inherited, work):
     return live, bound
 
 
-class RegistrationReservationDelivery:
-    """Fixed evidence-admission reserve delivery with durable request/ack pairs.
+def _owner_profile(owner):
+    """Select only exact source-owned classes, never a supplied codec/factory."""
+    if type(owner) is RegistrationReservationDelivery:
+        return 0
+    from serverware import authority_registration_finalization_reservation_delivery as finalization
+
+    if type(owner) is finalization.FinalizationReservationDelivery:
+        return 1
+    raise RegistrationReservationDeliveryError("reservation delivery owner type is not source fixed")
+
+
+def _record_codec(owner):
+    selected = _owner_profile(owner)
+    if type(owner._record_profile) is not int or selected != owner._record_profile:
+        raise RegistrationReservationDeliveryError("reservation delivery profile changed after construction")
+    if selected == 0:
+        return records
+    from serverware import authority_registration_finalization_reservation_records as finalization
+
+    return finalization
+
+
+class _RegistrationReservationDeliveryBase:
+    """Shared mechanics for two exact fixed-operation durable owner types.
 
     Journal ownership transfers at construction, including failure cleanup. Its
     preprovisioned directory must be separate from state/completion/SQL-attempt
@@ -96,10 +118,12 @@ class RegistrationReservationDelivery:
     __slots__ = ("_journal", "_pid", "_closed", "_lock", "_sequence", "_head_digest",
         "_enrollment_bytes", "_root_public_key", "_enrollment_digest", "_age", "_skew",
         "_maximum_records", "_pending", "_history", "_operations", "_capabilities",
-        "_predecessor_heads", "_last_reserved_sequence", "_last_fence", "_acknowledged_count")
+        "_predecessor_heads", "_last_reserved_sequence", "_last_fence", "_acknowledged_count",
+        "_record_profile")
 
     def __init__(self, *, journal, enrollment_bytes, root_public_key,
             expected_local_sequence, expected_local_head_digest):
+        self._record_profile = _owner_profile(self)
         if type(journal) is not storage.CurrentRootJournal:
             raise RegistrationReservationDeliveryError("reservation delivery requires its actual separate journal")
         self._journal = journal
@@ -134,7 +158,8 @@ class RegistrationReservationDelivery:
             raise
 
     def _require_process(self):
-        if type(self) is not RegistrationReservationDelivery or os.getpid() != self._pid:
+        _record_codec(self)
+        if os.getpid() != self._pid:
             raise RegistrationReservationDeliveryError("reservation delivery requires its actual process-bound owner")
         if self._closed:
             raise RegistrationReservationDeliveryError("reservation delivery owner is closed")
@@ -207,7 +232,7 @@ class RegistrationReservationDelivery:
 
     def _recover_record(self, sequence, original):
         work = _cold_work()
-        record = records._decode_on_work(original, enrollment_bytes=self._enrollment_bytes,
+        record = _record_codec(self)._decode_on_work(original, enrollment_bytes=self._enrollment_bytes,
             root_public_key=self._root_public_key, work=work)
         if record.sequence != sequence:
             raise RegistrationReservationDeliveryError("reservation filename and record sequence differ")
@@ -241,10 +266,11 @@ class RegistrationReservationDelivery:
         of identical retained originals/scope is idempotent and never renews it.
         """
         evidence.capture._SharedLedger(work)
-        original = authorization._original(request_bytes, records.MAX_REQUEST_BYTES, "reservation request")
-        snapshot = authorization._original(snapshot_bytes, records.MAX_SNAPSHOT_BYTES, "reservation snapshot")
+        codec = _record_codec(self)
+        original = authorization._original(request_bytes, codec.MAX_REQUEST_BYTES, "reservation request")
+        snapshot = authorization._original(snapshot_bytes, codec.MAX_SNAPSHOT_BYTES, "reservation snapshot")
         authorization.shape._digest(execution_record_digest)
-        scope = records._predecessor_scope(expected_predecessor_sequence,
+        scope = codec._predecessor_scope(expected_predecessor_sequence,
             expected_predecessor_head_digest, expected_fence)
         locator = execution_record_digest
         live, _bound = _live_guard(live_window, transport_deadline_ns, work)
@@ -265,7 +291,7 @@ class RegistrationReservationDelivery:
                 return identity
             if self._pending is not None or self._sequence + 2 > self._maximum_records:
                 raise RegistrationReservationDeliveryError("reservation pending or acknowledgment capacity unavailable")
-            encoded, record = records._prepare_request_on_work(sequence=self._sequence + 1,
+            encoded, record = codec._prepare_request_on_work(sequence=self._sequence + 1,
                 previous_record_digest=None if self._sequence == 0 else self._head_digest,
                 expected_predecessor_sequence=scope[0], expected_predecessor_head_digest=scope[1],
                 expected_fence=scope[2], execution_record_digest=locator,
@@ -285,6 +311,7 @@ class RegistrationReservationDelivery:
         Already durable receipts are returned unchanged, not refreshed.
         """
         evidence.capture._SharedLedger(work)
+        codec = _record_codec(self)
         authorization.shape._digest(request_digest)
         identity = request_digest
         configured = transport.CurrentRootDecisionClient._snapshot_configuration(client)
@@ -304,7 +331,7 @@ class RegistrationReservationDelivery:
             receipt = evidence.production._callback(work, lambda: transport._exchange_on_configuration(
                 configured, action="reserve", request_bytes=retained.request_bytes, deadline_ns=bound))
             live()
-            encoded, record = records._prepare_ack_on_work(sequence=self._sequence + 1,
+            encoded, record = codec._prepare_ack_on_work(sequence=self._sequence + 1,
                 previous_record_digest=self._head_digest,
                 expected_predecessor_sequence=retained.predecessor_sequence,
                 expected_predecessor_head_digest=retained.predecessor_head_digest,
@@ -330,7 +357,7 @@ class RegistrationReservationDelivery:
         evidence.capture._SharedLedger(work)
         authorization.shape._digest(execution_record_digest)
         locator = execution_record_digest
-        scope = records._predecessor_scope(expected_predecessor_sequence,
+        scope = _record_codec(self)._predecessor_scope(expected_predecessor_sequence,
             expected_predecessor_head_digest, expected_fence)
         self._require_process()
         with self._lock:
@@ -385,3 +412,9 @@ class RegistrationReservationDelivery:
             if not self._closed:
                 self._closed = True
                 storage.CurrentRootJournal.close(self._journal)
+
+
+class RegistrationReservationDelivery(_RegistrationReservationDeliveryBase):
+    """Original fixed evidence-admission owner; wire, API and domains unchanged."""
+
+    __slots__ = ()

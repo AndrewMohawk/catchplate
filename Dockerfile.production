@@ -117,6 +117,7 @@ COPY --from=verified-production-source /source/serverware/current_root_state_lau
 COPY --from=verified-production-source /source/serverware/registration_execution_authorizer_launcher.py /runtime/authority-bootstrap/registration_execution_authorizer_launcher.py
 COPY --from=verified-production-source /source/serverware/registration_finalization_authorizer_launcher.py /runtime/authority-bootstrap/registration_finalization_authorizer_launcher.py
 COPY --from=verified-production-source /source/serverware/registration_execution_reserver_launcher.py /runtime/authority-bootstrap/registration_execution_reserver_launcher.py
+COPY --from=verified-production-source /source/serverware/registration_finalization_reserver_launcher.py /runtime/authority-bootstrap/registration_finalization_reserver_launcher.py
 COPY --from=verified-production-source /source/serverware/registration_execution_sql_launcher.py /runtime/authority-bootstrap/registration_execution_sql_launcher.py
 COPY --from=verified-production-source /source/serverware/registration_execution_completion_launcher.py /runtime/authority-bootstrap/registration_execution_completion_launcher.py
 COPY --from=verified-production-source /source/serverware /runtime/app/serverware
@@ -138,6 +139,8 @@ COPY --from=verified-production-source /source/ops/systemd/serverware-registrati
 COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-authorizer.service.in /runtime/app/ops/systemd/serverware-registration-finalization-authorizer.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-reserver.socket /runtime/app/ops/systemd/serverware-registration-execution-reserver.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-reserver.service.in /runtime/app/ops/systemd/serverware-registration-execution-reserver.service.in
+COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-reserver.socket /runtime/app/ops/systemd/serverware-registration-finalization-reserver.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-reserver.service.in /runtime/app/ops/systemd/serverware-registration-finalization-reserver.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-sql.socket /runtime/app/ops/systemd/serverware-registration-execution-sql.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-sql.service.in /runtime/app/ops/systemd/serverware-registration-execution-sql.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-completion.socket /runtime/app/ops/systemd/serverware-registration-execution-completion.socket
@@ -160,6 +163,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/registration_execution_authorizer_launcher.py \
         /runtime/authority-bootstrap/registration_finalization_authorizer_launcher.py \
         /runtime/authority-bootstrap/registration_execution_reserver_launcher.py \
+        /runtime/authority-bootstrap/registration_finalization_reserver_launcher.py \
         /runtime/authority-bootstrap/registration_execution_sql_launcher.py \
         /runtime/authority-bootstrap/registration_execution_completion_launcher.py \
     && chmod 0755 /runtime/custody-trust \

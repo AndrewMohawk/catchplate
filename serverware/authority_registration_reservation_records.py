@@ -26,6 +26,9 @@ from serverware.authority_current_root_decisions import MAX_RECEIPT_BYTES
 OPERATION = "webauthn.registration.evidence.admit"
 RECORD_SCHEMA = "serverware.registrationExecutionReservationRecord/v1"
 RECORD_IDENTITY_DOMAIN = "serverware.registrationExecutionReservationRecordIdentity/v1"
+_FINALIZATION_OPERATION = "webauthn.registration.finalize"
+_FINALIZATION_SCHEMA = "serverware.registrationFinalizationReservationRecord/v1"
+_FINALIZATION_IDENTITY_DOMAIN = "serverware.registrationFinalizationReservationRecordIdentity/v1"
 MAX_REQUEST_BYTES = authorization.MAX_BYTES
 MAX_SNAPSHOT_BYTES = computation.MAX_SNAPSHOT_BYTES
 MAX_BYTES = journal.MAX_RECORD_BYTES
@@ -43,6 +46,14 @@ _ACK_JOINS = ("sourceRevision", "action", "enrollmentDigest", "databaseId", "gen
 
 class RegistrationReservationRecordError(ValueError):
     pass
+
+
+def _profile(profile):
+    """Only two source-fixed private profiles; never a supplied codec/operation."""
+    if type(profile) is not int or profile not in (0, 1):
+        raise RegistrationReservationRecordError("reservation record profile is not source fixed")
+    return ((OPERATION, RECORD_SCHEMA, RECORD_IDENTITY_DOMAIN) if profile == 0 else
+        (_FINALIZATION_OPERATION, _FINALIZATION_SCHEMA, _FINALIZATION_IDENTITY_DOMAIN))
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -90,7 +101,18 @@ def _local_scope(sequence, previous):
 def _verify_on_work(*, request_bytes, snapshot_bytes, receipt_bytes, enrollment_bytes,
         root_public_key, expected_predecessor_sequence, expected_predecessor_head_digest,
         expected_fence, work):
+    return _verify_profile_on_work(0, request_bytes=request_bytes, snapshot_bytes=snapshot_bytes,
+        receipt_bytes=receipt_bytes, enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+        expected_predecessor_sequence=expected_predecessor_sequence,
+        expected_predecessor_head_digest=expected_predecessor_head_digest, expected_fence=expected_fence,
+        work=work)
+
+
+def _verify_profile_on_work(profile, *, request_bytes, snapshot_bytes, receipt_bytes, enrollment_bytes,
+        root_public_key, expected_predecessor_sequence, expected_predecessor_head_digest,
+        expected_fence, work):
     """Authenticate owned originals, without supplying a current-state claim."""
+    operation, _schema, _domain = _profile(profile)
     held_request = _original(request_bytes, MAX_REQUEST_BYTES, "reservation request")
     held_snapshot = _original(snapshot_bytes, MAX_SNAPSHOT_BYTES, "reservation snapshot")
     held_receipt = None if receipt_bytes is None else _original(
@@ -104,7 +126,7 @@ def _verify_on_work(*, request_bytes, snapshot_bytes, receipt_bytes, enrollment_
     material, request, request_digest = authorization._verify_historical_request_on_work(
         request_bytes=held_request, enrollment_bytes=held_enrollment,
         root_public_key=held_key, work=work)
-    if request["action"] != "reserve" or request["operation"] != OPERATION:
+    if request["action"] != "reserve" or request["operation"] != operation:
         raise RegistrationReservationRecordError("reservation record requires the fixed registration reserve")
     if predecessor + 2 > material.payload["maxRecords"]:
         raise RegistrationReservationRecordError("reservation predecessor leaves no enrolled completion capacity")
@@ -158,7 +180,8 @@ def _base64_count(value, maximum):
     return count
 
 
-def _shape(document):
+def _shape(document, *, profile=0):
+    _operation, schema, _domain = _profile(profile)
     if type(document) is not dict or len(document) not in (len(REQUEST_FIELDS), len(ACK_FIELDS)):
         raise RegistrationReservationRecordError("reservation record is not a closed object")
     kind = document.get("kind")
@@ -166,7 +189,7 @@ def _shape(document):
         raise RegistrationReservationRecordError("reservation record kind is not source fixed")
     authorization.shape._object(document, REQUEST_FIELDS if kind == "request" else ACK_FIELDS,
         "registration reservation record")
-    authorization.shape._literal(document["schema"], RECORD_SCHEMA)
+    authorization.shape._literal(document["schema"], schema)
     authorization.shape._digest(document["enrollmentDigest"])
     authorization.shape._digest(document["executionRecordDigest"])
     _local_scope(document["sequence"], document["previousRecordDigest"])
@@ -177,11 +200,11 @@ def _shape(document):
         _base64_count(document["receiptBase64Url"], MAX_RECEIPT_BYTES)
 
 
-def _read(record_bytes, work):
+def _read(record_bytes, work, *, profile=0):
     held = _original(record_bytes, MAX_BYTES, "reservation record")
     document = authorization.wire._decode_object(held, work=work,
         maximum_bytes=MAX_BYTES, maximum_nodes=MAX_NODES, maximum_depth=MAX_DEPTH)
-    _shape(document)
+    _shape(document, profile=profile)
     authorization.capability._canonical(held, document,
         authorization.capture._SharedLedger(work), MAX_BYTES, MAX_NODES)
     request = authorization.transport._decode(document["requestBase64Url"],
@@ -196,23 +219,30 @@ def _read(record_bytes, work):
 
 
 def _record(document, original, request_bytes, snapshot_bytes, receipt_bytes,
-        request_payload, request_digest, receipt_payload, receipt_digest, work):
+        request_payload, request_digest, receipt_payload, receipt_digest, work, *, profile=0):
+    _operation, _schema, domain = _profile(profile)
     return _ReservationRecord(document["kind"], document["enrollmentDigest"], document["sequence"],
         document["previousRecordDigest"], document["predecessorSequence"], document["predecessorHeadDigest"],
         document["fence"], document["executionRecordDigest"], request_bytes, snapshot_bytes, receipt_bytes,
         request_payload, request_digest, receipt_payload, receipt_digest,
-        authorization.plan._frame(RECORD_IDENTITY_DOMAIN, (original,), work))
+        authorization.plan._frame(domain, (original,), work))
 
 
 def _decode_on_work(record_bytes, *, enrollment_bytes, root_public_key, work):
+    return _decode_profile_on_work(0, record_bytes, enrollment_bytes=enrollment_bytes,
+        root_public_key=root_public_key, work=work)
+
+
+def _decode_profile_on_work(profile, record_bytes, *, enrollment_bytes, root_public_key, work):
     """Authenticate originals; the owner separately admits the local chain."""
+    _profile(profile)
     held_record = _original(record_bytes, MAX_BYTES, "reservation record")
     held_enrollment = _original(enrollment_bytes, authorization.MAX_ENROLLMENT_BYTES,
         "reservation enrollment")
     held_key = root_public_key
     authorization._public(held_key)
-    document, request, snapshot, receipt = _read(held_record, work)
-    payload, digest, receipt_payload, receipt_digest = _verify_on_work(
+    document, request, snapshot, receipt = _read(held_record, work, profile=profile)
+    payload, digest, receipt_payload, receipt_digest = _verify_profile_on_work(profile,
         request_bytes=request, snapshot_bytes=snapshot, receipt_bytes=receipt,
         enrollment_bytes=held_enrollment, root_public_key=held_key,
         expected_predecessor_sequence=document["predecessorSequence"],
@@ -221,12 +251,13 @@ def _decode_on_work(record_bytes, *, enrollment_bytes, root_public_key, work):
     authorization.plan._same(document["enrollmentDigest"], payload["enrollmentDigest"], work,
         "reservation record original enrollment")
     return _record(document, held_record, request, snapshot, receipt, payload, digest,
-        receipt_payload, receipt_digest, work)
+        receipt_payload, receipt_digest, work, profile=profile)
 
 
 def _prepare(*, kind, sequence, previous_record_digest, expected_predecessor_sequence,
         expected_predecessor_head_digest, expected_fence, execution_record_digest,
-        request_bytes, snapshot_bytes, receipt_bytes, enrollment_bytes, root_public_key, work):
+        request_bytes, snapshot_bytes, receipt_bytes, enrollment_bytes, root_public_key, work, _profile_id=0):
+    _operation, schema, _domain = _profile(_profile_id)
     local_sequence, previous = _local_scope(sequence, previous_record_digest)
     predecessor, head, fence = _predecessor_scope(expected_predecessor_sequence,
         expected_predecessor_head_digest, expected_fence)
@@ -239,12 +270,12 @@ def _prepare(*, kind, sequence, previous_record_digest, expected_predecessor_seq
     enrollment = _original(enrollment_bytes, authorization.MAX_ENROLLMENT_BYTES,
         "reservation enrollment")
     held_key = root_public_key
-    payload, digest, receipt_payload, receipt_digest = _verify_on_work(
+    payload, digest, receipt_payload, receipt_digest = _verify_profile_on_work(_profile_id,
         request_bytes=request, snapshot_bytes=snapshot, receipt_bytes=receipt,
         enrollment_bytes=enrollment, root_public_key=held_key,
         expected_predecessor_sequence=predecessor, expected_predecessor_head_digest=head,
         expected_fence=fence, work=work)
-    document = {"schema": RECORD_SCHEMA, "kind": kind,
+    document = {"schema": schema, "kind": kind,
         "enrollmentDigest": payload["enrollmentDigest"], "sequence": local_sequence,
         "previousRecordDigest": previous, "predecessorSequence": predecessor,
         "predecessorHeadDigest": head, "fence": fence, "executionRecordDigest": local_execution,
@@ -252,11 +283,11 @@ def _prepare(*, kind, sequence, previous_record_digest, expected_predecessor_seq
         "snapshotBase64Url": authorization.transport._encode(snapshot, work)}
     if kind == "ack":
         document["receiptBase64Url"] = authorization.transport._encode(receipt, work)
-    _shape(document)
+    _shape(document, profile=_profile_id)
     original = authorization.capability._wire(document,
         authorization.capture._SharedLedger(work), MAX_BYTES, MAX_NODES)
     return original, _record(document, original, request, snapshot, receipt,
-        payload, digest, receipt_payload, receipt_digest, work)
+        payload, digest, receipt_payload, receipt_digest, work, profile=_profile_id)
 
 
 def _prepare_request_on_work(*, sequence, previous_record_digest, expected_predecessor_sequence,

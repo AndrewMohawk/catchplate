@@ -26,7 +26,7 @@ flowchart TD
     E --> F["Verify original authorization, raw7 and same-read complete vector"]
     F --> G["Dedicated authorizer signs genuine replayed grant; caller verifies"]
     G --> H["Durably retain raw10, then publish finalization association"]
-    H -. "Remaining integration" .-> I["Independent reserve, protected execution and completion"]
+    H -. "Remaining caller integration" .-> I["Wire separate reservation, then protected execution and completion"]
     I -.-> J["Separately authenticated OIDC session activation"]
 ```
 
@@ -107,9 +107,20 @@ also apply.
 
 Public present-purpose admission, same-read full-vector acquisition, the cold
 authorizer source and durable grant association are now connected in source.
-Independently current reservation, protected one-use execution and completion
-remain to be connected. The existing credential-finalization kernel does not
-activate an OIDC browser session; that is a separate authenticated transition.
+The separate [reserve producer and live receiving verifier](registration-finalization-reservation.md)
+and [dedicated reserver service](registration-finalization-reserver.md) are also
+implemented in source. That service durably retains the original request before
+delivery and retains the authenticated state acknowledgment; explicit root-signed
+state v2 admits its fixed peer and signed finalization operation. These components
+do not make the grant-preparation route dispatch a reservation.
+
+The control-plane cold reservation scope, separate public dispatch and durable
+association of returned reservation originals remain unwired. Independently
+current pending admission, protected SQL and its irreversible attempt/outcome
+ownership, and finalization completion still need orchestration. The existing
+credential-finalization kernel does not activate an OIDC browser session;
+that remains a separate authenticated transition. Provisioning and frozen
+verification remain required for all of these source components.
 
 No keys, services or socket permissions were provisioned. No build, import,
 parser, tests or runtime verification ran. Frozen verification must cover old

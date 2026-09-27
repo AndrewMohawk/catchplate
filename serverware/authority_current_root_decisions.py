@@ -255,7 +255,8 @@ class CurrentRootDecisionOwner:
         receipt_digest = authorization._receipt_digest_on_work(receipt_bytes, work)
         self._accept(request, request_digest, request_bytes, receipt_bytes, receipt_digest, receipt, after)
 
-    def apply(self, request_bytes, *, transport_deadline_ns=None, expected_action=None):
+    def apply(self, request_bytes, *, transport_deadline_ns=None, expected_action=None,
+            expected_operation=None):
         """Durably reserve/complete once, or return the exact historical receipt.
 
         An exception after publication can leave a pending or completed record.
@@ -269,7 +270,11 @@ class CurrentRootDecisionOwner:
         # it cannot choose a parser verdict or add authority to the request.
         if expected_action is not None:
             authorization._action(expected_action)
+        if expected_operation is not None and (type(expected_operation) is not str
+                or expected_operation not in authorization.OPERATIONS):
+            raise CurrentRootDecisionError("current-root transport operation restriction is invalid")
         original, inherited, purpose = request_bytes, transport_deadline_ns, expected_action
+        operation = expected_operation
         work = _work()
         if inherited is not None:
             evidence.plan.contract._integer(inherited, minimum=1)
@@ -299,6 +304,8 @@ class CurrentRootDecisionOwner:
                 raise CurrentRootDecisionError("current-root request enrollment changed")
             if purpose is not None and request["action"] != purpose:
                 raise CurrentRootDecisionError("current-root signed action differs from its admitted transport purpose")
+            if operation is not None and request["operation"] != operation:
+                raise CurrentRootDecisionError("current-root signed operation differs from its admitted peer")
             prior = self._history.get(request_digest)
             if prior is not None:
                 work.charge(input_bytes=len(original) + len(prior[0]))

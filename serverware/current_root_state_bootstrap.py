@@ -32,6 +32,7 @@ ROLE = PROCESS_MODE = "policy-authority-current-root-state"
 SERVICE_UID = SERVICE_GID = 65516
 RESERVE_PEER_UID = RESERVE_PEER_GID = 65514
 COMPLETE_PEER_UID = COMPLETE_PEER_GID = 65515
+FINALIZATION_RESERVE_PEER_UID = FINALIZATION_RESERVE_PEER_GID = 65510
 ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, JOURNAL_FD = 198, 199, 200, 201, 202
 INHERITED_DESCRIPTORS = (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, JOURNAL_FD)
 LISTENER_PATH = "/run/serverware/current-root/state.sock"
@@ -41,6 +42,9 @@ MAX_RECEIPT_AGE_NS = 300 * 1_000_000_000
 SCHEMA = "serverware.signedCurrentRootStateBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.currentRootStateBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.currentRootStateLaunch/v1"
+SCHEMA_V2 = "serverware.signedCurrentRootStateBootstrap/v2"
+PAYLOAD_SCHEMA_V2 = "serverware.currentRootStateBootstrap/v2"
+LAUNCH_SCHEMA_V2 = "serverware.currentRootStateLaunch/v2"
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "role", "enrollmentBase64Url",
     "enrollmentBytesDigest", "enrollmentByteCount", "enrollmentDigest", "databaseId",
@@ -53,6 +57,7 @@ _LAUNCH_FIELDS = frozenset({"schema", "processMode", "serviceUid", "serviceGid",
     "inheritedFileDescriptors", "listenerPath", "requestTimeoutSeconds", "journalDirectoryDevice",
     "journalDirectoryInode", "journalMaximumRecords", "listenerSocketDevice", "listenerSocketInode",
     "listenerPathDevice", "listenerPathInode"})
+_LAUNCH_FIELDS_V2 = _LAUNCH_FIELDS | frozenset({"finalizationReservePeerUid", "finalizationReservePeerGid"})
 
 
 class CurrentRootStateBootstrapError(ValueError):
@@ -72,8 +77,13 @@ class _StateMaterial:
 
 
 def _launch_shape(value, work):
-    shape._object(value, _LAUNCH_FIELDS, "current-root state launch")
-    shape._literal(value["schema"], LAUNCH_SCHEMA)
+    if type(value) is not dict or type(value.get("schema")) is not str:
+        raise CurrentRootStateBootstrapError("current-root launch schema is not source fixed")
+    schema = value["schema"]
+    if schema not in (LAUNCH_SCHEMA, LAUNCH_SCHEMA_V2):
+        raise CurrentRootStateBootstrapError("current-root launch schema is unsupported")
+    shape._object(value, _LAUNCH_FIELDS_V2 if schema == LAUNCH_SCHEMA_V2 else _LAUNCH_FIELDS,
+        "current-root state launch")
     shape._literal(value["processMode"], PROCESS_MODE)
     shape._literal(value["listenerPath"], LISTENER_PATH)
     fixed = (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID),
@@ -81,6 +91,9 @@ def _launch_shape(value, work):
         ("completePeerUid", COMPLETE_PEER_UID), ("completePeerGid", COMPLETE_PEER_GID),
         ("rootPublicKeyFd", ROOT_FD), ("bootstrapFd", BOOTSTRAP_FD),
         ("listenerFd", LISTENER_FD), ("signingKeyFd", KEY_FD), ("journalDirectoryFd", JOURNAL_FD))
+    if schema == LAUNCH_SCHEMA_V2:
+        fixed += (("finalizationReservePeerUid", FINALIZATION_RESERVE_PEER_UID),
+            ("finalizationReservePeerGid", FINALIZATION_RESERVE_PEER_GID))
     for name, expected in fixed:
         shape._integer(value[name], 2**32 - 2, minimum=1)
         if value[name] != expected:
@@ -102,7 +115,10 @@ def _launch_shape(value, work):
 
 def _payload_shape(payload, work):
     shape._object(payload, _PAYLOAD_FIELDS, "current-root state bootstrap payload")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    schema = payload["schema"]
+    if type(schema) is not str or schema not in (PAYLOAD_SCHEMA, PAYLOAD_SCHEMA_V2):
+        raise CurrentRootStateBootstrapError("current-root payload schema is unsupported")
+    for name, expected in (("sourceRevision", authority.SOURCE_REVISION),
             ("role", ROLE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
     for name in ("enrollmentBytesDigest", "enrollmentDigest", "generationDigest",
@@ -123,6 +139,8 @@ def _payload_shape(payload, work):
             "hsmBackedKeys", "teeVerified", "externalWitnessVerified")):
         raise CurrentRootStateBootstrapError("current-root launch is not the explicit trusted-host-local assurance")
     _launch_shape(payload["launch"], work)
+    shape._literal(payload["launch"]["schema"],
+        LAUNCH_SCHEMA_V2 if schema == PAYLOAD_SCHEMA_V2 else LAUNCH_SCHEMA)
 
 
 def _fresh(interval, work, opening=None):
@@ -193,14 +211,17 @@ def _admit_on_work(*, bootstrap_bytes, root_public_key, work):
         envelope = wire._decode_object(original, work=work, maximum_bytes=MAX_BYTES,
             maximum_nodes=MAX_NODES, maximum_depth=MAX_DEPTH)
         shape._object(envelope, _ENVELOPE_FIELDS, "current-root state root envelope")
-        shape._literal(envelope["schema"], SCHEMA)
+        schema = envelope["schema"]
+        if type(schema) is not str or schema not in (SCHEMA, SCHEMA_V2):
+            raise CurrentRootStateBootstrapError("current-root envelope schema is unsupported")
         shape._base64url(envelope["signatureBase64Url"], signature=True)
         if type(envelope["payload"]) is not dict:
             raise CurrentRootStateBootstrapError("current-root bootstrap payload is not an exact object")
         _canonical(original, envelope, work)
         payload = envelope["payload"]
+        shape._literal(payload.get("schema"), PAYLOAD_SCHEMA_V2 if schema == SCHEMA_V2 else PAYLOAD_SCHEMA)
         payload_bytes = capability._wire(payload, ledger, MAX_BYTES, MAX_NODES)
-        capability._signature(root_key, envelope["signatureBase64Url"], SCHEMA, payload_bytes, ledger)
+        capability._signature(root_key, envelope["signatureBase64Url"], schema, payload_bytes, ledger)
         _canonical(original, envelope, work)
         _payload_shape(payload, work)
         interval = (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"])
@@ -216,19 +237,20 @@ def _admit_on_work(*, bootstrap_bytes, root_public_key, work):
 
 
 def _sign(payload, private_key, public_key, work):
-    """Sign this module's one fixed domain and closed payload, never an override."""
+    """Sign the closed payload's source-fixed v1/v2 domain, never an override."""
     authorization._private(private_key)
     authorization._public(public_key)
     keys._pair_on_work(private_key, public_key, work)
     _payload_shape(payload, work)
-    envelope = {"schema": SCHEMA, "payload": payload, "signatureBase64Url": "A" * 86}
+    schema = SCHEMA_V2 if payload["schema"] == PAYLOAD_SCHEMA_V2 else SCHEMA
+    envelope = {"schema": schema, "payload": payload, "signatureBase64Url": "A" * 86}
     unsigned_size, unsigned_nodes = work.measure(payload)
     envelope_size, envelope_nodes = work.measure(envelope)
     if max(unsigned_size, envelope_size) > MAX_BYTES or max(unsigned_nodes, envelope_nodes) > MAX_NODES:
         raise CurrentRootStateBootstrapError("current-root bootstrap signature output exceeds its bound")
     work.charge(input_bytes=4 * unsigned_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=2 * unsigned_nodes + envelope_nodes)
-    frame_bytes = 2 * len(SCHEMA) + 9 + unsigned_size + 2 * 71
+    frame_bytes = 2 * len(schema) + 9 + unsigned_size + 2 * 71
     if (work.limits.max_hashes - work.hash_work < 1
             or work.limits.max_input_bytes - work.input_bytes < frame_bytes + unsigned_size
             or work.limits.max_json_nodes - work.json_nodes < 4 + unsigned_nodes):
@@ -236,7 +258,7 @@ def _sign(payload, private_key, public_key, work):
     unsigned = plan.core.canonical_bytes(payload)
     if len(unsigned) != unsigned_size:
         raise CurrentRootStateBootstrapError("current-root bootstrap payload changed after measurement")
-    message = plan._ascii(plan._frame(SCHEMA, (unsigned,), work), work)
+    message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
     signature = production._sign_and_verify(private_key, public_key, message, work)
     if work.measure(payload) != (unsigned_size, unsigned_nodes) or plan.core.canonical_bytes(payload) != unsigned:
         raise CurrentRootStateBootstrapError("current-root bootstrap changed during root signing")
@@ -279,7 +301,8 @@ def _produce_on_work(*, enrollment_bytes, checkpoint_sequence, checkpoint_head_d
     policy = enrolled.payload
     work.charge(hashes=1, input_bytes=len(raw))
     raw_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-    payload = {"schema": PAYLOAD_SCHEMA, "sourceRevision": authority.SOURCE_REVISION, "role": ROLE,
+    payload_schema = PAYLOAD_SCHEMA_V2 if owned_launch["schema"] == LAUNCH_SCHEMA_V2 else PAYLOAD_SCHEMA
+    payload = {"schema": payload_schema, "sourceRevision": authority.SOURCE_REVISION, "role": ROLE,
         "enrollmentBase64Url": authorization.transport._encode(raw, work),
         "enrollmentBytesDigest": raw_digest, "enrollmentByteCount": len(raw),
         "enrollmentDigest": enrolled.enrollment_digest, "databaseId": policy["databaseId"],

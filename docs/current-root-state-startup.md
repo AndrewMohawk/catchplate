@@ -5,6 +5,11 @@ current-root decision service. This is source-only: unbuilt and unexecuted, with
 unrendered, uninstalled service templates. It is not production approval,
 native measurement, a TEE/HSM result or an independent rollback witness.
 
+The [explicit v2 finalization-reserve profile](current-root-finalization-peer.md)
+adds a separately root-admitted peer and signed-operation restriction. The v1
+profile described below remains unchanged; v2 is not enabled by a socket ACL
+or environment setting.
+
 ## Separate enrollment and startup authority
 
 The existing [current-root enrollment](authority-current-root-decisions.md)

@@ -343,10 +343,16 @@ def initialize_from_environment():
             decision = decisions.CurrentRootDecisionOwner(journal=journal, enrollment_bytes=enrollment,
                 root_public_key=root_key, state_private_key=private_key,
                 expected_sequence=sequence, expected_head_digest=head)
-            serving = service.CurrentRootDecisionService(owner=decision,
-                reserve_peer_uid=RESERVE_PEER_UID, reserve_peer_gid=RESERVE_PEER_GID,
-                complete_peer_uid=COMPLETE_PEER_UID, complete_peer_gid=COMPLETE_PEER_GID,
-                timeout_seconds=timeout)
+            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V2:
+                # Only genuine root v2 admission selects this source-fixed
+                # peer/operation profile. v1 retains its exact older behavior.
+                serving = service.CurrentRootDecisionService._with_finalization_reserver(
+                    owner=decision, timeout_seconds=timeout)
+            else:
+                serving = service.CurrentRootDecisionService(owner=decision,
+                    reserve_peer_uid=RESERVE_PEER_UID, reserve_peer_gid=RESERVE_PEER_GID,
+                    complete_peer_uid=COMPLETE_PEER_UID, complete_peer_gid=COMPLETE_PEER_GID,
+                    timeout_seconds=timeout)
             bootstrap._fresh(interval, work, opening=opening)
             if _environment() != namespace:
                 raise CurrentRootStateStartupError("current-root namespace changed during admission")

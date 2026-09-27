@@ -125,11 +125,20 @@ and original [grant production](registration-finalization-grant-production.md)
 are now connected in source to public present-purpose admission, same-read
 complete-vector acquisition, the [dedicated cold authorizer](registration-finalization-authorizer.md)
 and durable raw10/finalization association referencing the existing evidence/
-signer association. These are unbuilt, unexecuted and
-unprovisioned implementations. Still required are independently current
-reservation/pending admission and protected SQL/completion orchestration with
-its irreversible attempt journal. Session activation remains a separate
-authenticated transition. The unchanged public
+signer association. The separate [reserve producer and receiving verifier](registration-finalization-reservation.md)
+now genuinely bind the same original grant/plan/vector to a signed reserve and
+state acknowledgment. The [dedicated reserver](registration-finalization-reserver.md)
+adds durable original delivery, with root-signed state v2 restricting its fixed
+peer to the finalization operation. These are unbuilt, unexecuted and
+unprovisioned source implementations, not an automatic continuation of the
+grant-preparation routes.
+
+Still unwired are control-plane cold reservation scope, separate public dispatch
+and durable returned-reservation association. Independently current pending
+admission, protected SQL/completion orchestration and irreversible attempt/outcome
+ownership remain required, alongside independent provisioning and frozen
+verification. Session activation remains a separate authenticated transition.
+The unchanged public
 [retained preparation facade](retained-registration-finalization.md) returns a
 raw7 locator only, and the excluded legacy authority dispatcher is not an
 execution fallback. Returning raw7 from this verifier is not an action token.

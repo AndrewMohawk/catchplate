@@ -6,13 +6,16 @@ then check their actual semantics. A separately root-enrolled finalization
 caller signs the exact request/operation commitment. Retention controls or an
 evidence-admission grant cannot replace that original authorization.
 
-Only unchanged original raw7 is returned. This supplies no present actor, cold
+The original verifier returns unchanged raw7. A private same-call continuation
+also retains genuinely derived facts and the original live guard; no entrypoint
+accepts that record as proof. This supplies no present actor, cold
 purpose owner, grant signing, reserve, pending/currentness, SQL, one-use claim,
 completion or session activation. The same caller work/window is retained.
 """
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from serverware import authority_registration_finalization_authorization as caller
 from serverware import authority_webauthn_transition_custody_actions as custody
@@ -27,12 +30,51 @@ class RegistrationFinalizationExecutionAdmissionError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _AdmittedFinalization:
+    """Internal results of THIS original replay, never an authority input."""
+
+    originals: tuple
+    raw4: tuple
+    before: bytes
+    authorization: bytes
+    authorization_enrollment: bytes
+    grant: bytes
+    grant_enrollment: bytes
+    current_enrollment: bytes
+    root: object
+    configured: object
+    authorized: object
+    verified_grant: object
+    history: dict
+    window: tuple
+    deadline_epoch_ns: int
+    deadline_ns: int
+    live: object
+
+
 def _verify_on_configuration(*, payload, configuration_digest, generation,
         runtime_role_identities, originals, before_vector_bytes, authorization_bytes,
         authorization_enrollment_bytes, grant_bytes, grant_enrollment_bytes,
         current_root_enrollment_bytes, root_public_key, live_window, work,
         transport_deadline_ns=None):
     """Return the exact raw7 only after genuine original authorization/replay."""
+    admitted = _admit_on_configuration(payload=payload, configuration_digest=configuration_digest,
+        generation=generation, runtime_role_identities=runtime_role_identities,
+        originals=originals, before_vector_bytes=before_vector_bytes,
+        authorization_bytes=authorization_bytes, authorization_enrollment_bytes=authorization_enrollment_bytes,
+        grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
+        current_root_enrollment_bytes=current_root_enrollment_bytes, root_public_key=root_public_key,
+        live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+    return admitted.originals
+
+
+def _admit_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, originals, before_vector_bytes, authorization_bytes,
+        authorization_enrollment_bytes, grant_bytes, grant_enrollment_bytes,
+        current_root_enrollment_bytes, root_public_key, live_window, work,
+        transport_deadline_ns=None):
+    """Fully replay originals and preserve private same-call facts and clocks."""
     ledger = evidence.capture._SharedLedger(work)
     if type(originals) is not tuple or len(originals) != 7:
         raise RegistrationFinalizationExecutionAdmissionError("finalization admission requires exact original raw7")
@@ -146,5 +188,13 @@ def _verify_on_configuration(*, payload, configuration_digest, generation,
             or actual["expiresAtEpochNs"] > authorized.expires_at_epoch_ns):
         raise RegistrationFinalizationExecutionAdmissionError("finalization grant escapes its original caller authority")
     bound = min(bound, window[1] + actual["expiresAtEpochNs"] - window[0])
+    deadline = min(window[3], authorized.expires_at_epoch_ns,
+        verified_custody.intent_times[1], verified_custody.relay_times[1],
+        plan_payload["expiresAtEpochNs"], actual["expiresAtEpochNs"])
+    window = clock._validate((window[0], window[1], window[2], deadline,
+        min(window[4], window[1] + deadline - window[0]), window[5], window[6]))
+    bound = min(bound, window[4])
     current()
-    return held
+    return _AdmittedFinalization(held, raw4, before, request, caller_enrollment,
+        grant, grant_enrollment, current_enrollment, root, configured, authorized,
+        verified_grant, expected, window, deadline, bound, current)

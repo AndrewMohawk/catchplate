@@ -33,9 +33,9 @@ class CurrentRootServiceError(RuntimeError):
 
 
 def _validate_configuration(config):
-    if type(config) is not tuple or len(config) != 6:
-        raise CurrentRootServiceError("current-root service configuration is not an exact six-tuple")
-    owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = config
+    if type(config) is not tuple or len(config) not in (6, 7):
+        raise CurrentRootServiceError("current-root service configuration is not a fixed profile")
+    owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = config[:6]
     if type(owner) is not decisions.CurrentRootDecisionOwner:
         raise CurrentRootServiceError("current-root service requires the actual durable decision owner")
     if any(type(value) is not int or not 0 <= value <= 0xFFFFFFFF
@@ -44,6 +44,11 @@ def _validate_configuration(config):
     if (type(timeout) not in (int, float) or not 0.05 <= timeout <= 30
             or not math.isfinite(timeout)):
         raise CurrentRootServiceError("current-root service timeout is invalid")
+    if len(config) == 7 and (type(config[6]) is not tuple or len(config[6]) != 2
+            or any(type(value) is not int for value in config[6])
+            or config[6] != (65510, 65510)
+            or (reserve_uid, reserve_gid, complete_uid, complete_gid) != (65514, 65514, 65515, 65515)):
+        raise CurrentRootServiceError("current-root finalization peer profile differs from fixed source")
     return config
 
 
@@ -78,6 +83,18 @@ class CurrentRootDecisionService:
         object.__setattr__(self, "_configuration", configured)
         object.__setattr__(self, "_pid", os.getpid())
 
+    @classmethod
+    def _with_finalization_reserver(cls, *, owner, timeout_seconds):
+        """Cold v2 only: fixed additional reserve peer, never a peer-list API."""
+        if cls is not CurrentRootDecisionService:
+            raise CurrentRootServiceError("current-root finalization profile requires the exact service")
+        configured = _validate_configuration((owner, 65514, 65514, 65515, 65515,
+            timeout_seconds, (65510, 65510)))
+        result = object.__new__(CurrentRootDecisionService)
+        object.__setattr__(result, "_configuration", configured)
+        object.__setattr__(result, "_pid", os.getpid())
+        return result
+
     def _snapshot_configuration(self):
         if type(self) is not CurrentRootDecisionService:
             raise CurrentRootServiceError("current-root serving requires its exact configured service")
@@ -92,8 +109,9 @@ class CurrentRootDecisionService:
             raise CurrentRootServiceError("current-root serving requires an actual accepted socket")
         try:
             configured = CurrentRootDecisionService._snapshot_configuration(self)
-            owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = configured
+            owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = configured[:6]
             reserve_peer, complete_peer = (reserve_uid, reserve_gid), (complete_uid, complete_gid)
+            finalization_peer = configured[6] if len(configured) == 7 else None
             deadline_ns = io._deadline_ns(timeout)
             if transport_deadline_ns is not None:
                 if type(transport_deadline_ns) is not int or transport_deadline_ns < 1:
@@ -103,11 +121,18 @@ class CurrentRootDecisionService:
             uid, gid, _pid = io._call_until(connection, deadline_ns,
                 lambda: _accepted_peer(connection))
             peer = (uid, gid)
-            if peer not in (reserve_peer, complete_peer):
+            if peer not in (reserve_peer, complete_peer, finalization_peer):
                 raise CurrentRootServiceError("current-root socket peer is not admitted")
             prefix = transport._recv_prefix(connection, deadline_ns=deadline_ns)
+            expected_operation = None
             if prefix == transport.RESERVE_REQUEST_MAGIC:
                 action, required_peer = "reserve", reserve_peer
+                if finalization_peer is not None:
+                    if peer == finalization_peer:
+                        required_peer = finalization_peer
+                        expected_operation = "webauthn.registration.finalize"
+                    else:
+                        expected_operation = "webauthn.registration.evidence.admit"
             elif prefix == transport.COMPLETE_REQUEST_MAGIC:
                 action, required_peer = "complete", complete_peer
             elif prefix == transport.QUERY_REQUEST_MAGIC:
@@ -132,7 +157,8 @@ class CurrentRootDecisionService:
                     raise CurrentRootServiceError("current-root framing action changed")
                 transport._check_deadline(deadline_ns)
                 receipt = decisions.CurrentRootDecisionOwner.apply(owner, original,
-                    expected_action=action, transport_deadline_ns=deadline_ns)
+                    expected_action=action, expected_operation=expected_operation,
+                    transport_deadline_ns=deadline_ns)
                 transport._check_deadline(deadline_ns)
                 transport._send_response(connection, receipt, deadline_ns=deadline_ns)
         except BaseException:

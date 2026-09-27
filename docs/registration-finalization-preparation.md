@@ -1,8 +1,8 @@
 # Registration finalization preparation
 
-Source `.141` connects the existing genuine finalization planner to the admitted
-control-plane caller. This is unbuilt, unexecuted source integration, not a
-working registration endpoint or production authentication claim.
+The preparation-only path connects the genuine finalization planner to the
+admitted control-plane caller. This is unbuilt, unexecuted source integration,
+not a verified registration endpoint or production authentication claim.
 
 ## Preserve the original evidence
 
@@ -74,6 +74,28 @@ A late append retains bytes, not renewed authority. This helper never forwards
 to a writer, signs replacement evidence, executes SQL mutations, consumes a
 challenge, activates a session or automatically retries.
 
+## Separate grant preparation path
+
+The [new public grant action](public-registration-finalization-grant.md) does
+not upgrade this older raw7. After separate present-purpose permission and
+retained ownership/completion replay, it issues dedicated authorization before
+requesting one new plan. The distinct
+[`authority_webauthn_registration_finalization_execution_caller`](../serverware/authority_webauthn_registration_finalization_execution_caller.py)
+uses `SWRFXQ01` / `SWRFXR01`: the same signer request8/response2 plus sibling
+hints produce custody raw7 **and** the complete before-vector. The configured
+verifier obtains that vector from one actual `CurrentRootReader`; the planning
+root projections derive from those exact bytes, not posted roots or a second
+vector lookup. The vector is bounded to 64 KiB and the full response to 64 MiB.
+This source-complete read is not an action-time currentness witness.
+
+The caller obtains and genuinely verifies the dedicated grant, then retains
+authorization/raw7/vector/grant as distinct `SWCPF001` raw10. A last-published
+`SWCPM001` marker links its local ID to the existing evidence-grant/signer pair,
+without duplicating or replacing those originals. See
+[associated finalization-grant retention](control-plane-custody-journal.md#associated-finalization-grant-preparation)
+for exact append/load, recovery, quota and uncertainty semantics. Neither the
+stored grant nor its association enables legacy forwarding, reservation or SQL.
+
 ## Still required
 
 The caller still needs actual unconsumed v2 business evidence and separate
@@ -84,9 +106,11 @@ and retain finalization raw7, but do not execute it or activate an OIDC browser
 session. The raw helper remains separate and supplies no replacement ceremony
 after expiry. The existing public `/prepare` endpoints continue to prepare
 evidence custody only; `/verify` remains on its existing legacy path.
-A separate [dedicated cold caller](control-plane-finalization-execution.md) now
-issues execution-purpose authorization before new planning and verifies returned
-originals. It is a private in-memory continuation, not a new public permission
-or durable grant/reservation/execution path.
+The separate [dedicated cold caller](control-plane-finalization-execution.md)
+and public grant route now connect authorization-before-new-planning, complete
+vector acquisition, genuine grant exchange and durable linked retention.
+Independent finalization reservation, protected execution and authenticated
+outcome handling remain separate; grant preparation is not credential insertion
+or OIDC activation.
 Independently operated production services, exact frozen builds and consolidated
 runtime verification remain outstanding.

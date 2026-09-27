@@ -216,9 +216,55 @@ def _produce_request_on_work(process, *, operation, request, inputs_bytes,
     request, original evaluation instant, capability or committed-stage history;
     possession of a JSON object cannot supply that provenance.
     """
+    return _produce_request_core(process, operation=operation, request=request,
+        inputs_bytes=inputs_bytes, now_epoch_ns=now_epoch_ns,
+        deadline_epoch_ns=deadline_epoch_ns, invocation=invocation, work=work,
+        complete_before=False, transport_deadline_ns=None)
+
+
+def _produce_finalization_execution_request_on_work(process, *, request, inputs_bytes,
+        now_epoch_ns, deadline_epoch_ns, invocation, work, transport_deadline_ns):
+    """Sign roots projected from ONE actual complete read; return its originals."""
+    return _produce_request_core(process, operation=root_contract.registration.OPERATION,
+        request=request, inputs_bytes=inputs_bytes, now_epoch_ns=now_epoch_ns,
+        deadline_epoch_ns=deadline_epoch_ns, invocation=invocation, work=work,
+        complete_before=True, transport_deadline_ns=transport_deadline_ns)
+
+
+def _finalization_vector_projection(before, request, work):
+    from serverware import authority_current_root_vector as vector
+
+    operation = root_contract.registration.OPERATION
+    document = vector._decode_on_work(before, work=work)
+    business, authorization, _tables, identities = root_contract._source(operation, request["arguments"])
+    work.prepare_scan(document["primaryRoots"])
+    work.prepare_scan(document["countedRoots"])
+    primary = {row["table"]: row for row in document["primaryRoots"]}
+    counted = {row["indexId"]: row for row in document["countedRoots"]}
+    work.charge(json_nodes=4 + len(business) + len(authorization) + 5 * len(identities))
+    selected = {"business": [primary[table] for table in business],
+        "authorization": [primary[table] for table in authorization],
+        "heads": [{name: counted[identity][name] for name in (
+            "indexId", "indexRevision", "rootDigest", "leafCount")} for identity in identities]}
+    owned = plan.evidence.capture._JSONCapture(plan.evidence.capture._SharedLedger(work),
+        maximum_bytes=vector.MAX_BYTES).visit(selected)
+    root_contract.proof_contract._roots(owned["business"], business)
+    root_contract.proof_contract._roots(owned["authorization"], authorization)
+    root_contract.proof_contract._heads(owned["heads"], identities)
+    for values in owned.values():
+        work.prepare_copy(values)
+    return tuple(owned["business"]), tuple(owned["authorization"]), tuple(owned["heads"])
+
+
+def _produce_request_core(process, *, operation, request, inputs_bytes,
+        now_epoch_ns, deadline_epoch_ns, invocation, work, complete_before,
+        transport_deadline_ns):
     from serverware import authority_webauthn_transition_actions as actions
 
     operation = _operation(operation)
+    if type(complete_before) is not bool or (complete_before
+            and operation != root_contract.registration.OPERATION):
+        raise ValueError("complete transition root preparation is not source fixed")
     original_inputs = inputs_bytes
     plan.proof.wire._raw(original_inputs, 2, plan.proof.wire.MAX_BYTES)
     owned = configuration.capability.capture._JSONCapture(
@@ -239,9 +285,24 @@ def _produce_request_on_work(process, *, operation, request, inputs_bytes,
     reader = root_mapping._reader_from_configuration_on_work(operation=operation,
         payload=payload, configuration_digest=digest, generation=held_generation,
         runtime_role_identities=runtime_role_identities, read_dsn=dsn, work=work)
-    inventory = root_reader.TransitionRootReader.read(reader, request=request_owned, work=work)
-    business, authorization, heads = root_contract._project_on_work(
-        inventory, operation=operation, request=request_owned, work=work)
+    before = None
+    if complete_before:
+        from serverware import authority_current_root_reader as complete_reader
+        from serverware import authority_revocation_writer_transport as deadline
+
+        pins = root_reader.TransitionRootReader._snapshot_configuration(reader)
+        plan.evidence.plan._same(pins[0], operation, work, "complete reader operation changed")
+        full = complete_reader.CurrentRootReader(dsn=pins[1], connect_timeout_seconds=pins[2],
+            database_role=pins[3], tls_client_dn=pins[4], tls_client_serial=pins[5],
+            tls_issuer_dn=pins[6], query_manifest_digest=pins[7])
+        actions.evidence.production._callback(work, lambda: deadline._check_deadline(transport_deadline_ns))
+        before = complete_reader.CurrentRootReader.read(full, work=work)
+        actions.evidence.production._callback(work, lambda: deadline._check_deadline(transport_deadline_ns))
+        business, authorization, heads = _finalization_vector_projection(before, request_owned, work)
+    else:
+        inventory = root_reader.TransitionRootReader.read(reader, request=request_owned, work=work)
+        business, authorization, heads = root_contract._project_on_work(
+            inventory, operation=operation, request=request_owned, work=work)
     _require_generation_on_work("verifier", held_generation, work)
     result = actions._produce_request_on_configuration(operation=operation,
         payload=payload, configuration_digest=digest, generation=held_generation,
@@ -252,6 +313,9 @@ def _produce_request_on_work(process, *, operation, request, inputs_bytes,
         deadline_epoch_ns=owned["deadlineEpochNs"], invocation=owned["invocation"],
         verifier_private_key=private, work=work)
     _require_generation_on_work("verifier", held_generation, work)
+    if complete_before:
+        actions.evidence.production._callback(work, lambda: deadline._check_deadline(transport_deadline_ns))
+        return result, before
     return result
 
 

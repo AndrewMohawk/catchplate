@@ -21,21 +21,33 @@ It returns exactly `(local_digest, finalization_local_digest)`:
 Neither ID is a credential, active-session result, remote receipt, currentness
 lease or permission to execute/retry.
 
-**Execution ordering remains unfinished:** this preparation-only path does not
+**This remains preparation only:** this path does not
 issue dedicated finalization execution authorization. The actual grant preserves
 the signed plan's original issue time and rejects a caller authorization issued
 later. Today's raw7 therefore cannot gain fresh execution permission afterward.
-The production path must admit the separate caller/purpose, reconstruct the exact
-request, issue its dedicated authorization **before** producing a new live plan,
-then perform grant/reservation/execution. Backdating, retiming and automatic
+The separate grant path admits its own caller/purpose, reconstructs the exact
+request and issues dedicated authorization **before** producing a new live plan
+and grant. Reservation and execution remain separate. Backdating, retiming and automatic
 replanning are forbidden. See [original execution admission](registration-finalization-execution-admission.md).
 
-A separate [private execution-purpose continuation](control-plane-finalization-execution.md)
-now shares the genuine retained ownership/completion preflight, then uses a
-dedicated cold caller to authorize **before** requesting and verifying a new
-plan. It returns original authorization/raw7 in memory, not this facade's
-durable raw7 locator. Its public permission, grant transport/retention and
-execution are not yet connected; existing public preparation never selects it.
+A separate [grant preparation route](public-registration-finalization-grant.md)
+now invokes `prepare_and_retain_registration_finalization_grant(local_digest, *,
+expected_user_id, expected_session_id)`. It shares the genuine retained
+ownership/completion preflight, then uses the dedicated cold caller to authorize
+before one new plan and same-read complete vector, obtains and verifies the
+dedicated grant, and retains exact authorization/raw7/vector/grant as raw10.
+It returns `(existing evidence locator, actual finalization grant locator)`.
+The older private `prepare_authorized_retained_registration_finalization`
+still returns authorization/raw7 in memory; neither it nor the original
+preparation-only route silently upgrades to this durable grant path.
+
+The [journal's distinct finalization profile](control-plane-custody-journal.md#associated-finalization-grant-preparation)
+uses `SWCPF001` and a last-published `SWCPM001` association binding that new
+record to the existing evidence-grant/signer pair. It rereads the originals,
+preserves their IDs and rejects conflicting or cross-source linkage. Missing
+final association means incomplete local preparation, not permission to infer
+success or retry. This association supplies no cryptographic replay or
+execution authority.
 
 ## Required retained state and verification
 
@@ -89,9 +101,10 @@ authenticated an old completion. As in the existing preparation API, an opaque
 durable append may finish after the preparation window; that retains bytes
 without renewing any authority.
 
-The separate caller issuer is source-implemented, but public finalization
-execution permission, grant transport/retention, independent reservation,
-actual atomic credential finalization and outcome handling remain required.
+Dedicated caller admission, authorization-before-new-plan, grant transport and
+durable linked retention are now implemented in the separate source-only grant
+flow. Independent reservation, actual atomic credential finalization and
+outcome handling remain required.
 OIDC browser-session activation is a separate operation, not an effect of the
 registration-finalize kernel.
 This facade does not invent or call missing execution authority. A response

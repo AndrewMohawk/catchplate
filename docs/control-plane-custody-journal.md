@@ -38,7 +38,7 @@ their originals, but must have enough configured quota for the missing
 observation reservation. Insufficient quota fails admission; it does not cause
 cleanup, automatic quota expansion or removal of an attempt barrier.
 
-The separate registration execution-grant and signer-exchange profiles count
+The separate registration execution-grant, finalization-grant and signer-exchange profiles count
 toward the same byte and record quotas, but reserve no attempt or observation
 space: they have no legacy delivery contract. Their completed preparation uses
 a separate bounded association marker, described below. The following lifecycle
@@ -96,9 +96,9 @@ These guarantees depend on the provisioned filesystem honoring fsync, not a
 hard syscall deadline or an independent anti-rollback witness.
 
 Prepared-record recovery and `load` dispatch only the fixed `SWCPR001`,
-`SWCPG001` and signer-exchange `SWCPS001` formats and preserve each original
+`SWCPG001`, signer-exchange `SWCPS001` and finalization-grant `SWCPF001` formats and preserve each original
 source revision.
-They reject attempt or observation markers on either registration family;
+They reject attempt or observation markers on all three retention-only registration families;
 `claim_attempt` and `record_observation` also reject those families. The client
 rejects them before forwarding or reconciliation. Inventory
 and the existing admin recovery workspace expose retention-only metadata, not
@@ -165,6 +165,64 @@ evidence business row was committed. Later finalization still needs all those
 separate gates. No new public original-export, forward, reconcile or attempt
 action or public association-complete flag is added; in-memory preparation
 remains raw10-only with no storage.
+
+## Associated finalization-grant preparation
+
+The separate [public grant preparation](public-registration-finalization-grant.md)
+authenticates the dedicated finalization purpose before obtaining a new plan,
+complete before-vector and genuine grant. It then retains exactly raw10:
+authorization, custody raw7, before-vector and grant. This is not the older
+[preparation-only raw7](public-registration-finalization.md), and cannot
+retroactively authorize that older plan.
+
+The [finalization record codec](../serverware/control_plane_registration_finalization_records.py)
+uses magic `SWCPF001`, family `registration-finalization`, selector
+`webauthn.registration.finalize` and local identity domain
+`serverware.controlPlaneRegistrationFinalizationGrantRecord/v1`. Its frame has
+the two-byte source length, original ASCII source, ten eight-byte big-endian
+lengths and exact bodies. Per-object, raw7-group and combined 64 MiB limits are
+checked before slicing or joining bodies; the maximum header is 346 bytes.
+No existing frame or content-identity domain changes.
+
+`append_registration_finalization_preparation(originals, *, evidence_local_digest)`
+exists on the journal and private cold client. It requires an already complete
+evidence-grant/signer preparation, rereads its actual association and originals,
+and checks capacity for the missing finalization record plus marker before
+publication. Existing legacy marker reserves are preserved.
+
+```text
+existing evidence grant + signer originals + their association (reread)
+  -> publish finalization raw10 record
+  -> publish finalization-associated-<finalization digest hex> LAST
+  -> return actual finalization grant local ID
+```
+
+The [finalization association codec](../serverware/control_plane_registration_finalization_associations.py)
+uses `SWCPM001`, a two-byte source length, source ASCII and three raw32 local
+digests: finalization grant, evidence grant and signer exchange. Its maximum
+is 362 bytes. The three identities must be distinct and share the original
+source; the evidence association must already bind that exact signer. The
+small marker avoids duplicating the evidence/signer inventories and preserves
+their existing local IDs. Each publication uses the existing protected
+file/fsync/no-replace/directory-fsync/readback path.
+
+The last marker is the local commit point. Interruption can leave durable
+orphan originals or follow a completed publication; it never triggers cleanup,
+re-signing, automatic retry or reassociation. An explicitly repeated exact
+append is idempotent after readback; conflicting linkage is rejected.
+`load_registration_finalization_preparation(finalizationID)` returns exactly
+`(finalization PreparedRecord, evidence localDigest, (evidence PreparedRecord,
+signer PreparedRecord))` only after rereading both association markers and all
+three originals. Recovery/load reject dangling, changed or cross-family/source
+links. A standalone original without its final marker is not a complete
+finalization preparation.
+
+This is retention only: zero legacy attempt/observation space is reserved, and
+attempt, observation, legacy forward and reconciliation actions reject the
+family. No finalization reserve, SQL attempt, authenticated outcome or OIDC
+activation is implied. The lower-level association authenticates no signatures,
+business evidence, permission or currentness; genuine replay remains a separate
+prerequisite on use. This path is source-only, unbuilt and unexecuted.
 
 ## Bounded registration completion reconciliation
 

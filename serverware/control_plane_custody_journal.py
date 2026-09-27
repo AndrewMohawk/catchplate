@@ -8,7 +8,7 @@ removed. Recovery rejects unknown and temporary files rather than guessing
 whether an interrupted publication may safely be discarded.
 An OBSERVED marker records only first successful readback metadata; it is
 neither terminal business state nor authority to bypass fresh verification.
-Registration execution-grant and signer-exchange records are retention-only families;
+Registration execution-grant, finalization-grant and signer-exchange records are retention-only families;
 they never admit attempted or observed markers or legacy forwarding.
 An ASSOCIATED marker commits only an exact local signer/grant relationship
 after both original records are durable; it supplies no verification or authority.
@@ -33,6 +33,8 @@ from serverware import control_plane_custody_observations as observations
 from serverware import control_plane_registration_execution_records as execution_records
 from serverware import control_plane_registration_signer_records as signer_records
 from serverware import control_plane_registration_associations as associations
+from serverware import control_plane_registration_finalization_records as finalization_records
+from serverware import control_plane_registration_finalization_associations as finalization_associations
 from serverware import control_plane_registration_outcome_records as outcome_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
@@ -45,8 +47,9 @@ _OBSERVATION_RESERVE = observations.MAX_OBSERVATION_BYTES
 _HEX = frozenset("0123456789abcdef")
 _READ_CHUNK = 1024 * 1024
 _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES,
-    signer_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES)
-_RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY})
+    signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES)
+_RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
+    finalization_records.FAMILY})
 
 
 class CustodyJournalError(RuntimeError):
@@ -89,7 +92,7 @@ def _identity(metadata):
 
 
 def _decode_prepared(encoded):
-    """Dispatch only the three fixed original-record formats, never a plugin."""
+    """Dispatch only the four fixed original-record formats, never a plugin."""
     if type(encoded) is not bytes:
         raise CustodyJournalError("prepared record is not immutable bytes")
     if encoded[:8] == records.PREPARED_RECORD_MAGIC:
@@ -98,6 +101,8 @@ def _decode_prepared(encoded):
         return execution_records.decode_prepared(encoded)
     if encoded[:8] == signer_records.PREPARED_RECORD_MAGIC:
         return signer_records.decode_prepared(encoded)
+    if encoded[:8] == finalization_records.PREPARED_RECORD_MAGIC:
+        return finalization_records.decode_prepared(encoded)
     raise CustodyJournalError("prepared record version is unsupported")
 
 
@@ -115,6 +120,20 @@ def _association_scope(association, entries):
         raise CustodyJournalError("preparation association differs from its exact retained originals")
 
 
+def _finalization_association_scope(association, entries, evidence_associations):
+    finalization = entries.get(association.finalization_digest)
+    evidence = evidence_associations.get(association.evidence_digest)
+    if (finalization is None or evidence is None
+            or (finalization.family, finalization.selector)
+                != (finalization_records.FAMILY, finalization_records.OPERATION)
+            or finalization.source_revision != association.source_revision
+            or evidence.source_revision != association.source_revision
+            or evidence.signer_digest != association.signer_digest
+            or finalization.attempted or finalization.observed):
+        raise CustodyJournalError("finalization association differs from its retained original scope")
+    _association_scope(evidence, entries)
+
+
 class CustodyJournal:
     """One PID-bound, explicitly provisioned, append-only local journal.
 
@@ -124,8 +143,10 @@ class CustodyJournal:
     Retention-only execution grants and signer exchanges reserve no delivery
     marker bytes. Complete preparations preflight both records and their final
     association without consuming another record's reserved marker capacity.
-    At most six times maximum_records published files are admitted, including
-    associations and fixed registration outcomes. Old records are never
+    Finalization grants link only to an already complete evidence/signer pair;
+    their separate association is published last. At most seven times
+    maximum_records published files are admitted, including associations and
+    fixed registration outcomes. Old records are never
     rewritten or removed; legacy marker byte reservations remain intact.
     """
 
@@ -147,6 +168,7 @@ class CustodyJournal:
         self._closed = False
         self._entries = {}
         self._associations = {}
+        self._finalization_associations = {}
         self._registration_outcomes = {}
         self._file_identities = {}
         self._used_bytes = 0
@@ -241,6 +263,7 @@ class CustodyJournal:
         attempted = set()
         observed = set()
         associated = {}
+        finalization_associated = {}
         registration_outcomes = {}
         uncertain_completions = set()
         count = 0
@@ -258,6 +281,8 @@ class CustodyJournal:
                     kind = "observed"
                 elif name.startswith("associated-"):
                     kind = "associated"
+                elif name.startswith("finalization-associated-"):
+                    kind = "finalization-associated"
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -273,6 +298,7 @@ class CustodyJournal:
                     _ATTEMPT_BYTES if kind == "attempted" else
                     observations.MAX_OBSERVATION_BYTES if kind == "observed" else
                     associations.MAX_ASSOCIATION_BYTES if kind == "associated" else
+                    finalization_associations.MAX_ASSOCIATION_BYTES if kind == "finalization-associated" else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -301,6 +327,11 @@ class CustodyJournal:
                     if association.execution_digest != digest or digest in associated:
                         raise CustodyJournalError("association filename differs from its execution original")
                     associated[digest] = association
+                elif kind == "finalization-associated":
+                    association = finalization_associations.decode(encoded)
+                    if association.finalization_digest != digest or digest in finalization_associated:
+                        raise CustodyJournalError("finalization association filename differs from its original")
+                    finalization_associated[digest] = association
                 else:
                     outcome = outcome_records.decode(encoded)
                     by_kind = registration_outcomes.setdefault(digest, {})
@@ -328,6 +359,9 @@ class CustodyJournal:
         for association in associated.values():
             _association_scope(association, self._entries)
         self._associations = associated
+        for association in finalization_associated.values():
+            _finalization_association_scope(association, self._entries, associated)
+        self._finalization_associations = finalization_associated
         for digest, by_kind in registration_outcomes.items():
             self._registration_outcome_scope(digest, by_kind)
             if "completion-reconciled" in by_kind and digest not in uncertain_completions:
@@ -382,6 +416,21 @@ class CustodyJournal:
                     != (held.source_revision, held.execution_digest, held.signer_digest)):
             raise CustodyJournalError("preparation association changed after admitted recovery")
         _association_scope(association, self._entries)
+        return association, encoded
+
+    def _read_finalization_association(self, digest):
+        name = _name("finalization-associated", digest)
+        encoded, identity = self._read_file(name,
+            maximum_bytes=finalization_associations.MAX_ASSOCIATION_BYTES)
+        association = finalization_associations.decode(encoded)
+        held = self._finalization_associations[digest]
+        if (identity != self._file_identities[name]
+                or association.finalization_digest != digest or association != held):
+            raise CustodyJournalError("finalization association changed after admitted recovery")
+        _finalization_association_scope(association, self._entries, self._associations)
+        evidence, _ = self._read_association(association.evidence_digest)
+        if evidence.signer_digest != association.signer_digest:
+            raise CustodyJournalError("finalization association changed its original signer pair")
         return association, encoded
 
     def _registration_outcome_scope(self, digest, by_kind):
@@ -566,6 +615,86 @@ class CustodyJournal:
                 signer, _ = self._load(association.signer_digest)
                 self._require_ready()
                 return execution, signer
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def append_registration_finalization_preparation(self, originals, *, evidence_local_digest):
+        """Retain finalization raw10 then commit its exact preexisting evidence pair.
+
+        No marker is published until all originals are durable. An interrupted
+        publication may leave an orphan record; it never remaps, cleans up or
+        automatically retries an uncertain operation.
+        """
+        evidence_digest = _digest(evidence_local_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            digest, encoded = finalization_records.encode(originals)
+            if evidence_digest not in self._associations:
+                raise CustodyJournalError("finalization requires an existing complete evidence preparation")
+            try:
+                evidence_association, _ = self._read_association(evidence_digest)
+                evidence, _ = self._load(evidence_digest)
+                signer, _ = self._load(evidence_association.signer_digest)
+                association, marker = finalization_associations.encode(
+                    digest, evidence_digest, signer.digest)
+                if (evidence.source_revision != association.source_revision
+                        or signer.source_revision != association.source_revision):
+                    raise CustodyJournalError("finalization association cannot cross retained source revisions")
+                if digest in self._entries:
+                    _, retained = self._load(digest)
+                    if retained != encoded:
+                        raise CustodyJournalError("finalization changed its exact retained originals")
+                if digest in self._finalization_associations:
+                    _, retained = self._read_finalization_association(digest)
+                    if retained != marker:
+                        raise CustodyJournalError("finalization cannot remap its original evidence preparation")
+                    self._require_ready()
+                    return digest
+                self._require_ready()
+            except BaseException:
+                self._io.poison()
+                raise
+            missing = int(digest not in self._entries)
+            required_bytes = missing * len(encoded) + len(marker)
+            if (len(self._entries) + missing > self._maximum_records
+                    or len(self._file_identities) + missing + 1 > 7 * self._maximum_records
+                    or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal complete finalization retention capacity is exhausted")
+            try:
+                # This family reserves no legacy delivery markers. Re-read
+                # the existing pair after publication before committing a link.
+                self._append(digest, encoded)
+                self._read_association(evidence_digest)
+                self._load(evidence_digest)
+                self._load(signer.digest)
+                _finalization_association_scope(association, self._entries, self._associations)
+                self._require_ready()
+                self._publish("finalization-associated", digest, marker)
+                self._used_bytes += len(marker)
+                self._finalization_associations[digest] = association
+                self._require_ready()
+                return digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_registration_finalization_preparation(self, finalization_digest):
+        """Return (record, evidence locator, original pair), never replay authority."""
+        digest = _digest(finalization_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._finalization_associations:
+                raise CustodyJournalError("local finalization preparation association is absent")
+            try:
+                association, _ = self._read_finalization_association(digest)
+                finalization, _ = self._load(digest)
+                evidence, _ = self._load(association.evidence_digest)
+                signer, _ = self._load(association.signer_digest)
+                self._require_ready()
+                return finalization, association.evidence_digest, (evidence, signer)
             except BaseException:
                 self._io.poison()
                 raise

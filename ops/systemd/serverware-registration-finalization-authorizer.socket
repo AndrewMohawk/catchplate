@@ -1,0 +1,23 @@
+# Uninstalled deployment input. Independent account/group, release, root,
+# enrollment and socket-identity admission are mandatory. Recreating this
+# socket invalidates the separately signed FD and pathname identities.
+[Unit]
+Description=Serverware dedicated finalization grant authorizer ingress
+Before=serverware-registration-finalization-authorizer.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/serverware/registration-finalization-authorizer.sock
+FileDescriptorName=serverware-registration-finalization-authorizer
+SocketUser=65511
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=16
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=serverware-registration-finalization-authorizer.service
+
+[Install]
+WantedBy=sockets.target

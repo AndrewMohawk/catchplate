@@ -167,6 +167,8 @@ def validate_control_plane_configuration() -> None:
             "webauthn.registration.execution.complete",
             "webauthn.registration.execution.recover",
             "webauthn.registration.finalization.prepare"))
+        if enrollment_owner.finalization_enabled:
+            required_actions.add("webauthn.registration.finalization.authorize")
     if "*" not in configured_actions and not required_actions.issubset(
         configured_actions
     ):

@@ -11,7 +11,7 @@ REGISTRATION_HANDOFF_CSS = r"""
     .registration-handoff-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(190px, 1fr); gap: 12px; }
     .registration-handoff-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 14px; }
     #registration-handoff-status, #registration-handoff-negotiation { white-space: pre-wrap; overflow-wrap: anywhere; }
-    #registration-finalization-locator { overflow-wrap: anywhere; }
+    #registration-finalization-locator, #registration-finalization-grant-locator { overflow-wrap: anywhere; }
     @media (max-width: 620px) {
       .registration-handoff-fields { grid-template-columns: minmax(0, 1fr); }
       .registration-handoff-actions button { width: 100%; white-space: normal; }
@@ -39,12 +39,13 @@ REGISTRATION_HANDOFF_HTML = r"""
           <button id="registration-handoff-complete" type="button">Request completion</button>
           <button id="registration-handoff-recover" type="button">Recover completion</button>
           <button id="registration-handoff-finalize" type="button">Prepare finalization</button>
+          <button id="registration-handoff-grant" type="button">Prepare finalization grant</button>
         </div>
         <div class="registration-handoff-actions">
           <button id="registration-handoff-use-inspected" class="secondary" type="button">Use inspected grant local ID</button>
           <a href="#custody-workspace">Admin-only local metadata inspection</a>
         </div>
-        <p id="registration-handoff-boundary" class="hint">Execute evidence is not credential finalization. Request completion uses live originals; Recover completion uses separately authorized historical recovery and never retries SQL. Prepare finalization retains a separate preparation only; the authorization-before-planning execution path is not connected, and fresh permission cannot authorize this plan retroactively. Registration is not finalized and no session is activated here.</p>
+        <p id="registration-handoff-boundary" class="hint">Execute evidence is not credential finalization. Request completion uses live originals; Recover completion uses separately authorized historical recovery and never retries SQL. Prepare finalization retains an inspection/preparation-only plan that cannot gain execution permission retroactively. Prepare finalization grant obtains dedicated authorization before a NEW plan, complete vector and grant; it does not reserve or execute finalization. Registration is not finalized and no session is activated here.</p>
         <p id="registration-handoff-status" role="status" aria-live="polite">No action submitted. Registration not finalized.</p>
         <p id="registration-handoff-negotiation" class="hint" aria-live="polite"></p>
         <div class="registration-handoff-actions">
@@ -53,6 +54,7 @@ REGISTRATION_HANDOFF_HTML = r"""
           <a id="registration-handoff-review" href="#approval-workspace" hidden>Review in the approval queue</a>
         </div>
         <p id="registration-finalization-locator" hidden></p>
+        <p id="registration-finalization-grant-locator" hidden></p>
       </section>
 """
 
@@ -63,6 +65,7 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
       complete: {label: 'Request completion', suffix: 'complete-retained', purpose: 'complete-registration-evidence', action: 'webauthn.registration.execution.complete', schema: 'serverware.webAuthnRegistrationCompletion/v1', status: 'completion-acknowledged', authenticated: true},
       recover: {label: 'Recover completion', suffix: 'recover-completion', purpose: 'recover-registration-evidence-completion', action: 'webauthn.registration.execution.recover', schema: 'serverware.webAuthnRegistrationCompletionRecovery/v1', status: 'completion-recovered', authenticated: true},
       finalize: {label: 'Prepare finalization', suffix: 'prepare-finalization', purpose: 'prepare-retained-registration-finalization', action: 'webauthn.registration.finalization.prepare', schema: 'serverware.webAuthnRegistrationFinalizationPreparation/v1', status: 'finalization-prepared'},
+      grant: {label: 'Prepare finalization grant', suffix: 'prepare-finalization-grant', purpose: 'prepare-registration-finalization-grant', action: 'webauthn.registration.finalization.authorize', schema: 'serverware.webAuthnRegistrationFinalizationGrantPreparation/v1', status: 'finalization-grant-prepared'},
     });
     let registrationHandoffEpoch = 0;
     let registrationHandoffBusy = false;
@@ -123,6 +126,8 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
       registrationHandoffPending = null;
       $('registration-finalization-locator').hidden = true;
       $('registration-finalization-locator').textContent = '';
+      $('registration-finalization-grant-locator').hidden = true;
+      $('registration-finalization-grant-locator').textContent = '';
       registrationHandoffMessage(registrationHandoffBusy
         ? 'Selection or authentication changed. Any submitted request may still have taken effect; no retry is allowed.'
         : 'Local prompt cleared; server approvals and attempts are unchanged. Registration not finalized.');
@@ -173,12 +178,14 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
     function registrationHandoffAccepted(value, selected, kind) {
       const action = registrationHandoffActions[kind];
       const fields = ['schema', 'status', 'purpose', 'localDigest', 'registrationCompleted', 'currentnessEstablished', 'automaticRetryAllowed'];
-      fields.push(...(kind === 'finalize' ? ['finalizationLocalDigest', 'operation', 'finalizationExecuted'] : ['observationAuthenticated']));
+      const preparationLocator = kind === 'finalize' ? 'finalizationLocalDigest'
+        : kind === 'grant' ? 'finalizationGrantLocalDigest' : null;
+      fields.push(...(preparationLocator ? [preparationLocator, 'operation', 'finalizationExecuted'] : ['observationAuthenticated']));
       if (!custodyClosed(value, fields) || value.schema !== action.schema || value.status !== action.status
           || value.purpose !== action.purpose || value.localDigest !== selected.digest
           || value.registrationCompleted !== false || value.currentnessEstablished !== false || value.automaticRetryAllowed !== false
-          || (kind !== 'finalize' && value.observationAuthenticated !== action.authenticated)
-          || (kind === 'finalize' && (!registrationHandoffDigest(value.finalizationLocalDigest)
+          || (!preparationLocator && value.observationAuthenticated !== action.authenticated)
+          || (preparationLocator && (!registrationHandoffDigest(value[preparationLocator])
             || value.operation !== 'webauthn.registration.finalize' || value.finalizationExecuted !== false))) {
         throw new Error('Unexpected server result. Remote state is unknown; do not repeat the action.');
       }
@@ -186,11 +193,17 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
         $('registration-finalization-locator').textContent = `Separate finalization local ID: ${value.finalizationLocalDigest} — prepared, not executed. Evidence grant input remains unchanged.`;
         $('registration-finalization-locator').hidden = false;
       }
+      if (kind === 'grant') {
+        $('registration-finalization-grant-locator').textContent = `Separate finalization GRANT local ID: ${value.finalizationGrantLocalDigest} — grant prepared, not reserved or executed. Evidence input and inspection/preparation-only locator remain unchanged.`;
+        $('registration-finalization-grant-locator').hidden = false;
+      }
       return kind === 'execute'
         ? 'Server reports observed-commit for evidence admission; this is not signed completion. Registration not finalized. No automatic next action or retry.'
         : kind === 'finalize'
           ? 'Server reports finalization-prepared and retained. Finalization NOT executed; registration not finalized; session not activated.'
-          : `Server reports ${action.status} with authenticated originals. This does not establish currentness, finalize registration or activate a session.`;
+          : kind === 'grant'
+            ? 'Server reports finalization-grant-prepared and retained. Dedicated authorization preceded a NEW plan and grant; no reservation or finalization SQL was performed. Registration not finalized; session not activated.'
+            : `Server reports ${action.status} with authenticated originals. This does not establish currentness, finalize registration or activate a session.`;
     }
 
     async function submitRegistrationHandoff(kind, continuing = false) {

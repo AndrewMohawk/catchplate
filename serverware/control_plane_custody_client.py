@@ -330,10 +330,32 @@ class ControlPlaneCustodyClient:
         sibling IDs are never population proof. No signing, journal append,
         writer forwarding or registration/session activation happens here.
         """
+        return ControlPlaneCustodyClient._prepare_registration_finalization(self, originals,
+            sibling_challenge_ids=sibling_challenge_ids, deadline_epoch_ns=deadline_epoch_ns,
+            work=work, deadline_ns=deadline_ns, execution=False)
+
+    def prepare_registration_finalization_execution(self, originals, *, sibling_challenge_ids,
+            deadline_epoch_ns, work, deadline_ns=None):
+        """Return new finalization raw7 plus its same-read complete before-vector.
+
+        The dedicated caller authorization must already exist. This fixed
+        profile never accepts a browser vector or upgrades an older plan.
+        Neither transport nor the returned originals are execution permission.
+        """
+        return ControlPlaneCustodyClient._prepare_registration_finalization(self, originals,
+            sibling_challenge_ids=sibling_challenge_ids, deadline_epoch_ns=deadline_epoch_ns,
+            work=work, deadline_ns=deadline_ns, execution=True)
+
+    def _prepare_registration_finalization(self, originals, *, sibling_challenge_ids,
+            deadline_epoch_ns, work, deadline_ns, execution):
         from serverware import authority_webauthn_registration_custody_caller as raw
         from serverware import authority_webauthn_registration_finalization_caller as preparing
         from serverware import authority_webauthn_registration_signer_response as verifying
 
+        if type(execution) is not bool:
+            raise CustodyClientError("registration finalization planning profile is not source fixed")
+        if execution:
+            from serverware import authority_webauthn_registration_finalization_execution_caller as preparing
         ledger = verifying.evidence.capture._SharedLedger(work)
         held = raw._request_originals(originals)
         verifying.evidence.plan.contract._integer(deadline_epoch_ns, minimum=1)
@@ -488,6 +510,52 @@ class ControlPlaneCustodyClient:
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed while loading registration preparation")
         return pair
+
+    def append_registration_finalization_preparation(self, originals, *, evidence_local_digest):
+        """Commit exact finalization originals and their existing evidence/signer link.
+
+        The local association supplies no replay, permission or execution
+        result. A late caller-lifetime failure does not remove durable bytes
+        or authorize automatic signing, exchange or publication retry.
+        """
+        evidence_digest = journal._digest(evidence_local_digest)
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_finalization_preparation(
+            binding.journal, originals, evidence_local_digest=evidence_digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining finalization preparation")
+        return journal._digest(digest)
+
+    def load_registration_finalization_preparation(self, finalization_digest):
+        """Reread (finalization record, evidence locator, exact original pair)."""
+        from serverware import control_plane_registration_finalization_records as finalization
+        from serverware import control_plane_registration_execution_records as evidence
+        from serverware import control_plane_registration_signer_records as signer
+
+        digest = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.load_registration_finalization_preparation(binding.journal, digest)
+        if (type(result) is not tuple or len(result) != 3
+                or type(result[0]) is not records.PreparedRecord
+                or type(result[2]) is not tuple or len(result[2]) != 2
+                or any(type(record) is not records.PreparedRecord for record in result[2])):
+            raise CustodyClientError("finalization preparation lacks its exact retained original inventory")
+        finalization_record, evidence_digest, pair = result
+        journal._digest(evidence_digest)
+        evidence_record, signer_record = pair
+        journal._digest(signer_record.digest)
+        if (finalization_record.digest != digest or evidence_record.digest != evidence_digest
+                or (finalization_record.family, finalization_record.selector)
+                    != (finalization.FAMILY, finalization.OPERATION)
+                or (evidence_record.family, evidence_record.selector) != (evidence.FAMILY, evidence.OPERATION)
+                or (signer_record.family, signer_record.selector) != (signer.FAMILY, signer.OPERATION)
+                or finalization_record.source_revision != evidence_record.source_revision
+                or evidence_record.source_revision != signer_record.source_revision
+                or len({digest, evidence_digest, signer_record.digest}) != 3):
+            raise CustodyClientError("finalization preparation original record scope differs")
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while loading finalization preparation")
+        return result
 
     def append_registration_reservation(self, local_digest, originals):
         """Retain bounded raw3; independent reserve authentication remains required."""

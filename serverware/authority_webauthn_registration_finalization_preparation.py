@@ -31,9 +31,20 @@ class RegistrationFinalizationPreparationError(ValueError):
 def _prepare_on_work(process, *, request_originals, response_originals,
         sibling_challenge_ids, deadline_epoch_ns, work, transport_deadline_ns=None):
     """Replay originals and prepare real raw7 under the actual verifier owner."""
+    return _prepare_core(process, request_originals=request_originals,
+        response_originals=response_originals, sibling_challenge_ids=sibling_challenge_ids,
+        deadline_epoch_ns=deadline_epoch_ns, work=work,
+        transport_deadline_ns=transport_deadline_ns, execution=False)
+
+
+def _prepare_core(process, *, request_originals, response_originals,
+        sibling_challenge_ids, deadline_epoch_ns, work, transport_deadline_ns, execution):
     from serverware import authority_service as service
+    import time
 
     ledger = evidence.capture._SharedLedger(work)
+    if type(execution) is not bool:
+        raise RegistrationFinalizationPreparationError("finalization preparation profile is not fixed")
     request_raw = verifying.wire._request_originals(request_originals)
     response_raw = verifying.wire._response_originals(response_originals)
     # Raw byte tuples cannot pass through the JSON-only shallow-copy meter.
@@ -73,8 +84,10 @@ def _prepare_on_work(process, *, request_originals, response_originals,
         maximum_lifetime_ns=authority.VERIFIER_RESPONSE_MAX_AGE_NS,
         maximum_clock_skew_ns=authority.VERIFIER_MAX_CLOCK_SKEW_NS, work=work)
     bound = window[4] if inherited is None else min(window[4], inherited)
+    last_epoch, last_monotonic = window[0], window[2]
 
     def current():
+        nonlocal last_epoch, last_monotonic
         if (process.configuration is not measured or measured.digest != digest
                 or process.role_name != "verifier"
                 or process.process_mode != service.PROCESS_MODES["verifier"]
@@ -87,6 +100,12 @@ def _prepare_on_work(process, *, request_originals, response_originals,
         now = clock._check_on_work(window, work=work)
         if not interval[0] <= now < interval[1]:
             raise RegistrationFinalizationPreparationError("registration finalization receipt expired")
+        if execution:
+            monotonic = evidence.production._callback(work, time.monotonic_ns)
+            evidence.plan.contract._integer(monotonic, minimum=1)
+            if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+                raise RegistrationFinalizationPreparationError("finalization execution preparation clocks reversed or expired")
+            last_epoch, last_monotonic = now, monotonic
         if (process.configuration is not measured or measured.digest != digest
                 or measured.attestation_evidence is not receipt
                 or framing._receipt_interval(receipt) != interval):
@@ -101,9 +120,17 @@ def _prepare_on_work(process, *, request_originals, response_originals,
     current()
     # Evaluation time is the genuine opening sample, not a new post-replay
     # window and not the attestation's historical verification instant.
-    result = service.AuthorityProcess._prepare_webauthn_transition_custody(process,
-        operation=verifying.production.registration.OPERATION, request=request,
-        inputs_bytes=inputs, now_epoch_ns=window[0], deadline_epoch_ns=window[3],
-        invocation={}, work=work, transport_deadline_ns=bound)
+    if execution:
+        from serverware import authority_webauthn_transition_preparation as preparation
+
+        result = preparation._prepare_finalization_execution_on_work(process,
+            request=request, inputs_bytes=inputs, now_epoch_ns=window[0],
+            deadline_epoch_ns=window[3], invocation={}, live_window=window,
+            work=work, transport_deadline_ns=bound)
+    else:
+        result = service.AuthorityProcess._prepare_webauthn_transition_custody(process,
+            operation=verifying.production.registration.OPERATION, request=request,
+            inputs_bytes=inputs, now_epoch_ns=window[0], deadline_epoch_ns=window[3],
+            invocation={}, work=work, transport_deadline_ns=bound)
     current()
     return result

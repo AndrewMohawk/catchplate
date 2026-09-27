@@ -14,6 +14,7 @@ Each button selects one real endpoint and requires an explicit click:
 | Request completion | Completion for live original controls. |
 | Recover completion | Separately authorized historical completion recovery; never SQL retry. |
 | Prepare finalization | Prepare and retain the separate `webauthn.registration.finalize` request; no finalization execution. |
+| Prepare finalization grant | Dedicated authorization before a new plan, complete before vector and retained grant; no reservation or finalization SQL. |
 
 The first three use the existing
 [public handoff](public-registration-handoff.md) and
@@ -24,7 +25,20 @@ preparation uses `/api/webauthn/register/prepare-finalization` or its
 `webauthn.registration.finalization.prepare`. Its returned finalization local
 ID is displayed separately; the evidence grant input is never replaced.
 This prepared-only plan cannot gain fresh execution permission retroactively:
-the dedicated authorization-before-planning execution path is not yet connected.
+the separate grant action must authorize before making a new plan.
+
+**Prepare finalization grant** uses
+`/api/webauthn/register/prepare-finalization-grant` or its
+`/api/auth/session/webauthn/register/prepare-finalization-grant` counterpart,
+purpose `prepare-registration-finalization-grant`, and action
+`webauthn.registration.finalization.authorize`. Its closed ten-field success
+contract is `serverware.webAuthnRegistrationFinalizationGrantPreparation/v1`
+with status `finalization-grant-prepared`, the unchanged evidence `localDigest`,
+a separate `finalizationGrantLocalDigest`, operation
+`webauthn.registration.finalize`, and all four execution/registration/currentness/
+automatic-retry flags false. It does not upgrade the older raw7 preparation.
+The grant locator has its own display: neither the evidence input nor the
+inspection/preparation-only finalization locator is overwritten.
 
 ## Fresh authorization, no action chaining
 
@@ -62,7 +76,9 @@ status rather than raw exception text or response originals. SQL
 `observed-commit` is not a signed completion. Completion/recovery reports rely
 on the server's actual original verification, not an independent browser proof.
 `finalization-prepared` displays the separate finalization locator as
-**prepared, not executed**. Every path keeps registration not finalized,
+**prepared, not executed**. `finalization-grant-prepared` displays the distinct
+grant locator as **not reserved or executed**, never as completed credentials
+or a session-activation receipt. Every path keeps registration not finalized,
 currentness unestablished, and automatic retry disallowed. No completion result
 activates a pending session.
 

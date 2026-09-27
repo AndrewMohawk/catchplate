@@ -1,0 +1,65 @@
+# Unrendered and uninstalled. The release root must be an independently
+# admitted complete runtime export, never a checkout. No account, signing key,
+# enrollment, root pin or deployment authority is provisioned here.
+# There is no writable journal/store and no one-use claim.
+[Unit]
+Description=Serverware dedicated finalization grant authorizer (trusted-host-local)
+BindsTo=serverware-registration-finalization-authorizer.socket
+After=local-fs.target serverware-registration-finalization-authorizer.socket
+RequiresMountsFor=@AUTHORIZER_RELEASE_ROOT@ @AUTHORIZER_TRUST_DIR@ @AUTHORIZER_KEY_FILE@
+AssertPathIsDirectory=@AUTHORIZER_RELEASE_ROOT@
+AssertPathIsDirectory=@AUTHORIZER_TRUST_DIR@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Root delivery permanently drops groups/UID/GID to 65511:65511 and retains
+# only the four sealed/activated FDs198..201. Type=exec is not crypto readiness.
+User=root
+Group=root
+RootDirectory=@AUTHORIZER_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@AUTHORIZER_TRUST_DIR@:/run/serverware/registration-finalization-trust
+BindReadOnlyPaths=@AUTHORIZER_KEY_FILE@:/run/secrets/serverware-registration-finalization-authorizer-key
+BindReadOnlyPaths=/run/serverware/registration-finalization-authorizer.sock:/run/serverware/registration-finalization-authorizer.sock
+Sockets=serverware-registration-finalization-authorizer.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/registration_finalization_authorizer_launcher.py --root-delivery
+Restart=no
+RuntimeMaxSec=300s
+TimeoutStartSec=35s
+# Cooperative TERM/cgroup escalation is not a hard kernel watchdog.
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native

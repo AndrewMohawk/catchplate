@@ -52,8 +52,15 @@ work remains cumulative; exhausting it fails closed rather than obtaining a
 replacement allowance. Original control/plan expiry and inherited deadlines
 only narrow the supplied window; synchronous checks are not a hard watchdog.
 
-This module adds no cold key owner, endpoint, durable grant journal, replay
-claim, currentness witness, reservation, SQL, completion or retry. The separate
+This pure module itself owns no key service, transport or durable state. The
+[dedicated cold authorizer](registration-finalization-authorizer.md) and
+[public grant-preparation path](public-registration-finalization-grant.md) now
+connect it to the actual purpose-key owner, bounded raw9 exchange, same-read
+complete-vector acquisition and durable raw10/finalization association
+referencing the existing evidence/signer association.
+That source integration is unbuilt, unexecuted and unprovisioned. It adds no
+one-use execution claim, currentness witness, reservation, SQL, completion or
+automatic retry. The separate
 [execution admission](registration-finalization-execution-admission.md) verifies
 original grants for later consumers; neither helper executes credentials.
 Atomic credential finalization/outcome handling and separate OIDC browser-session

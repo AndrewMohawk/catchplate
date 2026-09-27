@@ -10,10 +10,14 @@ enrollment. Authorization is issued from genuine signer replay at a current
 sample BEFORE one new planner request. The returned authorization/raw7 are
 genuinely joined locally; an older plan is not accepted or retimed. This private
 planning continuation does not journal, request a grant, reserve, execute SQL
-or activate a session. A separate explicit grant-request method authenticates
+or activate a session. A separate explicit grant-preparation method acquires
+the complete vector with the new plan, requests and verifies the actual grant.
+A separate explicit grant-request method authenticates
 raw8, exchanges once at its independently configured endpoint, and verifies the
-returned original grant against the full vector. No public route invokes either
-continuation yet, and the dedicated authorizer service is not implemented.
+returned original grant against the full vector. The public grant-preparation
+facade invokes the complete new-plan/vector/grant path under separate present
+permission and retains the exact resulting originals. The private raw8-only
+planning continuation remains unexposed.
 """
 from __future__ import annotations
 
@@ -110,7 +114,7 @@ def _authorize_on_owner(owner, *, request_originals, response_originals,
 
 
 def _prepare_on_owner(owner, *, signer_originals, live_window, work,
-        transport_deadline_ns=None, retained_original_bytes=0):
+        transport_deadline_ns=None, retained_original_bytes=0, _with_vector=False):
     """Authorize first, request one new plan, then admit the original raw8.
 
     Called after genuine retained ownership/completion replay on the same work
@@ -122,6 +126,10 @@ def _prepare_on_owner(owner, *, signer_originals, live_window, work,
     from serverware import db
 
     raw = signer_wire._request_originals(signer_originals)
+    if type(_with_vector) is not bool:
+        raise startup.EnrollmentStartupError("finalization planning profile is not source-selected")
+    if _with_vector:
+        from serverware import authority_webauthn_registration_finalization_execution_caller as plan_wire
     shape._integer(retained_original_bytes, evidence.authority.MAX_RESULT_BYTES)
     common, _private, window, bound, current = _scope(owner, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work)
@@ -183,7 +191,9 @@ def _prepare_on_owner(owner, *, signer_originals, live_window, work,
     # This is deliberately AFTER actual authorization issuance and verification.
     # A previous raw7 is not an input. No callback can retime or replace the
     # caller's original window, siblings, grant originals or authorization.
-    prepared = custody_client.ControlPlaneCustodyClient.prepare_registration_finalization(
+    prepare = (custody_client.ControlPlaneCustodyClient.prepare_registration_finalization_execution
+        if _with_vector else custody_client.ControlPlaneCustodyClient.prepare_registration_finalization)
+    prepared = prepare(
         owner._custody, raw, sibling_challenge_ids=siblings,
         deadline_epoch_ns=deadline, deadline_ns=bound, work=work)
     prepared = plan_wire._response_originals(prepared)
@@ -191,21 +201,39 @@ def _prepare_on_owner(owner, *, signer_originals, live_window, work,
             + sum(len(value) for value in prepared) > evidence.authority.MAX_RESULT_BYTES):
         raise startup.EnrollmentStartupError("finalization plan exceeds the original aggregate bound")
     authorized_current()
-    admitted = admission._verify_on_configuration(**common, originals=prepared,
+    admitted = admission._verify_on_configuration(**common, originals=prepared[:7],
         authorization_bytes=original_authorization, live_window=window,
         transport_deadline_ns=bound, work=work)
     authorized_current()
-    return (original_authorization, *admitted)
+    return (original_authorization, *admitted, *prepared[7:])
+
+
+def _prepare_grant_on_owner(owner, *, signer_originals, live_window, work,
+        transport_deadline_ns=None, retained_original_bytes=0):
+    """Explicit authorized new-plan/vector/grant composition; no storage or SQL."""
+    originals = _prepare_on_owner(owner, signer_originals=signer_originals,
+        live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
+        retained_original_bytes=retained_original_bytes, _with_vector=True)
+    grant = startup._EnrollmentOwner._request_registration_finalization_grant(owner,
+        originals=originals[:8], before_vector_bytes=originals[8], live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work)
+    finalization = owner._material.finalization
+    enrollment_bytes = sum(len(raw) for raw in (finalization.authorization_enrollment_bytes,
+        finalization.current_root_enrollment_bytes, finalization.grant_enrollment_bytes))
+    if (retained_original_bytes + enrollment_bytes + sum(len(raw) for raw in originals)
+            + len(grant) > evidence.authority.MAX_RESULT_BYTES):
+        raise startup.EnrollmentStartupError("finalization grant preparation exceeds its original aggregate bound")
+    return (*originals, grant)
 
 
 def _request_on_owner(owner, *, originals, before_vector_bytes, live_window,
         work, transport_deadline_ns=None):
     """Explicit original grant exchange, never automatic after preparation.
 
-    The caller must retain original raw8 and independently acquire the complete
+    The caller supplies original raw8 and the genuinely acquired complete
     before-vector. Neither a prior admission result nor an old preparation-only
     raw7 can replace the original dedicated authorization. The cold service is
-    a deployment prerequisite; no fallback to the evidence authorizer exists.
+    an independently admitted peer; no fallback to the evidence authorizer exists.
     """
     from serverware import authority_registration_finalization_transport as transport
     from serverware import authority_registration_finalization_execution_admission as receiving

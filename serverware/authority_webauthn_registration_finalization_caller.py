@@ -70,7 +70,21 @@ def _response_originals(originals):
 
 
 def _recv_request(connection, *, deadline_ns, prefix):
-    if type(prefix) is not bytes or prefix != REQUEST_MAGIC:
+    return _recv_request_profile(connection, deadline_ns=deadline_ns, prefix=prefix, execution=False)
+
+
+def _profile(execution):
+    if type(execution) is not bool:
+        raise AuthorityTransportError("registration finalization profile is not source fixed")
+    if execution:
+        from serverware import authority_webauthn_registration_finalization_execution_caller as wire
+        return wire.REQUEST_MAGIC, wire.RESPONSE_MAGIC, 8, wire._response_lengths, wire._response_originals
+    return REQUEST_MAGIC, RESPONSE_MAGIC, 7, _response_lengths, _response_originals
+
+
+def _recv_request_profile(connection, *, deadline_ns, prefix, execution):
+    request_magic, _response_magic, _count, _lengths, _originals = _profile(execution)
+    if type(prefix) is not bytes or prefix != request_magic:
         raise AuthorityTransportError("registration finalization request prefix is invalid")
     encoded = io._recv_exact_until(connection, 71, deadline_ns=deadline_ns)
     try:
@@ -91,8 +105,13 @@ def _recv_request(connection, *, deadline_ns, prefix):
 
 
 def _send_response(connection, originals, *, deadline_ns):
-    originals = _response_originals(originals)
-    header = RESPONSE_MAGIC + b"".join(len(raw).to_bytes(8, "big") for raw in originals)
+    return _send_response_profile(connection, originals, deadline_ns=deadline_ns, execution=False)
+
+
+def _send_response_profile(connection, originals, *, deadline_ns, execution):
+    _request_magic, response_magic, _count, _lengths, validate = _profile(execution)
+    originals = validate(originals)
+    header = response_magic + b"".join(len(raw).to_bytes(8, "big") for raw in originals)
     io._send_exact_until(connection, header, deadline_ns=deadline_ns)
     for raw in originals:
         io._send_exact_until(connection, raw, deadline_ns=deadline_ns)
@@ -102,6 +121,14 @@ def _send_response(connection, originals, *, deadline_ns):
 def _socket_request(path, *, configuration_digest, deadline_epoch_ns, originals,
         deadline_ns, expected_peer_uid, expected_peer_gid):
     """One peer-checked exchange under the original absolute local deadline."""
+    return _socket_request_profile(path, configuration_digest=configuration_digest,
+        deadline_epoch_ns=deadline_epoch_ns, originals=originals, deadline_ns=deadline_ns,
+        expected_peer_uid=expected_peer_uid, expected_peer_gid=expected_peer_gid, execution=False)
+
+
+def _socket_request_profile(path, *, configuration_digest, deadline_epoch_ns, originals,
+        deadline_ns, expected_peer_uid, expected_peer_gid, execution):
+    request_magic, response_magic, count, validate_lengths, validate_response = _profile(execution)
     originals = _request_originals(originals)
     digest = framing._configuration_digest(configuration_digest)
     deadline = _epoch_deadline(deadline_epoch_ns)
@@ -116,7 +143,7 @@ def _socket_request(path, *, configuration_digest, deadline_epoch_ns, originals,
         raise AuthorityTransportError("registration finalization endpoint is not valid UTF-8") from exc
     if not 1 <= len(path_bytes) <= 107:
         raise AuthorityTransportError("registration finalization endpoint is too long")
-    header = (REQUEST_MAGIC + digest.encode("ascii") + deadline.to_bytes(8, "big")
+    header = (request_magic + digest.encode("ascii") + deadline.to_bytes(8, "big")
         + b"".join(len(raw).to_bytes(8, "big") for raw in originals))
     _check_deadline(deadline_ns)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -130,11 +157,12 @@ def _socket_request(path, *, configuration_digest, deadline_epoch_ns, originals,
         for raw in originals:
             io._send_exact_until(connection, raw, deadline_ns=deadline_ns)
         io._call_until(connection, deadline_ns, lambda: connection.shutdown(socket.SHUT_WR))
-        if _recv_prefix(connection, deadline_ns=deadline_ns) != RESPONSE_MAGIC:
+        if _recv_prefix(connection, deadline_ns=deadline_ns) != response_magic:
             raise AuthorityTransportError("registration finalization response prefix is invalid")
-        header = io._recv_exact_until(connection, 56, deadline_ns=deadline_ns)
-        lengths = tuple(int.from_bytes(header[index:index + 8], "big") for index in range(0, 56, 8))
-        _response_lengths(lengths)
+        header = io._recv_exact_until(connection, 8 * count, deadline_ns=deadline_ns)
+        lengths = tuple(int.from_bytes(header[index:index + 8], "big")
+            for index in range(0, len(header), 8))
+        validate_lengths(lengths)
         response = tuple(io._recv_exact_until(connection, size, deadline_ns=deadline_ns)
             for size in lengths)
         io._require_eof(connection, deadline_ns)
@@ -148,7 +176,7 @@ def _socket_request(path, *, configuration_digest, deadline_epoch_ns, originals,
         raise
     connection.close()
     _check_deadline(deadline_ns)
-    return _response_originals(response)
+    return validate_response(response)
 
 
 def _hints_on_work(raw, work):
@@ -185,11 +213,16 @@ def _hints_on_work(raw, work):
 
 
 def _serve_relay(trust, connection, *, deadline_ns, prefix):
+    return _serve_relay_profile(trust, connection, deadline_ns=deadline_ns, prefix=prefix, execution=False)
+
+
+def _serve_relay_profile(trust, connection, *, deadline_ns, prefix, execution):
     from serverware import authority_service as service
     from serverware import authority_custody_caller_service as caller
     from serverware import authority_launch_guard as launch
     import os
 
+    _profile(execution)
     if type(trust) is not service.AuthorityRuntimeClient:
         raise AuthorityTransportError("registration finalization relay requires actual runtime trust")
     path, uid, gid = trust.verifier_socket_path, trust.verifier_uid, trust.verifier_gid
@@ -224,17 +257,23 @@ def _serve_relay(trust, connection, *, deadline_ns, prefix):
             raise AuthorityTransportError("registration finalization relay changed during callbacks")
         return clipped
 
-    received, deadline, originals = _recv_request(connection, deadline_ns=deadline_ns, prefix=prefix)
+    received, deadline, originals = _recv_request_profile(connection, deadline_ns=deadline_ns,
+        prefix=prefix, execution=execution)
     if received != digest:
         raise AuthorityTransportError("registration finalization differs from runtime configuration")
     deadline_ns = current()
-    response = _socket_request(path, configuration_digest=digest, deadline_epoch_ns=deadline,
-        originals=originals, deadline_ns=deadline_ns, expected_peer_uid=uid, expected_peer_gid=gid)
+    response = _socket_request_profile(path, configuration_digest=digest, deadline_epoch_ns=deadline,
+        originals=originals, deadline_ns=deadline_ns, expected_peer_uid=uid, expected_peer_gid=gid,
+        execution=execution)
     deadline_ns = current()
-    _send_response(connection, response, deadline_ns=deadline_ns)
+    _send_response_profile(connection, response, deadline_ns=deadline_ns, execution=execution)
 
 
 def _serve_verifier(process, connection, *, deadline_ns, prefix):
+    return _serve_verifier_profile(process, connection, deadline_ns=deadline_ns, prefix=prefix, execution=False)
+
+
+def _serve_verifier_profile(process, connection, *, deadline_ns, prefix, execution):
     from serverware import authority_service as service
     from serverware import authority_custody_caller_service as caller
     from serverware import authority_launch_guard as launch
@@ -242,6 +281,7 @@ def _serve_verifier(process, connection, *, deadline_ns, prefix):
     from serverware import authority_webauthn_transition_service as transition
     from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
+    _request_magic, _response_magic, _count, _lengths, validate_response = _profile(execution)
     if (type(process) is not service.AuthorityProcess or process.role_name != "verifier"
             or process.process_mode != service.PROCESS_MODES["verifier"]
             or type(process.configuration) is not service.MeasuredConfiguration):
@@ -251,7 +291,8 @@ def _serve_verifier(process, connection, *, deadline_ns, prefix):
     receipt = observed.attestation_evidence
     interval = _receipt_interval(receipt)
     deadline_ns = caller._relay_deadline(interval, deadline_ns)
-    received, deadline, originals = _recv_request(connection, deadline_ns=deadline_ns, prefix=prefix)
+    received, deadline, originals = _recv_request_profile(connection, deadline_ns=deadline_ns,
+        prefix=prefix, execution=execution)
     if received != digest or process.configuration is not observed:
         raise AuthorityTransportError("registration finalization differs from verifier configuration")
     # Complete immutable raw eleven and EOF precede this sole allowance. No
@@ -279,10 +320,12 @@ def _serve_verifier(process, connection, *, deadline_ns, prefix):
         return clipped
 
     deadline_ns = current()
-    response = service.AuthorityProcess._prepare_webauthn_registration_finalization(process,
+    prepare = (service.AuthorityProcess._prepare_webauthn_registration_finalization_execution
+        if execution else service.AuthorityProcess._prepare_webauthn_registration_finalization)
+    response = prepare(process,
         request_originals=originals[:8], response_originals=originals[8:10],
         sibling_challenge_ids=hints, deadline_epoch_ns=deadline,
         work=work, transport_deadline_ns=deadline_ns)
-    response = _response_originals(response)
+    response = validate_response(response)
     deadline_ns = current()
-    _send_response(connection, response, deadline_ns=deadline_ns)
+    _send_response_profile(connection, response, deadline_ns=deadline_ns, execution=execution)

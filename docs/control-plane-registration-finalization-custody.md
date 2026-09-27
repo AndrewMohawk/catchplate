@@ -3,9 +3,11 @@
 The control plane has a source-only, explicitly opted-in cold profile for the
 `webauthn.registration.finalize` caller. It does not reuse evidence-admission
 permission or its caller key. The [private authorization-before-planning
-continuation](control-plane-finalization-execution.md) still requires genuine
+continuation](control-plane-finalization-execution.md) requires genuine
 present-caller permission; provisioned keys and retained originals do not supply
-that permission. No public route is activated by this profile.
+it. The separate [public grant-preparation routes](public-registration-finalization-grant.md)
+now enforce that purpose in source. This profile neither deploys those routes
+nor turns its key custody into present-caller permission.
 
 ## Explicit parent v4
 
@@ -83,9 +85,13 @@ Independent caller/key enrollment, root provenance, descriptor inventory,
 protected files and socket access still require real provisioning. This cold
 profile alone performs no network request, grant signing, reserve, SQL, one-use
 consumption, completion, credential registration or session activation.
-The private request method exists, but the separate cold finalization authorizer
-service is not implemented by this slice; the fixed path is not evidence of
-socket availability or deployment.
+The private request method is now connected in source to the
+[dedicated finalization authorizer](registration-finalization-authorizer.md)
+and public grant-preparation facade, including same-read full-vector acquisition
+and durable original association. The service source and packaging remain
+unbuilt, unexecuted and unprovisioned; the fixed path is not evidence of socket
+availability or deployment. Independent reserve, protected SQL and completion
+orchestration, plus separate OIDC session activation, remain outstanding.
 Trusted-host-local descriptor continuity is not independent enclave evidence.
 
 This implementation has not been built or executed. Deferred frozen validation

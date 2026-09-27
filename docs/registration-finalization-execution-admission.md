@@ -9,8 +9,8 @@ an OIDC session. No tests, imports, builds or runtime verification ran.
 ## Execution-order prerequisite
 
 **Dedicated finalization authorization must precede production of the plan it
-authorizes. Today's public preparation does not make retained raw7 eligible for
-a later fresh execution authorization.** The current contracts require:
+authorizes. Plan-only public preparation does not make retained raw7 eligible
+for a later fresh execution authorization.** The current contracts require:
 
 ```text
 authorization.issuedAtEpochNs <= plan.issuedAtEpochNs == grant.issuedAtEpochNs
@@ -31,9 +31,10 @@ The separate [private cold caller path](control-plane-finalization-execution.md)
 now reconstructs the exact typed request/operation from signer originals and
 bounded sibling observations, issues its dedicated authorization at a current
 sample, then requests a new plan and genuinely joins the returned originals.
-It requires prior present-caller execution-purpose admission, which is not yet
-wired to a public route. Older preparation remains retained history, not
-permission to start that sequence or automatically replan. If the request or
+Its [public grant-preparation routes](public-registration-finalization-grant.md)
+now supply the separate present-caller purpose admission before this continuation.
+Older preparation remains retained history, not permission to start that
+sequence or automatically replan. If the request or
 live preconditions have changed, the new path fails; it cannot relabel old raw7.
 
 ## Fixed original authority
@@ -121,11 +122,13 @@ read and validated, not mutated by this kernel.
 Dedicated [caller enrollment/request issuance](registration-finalization-authorization.md),
 an opt-in [cold purpose/key owner](control-plane-registration-finalization-custody.md),
 and original [grant production](registration-finalization-grant-production.md)
-are now source-implemented separately. Still required are the actual public
-present-caller execution-purpose admission, complete-vector acquisition and
-the cold authorizer service, durable finalization association, independently
-current reservation/pending admission, and protected SQL/completion orchestration
-with its irreversible attempt journal. Session activation remains a separate
+are now connected in source to public present-purpose admission, same-read
+complete-vector acquisition, the [dedicated cold authorizer](registration-finalization-authorizer.md)
+and durable raw10/finalization association referencing the existing evidence/
+signer association. These are unbuilt, unexecuted and
+unprovisioned implementations. Still required are independently current
+reservation/pending admission and protected SQL/completion orchestration with
+its irreversible attempt journal. Session activation remains a separate
 authenticated transition. The unchanged public
 [retained preparation facade](retained-registration-finalization.md) returns a
 raw7 locator only, and the excluded legacy authority dispatcher is not an

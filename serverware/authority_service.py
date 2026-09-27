@@ -64,6 +64,7 @@ from serverware import authority_webauthn_registration_source_caller as registra
 from serverware import authority_webauthn_registration_custody_caller as registration_custody_caller
 from serverware import authority_webauthn_registration_execution_caller as registration_execution_caller
 from serverware import authority_webauthn_registration_finalization_caller as registration_finalization_caller
+from serverware import authority_webauthn_registration_finalization_execution_caller as registration_finalization_execution_caller
 from serverware import authority_webauthn_transition_transport as transition_plan_transport
 from serverware import authority_webauthn_transition_custody_transport as transition_custody_transport
 from serverware import authority_webauthn_transition_custody_read_transport as transition_custody_read_transport
@@ -3090,7 +3091,12 @@ class AuthorityRuntimeRelay:
                 or prefix in (registration_source_caller.REQUEST_MAGIC,
                     registration_custody_caller.REQUEST_MAGIC,
                     registration_execution_caller.REQUEST_MAGIC,
-                    registration_finalization_caller.REQUEST_MAGIC))
+                    registration_finalization_caller.REQUEST_MAGIC,
+                    registration_finalization_execution_caller.REQUEST_MAGIC))
+            if prefix == registration_finalization_execution_caller.REQUEST_MAGIC:
+                registration_finalization_execution_caller._serve_relay(
+                    trust, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             if prefix == registration_execution_caller.REQUEST_MAGIC:
                 registration_execution_caller._serve_relay(
                     trust, connection, deadline_ns=deadline_ns, prefix=prefix)
@@ -4207,6 +4213,17 @@ class AuthorityProcess:
         inferred from a custody digest or the supplied sibling lookup hints.
         """
         from serverware import authority_webauthn_registration_finalization_preparation as preparation
+
+        return preparation._prepare_on_work(self, request_originals=request_originals,
+            response_originals=response_originals, sibling_challenge_ids=sibling_challenge_ids,
+            deadline_epoch_ns=deadline_epoch_ns, work=work,
+            transport_deadline_ns=transport_deadline_ns)
+
+    def _prepare_webauthn_registration_finalization_execution(self, *, request_originals,
+            response_originals, sibling_challenge_ids, deadline_epoch_ns, work,
+            transport_deadline_ns=None):
+        """Prepare finalization raw7 and its actual jointly observed complete vector."""
+        from serverware import authority_webauthn_registration_finalization_execution_preparation as preparation
 
         return preparation._prepare_on_work(self, request_originals=request_originals,
             response_originals=response_originals, sibling_challenge_ids=sibling_challenge_ids,
@@ -9678,6 +9695,7 @@ class AuthorityServer:
                 registration_custody_caller.REQUEST_MAGIC,
                 registration_execution_caller.REQUEST_MAGIC,
                 registration_finalization_caller.REQUEST_MAGIC,
+                registration_finalization_execution_caller.REQUEST_MAGIC,
                 *transition_plan_transport.REQUEST_MAGICS,
                 *transition_custody_transport.REQUEST_MAGICS,
                 *transition_custody_transport.RELAY_REQUEST_MAGICS,
@@ -9685,6 +9703,10 @@ class AuthorityServer:
                 *transition_custody_read_transport.REQUEST_MAGICS,
                 *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
             reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
+            if prefix == registration_finalization_execution_caller.REQUEST_MAGIC:
+                registration_finalization_execution_caller._serve_verifier(
+                    self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             if prefix == registration_execution_caller.REQUEST_MAGIC:
                 registration_execution_caller._serve_verifier(
                     self.process, connection, deadline_ns=deadline_ns, prefix=prefix)

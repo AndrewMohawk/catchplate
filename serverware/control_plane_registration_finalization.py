@@ -9,10 +9,11 @@ finalization planner/custody path can prepare and durably retain raw7.
 The unchanged public preparation path performs no recovery, service request for
 completion, evidence SQL dispatch, signing or transition forwarding. Its local
 raw7 locator does not assert execution permission or a registered credential.
-A separate PRIVATE execution-purpose continuation admits a dedicated cold
+A separate execution-purpose continuation admits a dedicated cold
 caller key, signs authorization, then creates a NEW plan and returns original
-raw8 in memory. Its present-purpose application admission and durable grant
-association are not yet wired to a public route. Neither continuation reserves,
+raw8 in memory. A separately admitted public grant-preparation path acquires
+a complete before-vector with the new plan, verifies the returned grant and
+durably associates raw10 with the original evidence preparation. No path reserves,
 executes finalization or activates a session. An older preparation cannot be
 authorized retroactively, and failures never imply permission to retry.
 """
@@ -160,7 +161,20 @@ def prepare_authorized_retained_registration_finalization(local_digest, *, expec
         expected_session_id=expected_session_id, authorized=True)
 
 
-def _prepare_retained(local_digest, *, expected_user_id, expected_session_id, authorized):
+def prepare_and_retain_registration_finalization_grant(local_digest, *, expected_user_id,
+        expected_session_id):
+    """Return existing evidence ID and actual finalization-grant local ID.
+
+    Only the separate present-purpose handlers invoke this facade. Successful
+    local retention is not reserve, SQL execution, currentness or session
+    activation. A failed/uncertain grant exchange or append never auto-retries.
+    """
+    return _prepare_retained(local_digest, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, authorized=True, retain_grant=True)
+
+
+def _prepare_retained(local_digest, *, expected_user_id, expected_session_id, authorized,
+        retain_grant=False):
     from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
     startup._require_pid()
@@ -173,7 +187,8 @@ def _prepare_retained(local_digest, *, expected_user_id, expected_session_id, au
             or not callback(work, lambda: owner.sql_handoff_enabled)
             or callback(work, subjects.custody_startup.require_started) is not owner._custody):
         raise RetainedRegistrationFinalizationError("retained finalization requires both cold-enabled owners")
-    if type(authorized) is not bool:
+    if (type(authorized) is not bool or type(retain_grant) is not bool
+            or retain_grant and not authorized):
         raise RetainedRegistrationFinalizationError("retained finalization purpose is not source-selected")
     if authorized and not callback(work, lambda: owner.finalization_enabled):
         raise RetainedRegistrationFinalizationError("dedicated finalization caller is not cold-enabled")
@@ -192,10 +207,18 @@ def _prepare_retained(local_digest, *, expected_user_id, expected_session_id, au
             signer, retained_window, bound, current, original_bytes = _retained_on_owner(owner, digest,
                 expected_user_id=user_id, expected_session_id=session_id, live_window=window, work=work)
             current()
-            originals = finalization._prepare_on_owner(owner, signer_originals=signer,
+            prepare = (finalization._prepare_grant_on_owner if retain_grant else finalization._prepare_on_owner)
+            originals = prepare(owner, signer_originals=signer,
                 live_window=retained_window, transport_deadline_ns=bound, work=work,
                 retained_original_bytes=original_bytes)
             current()
+            if retain_grant:
+                # Late append can retain opaque originals but cannot renew
+                # their lifetime. The actual journal publishes association
+                # last and preserves the original evidence/signer relation.
+                local_grant = custody_client.ControlPlaneCustodyClient.append_registration_finalization_preparation(
+                    owner._custody, originals, evidence_local_digest=digest)
+                return digest, journal._digest(local_grant)
             return digest, originals
         return _prepare_on_owner(owner, digest, expected_user_id=user_id,
             expected_session_id=session_id, live_window=window, work=work)

@@ -94,10 +94,16 @@ Replanning is an explicit separately admitted continuation, never an automatic
 retry. Expired source originals require a new authorized flow, not renewal.
 
 This pure issuer does not open a socket, create a cold owner, retain bytes,
-reserve roots, claim an SQL attempt or sign completion. Actual ownership,
-original association, live current-root/pending admission and protected SQL
-orchestration remain their respective callers' obligations. The registration
-kernel does not mutate OIDC session activation, which remains separate.
+reserve roots, claim an SQL attempt or sign completion. The separate
+[public grant-preparation path](public-registration-finalization-grant.md) now
+connects genuine ownership and present-purpose admission to this issuer,
+same-read new-plan/vector acquisition, the
+[dedicated cold authorizer](registration-finalization-authorizer.md) and durable
+raw10/finalization association referencing the existing evidence/signer pair.
+That integration remains source-only,
+unbuilt, unexecuted and unprovisioned. Live current-root/pending admission and
+protected SQL/completion orchestration remain downstream obligations. The
+registration kernel does not mutate OIDC session activation, which remains separate.
 
 Deferred frozen coverage must exercise distinct-purpose rejection, original
 replay/request mismatch, key separation, actual issue-time ordering, no lifetime
@@ -125,10 +131,12 @@ are checked before sending or reading a response prefix. The request is
 half-closed, and response success requires exact EOF. There is no retry,
 fallback, JSON decoding, signature verification or new work allowance here.
 
-`_recv_request` and `_send_response` are framing helpers, not a server: an
-actual serving owner must first authenticate its client peer, genuinely verify
-the fixed-purpose originals and close its response. That dedicated cold
-authorizer service remains deferred. The receiving caller must independently
+`_recv_request` and `_send_response` are framing helpers, not authority. The
+[dedicated cold authorizer service](registration-finalization-authorizer.md)
+now authenticates its actual client peer before body reads, genuinely verifies
+the fixed-purpose originals and closes its response under the original bounded
+request window. This is source implementation, not a deployed service. The
+receiving caller must independently
 verify the returned original grant against the same authorization, raw7,
 before-vector and admitted configuration/enrollments. Neither a root listener
 credential nor a complete frame establishes signing authority, currentness,

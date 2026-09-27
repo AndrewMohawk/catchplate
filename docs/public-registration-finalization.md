@@ -14,10 +14,12 @@ This is source-only integration, unbuilt and unexecuted. The existing legacy
 This prepared-only path does not issue finalization execution authorization.
 That authorization must precede the signed plan's issue time; a fresh permission
 obtained afterward cannot authorize this existing raw7 retroactively. The
-[private authorization-before-planning continuation](control-plane-finalization-execution.md)
-is now source-implemented separately, but is not invoked by these endpoints.
-Its own public permission, grant transport/retention and execution still need
-integration, without backdating, expiry renewal or automatic replanning.
+[separate public finalization-grant preparation](public-registration-finalization-grant.md)
+admits its own fresh purpose, authorizes before one new plan and complete vector,
+then verifies and durably retains a genuine grant. These older endpoints never
+select that action, reuse its permission or upgrade their existing plan.
+Reservation and finalization execution remain separate; no path backdates,
+renews expiry or automatically replans after uncertainty.
 
 ## Separate present permission
 
@@ -81,9 +83,14 @@ is included only after genuine ownership inspection. Existing bounded `412`/
 An assertion consumed before approval negotiation must not be reused. All
 responses are non-cacheable.
 
-Finalization still requires its distinct original caller authorization,
-independently admitted grant, fresh current-root reservation and real protected
-execution/outcome handling. OIDC browser-session activation is another operation;
+The separate grant flow retains authorization/raw7/vector/grant in `SWCPF001`
+and commits a last-published `SWCPM001` link to the existing evidence/signer
+originals. Its `finalizationGrantLocalDigest` is distinct from this route's
+`finalizationLocalDigest`; neither is an execution receipt. See the
+[retention contract](control-plane-custody-journal.md#associated-finalization-grant-preparation).
+
+Finalization still requires independently current reservation and real protected
+execution/outcome handling after grant preparation. OIDC browser-session activation is another operation;
 even actual credential insertion must not be reported as session activation.
 Those execution/activation integrations and full frozen verification remain
 open. See the [portal handoff controls](portal-registration-handoff.md) for

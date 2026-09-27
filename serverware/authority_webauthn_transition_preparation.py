@@ -74,6 +74,24 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
     committedStage still require independent admission by the upstream owner.
     Neither an existing context nor a successful-proof carrier is accepted.
     """
+    return _prepare_core(process, operation=operation, request=request, inputs_bytes=inputs_bytes,
+        now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns, invocation=invocation,
+        work=work, transport_deadline_ns=transport_deadline_ns, complete_before=False,
+        original_window=None)
+
+
+def _prepare_finalization_execution_on_work(process, *, request, inputs_bytes,
+        now_epoch_ns, deadline_epoch_ns, invocation, live_window, work, transport_deadline_ns):
+    """Return custody raw7 and the SAME actual vector used to sign its request."""
+    return _prepare_core(process, operation=transition.root_contract.registration.OPERATION,
+        request=request, inputs_bytes=inputs_bytes, now_epoch_ns=now_epoch_ns,
+        deadline_epoch_ns=deadline_epoch_ns, invocation=invocation, work=work,
+        transport_deadline_ns=transport_deadline_ns, complete_before=True,
+        original_window=live_window)
+
+
+def _prepare_core(process, *, operation, request, inputs_bytes, now_epoch_ns,
+        deadline_epoch_ns, invocation, work, transport_deadline_ns, complete_before, original_window):
     from serverware import authority_service as service
 
     ledger = evidence.capture._SharedLedger(work)
@@ -85,6 +103,9 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
         raise WebAuthnTransitionPreparationError("transition preparation requires measured configuration")
     archive = measured.history_archive
     operation = transition._operation(operation)
+    if type(complete_before) is not bool or (complete_before
+            and operation != transition.root_contract.registration.OPERATION):
+        raise WebAuthnTransitionPreparationError("complete-before preparation is not fixed finalization")
     plan.proof.wire._raw(inputs_bytes, 2, plan.proof.wire.MAX_BYTES)
     original_inputs, inherited_deadline = inputs_bytes, transport_deadline_ns
     if inherited_deadline is not None:
@@ -110,10 +131,16 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
     snapshots = history.archive._capture_on_work(archive, work=work)
     if not snapshots.valid_from_epoch_ns <= owned["nowEpochNs"] < snapshots.valid_until_epoch_ns:
         raise WebAuthnTransitionPreparationError("original transition evaluation is outside current archive admission")
-    window = clock._open_on_work(
-        deadline_epoch_ns=min(owned["deadlineEpochNs"], snapshots.valid_until_epoch_ns),
-        maximum_lifetime_ns=wire.authority.VERIFIER_RESPONSE_MAX_AGE_NS,
-        maximum_clock_skew_ns=wire.authority.VERIFIER_MAX_CLOCK_SKEW_NS, work=work)
+    if complete_before:
+        supplied = clock._validate(original_window)
+        end = min(supplied[3], owned["deadlineEpochNs"], snapshots.valid_until_epoch_ns)
+        window = clock._validate((supplied[0], supplied[1], supplied[2], end,
+            min(supplied[4], supplied[1] + end - supplied[0]), supplied[5], supplied[6]))
+    else:
+        window = clock._open_on_work(
+            deadline_epoch_ns=min(owned["deadlineEpochNs"], snapshots.valid_until_epoch_ns),
+            maximum_lifetime_ns=wire.authority.VERIFIER_RESPONSE_MAX_AGE_NS,
+            maximum_clock_skew_ns=wire.authority.VERIFIER_MAX_CLOCK_SKEW_NS, work=work)
     if not snapshots.valid_from_epoch_ns <= window[0] < snapshots.valid_until_epoch_ns:
         raise WebAuthnTransitionPreparationError("transition preparation archive is not current")
     _same_owner(process, measured, archive)
@@ -129,18 +156,29 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
     start, before, after = window[:3]
     end = min(window[3], start + configured.maximum_control_age_ns)
     window = clock._validate((start, before, after, end, before + end - start,
-        configured.maximum_control_age_ns, configured.pins[6][1]))
+        min(window[5], configured.maximum_control_age_ns) if complete_before
+            else configured.maximum_control_age_ns,
+        min(window[6], configured.pins[6][1]) if complete_before else configured.pins[6][1]))
     # An inherited absolute transport bound can only narrow this same original
     # opening. It never rewrites signed control times or starts a new window.
     effective_deadline = None if inherited_deadline is None else min(inherited_deadline, window[4])
+    if complete_before:
+        effective_deadline = window[4] if effective_deadline is None else effective_deadline
     controls = ()
     _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
         effective_deadline)
 
-    requested = service.AuthorityProcess._produce_webauthn_transition_plan_request(process,
-        operation=operation, request=owned_request, inputs_bytes=original_inputs,
-        now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
-        invocation=owned["invocation"], work=work)
+    before = None
+    if complete_before:
+        requested, before = transition._produce_finalization_execution_request_on_work(process,
+            request=owned_request, inputs_bytes=original_inputs,
+            now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=window[3],
+            invocation=owned["invocation"], work=work, transport_deadline_ns=effective_deadline)
+    else:
+        requested = service.AuthorityProcess._produce_webauthn_transition_plan_request(process,
+            operation=operation, request=owned_request, inputs_bytes=original_inputs,
+            now_epoch_ns=owned["nowEpochNs"], deadline_epoch_ns=owned["deadlineEpochNs"],
+            invocation=owned["invocation"], work=work)
     originals = actions.transport._validate_request(
         requested.control_bytes, requested.context_bytes, requested.inputs_bytes)
     value, _signature, _unsigned = actions.request_wire._read_control(originals[0], work)
@@ -202,4 +240,4 @@ def _prepare_on_work(process, *, operation, request, inputs_bytes,
     now = _current_on_work(process, measured, archive, snapshots, generation, window, controls, work,
         effective_deadline)
     plan._fresh(plan_payload, expected, now)
-    return result
+    return (*result, before) if complete_before else result

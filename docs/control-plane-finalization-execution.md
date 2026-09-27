@@ -1,8 +1,11 @@
 # Dedicated finalization caller and ordered planning
 
-This is source-only implementation, not a deployed or verified registration
-flow. Existing public preparation routes and portal buttons remain
-preparation-only. They do not invoke the new execution-purpose continuation.
+This is source-only implementation, unbuilt, unexecuted and unprovisioned, not
+a deployed or verified registration flow. Existing plan-only preparation routes
+and portal buttons retain their behavior. The separate
+[public grant-preparation routes](public-registration-finalization-grant.md)
+now invoke the authorization-before-new-plan continuation and retain its grant;
+they do not reserve roots or execute credential finalization.
 
 ## Why a separate path
 
@@ -16,22 +19,25 @@ The new private continuation implements the correct order:
 
 ```mermaid
 flowchart TD
-    A["Separate present-caller execution-purpose admission required"] --> B["Replay retained ownership and stored acknowledged evidence completion"]
+    A["Live subject inspection, then public purpose/current-caller admission"] --> B["Repeat retained ownership and stored acknowledged completion replay"]
     B --> C["Derive exact finalization request and observe bounded sibling hints"]
     C --> D["Dedicated cold caller signs authorization at current time"]
     D --> E["Request one NEW finalization plan within authorization expiry"]
-    E --> F["Verify original authorization, custody signatures and plan replay"]
-    F --> G["Return original authorization plus raw7 in memory"]
-    G -. "Remaining integration" .-> H["Durable grant association, independent reserve and protected execution"]
-    H -.-> I["Separately authenticated OIDC session activation"]
+    E --> F["Verify original authorization, raw7 and same-read complete vector"]
+    F --> G["Dedicated authorizer signs genuine replayed grant; caller verifies"]
+    G --> H["Durably retain raw10, then publish finalization association"]
+    H -. "Remaining integration" .-> I["Independent reserve, protected execution and completion"]
+    I -.-> J["Separately authenticated OIDC session activation"]
 ```
 
-The first box is an application-admission prerequisite, **not implemented by
-this private helper**. No new HTTP route or portal action yet admits that purpose.
+The first box is enforced by the separate public handlers, not inferred by this
+private helper. Their purpose is `prepare-registration-finalization-grant` and
+action is `webauthn.registration.finalization.authorize`; older preparation or
+evidence-execution permission cannot substitute.
 
 ## Actual source path
 
-[`prepare_authorized_retained_registration_finalization`](../serverware/control_plane_registration_finalization.py)
+[`prepare_and_retain_registration_finalization_grant`](../serverware/control_plane_registration_finalization.py)
 accepts only the existing evidence-admission local locator and independently
 authenticated user/session scalars. A local locator is not ownership. Under
 the actual cold owner's lock and one work/window, the shared retained-original
@@ -63,7 +69,9 @@ actual transition replay, joining the exact request/operation and interval to
 the original authorization. A changed request or plan issued too early fails;
 there is no automatic reauthorization, replanning or timestamp adjustment.
 
-The returned pair is `(existing_evidence_locator, original_raw8)`. Raw8 is:
+The separate private `prepare_authorized_retained_registration_finalization`
+still returns `(existing_evidence_locator, original_raw8)` without dispatch or
+retention. Raw8 is:
 
 1. Original dedicated finalization authorization.
 2. Original verifier custody intent.
@@ -74,15 +82,18 @@ The returned pair is `(existing_evidence_locator, original_raw8)`. Raw8 is:
 7. Original evaluation context.
 8. Separate signed-custody-committed historical expectations.
 
-It is not a new local journal locator or a successful-verification token. A
-separate explicit cold-owner grant-request method accepts this original raw8
-and a complete before-vector. It first authenticates the original permission
-and plan, performs one bounded [original-byte exchange](registration-finalization-authorization.md#bounded-finalization-grant-transport),
-then genuinely verifies the returned grant and full before/after vector before
-returning the original grant bytes. It neither runs automatically after
-preparation nor retains the resulting grant. The [grant producer](registration-finalization-grant-production.md)
-is implemented, but the separate authorizer service that must own its signing
-key and serve this protocol is not yet connected.
+It is not a new local journal locator or a successful-verification token. The
+public grant facade explicitly selects the new-plan/vector variant, whose
+complete before-vector comes from the same actual verifier-side read transaction.
+The cold-owner grant-request method authenticates the original permission and
+plan, performs one bounded [original-byte exchange](registration-finalization-authorization.md#bounded-finalization-grant-transport)
+with the [dedicated cold authorizer](registration-finalization-authorizer.md),
+then genuinely verifies the returned grant and full before/after vector. The
+facade durably appends authorization + raw7 + before-vector + grant as raw10 and
+publishes the new finalization association last, referencing the existing
+evidence/signer association. It returns only
+`(existing_evidence_locator, finalization_grant_local_locator)`. This is an
+explicit action, not automatic dispatch after old plan-only preparation.
 
 ## Limits and remaining work
 
@@ -91,14 +102,14 @@ bracket remains unchanged; attestation, signer, authorization, custody and
 transport limits only reduce remaining time. Epoch/monotonic checks reject
 observed reversals. Cooperative checks cannot interrupt blocked native work.
 The complete retained input inventory plus new enrollments, authorization and
-returned plan is capped at 64 MiB. Existing per-original bounds also apply.
+returned plan/vector/grant is capped at 64 MiB. Existing per-original bounds
+also apply.
 
-The new raw8 is currently returned in memory, not durably associated or
-automatically sent to a grant service. Dedicated public present-purpose admission,
-full-vector acquisition, the cold authorizer service, grant retention, independently
-current reservation, protected one-use execution and completion remain to be
-connected. The existing credential-finalization kernel does not activate an
-OIDC browser session; that is a separate authenticated transition.
+Public present-purpose admission, same-read full-vector acquisition, the cold
+authorizer source and durable grant association are now connected in source.
+Independently current reservation, protected one-use execution and completion
+remain to be connected. The existing credential-finalization kernel does not
+activate an OIDC browser session; that is a separate authenticated transition.
 
 No keys, services or socket permissions were provisioned. No build, import,
 parser, tests or runtime verification ran. Frozen verification must cover old

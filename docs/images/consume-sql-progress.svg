@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="544" viewBox="0 0 1000 544" role="img" aria-labelledby="consume-sql-title consume-sql-description">
+  <title id="consume-sql-title">Inside token-release rows 12 and 13: all 6 diagnostic source components landed, 0 in progress and 0 open.</title>
+  <desc id="consume-sql-description">Six diagnostic components explain existing reservation/pending row 12 and one-use SQL row 13 without adding milestones to the 16-unit, 26-leaf or 46-parent inventories. Stable IDs are F08.4e.7.c.10.1 through F08.4e.7.c.10.3 and F08.4e.7.c.11.1 through F08.4e.7.c.11.3. Component 12.1 reserve originals and durable ACK is source-landed in 4d4091c72543477823ff4031bfac60e03d79b925. Component 12.2 cold reserver delivery/startup is source-landed in dd460bae26946d2dd81af346abd7dee76d094ad5. Components 12.3 independent current-pending receiver, 13.1 protected packet/issuer, 13.2 one-use SQL/durable attempt and 13.3 cold SQL service/response are source-landed in bdaee247b937d5781c5ad0c75587eee861c9c3b0. Actual original-input consumer joins are connected in committed source; no profile or successful result carrier substitutes for those checks. Each visible row links to its exact criterion and evidence ledger. All six statuses are written as well as color-coded. Six landed, zero in progress and zero open inside this diagnostic view; these are not additional parent completions or effort estimates. Overall token release is 13/16 landed, activation 19/26, project 34/46 and production 0/6 verified. Outside this view, row 14 durable completion/recovery is NEXT and open; row 15 exact committed-original token release and row 16 cold release response/handoff remain open. Source only: unbuilt, unexecuted and unprovisioned. No token release, completion recovery or current-session claim.</desc>
+  <rect x="1" y="1" width="998" height="542" rx="16" fill="#0f172a" stroke="#475569"/>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">Inside rows 12–13 · Reservation through one-use SQL</text>
+    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">6 / 6 landed</text>
+    <text x="228" y="71" fill="#cbd5e1" font-size="18">0 in progress · 0 open</text>
+    <text x="24" y="98" fill="#94a3b8" font-size="14">Committed source · final four bdaee24 · no runtime or production acceptance credit</text>
+    <g font-size="16" font-weight="700" text-anchor="middle">
+      <a href="../production-status.md#consume-reservation-and-sql-detail">
+        <rect x="24" y="112" width="152" height="42" rx="5" fill="#34d399"><title>12.1 · F08.4e.7.c.10.1 · Reserve originals / durable ACK · LANDED · 4d4091c · Read the criterion and evidence</title></rect>
+        <text x="100" y="139" fill="#052e26">✓ 12.1</text>
+      </a>
+      <a href="../production-status.md#consume-reservation-and-sql-detail">
+        <rect x="184" y="112" width="152" height="42" rx="5" fill="#34d399"><title>12.2 · F08.4e.7.c.10.2 · Cold reserver · LANDED · dd460ba · Read the criterion and evidence</title></rect>
+        <text x="260" y="139" fill="#052e26">✓ 12.2</text>
+      </a>
+      <a href="../production-status.md#consume-reservation-and-sql-detail">
+        <rect x="344" y="112" width="152" height="42" rx="5" fill="#34d399"><title>12.3 · F08.4e.7.c.10.3 · Independent current-pending receiver · LANDED · bdaee24</title></rect>
+        <text x="420" y="139" fill="#052e26">✓ 12.3</text>
+      </a>
+      <a href="../production-status.md#consume-reservation-and-sql-detail">
+        <rect x="504" y="112" width="152" height="42" rx="5" fill="#34d399"><title>13.1 · F08.4e.7.c.11.1 · Protected packet / issuer · LANDED · bdaee24</title></rect>
+        <text x="580" y="139" fill="#052e26">✓ 13.1</text>
+      </a>
+      <a href="../production-status.md#consume-reservation-and-sql-detail">
+        <rect x="664" y="112" width="152" height="42" rx="5" fill="#34d399"><title>13.2 · F08.4e.7.c.11.2 · One-use SQL / durable attempt · LANDED · bdaee24</title></rect>
+        <text x="740" y="139" fill="#052e26">✓ 13.2</text>
+      </a>
+      <a href="../production-status.md#consume-reservation-and-sql-detail">
+        <rect x="824" y="112" width="152" height="42" rx="5" fill="#34d399"><title>13.3 · F08.4e.7.c.11.3 · Cold SQL service / response · LANDED · bdaee24</title></rect>
+        <text x="900" y="139" fill="#052e26">✓ 13.3</text>
+      </a>
+    </g>
+    <text x="24" y="181" fill="#6ee7b7" font-size="13">✓ LANDED = commit-backed source</text>
+    <text x="396" y="181" fill="#94a3b8" font-size="13">Source closure only · remaining work is outside this view</text>
+
+    <g font-size="15" font-weight="600" fill="#f8fafc">
+      <text x="24" y="216">12.1 · Reserve originals / durable ACK</text>
+      <text x="24" y="262">12.2 · Cold reserver</text>
+      <text x="24" y="308">12.3 · Independent current-pending receiver</text>
+      <text x="24" y="354">13.1 · Protected packet / issuer</text>
+      <text x="24" y="400">13.2 · One-use SQL / durable attempt</text>
+      <text x="24" y="446">13.3 · Cold SQL service / response</text>
+    </g>
+    <g font-size="13">
+      <a href="https://github.com/AndrewMohawk/serverware/commit/4d4091c72543477823ff4031bfac60e03d79b925"><text x="610" y="216" fill="#6ee7b7">✓ LANDED · 4d4091c</text></a>
+      <a href="https://github.com/AndrewMohawk/serverware/commit/dd460bae26946d2dd81af346abd7dee76d094ad5"><text x="610" y="262" fill="#6ee7b7">✓ LANDED · dd460ba</text></a>
+      <a href="https://github.com/AndrewMohawk/serverware/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="308" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
+      <a href="https://github.com/AndrewMohawk/serverware/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="354" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
+      <a href="https://github.com/AndrewMohawk/serverware/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="400" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
+      <a href="https://github.com/AndrewMohawk/serverware/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="446" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
+      <a href="../production-status.md#consume-reservation-and-sql-detail" fill="#93c5fd" text-decoration="underline">
+        <text x="866" y="216">Criterion ↗</text><text x="866" y="262">Criterion ↗</text>
+        <text x="866" y="308">Criterion ↗</text><text x="866" y="354">Criterion ↗</text>
+        <text x="866" y="400">Criterion ↗</text><text x="866" y="446">Criterion ↗</text>
+      </a>
+    </g>
+    <g font-size="11" fill="#94a3b8">
+      <text x="24" y="235">F08.4e.7.c.10.1</text><text x="206" y="235">Original replay, locked reserve-only state and first-exact durable signed ACK.</text>
+      <text x="24" y="281">F08.4e.7.c.10.2</text><text x="206" y="281">Root-admitted keys/FDs and actual finite service preserve the first processing allowance.</text>
+      <text x="24" y="327">F08.4e.7.c.10.3</text><text x="206" y="327">Cold receiver passes independent pending/predecessor pins into genuine original replay.</text>
+      <text x="24" y="373">F08.4e.7.c.11.1</text><text x="206" y="373">Actual consume replay derives the protected packet; the genuine issuer stores it.</text>
+      <text x="24" y="419">F08.4e.7.c.11.2</text><text x="206" y="419">Only same-call issued IDs reach the executor; durable one-use attempt and marker join.</text>
+      <text x="24" y="465">F08.4e.7.c.11.3</text><text x="206" y="465">Fixed AES/TLS/journal delivery, real worker and bounded terminal response are connected.</text>
+    </g>
+    <path d="M24 482H976" stroke="#334155"/>
+    <text x="24" y="498" fill="#93c5fd" font-size="13">Outside this view: NEXT 14 completion/recovery · OPEN 15 exact release · OPEN 16 cold handoff</text>
+    <text x="24" y="518" fill="#94a3b8" font-size="13">Nonadditive · token release 13/16 · activation 19/26 · project 34/46 · production 0/6 verified</text>
+    <text x="24" y="536" fill="#94a3b8" font-size="12">Source only · unbuilt / unexecuted / unprovisioned · no token release or completion/recovery claim</text>
+  </g>
+</svg>

@@ -45,15 +45,24 @@ defines each scope and its dependencies. Open items can already contain partial 
 
 ### Protected token release: remaining source work
 
-**11/16 units landed · 1 in progress · 4 other open.**
+**13/16 units landed · 0 in progress · 3 open. Next: completion and recovery.**
 
-[![Protected token release: units 01–11 landed, row 12 reservation and pending admission in progress, and four other units open: one-use protected consume SQL, durable completion and recovery, exact committed-original token release, and cold release response and handoff. Row 11's authorization substeps are 12/12 landed and its A11 issuance detail is 5/5 landed. Source counts only; no runtime token release or production claim.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![Protected token release: units 01–13 landed; 14 completion and recovery is next and open; 15 exact committed-original token release and 16 cold release response and handoff are open. Each segment has a task name and source status. These are source checkpoints, not runtime token release or production readiness.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
-Five remain: **reservation/pending admission (in progress)**, one-use consume SQL,
-durable completion/recovery, exact committed-original release, and cold response/handoff.
-The [reservation foundations](https://github.com/example/private-deployment)
-and [cold reserver delivery/startup plus SQL bootstrap](https://github.com/example/private-deployment)
-are source-landed. Actual cold SQL pending OS delivery/startup remains. No runtime claim.
+| Unit | Still to finish | Status |
+| --- | --- | --- |
+| 14 | Authenticate and durably reconcile consume completion, including uncertain outcomes | Next / open |
+| 15 | Release a token only from the exact authorized, committed originals | Open |
+| 16 | Connect the cold release service, verified response and authorized handoff | Open |
+
+**Finer breakdown — reservation to SQL: six named source checkpoints, all landed.**
+
+[![Reservation and SQL detail: 12.1 reserve originals and durable ACK, 12.2 cold reserver, 12.3 independent current-pending receiver, 13.1 protected packet and issuer, 13.2 one-use SQL and durable attempt, and 13.3 cold SQL service and response. All six source checkpoints are landed; their enclosing token-release workflow remains 13/16. Completion/recovery, token release and cold handoff remain open.](docs/images/consume-sql-progress.svg)](docs/production-status.md#consume-reservation-and-sql-detail)
+
+The [latest implementation](https://github.com/example/private-deployment)
+connects the cold pending receiver, protected packet issuer and one-use SQL executor.
+Each segment has a [completion criterion and commit evidence](docs/production-status.md#consume-reservation-and-sql-detail).
+These six steps subdivide units 12–13; they are not six additional project completions.
 
 <details>
 <summary>Completed source detail: authorization 12/12 and grant issuance 5/5</summary>
@@ -87,7 +96,7 @@ are still open. The full activation workflow remains **19/26 landed**.
 
 **OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 11 landed, row 12 consume reservation/pending admission in progress and four other open. Row 11's authorization substeps are 12/12 landed and A11 issuance is 5/5 landed. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed and 13/16 detail units landed. Completion/recovery, exact token release and cold handoff remain open. Nested counts do not add to the total. Source-only; no runtime token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
@@ -101,13 +110,13 @@ immutable dependencies, frozen verification and independent release evidence
 are pending; signing, Nitro/KMS and witness services are not provisioned;
 live operator/hardware/provider acceptance awaits deployment.
 
-Full verification follows source freeze. No consumption execution or plaintext
+Full verification follows source freeze. No runtime consumption execution or plaintext
 release is claimed for the new protected path.
 
 [Open the full tracker →](docs/production-status.md) for checkpoint evidence and
 the [six separate production gates](docs/production-status.md#remaining-production-gates).
 
-<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg, implementation-progress.svg, token-release-progress.svg, consume-authorization-progress.svg and consume-grant-progress.svg together. Keep the unfinished workflow visible and completed nested detail collapsible. Activation has 26 fixed named F08 steps; token release has 16 detail units inside step 20, replacing c with twelve parts within the existing five diagnostic groups (5 - 1 + 12 = 16). Row 11 has twelve authorization substeps A01-A12; A11 alone has five fixed components A11.1-A11.5. No children or grouping parents are additive. Every segment needs a visible number, name, status and linked criterion/evidence; keep blue NEXT/open distinct from amber active work. Green means commit-backed landed source; gray means other open scope. Uncommitted work cannot be landed. Make denominator changes explicit and keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg, implementation-progress.svg, token-release-progress.svg, consume-authorization-progress.svg, consume-grant-progress.svg and consume-sql-progress.svg together. Keep unfinished work visible and older completed detail collapsible. Activation has 26 fixed named F08 steps; token release has 16 units within step 20. Row 11 has twelve authorization substeps A01-A12; A11 has five fixed components. Rows 12 and 13 have six diagnostic components, displayed as 12.1-12.3 and 13.1-13.3. No children or grouping parents are additive. Every segment needs a visible number, name, status and linked criterion/evidence; distinguish blue NEXT/open from amber active work. Green means commit-backed landed source, never uncommitted work; gray means other open scope. Make denominator changes explicit and keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

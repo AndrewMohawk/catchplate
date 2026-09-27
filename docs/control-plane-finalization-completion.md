@@ -4,7 +4,9 @@ This source-only integration connects retained finalization originals to the
 [dedicated completion service](registration-finalization-completion-service.md).
 It is unbuilt, unexecuted and unprovisioned. It never invokes or retries SQL,
 clears an attempt, renews old execution authority or activates an OIDC session.
-Public completion/recovery permissions and portal controls are not wired here.
+Separate [public completion/recovery permissions](public-registration-finalization-completion.md)
+and explicit [portal controls](portal-registration-handoff.md) now call this
+private path; they do not make historical ownership itself present permission.
 
 ## Explicit cold scope and original ownership
 
@@ -21,9 +23,11 @@ authorization identity must match `completionAuthorizationDigest`.
 
 The [subject inspector](../serverware/control_plane_registration_finalization_completion_subject.py)
 exposes `inspect_retained_finalization_completion_subject(local_digest)`.
-Its result is ordinary owned data with exactly `localDigest`, `userId`,
-`challengeId`, `sessionId`, `mode`, `requestDigest` and `operationId`—not a proof
-token or present-caller permission. The locator alone establishes no ownership.
+Its result is ordinary owned data with exactly eight fields: `localDigest`,
+`userId`, `challengeId`, `sessionId`, `mode`, `requestDigest`, `operationId` and
+`credentialId`—not a proof token or present-caller permission. The credential ID
+comes from the fully regenerated, authenticated finalization request, not the
+locator or an unsigned SQL response. The locator alone establishes no ownership.
 
 Actual [historical replay](registration-finalization-history.md) authenticates the complete finalization plan/grant and
 its associated signer/evidence-completion originals. The finalization request
@@ -86,26 +90,29 @@ without changing existing SQL claim/outcome bytes. The latter is an association
 with authenticated recovery originals, not a mutable “latest result” receipt.
 Local retention is not an off-host witness or rollback-resistant currentness.
 
-## Remaining public and release boundaries
+## Public integration and remaining release boundaries
 
-This batch adds no HTTP endpoint or portal action. Separate current ownership,
-purpose-specific complete/recover permission and post-SQL pending-session handling
-remain necessary. That session branch must account for the credential already
-inserted by SQL rather than reuse the pre-execution empty-history branch.
-Separate authenticated OIDC activation remains F08.
+The [public routes and contract](public-registration-finalization-completion.md)
+now expose independent complete and recover purposes, with fresh present
+permission before this facade repeats genuine ownership. The new binding adds
+the authenticated credential ID without widening the older generic seven-field
+handoff schema. Success projects only the facade's authenticated result: it
+acknowledges finalization, not session activation or currentness.
 
-The next public implementation will keep the pre-SQL empty-history rule intact.
-Its new completion-only subject contract must additionally bind the credential
-ID regenerated from these originals. A fresh pending cookie, CSRF and current
-roles precede permission: genuinely empty history with the target absent may
-use fresh bootstrap; exactly the one matching live target requires fresh
-target-key, action-bound WebAuthn plus configured two-person approval, not
-bootstrap. Extra, foreign or revoked history is denied. Pending-purpose options
-must derive the action and payload binding server-side because the existing
-operator options endpoint requires an active session. Recheck session, roles
-and credential identity after permission, allowing only the expected counter
-update. This is the next design decision, **not an implemented public bypass**;
-the current private inspector still returns seven fields.
+The implemented [pending permission helper](finalization-pending-permission.md)
+keeps the pre-SQL empty-history rule intact. A fresh pending cookie, explicit
+CSRF and current roles precede permission: genuinely empty history with the
+target absent requires fresh bootstrap; exactly the one matching live target
+requires fresh target-key, action-bound WebAuthn plus configured two-person
+approval, not bootstrap. Extra, foreign or revoked history is denied. Dedicated
+pending-purpose options derive the action and payload binding server-side.
+Session, roles and credential identity are rechecked after permission, allowing
+only the expected verified counter/bookkeeping changes.
+
+Two explicit [portal controls](portal-registration-handoff.md) connect those
+actions without automatic chaining or retry. Approval continuation requires an
+explicit user action and another fresh assertion. F08 separate authenticated
+OIDC activation is next; no completion route activates the pending session.
 
 Authenticated historical completion is not a live latest-head lease, packet
 provenance proof, browser-session activation or production acceptance. Independent

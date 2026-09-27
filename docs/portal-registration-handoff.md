@@ -5,7 +5,7 @@ The **Registration actions** workspace's first five actions operate on a real ev
 one already inspected in the admin-only custody inventory. Inspection supplies
 local metadata only—not ownership, complete association, currentness or action
 permission. The panel neither invents IDs nor loads raw registration originals.
-The sixth and seventh actions use the separately labeled finalization-grant input: paste
+The sixth through ninth actions use the separately labeled finalization-grant input: paste
 that real locator, or use the ID filled by a successful fifth action. Neither
 the evidence input nor the older preparation-only finalization ID is replaced.
 
@@ -20,6 +20,8 @@ Each button selects one real endpoint and requires an explicit click:
 | Prepare finalization grant | Dedicated authorization before a new plan, complete before vector and retained grant; no reservation or finalization SQL. |
 | Reserve finalization | Explicit fresh-authorized reservation of the separate finalization grant and retention of verified returned raw3; no finalization SQL or current-head authority. |
 | Execute finalization | Separate fresh-authorized protected SQL handoff using that finalization grant; its unsigned commit observation is not signed completion, currentness or session activation. |
+| Complete finalization | Separate fresh-authorized request for authenticated historical finalization acknowledgment; no SQL retry, current-head or session-activation claim. |
+| Recover finalization | Explicit fresh-authorized finalization completion reconciliation; distinct from evidence recovery and never another SQL execution. |
 
 The first three use the existing
 [public handoff](public-registration-handoff.md) and
@@ -72,10 +74,34 @@ custody IDs or marker. The browser reports the server's unsigned observation,
 not independently verified completion; filling a locator or recording a
 reservation never dispatches this action automatically.
 
+**Complete finalization** uses `/api/webauthn/register/complete-finalization` or
+its `/api/auth/session/webauthn/register/complete-finalization` counterpart,
+purpose `complete-registration-finalization` and action
+`webauthn.registration.finalization.complete`. Its schema is
+`serverware.webAuthnRegistrationFinalizationCompletion/v1`, with status
+`finalization-completion-acknowledged`.
+
+**Recover finalization** uses `/api/webauthn/register/recover-finalization-completion`
+or its pending-session counterpart, purpose
+`recover-registration-finalization-completion` and action
+`webauthn.registration.finalization.recover`. Its schema is
+`serverware.webAuthnRegistrationFinalizationCompletionRecovery/v1`, with status
+`finalization-completion-recovered`.
+
+Both use only the finalization-grant input. Their success objects have exactly
+nine keys: `schema`, `status`, `purpose`, `localDigest`,
+`observationAuthenticated: true`, `finalizationAcknowledged: true`,
+`sessionActivated: false`, `currentnessEstablished: false` and
+`automaticRetryAllowed: false`. They contain **no `registrationCompleted` field**.
+The panel reports the server's authenticated historical acknowledgment, not
+independent browser verification, latest-head truth or completed enrollment.
+
 ## Fresh authorization, no action chaining
 
-Select the present operator-with-history, operator-without-history, or pending
-OIDC first-enrollment flow. That selection grants no authority: real server
+Select the present operator-with-history, operator-without-history, pending
+OIDC first-enrollment, or **Pending OIDC after SQL · fresh key proof** flow.
+The new pending-credential mode enables only Complete / Recover finalization;
+the prior seven actions are disabled in that mode. That selection grants no authority: real server
 ownership, current actor/session, bootstrap, WebAuthn and two-person gates still
 decide. Operator requests use the existing `api` helper. Pending requests use
 `sessionApi` with an explicitly obtained cookie CSRF header, including when an
@@ -89,8 +115,33 @@ requester explicitly continues with a **new** assertion; no consumed assertion
 is reused. The requester's WebAuthn challenge does not select the approver
 challenge: the approval ID is carried only in the final action's MFA body.
 
+For pending-credential continuation, the browser does **not** call the active
+operator's generic mutation-options endpoint. Each explicit continuation POSTs
+only `purpose` and `localDigest` to the selected fixed pending endpoint:
+
+- `/api/auth/session/webauthn/register/complete-finalization/options`
+- `/api/auth/session/webauthn/register/recover-finalization-completion/options`
+
+These requests use the pending cookie plus an explicitly acquired CSRF header
+even when an unrelated operator token is entered. The response must have exactly
+eight keys: `schema: "serverware.webAuthnRegistrationFinalizationPermissionOptions/v1"`,
+`purpose`, `localDigest`, `action`, `resourceId`, `payloadDigest`, `publicKey`
+and `automaticRetryAllowed: false`. The panel compares every public binding to
+the held 412/428 negotiation **before** requesting WebAuthn. It bounds the
+options, requires the sole allowed credential, then uses the existing
+`prepareRequestOptions`, `navigator.credentials.get` and `credentialToJson`
+helpers. The server—not the browser—authenticates that credential as the actual
+retained target key and applies configured two-person approval.
+
+A 428 consumes the previous assertion: another explicit continuation obtains
+new pending options and a fresh assertion. The panel never supplies an action or
+payload hash to the options endpoint, reuses a consumed assertion, automatically
+resubmits, switches to bootstrap or activates the pending session. Operator
+continuation retains its existing active-operator assertion helper.
+
 The no-history branches prompt for a fresh masked bootstrap token on each
-action. The existing dialog clears its input. New panel controls and that
+action. The server must establish genuinely empty history; a denial never
+automatically switches to pending-credential mode. The existing dialog clears its input. New panel controls and that
 password field are excluded from refresh draft capture/restore. No bootstrap,
 assertion, pending request or approval state is written to local/session
 storage by this panel. Temporary JavaScript strings are not guaranteed wiped.
@@ -114,25 +165,33 @@ or a session-activation receipt. The separate `reservation-recorded` result
 means the returned reservation originals were retained, not finalization SQL,
 credential completion or independent currentness. The seventh action can
 request actual finalization SQL, but its `observed-commit` does not establish
-signed completion or full enrollment. Every path keeps completed registration
-and currentness unestablished, and automatic retry disallowed. No completion result
+signed completion or full enrollment. The eighth/ninth actions acknowledge
+finalization originals without asserting completed registration or currentness;
+automatic retry remains disallowed. No completion result
 activates a pending session.
 
 Unavailable, lost or unrecognized responses display remote state as unknown;
 the request may have taken effect. Do not repeat SQL. Historical recovery is a
 separate explicit action requiring fresh server authorization, not a retry
-policy. The existing Recover completion control is for evidence admission,
-not finalization SQL reconciliation. Reloading the page cannot clear the
+policy. The existing Recover completion control is for evidence admission;
+Recover finalization is the separate finalization completion action, not a SQL
+retry or an automatic response to uncertainty. Reloading the page cannot clear the
 server's attempt history.
 
 This UI is source-only and has not been browser-verified or deployed. Cold
-provisioning, independent currentness/release acceptance, signed finalization
-completion and separate session activation remain outstanding. Planned frozen browser verification
+provisioning, independent currentness/release acceptance and separate session
+activation remain outstanding. The [private original-verification and retention path](control-plane-finalization-completion.md)
+supplies the finalization acknowledgment; this UI is not a replacement for it.
+Planned frozen browser verification
 covers both caller paths, cookie CSRF with an entered token, action-bound fresh
 assertions/approvals, bootstrap clearing across refresh, stale async results,
 exact status/uncertainty handling, and absence of automatic dispatch or retries.
 The sixth- and seventh-action checks also cover independent evidence/finalization
 locators, pasted locators after refresh, exact reservation and unsigned execution
 response shapes, uncertain outcomes and per-locator/action latches.
+The eighth/ninth-action checks additionally cover exact nine-key acknowledgments,
+pending-cookie target-key proof after SQL, binding drift before WebAuthn,
+fresh options/assertions after approval negotiation, no use of the active-only
+options endpoint, immutable uncertainty and distinct finalization recovery.
 
 Source: [portal fragment](../serverware/portal_registration_handoff.py).

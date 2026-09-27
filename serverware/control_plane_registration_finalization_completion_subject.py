@@ -218,7 +218,8 @@ def _inspect_on_owner(owner, local_digest, *, live_window, transport_deadline_ns
     arguments, intent = regenerated["arguments"], regenerated["arguments"]["semantic_intent"]
     result = {"localDigest": digest, "userId": intent["userId"], "challengeId": intent["challengeId"],
         "sessionId": arguments["oidc_session_id"], "mode": intent["authorizationMode"],
-        "requestDigest": regenerated["requestDigest"], "operationId": regenerated["operationId"]}
+        "requestDigest": regenerated["requestDigest"], "operationId": regenerated["operationId"],
+        "credentialId": arguments["credential"]["credential_id"]}
     evidence.plan._same((result["userId"], result["challengeId"], result["sessionId"], result["mode"]),
         (subject["userId"], subject["challengeId"], subject["sessionId"], subject["mode"]), work,
         "historical finalization subject differs from its genuine associated signer")
@@ -227,7 +228,12 @@ def _inspect_on_owner(owner, local_digest, *, live_window, transport_deadline_ns
 
 
 def inspect_retained_finalization_completion_subject(local_digest):
-    """Return genuine seven-field ownership data, not present action permission."""
+    """Return genuine eight-field ownership data, not present action permission.
+
+    The credential ID comes from the complete signer-regenerated request, not
+    a posted selector. It permits the public pending branch to distinguish the
+    exact post-SQL credential from unrelated, replaced or revoked history.
+    """
     from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
     digest = journal._digest(local_digest)

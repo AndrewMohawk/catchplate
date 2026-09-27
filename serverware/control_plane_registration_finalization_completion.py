@@ -1,7 +1,8 @@
 """Explicit retained finalization completion and uncertainty recovery.
 
 The actual application must FIRST admit the present user/session and the
-separate complete or recover purpose. These private facades are not HTTP routes.
+separate complete or recover purpose. Fixed public handlers own those checks;
+these private facades are not HTTP routes and accept no public proof dictionary.
 Each call repeats genuine historical retained ownership and pending/grant replay
 under the actual cold owner's lock; no inspected subject object is accepted.
 
@@ -100,7 +101,7 @@ def _run(local_digest, *, expected_user_id, expected_session_id, recovery):
         owner, material, binding, window = subjects._open_on_work(work)
         custody = owner._custody
         # The concrete owner method holds its actual lock and repeats original
-        # ownership. A previously inspected seven-field subject is never input.
+        # ownership. A previously inspected eight-field subject is never input.
         method = (startup._EnrollmentOwner._recover_retained_registration_finalization_completion
             if recovery else startup._EnrollmentOwner._request_retained_registration_finalization_completion)
         returned = method(owner, local_digest=digest,

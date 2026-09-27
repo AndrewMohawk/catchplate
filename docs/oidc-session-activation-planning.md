@@ -1,15 +1,19 @@
-# OIDC activation: actual read acquisition
+# OIDC activation: actual read and indexed-write evidence acquisition
 
 This source-only owner reads real PostgreSQL rows and original primary/range
-proofs for `oidc.session.activate`. It does not sign a plan, execute SQL writes,
-activate a session, deliver a cookie or enable a public planner factory.
+proofs for `oidc.session.activate`. Its explicit full method also derives the
+actual transition and captures indexed write evidence. It does not sign a plan,
+execute SQL writes, activate a session, deliver a cookie or enable a public
+activation route.
 Implementation is
 [authority_oidc_session_activation_planning.py](../serverware/authority_oidc_session_activation_planning.py).
 No build, database, test or runtime verification was performed for this batch.
-The private call still imports the real planner, whose module-level registry
-closure rejects the missing activation successor factory. The read source is
-implemented but cannot run in the current tree until the genuine configured
-owner is integrated. No registry check is bypassed and no stub is registered.
+The real successor registry now declares this operation's fixed acquisition
+factory and an explicit configured planning factory, constructing the actual
+[`OidcSessionActivationPlanOwner`](../serverware/authority_oidc_session_activation_plan_owner.py).
+The existing module-level closure guard remains; no stub or bypass was added.
+This closes the seven-operation successor source inventory, not an import,
+runtime, cold-admission or provisioning verification claim.
 
 ## Fixed owner and originals
 
@@ -70,20 +74,61 @@ The composing transition must consume the original proofs and perform its
 actual empty-range, assertion, token, trust/RBAC, row-state and capacity replay;
 constructing this result cannot substitute for that admission.
 
+## Full transition in the same snapshot
+
+`acquire_transition` preserves the read method's request/root/window/work
+arguments but requires the **thirteen-head** independent expectation. Additional
+original inputs are `assertion_bytes`, `old_token_bytes`, `new_token_bytes`,
+`delivery_custody_key`; independent scope is `expected_user_id`,
+`expected_session_id`, `expected_credential_id`, `expected_credential_record_id`,
+`expected_challenge_id`, `rp_id`, `origin`, `authn_policy` and `trust_policy`.
+It accepts no caller mutation, envelope, proof-result object or callback. The
+caller must own the token originals and independently admitted custody key.
+
+After genuine read proof acquisition, this method uses the actual database
+time, proved session expiry and original request to derive the fixed delivery
+scope. It genuinely seals and reopens the new token, then calls the full
+original assertion/read/trust/RBAC transition and real audit-capacity finalizer.
+That result contains exactly five business mutations plus one capacity CAS.
+
+The actual indexed mutation reader projects those six mutations' complete
+OLD/NEW images and acquires/reconstructs the real twelve write frontiers in
+the same read-only snapshot, on the same physical acquisition ledger and work.
+The thirteen-head union is two session, five delivery, three credential, two
+challenge and one read-only pending-publication profile. The publication head
+is not a write head. All thirteen were compared to the independent expectation;
+none is fabricated by merging observations from another transaction. The older
+operations retain their eleven-head ceiling; only this exact activation union
+admits thirteen.
+
+The returned `_AcquiredActivationTransition` extends the raw read fields with
+`delivery_envelope_bytes`, the actual same-call `transition`, thirteen
+`counted_before_heads` and twelve raw `write_inputs`. `read_heads` remains the
+seven read-only heads. No token plaintext or custody key is returned. Offline
+signed planning still genuinely replays the original transition and write
+proofs; this ordinary result is not accepted instead of them. The original
+transition's live checker and authenticated expiry are enforced after write
+acquisition and again after scope cleanup, without retiming the envelope,
+assertion, challenge or session.
+
 ## Deliberately separate boundaries
 
-The shared acquisition/trace gates add only this fixed operation and its seven
-read roles. Older families retain their rules; activation write-head acquisition
-is explicitly rejected. Future indexed write-frontier capture must use the
-actual `authority_index_mutation_reader._acquire_indexed_primary_batch` with
-the complete potential-write head union and real computed mutations, not merge
-these seven read heads into a fabricated write proof.
+The shared acquisition/trace gates add only this fixed operation's seven read
+roles and complete thirteen-head read/write inventory. Existing `acquire`
+remains a seven-head read method; it cannot silently produce write evidence.
 
-Independent root/currentness and index-population admission, immutable source
-and database provisioning, original assertion/encrypted-delivery custody,
-composition with the real full kernel and [signed-plan mechanics](oidc-session-activation-plan.md), reservation/protected execution and
-the final public/portal activation sequence remain separate work. The owner
-does not infer any of them from database success. Driver allocation, ordinary
+The actual configured planning owner now joins acquisition with
+[indexed signed-plan replay](oidc-session-activation-plan.md), server-owned
+token generation and [encrypted private original retention](oidc-session-activation-journal.md).
+Its `prepare` returns token-free originals and local locators;
+`verify_retained` replays a known exact plan with independently supplied roots
+and thirteen-head expectations inside the original live interval. Neither is
+SQL execution or expired-history recovery.
+
+Independent cold configuration/key custody, root/currentness and index-population
+admission, immutable source/database provisioning, reservation/protected
+execution and the final public/portal activation sequence remain separate
+work. The owner does not infer them from database success. Driver allocation, ordinary
 primary-proof SQL and metadata admission keep their existing separate bounds;
 this is not whole-process work accounting or a preemptive watchdog. A hostile
 host/driver is not excluded by local handle/status checks or sampled clocks.

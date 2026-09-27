@@ -49,9 +49,11 @@ The domain-separated body identities are
 `serverware.policyAuthorityOidcSessionActivationContext/v1`,
 `serverware.policyAuthorityOidcSessionActivationPrivateInputs/v1` and
 `serverware.policyAuthorityOidcSessionActivationTransition/v1`. The last commits
-the complete canonical `mutations`, `result` and `workUnits` graph, including
-the real audit-capacity query/mutation work; it does not duplicate a separate
-`kernelWorkUnits` allowance.
+the exact canonical indexed-transition original from the genuine
+[write replay](oidc-session-activation-writes.md): fixed source/request identity,
+write-proof digest, complete `mutations`, `result`, `workUnits`, business and
+authorization after-roots, and all thirteen counted after-heads. Work includes
+the real audit-capacity query/mutation work, not a separate duplicated allowance.
 
 ## Signing, privacy and same-call replay boundary
 
@@ -61,9 +63,9 @@ identity domain is `serverware.policyAuthorityOidcSessionActivationPlanIdentity/
 The actual producer must bind the real independently enrolled planner public
 key/SPKI and private-key pair, perform genuine original replay, then use the
 existing metered Ed25519 sign-and-verify primitive over the domain-framed
-canonical payload. The verifier must authenticate the signature and every
-detached byte commitment before decoding context or relying on original-body
-contents. A received context cannot supply independent expectations.
+canonical payload. The verifier authenticates the signature, repeats genuine
+original replay and compares every detached byte commitment before returning.
+A received context cannot supply independent expectations.
 
 The owner retains the exact assertion, old/new server token originals and
 encrypted delivery envelope privately. `inputs_bytes` is only a canonical
@@ -86,9 +88,11 @@ request/delivery/encryption cycle. See the separate
 Full activation replay requires the original assertion and tokens, independently
 admitted custody key, target/user/session policy and trust, complete selected
 rows, primary proofs, counted-query heads/frontiers and independent before
-roots. A public-key signature alone cannot replace that replay or decrypt the
-private delivery. Existing generic raw-four retention preserves complete input
-bytes and is not a place to insert a new plaintext-secret serialization.
+roots. It also requires the canonical original write proof and an independently
+admitted, fixed thirteen-head union; heads copied from that proof are not
+independent pins. A public-key signature alone cannot replace replay or decrypt
+the private delivery. Existing generic raw-four custody is not widened into a
+plaintext-secret serialization.
 
 ## Actual producer and verifier
 
@@ -96,8 +100,11 @@ bytes and is not a place to insert a new plaintext-secret serialization.
 implements `_produce_on_work` and `_verify_on_work`. Both take the exact
 `KernelContext`, original typed request, independent scope, original assertion,
 old/new token bytes, ciphertext and private custody key, primary/range proofs
-and independent roots, actual planner key, and existing work/window/deadline.
-Neither accepts an alleged successful replay or a caller-computed transition.
+and independent roots, required `write_proof_bytes` and
+`expected_counted_heads`, actual planner key, and existing work/window/deadline.
+The head input is an exact tuple of thirteen closed dictionaries with
+`indexId`, `indexRevision`, `rootDigest` and `leafCount` in source-fixed order.
+Neither call accepts a successful replay carrier or caller-computed transition.
 
 The independent scope is exactly `userId`, `sessionId`, `credentialId`,
 `credentialRecordId`, `challengeId`, `rpId`, `origin`, `authenticationPolicy`,
@@ -107,40 +114,71 @@ operation digests are genuinely recomputed and joined to the owned context.
 All raw graphs and exact immutable originals are held before native callbacks.
 This captures independently supplied expectations; it does not enroll them.
 
-The producer constructs private canonical bodies from the actual read records,
-proof originals and independent scope. Its input body contains only four
-domain-separated digest/count pairs derived from the assertion, old token, new
-token and ciphertext; it has no token or key serialization. It calls the real
-full transition, including audit capacity, before committing its six mutations,
-result and complete work count. Actual key/SPKI and key-pair checks precede
-Ed25519 signing and verification of the signature produced. Only the closed
+`_capture` holds the exact immutable write bytes and detaches the independent
+head dictionaries alongside every other caller graph before native callbacks.
+`_read_inputs(invocation, work)` projects a fresh, ordinary nine-field graph for
+private original retention: `schema`, `selectedRows`, `beforeProofs`, `readHeads`,
+`queryFrontiers`, `queryReads`, `businessBeforeRoots`, `authorizationBeforeRoots`
+and `countedBeforeHeads`. Its schema remains the existing proof domain; the
+head/root descriptors are data, not independent authority merely by storage.
+Read heads/frontiers retain the existing raw array shapes, and each query-read
+record retains its five fields and exact original declaration/resolution text.
+Every tuple is normalized into an actual JSON list using the same supplied
+work and bounded byte/node/depth accounting, so producer, journal and retained
+verifier share one storage graph without a consumer-specific fallback.
+
+The producer constructs private canonical bodies from those real read records,
+proof originals and independent scope. `writeProofBase64Url` binds the exact
+write original into the proof body; the context body binds the independent
+thirteen before-heads. Base64 allocation is bounded first, and both producer
+and verifier enforce the four detached bodies' aggregate 64 MiB ceiling.
+The input body contains only four domain-separated digest/count pairs derived
+from the assertion, old token, new
+token and ciphertext; it has no token or key serialization. The actual
+`authority_oidc_session_activation_writes._replay_on_work` derives the full
+six-mutation transition, reconstructs twelve indexed write frontiers and all
+primary after-roots, and preserves the read-only publication head in the full
+thirteen-head result. Its exact `transition_bytes`, including those derived
+roots and heads, supply the signed commitment. Actual key/SPKI and key-pair
+checks precede Ed25519 signing and verification of the signature produced. Only the closed
 signed envelope is returned; no original or private key is returned with it.
 
 The verifier requires the originals again, independently binds request and
-planner/configuration pins, verifies the actual signature, reconstructs and
-compares the proof/context/input byte commitments, then invokes the actual
-full transition again and compares its complete transition commitment. It
-returns only that newly computed ordinary `KernelTransition`, not authority to
+planner/configuration pins, verifies the actual signature, reconstructs the
+proof/context/input bodies, then invokes actual indexed replay and compares
+all four complete body commitments. It returns only that newly computed
+ordinary `KernelTransition`, not authority to
 execute it. A forged result, correct signature over incorrect effects, altered
-original or supplied secret digest cannot substitute for this replay.
+original, substituted head, invalid write frontier or supplied secret digest
+cannot substitute for this replay. No caller can supply derived after-roots.
 
 Both calls keep the supplied work and original dual-clock window, including
 the inherited earlier monotonic deadline. The plan expiry is clipped to the
 original invocation, configured age, provider/session/pending-session,
 challenge and delivery intervals. Sticky liveness checks bracket signing and
-verification and run again before return. Verification is active-window only;
+verification and run again before return. After genuine write replay, both
+paths retain that same call's `live` closure and `valid_until_epoch_ns`; signing
+cannot discard its narrower original lifetime. Verification is active-window only;
 it cannot re-date an expired plan or establish cross-host historical admission.
 
-The actual [read-acquisition owner](oidc-session-activation-planning.md) and
-these signing mechanics remain separate pieces. A configured owner must still
-join them with genuine token generation/sealing and private durable original
-retention; callers cannot publicly supply this private key/policy interface.
+The actual [acquisition owner](oidc-session-activation-planning.md) supplies
+read and write originals from one read-only database snapshot. The source
+[`OidcSessionActivationPlanOwner`](../serverware/authority_oidc_session_activation_plan_owner.py)
+now composes it with signing and [encrypted original retention](oidc-session-activation-journal.md),
+and the explicit successor planning factory constructs that real owner.
+`prepare` returns only token-free request/scope/envelope originals and local
+locators; `verify_retained` requires the known exact envelope, independent
+request/scope/roots/thirteen heads, and genuinely replays the retained originals.
+It remains live-only, not expired-history or lost-locator recovery. These
+configured APIs do not themselves admit cold keys or establish current roots,
+and callers cannot publicly supply this private key/policy interface.
 
 ## Remaining implementation boundary
 
-The codec adds no writer, indexed-after-root authority, durable private-original
-retention, registered execution owner, reservation, protected SQL, one-use
-delivery or activation/recovery route. Original current processing work and
+The codec and signing module add no database writer or authority that derived
+after-roots are current, and perform no durable retention themselves. An
+indexed signed plan is not a registered execution owner, reservation, protected
+SQL, one-use delivery or activation/recovery route. Original current processing work and
 window/deadline must remain unchanged through the real owner; an encoded or
 signed plan does not renew the assertion, session or delivery lifetime.
 The [retained-finalization prerequisite](retained-registration-activation.md),
@@ -149,6 +187,7 @@ private token delivery remain separate inputs to that unfinished flow.
 
 Verification is deferred until the source freeze. Required cases include
 actual successful original replay, bad signatures/keys, altered request/scope/
-body commitments, mutation and work-count disagreement, raw secret absence in
+body commitments, independent thirteen-head substitution, altered write
+frontiers/after-roots, mutation and work-count disagreement, raw secret absence in
 the output, token/envelope tampering, original expiry and clock reversal,
 post-sign failure and cumulative work exhaustion. No such test was run here.

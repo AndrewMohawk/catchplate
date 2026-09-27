@@ -78,7 +78,6 @@ class _CompleteQueryAcquisition:
                     or type(operation) is not str or operation not in
                     (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
                      complete.ACTIVATION_OPERATION)
-                    or operation == complete.ACTIVATION_OPERATION and include_write_heads
                     or type(work) is not _ValidationWork
                     or type(queries) is not tuple or not 1 <= len(queries) <= (
                         len(complete.ROLES) if operation == complete.OPERATION else

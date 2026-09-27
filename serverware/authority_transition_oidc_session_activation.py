@@ -10,7 +10,9 @@ real shared audit-capacity finalizer; it still proves no committed execution.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import timedelta
+from typing import Callable
 import time
 
 from serverware import authority_oidc_session_activation as assertion
@@ -45,6 +47,13 @@ _PUBLICATION_FIELDS = frozenset({"id", "scope", "previous_bundle_digest", "bundl
 
 class OidcSessionActivationTransitionError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _FullTransition:
+    transition: core.KernelTransition
+    live: Callable[[], int]
+    valid_until_epoch_ns: int
 
 
 def _fail(message):
@@ -326,12 +335,12 @@ def _transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_
     return effects, result
 
 
-def _full_transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+def _full_transition_with_liveness_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
         delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
         expected_credential_id, expected_credential_record_id, expected_challenge_id,
         rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None):
-    """Return a genuine full KernelTransition after original replay and capacity CAS.
+    """Derive the full transition and retain this invocation's original liveness.
 
     work_units ALREADY includes the actual query declarations and framework
     units. A future planner must not finalize capacity or add those units again.
@@ -396,4 +405,22 @@ def _full_transition_on_work(context, *, assertion_bytes, old_token_bytes, new_t
     transition = core.KernelTransition(mutations=planned, result=result, work_units=total_work)
     if live() >= valid_until:
         _fail("activation originals expired during full transition derivation")
-    return transition
+    return _FullTransition(transition, live, valid_until)
+
+
+def _full_transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
+        expected_credential_id, expected_credential_record_id, expected_challenge_id,
+        rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None):
+    """Preserve the original full-transition projection, not a SQL result."""
+    return _full_transition_with_liveness_on_work(context,
+        assertion_bytes=assertion_bytes, old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        expected_credential_id=expected_credential_id, expected_credential_record_id=expected_credential_record_id,
+        expected_challenge_id=expected_challenge_id, rp_id=rp_id, origin=origin, authn_policy=authn_policy,
+        trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns).transition

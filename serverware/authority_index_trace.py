@@ -175,7 +175,7 @@ def validate_mutation_read_trace(operation: str, table: str, key: Any) -> None:
     """
     if (type(operation) is not str or operation not in
             (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
-             heads.COMPLETION_OPERATION)
+             complete.ACTIVATION_OPERATION, heads.COMPLETION_OPERATION)
             or type(table) is not str or table not in (reader.LEAF_TABLE, reader.NODE_TABLE)):
         raise IndexTraceError("mutation read operation or table is not source admitted")
     _closed(key, _MUTATION_LEAF_FIELDS if table == reader.LEAF_TABLE else _MUTATION_NODE_FIELDS)

@@ -26,6 +26,13 @@ supplied work object. The original liveness closure and earlier assertion,
 delivery and processing deadlines also remain active through finalization and
 the final return. No input accepts a successful effects or capacity carrier.
 
+The private `_full_transition_with_liveness_on_work` has the same original-input
+signature and returns `transition`, `live` and `valid_until_epoch_ns` for its
+same-call acquisition/replay caller. Subsequent write-frontier reads, scope
+cleanup and [indexed write replay](oidc-session-activation-writes.md) must recheck
+that original closure and validity bound; they cannot substitute a fresh window.
+The existing full-transition API still projects only `KernelTransition`.
+
 The exact `KernelContext` contains the actual ten-field argument profile,
 selected rows, original `QueryRead` records, request digest and independently
 admitted database time. Private keyword inputs provide the original assertion,
@@ -78,8 +85,9 @@ monotonic cap. No new allowance, fresh expiry or delivery retry is manufactured.
 Database time is independently supplied and checked against that processing
 scope, not inferred from a response or advertised as a trusted clock.
 
-Typed planner/kernel factory registration, complete after-root/index-mutation
-proofs, composition with the [signed-plan producer/verifier](oidc-session-activation-plan.md), cold policy/key admission, protected one-use SQL,
+Typed planner/kernel factory registration, composition of the available
+[after-root/indexed write replay](oidc-session-activation-writes.md) with the
+[signed-plan producer/verifier](oidc-session-activation-plan.md), cold policy/key admission, protected one-use SQL,
 currentness admission and committed token delivery/recovery remain separate
 required integration. The original five-effect API remains unchanged; only the
 full adapter performs common capacity finalization. This source-only

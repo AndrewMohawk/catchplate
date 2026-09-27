@@ -4,8 +4,9 @@ The caller retains all original inputs and independently admits request, root,
 policy, subject, key and time provenance. Only a bounded signed commitment
 envelope leaves the producer. Verification requires those original inputs
 again and returns the actual recomputed transition, never an execution grant.
-No SQL, indexed after-root authority, durable retention, historical replay,
-registry factory or public activation is implemented by this private seam.
+Indexed after-roots and all thirteen after-heads are genuinely replayed and
+committed, not accepted from a result carrier. No SQL, current-root authority,
+durable retention, historical replay or public activation occurs here.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import time
 
 from serverware import authority_oidc_session_activation_plan_contract as contract
 from serverware import authority_oidc_session_activation_reads as reads
+from serverware import authority_oidc_session_activation_writes as writes
 from serverware import authority_request_commitment as commitment
 from serverware import authority_transition_oidc_session_activation as transition
 
@@ -40,6 +42,8 @@ class _Invocation:
     raw_reads: dict
     read_heads: tuple
     query_frontiers: tuple
+    expected_counted_heads: tuple
+    write_proof_bytes: bytes
     window: tuple
     monotonic_deadline: int
 
@@ -50,7 +54,8 @@ def _fail(message):
 
 def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_token_bytes,
         delivery_envelope_bytes, delivery_custody_key, business_before_roots, authorization_before_roots,
-        before_proofs, read_heads, query_frontiers, live_window, transport_deadline_ns, work):
+        before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
+        live_window, transport_deadline_ns, work):
     """Own every caller graph before clock, hash, signature or crypto callbacks."""
     ledger = evidence.capture._SharedLedger(work)
     if (type(context) is not core.KernelContext or context.operation != contract.OPERATION
@@ -61,7 +66,11 @@ def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_t
     if (type(assertion_bytes) is not bytes or not 2 <= len(assertion_bytes) <= assertion.MAX_ASSERTION_BYTES
             or type(delivery_envelope_bytes) is not bytes
             or len(delivery_envelope_bytes) != transition.delivery.ENVELOPE_BYTES
-            or type(delivery_custody_key) is not bytes or len(delivery_custody_key) != 32):
+            or type(delivery_custody_key) is not bytes or len(delivery_custody_key) != 32
+            or type(write_proof_bytes) is not bytes
+            or not 2 <= len(write_proof_bytes) <= writes.MAX_WRITE_PROOF_BYTES
+            or type(expected_counted_heads) is not tuple
+            or len(expected_counted_heads) != writes.HEAD_COUNT):
         _fail("activation plan originals are outside their exact bounds")
     originals = (assertion_bytes, assertion._token(old_token_bytes, work),
         assertion._token(new_token_bytes, work), delivery_envelope_bytes, delivery_custody_key)
@@ -71,12 +80,15 @@ def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_t
         registration._integer(transport_deadline_ns, "activation plan inherited deadline", 1)
         bound = min(bound, transport_deadline_ns)
     owned = assertion._Capture(ledger, maximum_bytes=assertion.MAX_CONTEXT_BYTES).visit({
-        "request": request, "scope": scope})
+        "request": request, "scope": scope, "countedBeforeHeads": list(expected_counted_heads)})
     raw, records, heads, frontiers = reads._capture(arguments=context.arguments,
         request_digest=context.request_digest, selected_rows=context.selected_rows,
         query_reads=context.query_reads, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
         read_heads=read_heads, query_frontiers=query_frontiers, work=work)
+    # Validate the independent fixed thirteen-head inventory only after all
+    # mutable inputs above are detached. It is never learned from write bytes.
+    writes._heads(owned["countedBeforeHeads"])
     expected = owned["scope"]
     registration._closed(expected, _SCOPE_FIELDS, "independent activation plan scope")
     for field in ("configurationDigest", "plannerSpkiDigest"):
@@ -107,7 +119,8 @@ def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_t
         registration._text(expected[name], name, maximum, work)
     held = core.KernelContext(contract.OPERATION, raw["arguments"], raw["selected_rows"],
         database_now, digest, query_reads=records)
-    return _Invocation(actual, expected, held, originals, raw, heads, frontiers, window, bound)
+    return _Invocation(actual, expected, held, originals, raw, heads, frontiers,
+        tuple(owned["countedBeforeHeads"]), write_proof_bytes, window, bound)
 
 
 def _live(invocation, work):
@@ -132,9 +145,41 @@ def _wire(value, work):
         contract.MAX_ORIGINAL_BYTES, reads.reads.MAX_JSON_NODES)
 
 
-def _bodies(invocation, work):
-    """Private canonical graph commitments, with no secret-token serialization."""
-    raw, context, expected = invocation.raw_reads, invocation.context, invocation.scope
+class _ReadInputsCapture(evidence.capture._JSONCapture):
+    """Normalize private tuple arrays under the existing exact JSON budgets."""
+
+    def visit(self, value, depth=0, ancestors=frozenset()):
+        if depth > reads.reads.MAX_JSON_DEPTH or self.nodes >= reads.reads.MAX_JSON_NODES:
+            _fail("activation retained read graph exceeds its structural bound")
+        if type(value) is not tuple:
+            return super().visit(value, depth, ancestors)
+        if id(value) in ancestors:
+            _fail("activation retained read graph is cyclic")
+        self.ledger.charge(json_nodes=1)
+        self.nodes += 1
+        maximum_nodes = getattr(self.ledger, "maximum_json_nodes", reads.reads.MAX_JSON_NODES)
+        if len(value) > min(reads.reads.MAX_JSON_NODES - self.nodes,
+                maximum_nodes - self.ledger.json_nodes):
+            _fail("activation retained read array exceeds its node bound")
+        self._bytes(2 + max(0, len(value) - 1))
+        branch = ancestors | {id(value)}
+        result = [] if self.retain else None
+        for child in value:
+            fresh = self.visit(child, depth + 1, branch)
+            if self.retain:
+                result.append(fresh)
+        return result
+
+
+def _read_inputs(invocation, work):
+    """Exact private read originals, not a replay result or independent authority.
+
+    The storage schema remains the fixed proof domain. Root/head descriptors
+    retain their independent provenance only through the real owning caller.
+    """
+    if type(invocation) is not _Invocation:
+        _fail("activation read originals require the actual captured invocation")
+    raw, context = invocation.raw_reads, invocation.context
     records = []
     for record in context.query_reads:
         work.charge(input_bytes=len(record.declared_query_json) + len(record.resolved_query_json)
@@ -145,13 +190,35 @@ def _bodies(invocation, work):
             "returnedRowCount": record.returned_row_count,
             "addresses": [{"table": address.table, "keyJson": address.key_json.decode("ascii"),
                 "keyDigest": address.key_digest, "present": address.present} for address in record.addresses]})
-    proof = {"schema": contract.PROOF_DOMAIN, "selectedRows": raw["selected_rows"],
+    return _ReadInputsCapture(evidence.capture._SharedLedger(work),
+        maximum_bytes=contract.MAX_ORIGINAL_BYTES).visit({
+        "schema": contract.PROOF_DOMAIN, "selectedRows": raw["selected_rows"],
         "beforeProofs": raw["before_proofs"], "readHeads": raw["read_heads"],
-        "queryFrontiers": raw["query_frontiers"], "queryReads": records}
+        "queryFrontiers": raw["query_frontiers"], "queryReads": records,
+        "businessBeforeRoots": raw["business_before_roots"],
+        "authorizationBeforeRoots": raw["authorization_before_roots"],
+        "countedBeforeHeads": list(invocation.expected_counted_heads)})
+
+
+def _bodies(invocation, work):
+    """Private canonical graph commitments, with no secret-token serialization."""
+    read_inputs = _read_inputs(invocation, work)
+    context, expected = invocation.context, invocation.scope
+    proof = {name: read_inputs[name] for name in ("schema", "selectedRows", "beforeProofs",
+        "readHeads", "queryFrontiers", "queryReads")}
+    # Bound the encoded original before base64 allocation. The later canonical
+    # body and combined four-body checks retain the original aggregate ceiling.
+    original = invocation.write_proof_bytes
+    encoded_size = (4 * len(original) + 2) // 3
+    if encoded_size > contract.MAX_ORIGINAL_BYTES:
+        _fail("activation encoded write proof exceeds the original body bound")
+    work.charge(input_bytes=len(original) + 3 * (encoded_size + 2))
+    proof["writeProofBase64Url"] = base64.urlsafe_b64encode(original).decode("ascii").rstrip("=")
     evaluation = {"schema": contract.CONTEXT_DOMAIN, "request": invocation.request,
         "scope": expected, "databaseNow": context.database_now.isoformat(),
-        "businessBeforeRoots": raw["business_before_roots"],
-        "authorizationBeforeRoots": raw["authorization_before_roots"]}
+        "businessBeforeRoots": read_inputs["businessBeforeRoots"],
+        "authorizationBeforeRoots": read_inputs["authorizationBeforeRoots"],
+        "countedBeforeHeads": read_inputs["countedBeforeHeads"]}
     # Domain-separated raw commitments are derived here, never accepted as an
     # input in place of the actual original. The key is deliberately omitted.
     inputs = {"schema": contract.INPUTS_DOMAIN}
@@ -164,7 +231,7 @@ def _bodies(invocation, work):
 
 def _replay(invocation, work):
     expected, original, raw = invocation.scope, invocation.originals, invocation.raw_reads
-    return transition._full_transition_on_work(invocation.context, assertion_bytes=original[0],
+    return writes._replay_on_work(invocation.context, assertion_bytes=original[0],
         old_token_bytes=original[1], new_token_bytes=original[2], delivery_envelope_bytes=original[3],
         delivery_custody_key=original[4], expected_user_id=expected["userId"],
         expected_session_id=expected["sessionId"], expected_credential_id=expected["credentialId"],
@@ -173,13 +240,8 @@ def _replay(invocation, work):
         trust_policy=expected["trustPolicy"], business_before_roots=raw["business_before_roots"],
         authorization_before_roots=raw["authorization_before_roots"], before_proofs=raw["before_proofs"],
         read_heads=invocation.read_heads, query_frontiers=invocation.query_frontiers,
+        expected_counted_heads=invocation.expected_counted_heads, write_proof_bytes=invocation.write_proof_bytes,
         live_window=invocation.window, work=work, transport_deadline_ns=invocation.monotonic_deadline)
-
-
-def _transition_bytes(actual, work):
-    if type(actual) is not core.KernelTransition:
-        _fail("activation original replay did not return its actual transition")
-    return _wire({"mutations": actual.mutations, "result": actual.result, "workUnits": actual.work_units}, work)
 
 
 def _expiry(invocation, work, issued):
@@ -204,9 +266,20 @@ def _fresh(payload, invocation, now, work):
         _fail("activation plan exceeds its independently admitted original lifetimes")
 
 
+def _fresh_replayed(payload, invocation, actual, live, work):
+    """Retain this call's genuine replay guard through final signature work."""
+    original_now = actual.live()
+    now = live()
+    if (now < original_now or now >= actual.valid_until_epoch_ns
+            or payload["expiresAtEpochNs"] > actual.valid_until_epoch_ns):
+        _fail("activation plan exceeds its genuine original replay lifetime")
+    _fresh(payload, invocation, now, work)
+
+
 def _produce_on_work(context, *, request, scope, assertion_bytes, old_token_bytes, new_token_bytes,
         delivery_envelope_bytes, delivery_custody_key, business_before_roots, authorization_before_roots,
-        before_proofs, read_heads, query_frontiers, planner_private_key, planner_public_key,
+        before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
+        planner_private_key, planner_public_key,
         live_window, work, transport_deadline_ns=None):
     """Genuinely replay all originals, then return only a signed token-free envelope."""
     if (not isinstance(planner_private_key, evidence.Ed25519PrivateKey)
@@ -217,22 +290,23 @@ def _produce_on_work(context, *, request, scope, assertion_bytes, old_token_byte
         delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
         business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
         before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
+        expected_counted_heads=expected_counted_heads, write_proof_bytes=write_proof_bytes,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
     live = _live(invocation, work)
     live()
     proof_bytes, context_bytes, inputs_bytes = _bodies(invocation, work)
     actual = _replay(invocation, work)
     body_fields = contract._body_commitments_on_work(proof_bytes=proof_bytes,
-        context_bytes=context_bytes, inputs_bytes=inputs_bytes, transition_bytes=_transition_bytes(actual, work), work=work)
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, transition_bytes=actual.transition_bytes, work=work)
     expected = invocation.scope
     payload = {**contract._source_fields(), **body_fields,
         "requestDigest": invocation.request["requestDigest"], "operationId": invocation.request["operationId"],
         "configurationDigest": expected["configurationDigest"], "plannerIdentity": expected["plannerIdentity"],
         "plannerSpkiDigest": expected["plannerSpkiDigest"], "issuedAtEpochNs": invocation.window[0],
         "expiresAtEpochNs": min(_expiry(invocation, work, invocation.window[0]), invocation.window[3],
-            invocation.window[0] + invocation.monotonic_deadline - invocation.window[1])}
+            invocation.window[0] + invocation.monotonic_deadline - invocation.window[1], actual.valid_until_epoch_ns)}
     unsigned = contract._encode_on_work(payload, work=work)
-    _fresh(payload, invocation, live(), work)
+    _fresh_replayed(payload, invocation, actual, live, work)
     evidence.keys._public_binding(planner_public_key, expected["plannerSpkiDigest"], work)
     evidence.keys._pair_on_work(planner_private_key, planner_public_key, work)
     message = evidence.plan._ascii(evidence.plan._frame(contract.SIGNATURE_DOMAIN, (unsigned,), work), work)
@@ -245,9 +319,9 @@ def _produce_on_work(context, *, request, scope, assertion_bytes, old_token_byte
         _fail("activation plan signed output exceeds its wire bound")
     work.charge(input_bytes=envelope_size + 2 * payload_size + evidence.production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=envelope_nodes + payload_nodes)
-    _fresh(payload, invocation, live(), work)
+    _fresh_replayed(payload, invocation, actual, live, work)
     signature = evidence.production._sign_and_verify(planner_private_key, planner_public_key, message, work)
-    _fresh(payload, invocation, live(), work)
+    _fresh_replayed(payload, invocation, actual, live, work)
     # The held canonical payload, not a callback-returned projection, is signed.
     if commitment.canonical_bytes(payload) != unsigned:
         _fail("activation plan payload changed during signing")
@@ -257,15 +331,16 @@ def _produce_on_work(context, *, request, scope, assertion_bytes, old_token_byte
         "payload": payload, "signatureBase64Url": encoded})
     if len(envelope) != envelope_size:
         _fail("activation plan output changed after sizing")
-    _fresh(payload, invocation, live(), work)
+    _fresh_replayed(payload, invocation, actual, live, work)
     return envelope
 
 
 def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes, old_token_bytes,
         new_token_bytes, delivery_envelope_bytes, delivery_custody_key, business_before_roots,
-        authorization_before_roots, before_proofs, read_heads, query_frontiers, planner_public_key,
+        authorization_before_roots, before_proofs, read_heads, query_frontiers,
+        expected_counted_heads, write_proof_bytes, planner_public_key,
         live_window, work, transport_deadline_ns=None):
-    """Verify the signature and real body commitments, then repeat original replay.
+    """Verify the signature, repeat original replay and compare every commitment.
 
     This active-window API does not renew expired plans or authenticate history.
     Its actual KernelTransition return is ordinary data, not an executor input
@@ -280,6 +355,7 @@ def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes,
         delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
         business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
         before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
+        expected_counted_heads=expected_counted_heads, write_proof_bytes=write_proof_bytes,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
     live = _live(invocation, work)
     live()
@@ -295,15 +371,10 @@ def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes,
         contract.SIGNATURE_DOMAIN, unsigned, evidence.capture._SharedLedger(work))
     _fresh(payload, invocation, live(), work)
     proof_bytes, context_bytes, inputs_bytes = _bodies(invocation, work)
-    for prefix, domain, original in (("proof", contract.PROOF_DOMAIN, proof_bytes),
-            ("context", contract.CONTEXT_DOMAIN, context_bytes), ("inputs", contract.INPUTS_DOMAIN, inputs_bytes)):
-        registration._same((payload[prefix + "Digest"], payload[prefix + "ByteCount"]),
-            (evidence.plan._frame(domain, (original,), work), len(original)), work,
-            "activation plan original " + prefix)
     actual = _replay(invocation, work)
-    transition_bytes = _transition_bytes(actual, work)
-    registration._same((payload["transitionDigest"], payload["transitionByteCount"]),
-        (evidence.plan._frame(contract.TRANSITION_DOMAIN, (transition_bytes,), work), len(transition_bytes)),
-        work, "activation plan full transition replay")
-    _fresh(payload, invocation, live(), work)
-    return actual
+    body_fields = contract._body_commitments_on_work(proof_bytes=proof_bytes,
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, transition_bytes=actual.transition_bytes, work=work)
+    for field, expected_value in body_fields.items():
+        registration._same(payload[field], expected_value, work, "activation plan original " + field)
+    _fresh_replayed(payload, invocation, actual, live, work)
+    return actual.transition

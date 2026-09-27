@@ -1,9 +1,11 @@
-"""Fixed read-only OIDC activation acquisition, not a plan or authority.
+"""Fixed read-only OIDC activation read/write-proof acquisition, not authority.
 
 The owner holds its real PostgreSQL reader configuration. Each call owns its
 request, independent root expectations and original lifetime before callbacks,
 then uses the actual source query/primary/range acquisition machinery in one
-read-only snapshot. Detached observations escape only after normal cleanup.
+read-only snapshot. The separate full method derives a genuine envelope and
+transition, then acquires actual indexed write proofs without performing DML.
+Detached observations escape only after normal cleanup and original expiry.
 No caller cursor, proof result, SQL, callback, signing key or new work/window
 is accepted. Caller/current-root/index-population authority remains separate.
 """
@@ -13,19 +15,26 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from serverware import authority_complete_acquisition as acquisition
 from serverware import authority_complete_query as complete
 from serverware import authority_complete_query_batch as batch
+from serverware import authority_complete_read_write as read_write
 from serverware import authority_contract as authority
+from serverware import authority_index_heads as index_heads
+from serverware import authority_index_mutation_reader as mutation_reader
+from serverware import authority_index_projection as projection
 from serverware import authority_index_reader as index_reader
+from serverware import authority_indexed_mutation as indexed
 from serverware import authority_oidc_session_activation_reads as reads
 from serverware import authority_query_reads as query_reads
 from serverware import authority_query_staging as staging
+from serverware import authority_primary_contract as primary
 from serverware import authority_request_commitment as commitment
 from serverware import authority_revocation_planning as planning
 from serverware import authority_revocation_semantics as semantics
+from serverware import authority_transition_oidc_session_activation as transition
 from serverware import authority_webauthn_evidence_plan_clock as clock
 from serverware.authority_query_read_work import _ValidationWork
 
@@ -55,6 +64,16 @@ class _AcquiredActivationReads:
     trace: tuple
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _AcquiredActivationTransition(_AcquiredActivationReads):
+    """Same-call observations/effects; offline consumers reverify originals."""
+
+    delivery_envelope_bytes: bytes
+    transition: transition.core.KernelTransition
+    counted_before_heads: tuple
+    write_inputs: tuple
+
+
 def _configuration(value):
     if type(value) is not tuple or len(value) != 4:
         raise OidcSessionActivationPlanningError("activation read configuration is not exact")
@@ -72,10 +91,12 @@ def _configuration(value):
 
 
 def _capture(*, request, business_before_roots, authorization_before_roots,
-             expected_counted_heads, live_window, transport_deadline_ns, work):
+             expected_counted_heads, live_window, transport_deadline_ns, work,
+             transition_inputs=None):
     batch._SharedLedger(work)
+    head_count = 7 if transition_inputs is None else index_heads.MAX_ACTIVATION_HEADS
     if (type(request) is not dict or len(request) != 7
-            or type(expected_counted_heads) is not tuple or len(expected_counted_heads) != 7
+            or type(expected_counted_heads) is not tuple or len(expected_counted_heads) != head_count
             or type(live_window) is not tuple or len(live_window) != 7
             or type(transport_deadline_ns) is not int or transport_deadline_ns <= 0):
         raise OidcSessionActivationPlanningError("activation read originals are not source bounded")
@@ -86,7 +107,7 @@ def _capture(*, request, business_before_roots, authorization_before_roots,
         "request": request, "businessBeforeRoots": business_before_roots,
         "authorizationBeforeRoots": authorization_before_roots,
         "expectedCountedHeads": expected_counted_heads, "liveWindow": live_window,
-        "transportDeadlineNs": transport_deadline_ns,
+        "transportDeadlineNs": transport_deadline_ns, "transitionInputs": transition_inputs,
     })
     window = clock._validate(owned["liveWindow"])
     actual = owned["request"]
@@ -103,16 +124,28 @@ def _capture(*, request, business_before_roots, authorization_before_roots,
     if commitment._request_different(commitment.operation_id(OPERATION, request_digest),
                                      actual.get("operationId"), work=work):
         raise OidcSessionActivationPlanningError("activation operation commitment changed")
-    wanted = tuple(sorted(complete._role(OPERATION, role).index_id
-                          for role in complete.ACTIVATION_ROLES))
+    wanted = index_heads._activation_ids(include_write_heads=transition_inputs is not None)
     for item, identifier in zip(owned["expectedCountedHeads"], wanted):
         if (type(item) is not dict or set(item) != _HEAD_FIELDS
                 or type(item["indexId"]) is not str or item["indexId"] != identifier
                 or type(item["indexRevision"]) is not int or not 0 <= item["indexRevision"] < 2**63
                 or type(item["leafCount"]) is not int or not 0 <= item["leafCount"] < 2**63):
-            raise OidcSessionActivationPlanningError("activation counted expectations are not the fixed seven")
+            raise OidcSessionActivationPlanningError("activation counted expectations differ from the fixed inventory")
         planning.retention.plan.contract._digest(item["rootDigest"])
     return owned
+
+
+def _originals(*, assertion_bytes, old_token_bytes, new_token_bytes, delivery_custody_key, work):
+    """Hold exact immutable originals before any invocation callback."""
+    batch._SharedLedger(work)
+    if (type(assertion_bytes) is not bytes
+            or not 2 <= len(assertion_bytes) <= transition.assertion.MAX_ASSERTION_BYTES
+            or type(delivery_custody_key) is not bytes
+            or len(delivery_custody_key) != transition.delivery.KEY_BYTES):
+        raise OidcSessionActivationPlanningError("activation write originals exceed their source bounds")
+    work.charge(input_bytes=len(assertion_bytes) + len(delivery_custody_key))
+    return (assertion_bytes, transition.assertion._token(old_token_bytes, work),
+            transition.assertion._token(new_token_bytes, work), delivery_custody_key)
 
 
 class _Lifetime:
@@ -203,11 +236,12 @@ class _Cursor:
         return _Result(self._call(lambda: cursor.execute(*arguments)), self)
 
 
-def _acquire(cursor, manifest, trace, owned, lifetime, work):
+def _acquire(cursor, manifest, trace, owned, lifetime, work, originals=None):
     from serverware import authority_planner as planner
 
     physical = index_reader._ReadAcquisitionBudget(cursor, trace, work=work)
     request = owned["request"]
+    full = originals is not None
     try:
         with physical.read_phase(cursor, trace, work):
             observed_business, observed_authorization, _ = planner._read_root_set(
@@ -228,7 +262,7 @@ def _acquire(cursor, manifest, trace, owned, lifetime, work):
                 arguments=request["arguments"], cutoff_us=complete.cutoff_microseconds(database_now),
                 queries=tuple(query for query in queries if type(query) is complete.CompleteIndexQuery),
                 business_before_roots=observed_business, authorization_before_roots=observed_authorization,
-                trace=trace, work=work, acquisition=physical, include_write_heads=False)
+                trace=trace, work=work, acquisition=physical, include_write_heads=full)
             sources = staging.StagedQueryProofs(operation=OPERATION,
                 business_before_roots=observed_business, authorization_before_roots=observed_authorization,
                 query_work=work)
@@ -243,16 +277,98 @@ def _acquire(cursor, manifest, trace, owned, lifetime, work):
                 label="activation observed counted heads differ from independent expectations")
             physical.require_idle(cursor, trace, work)
         lifetime.check()
-        closed_trace = trace.close(selected_rows=selected, mutation_plan=())
+        read_ids = {complete._role(OPERATION, role).index_id for role in complete.ACTIVATION_ROLES}
+        read_heads = tuple(batch.CompleteQueryHead(head.index_id, head.index_revision, head.index_root)
+                          for head in retained.heads if head.index_id in read_ids)
+        if full:
+            envelope, actual, writes = _write_evidence(cursor, trace, physical, request, database_now,
+                selected, records, retained, read_heads, owned["transitionInputs"], originals, lifetime, work)
+            for mutation in actual.transition.mutations:
+                trace.write(mutation["table"], mutation["key"])
+            closed_trace = trace.close(selected_rows=selected, mutation_plan=actual.transition.mutations)
+        else:
+            actual = None
+            closed_trace = trace.close(selected_rows=selected, mutation_plan=())
         copier = query_reads._CopyBudget(work)
-        return _AcquiredActivationReads(copier.copy(request), database_now,
+        raw = (copier.copy(request), database_now,
             copier.copy(selected), tuple(query_reads._copy_read(record, work) for record in records),
             retained.business_before_roots, retained.authorization_before_roots, retained.before_proofs,
-            tuple(batch.CompleteQueryHead(head.index_id, head.index_revision, head.index_root)
-                  for head in retained.heads), retained.frontiers, copier.copy(closed_trace))
+            read_heads, retained.frontiers, copier.copy(closed_trace))
+        if not full:
+            return _AcquiredActivationReads(*raw), None
+        counted = tuple(read_write.CompleteReadWriteHead(head.index_id, head.index_revision, head.index_root)
+                        for head in retained.heads)
+        _fresh_transition(actual, lifetime)
+        return _AcquiredActivationTransition(*raw, envelope, actual.transition, counted, writes.index_inputs), actual
     except BaseException:
         physical.failed = True
         raise
+
+
+def _fresh_transition(actual, lifetime):
+    lifetime.check()
+    if actual.live() >= actual.valid_until_epoch_ns:
+        raise OidcSessionActivationPlanningError("activation originals expired during write acquisition")
+    lifetime.check()
+
+
+def _write_evidence(cursor, trace, physical, request, database_now, selected, records,
+                    retained, read_heads, inputs, originals, lifetime, work):
+    """Derive the envelope/effects and read real write proofs in this snapshot."""
+    registration, core = transition.registration, transition.core
+    context = core.KernelContext(OPERATION, request["arguments"], selected, database_now,
+                                 request["requestDigest"], query_reads=records)
+    # Real primary/range acquisition has already proved these original rows.
+    # Semantic caller/assertion/token/trust admission still runs below before
+    # any mutation-frontier query and before any result can escape.
+    values = transition._arguments(context.arguments, work)
+    session = context._exact("oidc_browser_sessions", {"id": values["session_id"]}, work=work)
+    if session["present"] is not True or type(session["row"]) is not dict:
+        raise OidcSessionActivationPlanningError("activation delivery requires the exact proved session row")
+    delivery_id = core._deterministic_uuid(operation=OPERATION, request_digest=context.request_digest,
+        purpose=reads.DELIVERY_PURPOSE, work=work)
+    expiry = min(database_now + timedelta(seconds=values["delivery_ttl_seconds"]),
+                 registration._utc(session["row"].get("expires_at"), "session expiry", work))
+    scope = {"deliveryId": delivery_id, "userId": values["user_id"], "sessionId": values["session_id"],
+        "credentialId": values["credential_id"], "credentialRecordId": values["credential_record_id"],
+        "challengeId": values["challenge_id"], "assertionDigest": values["assertion_digest"],
+        "oldTokenDigest": values["old_token_digest"], "newTokenDigest": values["new_token_digest"],
+        "createdAt": database_now.isoformat(), "expiresAt": expiry.isoformat()}
+    lifetime.check()
+    envelope = transition.delivery._seal_on_work(new_token_bytes=originals[2], custody_key=originals[3],
+        scope=scope, live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work)
+    lifetime.check()
+    actual = transition._full_transition_with_liveness_on_work(context,
+        assertion_bytes=originals[0], old_token_bytes=originals[1], new_token_bytes=originals[2],
+        delivery_envelope_bytes=envelope, delivery_custody_key=originals[3],
+        expected_user_id=inputs["userId"], expected_session_id=inputs["sessionId"],
+        expected_credential_id=inputs["credentialId"],
+        expected_credential_record_id=inputs["credentialRecordId"], expected_challenge_id=inputs["challengeId"],
+        rp_id=inputs["rpId"], origin=inputs["origin"], authn_policy=inputs["authnPolicy"],
+        trust_policy=inputs["trustPolicy"], business_before_roots=retained.business_before_roots,
+        authorization_before_roots=retained.authorization_before_roots, before_proofs=retained.before_proofs,
+        read_heads=read_heads, query_frontiers=retained.frontiers, live_window=lifetime.window,
+        transport_deadline_ns=lifetime.bound, work=work)
+    _fresh_transition(actual, lifetime)
+    mutations = actual.transition.mutations
+    write_ids = {index_id for item in mutations for index_id in projection.index_ids_for_table(item["table"])}
+    expected_write_ids = set(index_heads._activation_ids(include_write_heads=True)) - {
+        "webauthn_publication_status"}
+    if len(mutations) != 6 or write_ids != expected_write_ids or len(write_ids) != 12:
+        raise OidcSessionActivationPlanningError("activation effects differ from the fixed indexed write closure")
+    heads = tuple(indexed.IndexedMutationHead(head.index_id, head.index_revision, head.index_root)
+                  for head in retained.heads if head.index_id in write_ids)
+    limits = read_write._write_limits(authority.operation_spec(OPERATION), batch._SharedLedger(work))
+    writer = mutation_reader._AcquisitionBudget(shared_acquisition=physical, work=work)
+    writes = mutation_reader._acquire_indexed_primary_batch(cursor,
+        table_contracts=primary.primary_table_contracts(OPERATION),
+        business_before_roots=batch._roots(retained.business_before_roots),
+        authorization_before_roots=batch._roots(retained.authorization_before_roots),
+        selected_rows=selected, before_proofs=retained.before_proofs, mutations=mutations,
+        index_before_heads=heads, limits=limits, trace=trace, acquisition_budget=writer)
+    physical.require_idle(cursor, trace, work)
+    _fresh_transition(actual, lifetime)
+    return envelope, actual, writes
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -276,6 +392,30 @@ class OidcSessionActivationReadPlanner:
 
     def acquire(self, *, request, business_before_roots, authorization_before_roots,
                 expected_counted_heads, live_window, transport_deadline_ns, work: _ValidationWork):
+        return OidcSessionActivationReadPlanner._run(self, request=request,
+            business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+            expected_counted_heads=expected_counted_heads, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work)
+
+    def acquire_transition(self, *, request, business_before_roots, authorization_before_roots,
+            expected_counted_heads, assertion_bytes, old_token_bytes, new_token_bytes, delivery_custody_key,
+            expected_user_id, expected_session_id, expected_credential_id, expected_credential_record_id,
+            expected_challenge_id, rp_id, origin, authn_policy, trust_policy,
+            live_window, transport_deadline_ns, work: _ValidationWork):
+        originals = _originals(assertion_bytes=assertion_bytes, old_token_bytes=old_token_bytes,
+            new_token_bytes=new_token_bytes, delivery_custody_key=delivery_custody_key, work=work)
+        inputs = {"userId": expected_user_id, "sessionId": expected_session_id,
+            "credentialId": expected_credential_id, "credentialRecordId": expected_credential_record_id,
+            "challengeId": expected_challenge_id, "rpId": rp_id, "origin": origin,
+            "authnPolicy": authn_policy, "trustPolicy": trust_policy}
+        return OidcSessionActivationReadPlanner._run(self, request=request,
+            business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+            expected_counted_heads=expected_counted_heads, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, transition_inputs=inputs, originals=originals)
+
+    def _run(self, *, request, business_before_roots, authorization_before_roots,
+             expected_counted_heads, live_window, transport_deadline_ns, work,
+             transition_inputs=None, originals=None):
         configured = OidcSessionActivationReadPlanner._snapshot_configuration(self)
         lock = self._lock
         if not lock.acquire(blocking=False):
@@ -284,7 +424,7 @@ class OidcSessionActivationReadPlanner:
             owned = _capture(request=request, business_before_roots=business_before_roots,
                 authorization_before_roots=authorization_before_roots,
                 expected_counted_heads=expected_counted_heads, live_window=live_window,
-                transport_deadline_ns=transport_deadline_ns, work=work)
+                transport_deadline_ns=transport_deadline_ns, work=work, transition_inputs=transition_inputs)
             window = owned["liveWindow"]
             if window[6] != configured[3]:
                 raise OidcSessionActivationPlanningError("activation live clock policy differs from its owner")
@@ -298,11 +438,13 @@ class OidcSessionActivationReadPlanner:
                     cursor, manifest, trace):
                 lifetime.check()
                 guarded = _Cursor(cursor, lifetime)
-                result = _acquire(guarded, manifest, trace, owned, lifetime, work)
+                result, actual = _acquire(guarded, manifest, trace, owned, lifetime, work, originals)
                 lifetime.check()
             # An actual result cannot escape a failed cursor/transaction/
             # connection exit, a replaced owner or the original elapsed bound.
             lifetime.check()
+            if actual is not None:
+                _fresh_transition(actual, lifetime)
             return result
         finally:
             lock.release()

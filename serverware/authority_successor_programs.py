@@ -4,7 +4,7 @@ These owners require configured keys and original invocation work; they are
 not legacy TransitionKernel adapters. Registration describes available source
 paths, not admission, reservation, or business execution authority. Imports
 stay lazy so the actual read owners can use planner primitives without an
-import-time registry cycle. The three transition read factories remain
+import-time registry cycle. The four transition read factories remain
 read-acquisition producers; their separate operation-bound plan factories
 add the actual configured signer without changing that base result contract.
 """
@@ -188,6 +188,32 @@ def _completion_plan(*, read_planner, planner_private_key, planner_public_key,
         configuration_digest=configuration_digest, maximum_plan_age_ns=maximum_plan_age_ns)
 
 
+def _activation(*, read_dsn, connect_timeout_seconds, database_identity, maximum_clock_skew_ns):
+    from serverware.authority_oidc_session_activation_planning import OidcSessionActivationReadPlanner
+
+    return OidcSessionActivationReadPlanner(read_dsn=read_dsn,
+        connect_timeout_seconds=connect_timeout_seconds, database_identity=database_identity,
+        maximum_clock_skew_ns=maximum_clock_skew_ns)
+
+
+def _activation_plan(*, read_planner, planner_private_key, planner_public_key,
+        expected_planner_identity, expected_planner_spki_digest, configuration_digest,
+        delivery_custody_key, journal, rp_id, origin, authn_policy, trust_policy,
+        maximum_plan_age_ns, maximum_clock_skew_ns, delivery_ttl_seconds,
+        live_window, work, transport_deadline_ns=None):
+    from serverware.authority_oidc_session_activation_plan_owner import OidcSessionActivationPlanOwner
+
+    return OidcSessionActivationPlanOwner(read_planner=read_planner,
+        planner_private_key=planner_private_key, planner_public_key=planner_public_key,
+        expected_planner_identity=expected_planner_identity,
+        expected_planner_spki_digest=expected_planner_spki_digest,
+        configuration_digest=configuration_digest, delivery_custody_key=delivery_custody_key,
+        journal=journal, rp_id=rp_id, origin=origin, authn_policy=authn_policy, trust_policy=trust_policy,
+        maximum_plan_age_ns=maximum_plan_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns,
+        delivery_ttl_seconds=delivery_ttl_seconds, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns)
+
+
 def _program(operation, factory, result_kind, kernel_factory=None, plan_factory=None):
     return SuccessorPlanningProgram(operation=operation,
         handler=authority_contract.operation_spec(operation)["handler"],
@@ -198,6 +224,7 @@ def _program(operation, factory, result_kind, kernel_factory=None, plan_factory=
 
 PROGRAMS: Final[Mapping[str, SuccessorPlanningProgram]] = MappingProxyType({
     program.operation: program for program in (
+        _program("oidc.session.activate", _activation, "read-acquisition", plan_factory=_activation_plan),
         _program("webauthn.credential.revoke", _revocation, "signed-originals"),
         _program("webauthn.registration.evidence.admit", _registration_evidence,
             "signed-originals", _registration_evidence_kernel),

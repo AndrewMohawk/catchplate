@@ -27,6 +27,7 @@ READ_PROFILE = "serverware.policyAuthorityCountedHeadRead/v1"
 HEAD_TABLE = "policy_authority_counted_index_heads"
 COMPLETION_OPERATION = "webauthn.trust.complete"
 MAX_HEADS = 11
+MAX_ACTIVATION_HEADS = 13
 _FIELDS = ("index_id", "table_name", "counted_profile", "projection_digest",
            "projection_manifest_digest", "index_revision", "root_digest", "leaf_count")
 _TRACE_FIELDS = frozenset({"profile", "indexIds", "rowLimit"})
@@ -41,6 +42,24 @@ _HEAD_SELECT = ", ".join(
 
 class IndexHeadReadError(reader.IndexReadError):
     pass
+
+
+def _activation_ids(*, include_write_heads: bool) -> tuple[str, ...]:
+    """Fixed activation-only inventory; old operation ceilings stay unchanged."""
+    if type(include_write_heads) is not bool:
+        raise IndexHeadReadError("activation counted mode is not source exact")
+    reads = {complete._role(complete.ACTIVATION_OPERATION, name).index_id
+             for name in complete.ACTIVATION_ROLES}
+    writes = {index_id
+        for table in authority_contract.operation_spec(complete.ACTIVATION_OPERATION)["businessWrites"]
+        for index_id in projection.index_ids_for_table(table)}
+    if len(reads) != 7 or len(writes) != 12 or len(reads | writes) != MAX_ACTIVATION_HEADS:
+        raise IndexHeadReadError("activation counted source inventory changed")
+    return tuple(sorted(reads | writes if include_write_heads else reads))
+
+
+def _head_limit(operation: str) -> int:
+    return MAX_ACTIVATION_HEADS if operation == complete.ACTIVATION_OPERATION else MAX_HEADS
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +81,8 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
 
     Revocation preserves its existing role/potential-write union and no-context
     API. Registration/staging read heads follow their rebound argument family;
-    OIDC activation admits exactly its seven read heads, not write acquisition.
+    OIDC activation admits its seven read heads or fixed thirteen read/write
+    heads only when the private transition owner requests the full write union.
     a private transition owner can additionally require every
     potential source-write profile. Completion has exact primary-key reads,
     not a complete-range family: its private writer must explicitly request
@@ -75,8 +95,6 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
                                  complete.STAGE_OPERATION, complete.ACTIVATION_OPERATION,
                                  COMPLETION_OPERATION)):
         raise IndexHeadReadError("counted head operation has no declared source inventory")
-    if operation == complete.ACTIVATION_OPERATION and include_write_heads:
-        raise IndexHeadReadError("activation acquisition admits its seven read heads only")
     if operation == COMPLETION_OPERATION:
         if not include_write_heads or arguments is not None or queries is not None:
             raise IndexHeadReadError("completion heads require explicit write-only source admission")
@@ -114,7 +132,10 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
         for table in spec["businessWrites"]:
             identities.update(projection.index_ids_for_table(table))
     result = tuple(sorted(identities))
-    if not roles or not 1 <= len(result) <= MAX_HEADS:
+    if operation == complete.ACTIVATION_OPERATION and result != _activation_ids(
+            include_write_heads=include_write_heads):
+        raise IndexHeadReadError("activation heads differ from their exact source union")
+    if not roles or not 1 <= len(result) <= _head_limit(operation):
         raise IndexHeadReadError("counted head source inventory is not bounded")
     return result
 
@@ -125,10 +146,10 @@ def validate_head_trace_key(operation: str, key: Any, *, arguments=None, queries
     if type(operation) is not str or type(include_write_heads) is not bool:
         raise IndexHeadReadError("counted head operation is not an exact source identity")
     if operation == complete.ACTIVATION_OPERATION and arguments is None and queries is None:
-        if include_write_heads:
-            raise IndexHeadReadError("activation trace admits its seven read heads only")
-        inventories = (tuple(sorted(complete._role(operation, name).index_id
-                                    for name in complete.ACTIVATION_ROLES)),)
+        # Trace shape is not mode authority. The fixed source owner and actual
+        # collector bind either seven reads or the complete thirteen-head union.
+        inventories = (_activation_ids(include_write_heads=False),
+                       _activation_ids(include_write_heads=True))
     elif operation in (complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION) and arguments is None and queries is None:
         # Trace markers carry no mode authority. The actual producer binds one
         # fixed mode/read-or-read-write inventory before SQL. Trace admission
@@ -151,7 +172,7 @@ def validate_head_trace_key(operation: str, key: Any, *, arguments=None, queries
             or any(type(name) is not str or len(name) > 32 for name in key)
             or set(key) != _TRACE_FIELDS
             or type(key["profile"]) is not str or key["profile"] != READ_PROFILE
-            or type(key["indexIds"]) is not list or not 1 <= len(key["indexIds"]) <= MAX_HEADS
+            or type(key["indexIds"]) is not list or not 1 <= len(key["indexIds"]) <= _head_limit(operation)
             or any(type(value) is not str or not 1 <= len(value) <= 128
                    for value in key["indexIds"])
             or tuple(key["indexIds"]) not in inventories
@@ -237,8 +258,11 @@ def _read_index_heads_on_scope(cursor, *, operation, identities, trace, work, ac
                 complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
                 complete.ACTIVATION_OPERATION, COMPLETION_OPERATION)
             or type(getattr(trace, "operation", None)) is not str or trace.operation != operation
-            or type(identities) is not tuple or not 1 <= len(identities) <= MAX_HEADS):
+            or type(identities) is not tuple or not 1 <= len(identities) <= _head_limit(operation)):
         raise IndexHeadReadError("counted head source scope changed")
+    if operation == complete.ACTIVATION_OPERATION and identities not in (
+            _activation_ids(include_write_heads=False), _activation_ids(include_write_heads=True)):
+        raise IndexHeadReadError("activation observed head inventory is not source fixed")
     previous = None
     for identity in identities:
         if (type(identity) is not str or identity not in projection.INDEX_IDS

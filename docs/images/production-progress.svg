@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="144" viewBox="0 0 720 144" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="168" viewBox="0 0 720 168" role="img" aria-labelledby="title description">
   <title id="title">Production acceptance: 0 of 6 gates verified; 6 remaining</title>
-  <desc id="description">Six empty numbered segments represent integration, frozen verification, independent release, Nitro and KMS, witnesses, and live acceptance. All six remain unverified. Source-only implementation is in progress; verification has not run. This is not a measure of code completion, effort remaining, or an estimated completion date.</desc>
-  <rect x="1" y="1" width="718" height="142" rx="12" fill="#0f172a" stroke="#475569"/>
+  <desc id="description">Six empty numbered segments represent integration in progress, frozen verification blocked on prerequisites, independent release blocked on infrastructure, Nitro and KMS not provisioned, witnesses not provisioned, and live acceptance pending deployment. All six remain unverified. Source-only implementation is in progress; verification has not run. This is not a measure of code completion, effort remaining, or an estimated completion date.</desc>
+  <rect x="1" y="1" width="718" height="166" rx="12" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="31" fill="#f8fafc" font-size="15" font-weight="600">PRODUCTION ACCEPTANCE</text>
     <text x="696" y="31" fill="#fbbf24" font-size="15" font-weight="600" text-anchor="end">0 OF 6 VERIFIED</text>
@@ -21,7 +21,15 @@
       <text x="531" y="86">5 · Witnesses</text>
       <text x="645" y="86">6 · Live flows</text>
     </g>
-    <text x="24" y="122" fill="#cbd5e1" font-size="13">Source-only implementation in progress</text>
-    <text x="696" y="122" fill="#cbd5e1" font-size="13" text-anchor="end">6 gates remaining</text>
+    <g font-size="11" text-anchor="middle">
+      <text x="75" y="107" fill="#fbbf24">In progress</text>
+      <text x="189" y="107" fill="#fda4af">Blocked</text>
+      <text x="303" y="107" fill="#fda4af">Blocked</text>
+      <text x="417" y="107" fill="#fda4af">Not provisioned</text>
+      <text x="531" y="107" fill="#fda4af">Not provisioned</text>
+      <text x="645" y="107" fill="#cbd5e1">Pending</text>
+    </g>
+    <text x="24" y="146" fill="#cbd5e1" font-size="13">Source-only implementation in progress</text>
+    <text x="696" y="146" fill="#cbd5e1" font-size="13" text-anchor="end">6 gates remaining</text>
   </g>
 </svg>

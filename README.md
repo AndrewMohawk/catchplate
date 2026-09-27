@@ -18,7 +18,7 @@ long-lived credential.
 
 Checkpoint: **2026-09-26 — pre-production, source-only.**
 
-[![Production acceptance: 0 of 6 gates verified; 6 remain. Source-only implementation is in progress.](docs/images/production-progress.svg)](docs/production-status.md)
+[![Production acceptance: 0 of 6 gates verified; 6 remain. Integration in progress; verification and release blocked; Nitro/KMS and witnesses not provisioned; live flows pending.](docs/images/production-progress.svg)](docs/production-status.md)
 
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
@@ -33,6 +33,7 @@ not percentage of code written, effort remaining, or an ETA.
   operated signing, Nitro/KMS and witness services, which are not yet provisioned.
 
 [Open the progress tracker →](docs/production-status.md) for committed milestones,
+the [next integration checklist](docs/production-status.md#next-source-milestones),
 all six remaining gates, blockers and their completion criteria.
 **Zero verified gates does not mean zero implementation progress.**
 

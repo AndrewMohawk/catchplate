@@ -1101,6 +1101,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_release_committed_inputs.py \
 	serverware/authority_oidc_session_activation_release_committed_target.py \
 	serverware/authority_oidc_session_activation_release_committed.py \
+	serverware/oidc_session_activation_release_proof.py \
+	serverware/oidc_session_activation_release_proof_enrollment.py \
+	serverware/authority_oidc_session_activation_release_proof.py \
+	serverware/authority_oidc_session_activation_release_proof_production.py \
 	serverware/authority_oidc_session_activation_release_custody.py \
 	serverware/authority_oidc_session_activation_delivery_reads.py \
 	serverware/authority_transition_oidc_session_activation_delivery.py \
@@ -3146,6 +3150,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_release_committed_inputs.py \
 				serverware/authority_oidc_session_activation_release_committed_target.py \
 				serverware/authority_oidc_session_activation_release_committed.py \
+				serverware/oidc_session_activation_release_proof.py \
+				serverware/oidc_session_activation_release_proof_enrollment.py \
+				serverware/authority_oidc_session_activation_release_proof.py \
+				serverware/authority_oidc_session_activation_release_proof_production.py \
 				serverware/authority_oidc_session_activation_release_custody.py \
 				serverware/authority_oidc_session_activation_delivery_reads.py \
 				serverware/authority_transition_oidc_session_activation_delivery.py \

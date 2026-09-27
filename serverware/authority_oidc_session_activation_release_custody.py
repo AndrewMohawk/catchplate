@@ -1,8 +1,9 @@
 """Process-bound delivery-key custody with NO plaintext release entrypoint.
 
 Original root scope is reauthenticated before every check, original-intent
-admission and exact AEAD metadata inspection. Fresh intent admission proves
-caller authority and old-token possession, not committed consumption. This
+admission, signed committed-proof admission and exact AEAD metadata inspection.
+Fresh intent alone proves caller authority and old-token possession, not
+committed consumption. The separate proof join still grants no token egress. This
 owner still has no token-release method, SQL, journal, transport or public HTTP
 result, and no successful admission result can be supplied as release proof.
 """
@@ -18,6 +19,9 @@ from serverware import oidc_session_activation_delivery as delivery
 from serverware import oidc_session_activation_release_intent as release_intent
 from serverware import oidc_session_activation_release_intent_enrollment as intent_enrollment
 from serverware import authority_oidc_session_activation_release_intent as intent_admission
+from serverware import oidc_session_activation_release_proof as release_proof
+from serverware import oidc_session_activation_release_proof_enrollment as proof_enrollment
+from serverware import authority_oidc_session_activation_release_proof as proof_admission
 from serverware import authority_successor_execution_window as processing_window
 
 
@@ -240,6 +244,63 @@ class OidcSessionActivationReleaseCustody:
         finally:
             lock.release()
 
+    def _intent_locked(self, *, configured, material, current, original,
+            enrollment_original, caller, consume_binding, old_token, window, bound, work):
+        """Join actual root/intent originals inside this owner's held lock."""
+        digest = release_intent._digest(original, work)
+        current()
+        registration._same(digest, material.release_intent_digest, work,
+            "root-pinned original release intent identity")
+        # Use only the original planner's actually admitted current-root
+        # enrollment, not keys or a database identity selected by intent.
+        state = bootstrap.authorization._admit_enrollment_on_work(
+            enrollment_bytes=material.planner.state_enrollment_bytes,
+            root_public_key=configured.root_public_key, work=work)
+        current()
+        registration._same(state.enrollment_digest,
+            material.planner.state_enrollment_digest, work,
+            "original release planner state enrollment")
+        registration._same(state.payload["generationDigest"],
+            material.planner.generation["digest"], work,
+            "original release planner state generation")
+        expected_scope = {
+            "configurationDigest": material.planner.configuration_digest,
+            "databaseId": state.payload["databaseId"],
+            "generationDigest": material.planner.generation["digest"],
+            "runtimeClosureDigest": material.planner.runtime_closure_digest,
+            "callerId": caller,
+            "receiverIdentity": material.receiver_identity,
+        }
+        expected_release = {
+            "activationRequestDigest": material.activation_request_digest,
+            "activationOperationId": material.activation_operation_id,
+            "consumeRequestDigest": material.consume_request_digest,
+            "deliveryEnvelopeDigest": material.delivery_envelope_digest,
+            "deliveryScope": material.delivery_scope,
+            "consumeBinding": consume_binding,
+        }
+        admitted = intent_admission._verify_on_work(intent_bytes=original,
+            enrollment_bytes=enrollment_original, root_public_key=configured.root_public_key,
+            forbidden_public_keys=(material.planner.planner_public_key,
+                state.computation_public_key, state.completion_public_key, state.state_public_key),
+            expected_scope=expected_scope, expected_release=expected_release,
+            old_token_bytes=old_token, live_window=window,
+            transport_deadline_ns=bound, work=work)
+        if type(admitted) is not intent_admission._AdmittedIntent:
+            _fail("release intent did not return the genuine original admission")
+        registration._same(admitted.intent_digest, digest, work,
+            "original release intent identity after admission")
+        intent_now = admitted.live()
+        if intent_now < self._last_epoch:
+            _fail("release custody clock reversed after original intent admission")
+        # Preserve the nested guard's observed epoch even if the next
+        # custody sample fails; a later call cannot forget that sample.
+        object.__setattr__(self, "_last_epoch", intent_now)
+        current()
+        return admitted, expected_scope, expected_release, (
+            material.planner.planner_public_key, state.computation_public_key,
+            state.completion_public_key, state.state_public_key)
+
     def verify_intent_on_work(self, *, intent_bytes, intent_enrollment_bytes,
             expected_caller_id, expected_consume_binding, old_token_bytes,
             live_window, transport_deadline_ns, work):
@@ -273,58 +334,113 @@ class OidcSessionActivationReleaseCustody:
             _fail("activation release custody is already in use")
         try:
             material, current = self._reauthenticate_locked(configured, window, bound, work)
-            digest = release_intent._digest(original, work)
-            current()
-            registration._same(digest, material.release_intent_digest, work,
-                "root-pinned original release intent identity")
-            # Use only the original planner's actually admitted current-root
-            # enrollment, not keys or a database identity selected by intent.
-            state = bootstrap.authorization._admit_enrollment_on_work(
-                enrollment_bytes=material.planner.state_enrollment_bytes,
-                root_public_key=configured.root_public_key, work=work)
-            current()
-            registration._same(state.enrollment_digest,
-                material.planner.state_enrollment_digest, work,
-                "original release planner state enrollment")
-            registration._same(state.payload["generationDigest"],
-                material.planner.generation["digest"], work,
-                "original release planner state generation")
-            expected_scope = {
-                "configurationDigest": material.planner.configuration_digest,
-                "databaseId": state.payload["databaseId"],
-                "generationDigest": material.planner.generation["digest"],
-                "runtimeClosureDigest": material.planner.runtime_closure_digest,
-                "callerId": caller,
-                "receiverIdentity": material.receiver_identity,
-            }
-            expected_release = {
-                "activationRequestDigest": material.activation_request_digest,
-                "activationOperationId": material.activation_operation_id,
-                "consumeRequestDigest": material.consume_request_digest,
-                "deliveryEnvelopeDigest": material.delivery_envelope_digest,
-                "deliveryScope": material.delivery_scope,
-                "consumeBinding": consume_binding,
-            }
-            admitted = intent_admission._verify_on_work(intent_bytes=original,
-                enrollment_bytes=enrollment_original, root_public_key=configured.root_public_key,
-                forbidden_public_keys=(material.planner.planner_public_key,
-                    state.computation_public_key, state.completion_public_key, state.state_public_key),
-                expected_scope=expected_scope, expected_release=expected_release,
-                old_token_bytes=old_token, live_window=window,
-                transport_deadline_ns=bound, work=work)
-            if type(admitted) is not intent_admission._AdmittedIntent:
-                _fail("release intent did not return the genuine original admission")
-            registration._same(admitted.intent_digest, digest, work,
-                "original release intent identity after admission")
-            intent_now = admitted.live()
-            if intent_now < self._last_epoch:
-                _fail("release custody clock reversed after original intent admission")
-            # Preserve the nested guard's observed epoch even if the next
-            # custody sample fails; a later call cannot forget that sample.
-            object.__setattr__(self, "_last_epoch", intent_now)
-            current()
+            self._intent_locked(configured=configured, material=material, current=current,
+                original=original, enrollment_original=enrollment_original, caller=caller,
+                consume_binding=consume_binding, old_token=old_token, window=window,
+                bound=bound, work=work)
             # Deliberately return None. This call cannot mint reusable release
             # authority; full release must join all original proofs itself.
+        finally:
+            lock.release()
+
+    def verify_committed_on_work(self, *, proof_bytes, proof_enrollment_bytes,
+            intent_bytes, intent_enrollment_bytes, expected_producer_id,
+            expected_producer_identity, expected_caller_id, expected_consume_binding,
+            expected_state_receipt_digest, old_token_bytes,
+            live_window, transport_deadline_ns, work):
+        """Join signed committed facts and fresh intent; grant no token egress.
+
+        This authenticates originals in one held custody invocation, not a
+        cached intent result or reusable permission for later token access.
+        """
+        ledger = evidence.capture._SharedLedger(work)
+        proof_raw = bootstrap.authorization._original(proof_bytes,
+            release_proof.MAX_BYTES, "release committed proof original")
+        proof_enrolled = bootstrap.authorization._original(proof_enrollment_bytes,
+            proof_enrollment.MAX_BYTES, "release proof enrollment original")
+        intent_raw = bootstrap.authorization._original(intent_bytes,
+            release_intent.MAX_BYTES, "release intent original")
+        intent_enrolled = bootstrap.authorization._original(intent_enrollment_bytes,
+            intent_enrollment.MAX_BYTES, "release intent enrollment original")
+        producer, caller, receipt = (expected_producer_id, expected_caller_id,
+            expected_state_receipt_digest)
+        bootstrap.authorization._token(producer)
+        bootstrap.authorization._token(caller)
+        registration._digest(receipt)
+        old_token = delivery._token(old_token_bytes, work)
+        # Joint structural ownership precedes any root/key/hash/clock callback.
+        held = evidence.capture._JSONCapture(ledger, maximum_bytes=2048).visit({
+            "producerIdentity": expected_producer_identity,
+            "consumeBinding": expected_consume_binding})
+        bootstrap.shape.validate_identity_shape(held["producerIdentity"])
+        registration._closed(held["consumeBinding"], release_intent.CONSUME_BINDING_FIELDS,
+            "independent committed release consumption")
+        for digest in held["consumeBinding"].values():
+            registration._digest(digest)
+        total = sum(map(len, (proof_raw, proof_enrolled, intent_raw, intent_enrolled, old_token)))
+        maximum = (release_proof.MAX_BYTES + proof_enrollment.MAX_BYTES
+            + release_intent.MAX_BYTES + intent_enrollment.MAX_BYTES + delivery.TOKEN_BYTES)
+        if total > maximum:
+            _fail("release committed originals exceed their aggregate bound")
+        work.charge(input_bytes=total)
+        window = clock._validate(live_window)
+        registration._integer(transport_deadline_ns, "release committed inherited deadline", 1)
+        configured = self._snapshot_configuration()
+        window, bound = self._bounds(configured, window, transport_deadline_ns)
+        lock = self._lock
+        if not lock.acquire(blocking=False):
+            _fail("activation release custody is already in use")
+        try:
+            material, current = self._reauthenticate_locked(configured, window, bound, work)
+            intent, intent_scope, release, forbidden = self._intent_locked(
+                configured=configured, material=material, current=current, original=intent_raw,
+                enrollment_original=intent_enrolled, caller=caller,
+                consume_binding=held["consumeBinding"], old_token=old_token,
+                window=window, bound=bound, work=work)
+            # Authenticate the actual intent key, not a PEM chosen by the
+            # proof, before checking separation from the new proof signer.
+            intent_key = intent_enrollment._admit_on_work(enrollment_bytes=intent_enrolled,
+                root_public_key=configured.root_public_key, expected_scope=intent_scope,
+                forbidden_public_keys=forbidden, work=work)
+            registration._same(intent_key.enrollment_digest, intent.payload["enrollmentDigest"],
+                work, "release proof actual intent enrollment")
+            current()
+            expected_scope = {name: intent_scope[name] for name in (
+                "configurationDigest", "databaseId", "generationDigest",
+                "runtimeClosureDigest", "receiverIdentity")}
+            expected_scope.update(producerId=producer, producerIdentity=held["producerIdentity"])
+            custody_digest = evidence.plan._frame(release_proof.CUSTODY_IDENTITY_DOMAIN,
+                (configured.custody_bytes,), work)
+            current()
+            admitted = proof_admission._verify_on_work(proof_bytes=proof_raw,
+                enrollment_bytes=proof_enrolled, root_public_key=configured.root_public_key,
+                forbidden_public_keys=(*forbidden, intent_key.caller_public_key),
+                expected_scope=expected_scope, expected_release=release,
+                expected_evidence={"releaseCustodyDigest": custody_digest,
+                    "releaseIntentDigest": material.release_intent_digest,
+                    "stateReceiptDigest": receipt},
+                expected_intent_interval=(intent.payload["issuedAtEpochNs"],
+                    intent.payload["expiresAtEpochNs"]),
+                live_window=window, transport_deadline_ns=bound, work=work)
+            if type(admitted) is not proof_admission._AdmittedProof:
+                _fail("release committed proof lacks genuine original admission")
+            # Later owner samples also obey both signed expiries. Retain the
+            # original guard and persistent owner clocks, not a new allowance.
+            final_window = processing_window._narrow(window,
+                deadline_epoch_ns=min(intent.payload["expiresAtEpochNs"],
+                    admitted.payload["expiresAtEpochNs"]),
+                maximum_lifetime_ns=configured.maximum_age_ns,
+                maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
+            final_current = self._guard(configured, final_window,
+                min(bound, final_window[4]), work)
+            for guard in (intent.live, admitted.live, intent.live, admitted.live):
+                now = guard()
+                if now < self._last_epoch:
+                    _fail("release custody clock reversed across original proof admission")
+                object.__setattr__(self, "_last_epoch", now)
+                current()
+                final_current()
+            # No token, outcome claim or permission for another call escapes.
         finally:
             lock.release()
 

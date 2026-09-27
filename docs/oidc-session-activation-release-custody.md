@@ -2,9 +2,9 @@
 
 This is **partial step 20 source**, unbuilt, unexecuted and unprovisioned. It adds
 root-original-admitted delivery-key custody, fresh original release-intent
-admission and exact authenticated ciphertext metadata inspection. It does
-**not** release a token, prove protected consumption, execute SQL or complete
-the browser flow.
+admission, independently signed committed-consumption proof admission and exact
+authenticated ciphertext metadata inspection. It does **not** release a token,
+retain an authorized durable outcome, execute SQL or complete the browser flow.
 
 ## Distinct root scope
 
@@ -95,7 +95,31 @@ A nonblocking owner lock excludes overlapping checks and inspection.
 - `close()` closes the same-process owner and drops held references; this is not
   a claim of guaranteed memory erasure.
 
-Every check/inspection/intent admission reauthenticates original root scope, identity and key
+`verify_committed_on_work` accepts original proof/enrollment and intent/enrollment
+bytes, independently expected producer ID/identity, caller ID, five consume
+bindings and state-receipt digest, the old-token original and the existing
+work/window/deadline. Both external graphs are structurally owned before native
+callbacks. Under one nonblocking lock it reauthenticates root custody, invokes
+the same genuine intent/possession admission, and admits the distinct
+[proof original](oidc-session-activation-release-proof-admission.md). Its expected
+configuration/database/generation/runtime/receiver and release target come from
+the actual root/planner/state originals, never from the proof being checked.
+The proof must bind the domain-framed exact custody original and root-pinned
+intent identity as well as the independently expected state receipt.
+
+The proof key must differ from the actual root, activation planner, state,
+computation, completion and freshly admitted intent keys. This is separation
+from these actual known keys, not a universal claim about every deployed key.
+No completion history or signing key crosses into UID 65502. Original custody,
+intent and proof guards survive the join; persistent owner clocks retain nested
+samples, and final owner checks are also clipped to both signed expiries.
+The method returns **nothing** and does not save a permission for another call.
+The [proof producer](oidc-session-activation-release-proof-production.md) must
+genuinely verify packet/replay/commit/completion originals on the separate
+completion side. The receiver checks its signed evidence; it does not repeat
+historical decryption or treat a successful Python object as that evidence.
+
+Every check, inspection and original admission reauthenticates root scope, identity and key
 under the same supplied work. Narrowing preserves original epoch/monotonic
 opening samples and caps at the fresh release interval and inherited deadline.
 Sticky guards surround callbacks and final return. Old planner expiry is never
@@ -110,10 +134,10 @@ consumption through the separate protected operation. A pure kernel transition,
 proof object is not that evidence. The legacy environment-secret decrypt/direct
 database recovery helper is not invoked.
 
-Fresh intent now has its own original-consuming admission, but future plaintext
-egress must join that intent and actual protected plan/commit evidence in the
-same release call to these independent identities and the exact delivery, then
-retain the exact allowed outcome for separately authorized recovery. That
-committed-original integration, cold key/FD service, public
+Fresh intent and signed committed facts now have a same-call original-consuming
+join, but future plaintext egress must perform that join again inside the actual
+release operation and durably retain the exact allowed outcome before opening.
+The standalone admission returns no authorization for such a future call.
+Durable outcome/recovery, guarded plaintext egress, cold key/FD service, public
 permission, token response and current-session confirmation remain open.
 No test, parser, interpreter, build, provisioning or runtime verification was run.

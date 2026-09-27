@@ -12,6 +12,7 @@ import os
 import threading
 from dataclasses import dataclass
 
+from serverware import authority_oidc_session_activation_execution_bundle as bundle
 from serverware import authority_oidc_session_activation_journal as custody
 from serverware import authority_oidc_session_activation_plan as plan
 from serverware import authority_oidc_session_activation_planning as planning
@@ -395,68 +396,133 @@ class OidcSessionActivationPlanOwner:
         if not lock.acquire(blocking=False):
             _fail("activation plan owner is already in use")
         try:
-            if type(envelope_bytes) is not bytes or not 2 <= len(envelope_bytes) <= contract.MAX_BYTES:
-                _fail("activation retained verification requires its known signed original")
-            owned, window, bound = _capture(values={"request": expected_request, "scope": expected_scope},
+            _original, _scope, _window, _bound, check, full = OidcSessionActivationPlanOwner._verify_retained_locked(
+                self, configured=configured, envelope_bytes=envelope_bytes,
+                expected_request=expected_request, expected_scope=expected_scope,
                 business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
-                expected_counted_heads=expected_counted_heads, live_window=live_window,
-                transport_deadline_ns=transport_deadline_ns, configured=configured, work=work)
-            request, scope = owned["values"]["request"], owned["values"]["scope"]
-            registration._closed(scope, plan._SCOPE_FIELDS, "independent retained activation scope")
-            fixed = _fixed_scope(configured, work)
-            registration._same({name: scope[name] for name in fixed}, fixed, work, "configured retained activation scope")
-            registration._same(request["requestDigest"], plan.commitment._typed_request_digest(request, work=work),
-                work, "independent retained request")
-            check = OidcSessionActivationPlanOwner._guard(self, configured, window, bound, work)
-            check()
-            payload = _authenticate_known(envelope_bytes, request, scope, configured, window, check, work)
-            journal_scope = _journal_scope(configured, request, envelope_bytes, work)
-            original = custody.ActivationOriginalJournal.read(configured[3], scope=journal_scope,
-                live_window=window, work=work, transport_deadline_ns=bound)
-            if original is None:
-                _fail("activation exact retained original is absent")
-            stored = custody._decode_original_on_work(original, scope=journal_scope, work=work)
-            registration._same(stored["request"], request, work, "independent retained request")
-            registration._same(stored["scope"], scope, work, "independent retained scope")
-            raw = stored["readInputs"]
-            for name, value in (("businessBeforeRoots", owned["business"]),
-                    ("authorizationBeforeRoots", owned["authorization"]), ("countedBeforeHeads", owned["heads"])):
-                registration._same(raw[name], list(value), work, "independent retained " + name)
-            signed = registration._encoded_original(stored["planEnvelopeBase64Url"], contract.MAX_BYTES, work)
-            _bytes_equal(signed, envelope_bytes, work, "signed envelope")
-            selected, proofs, heads, frontiers, records = _restore_inputs(raw, work)
-            database_now = registration._utc(stored["databaseNow"], "retained database time", work)
-            context = core.KernelContext(OPERATION, request["arguments"], selected, database_now,
-                request["requestDigest"], query_reads=records)
-            original_assertion = registration._encoded_original(stored["assertionBase64Url"], assertion.MAX_ASSERTION_BYTES, work)
-            old = registration._encoded_original(stored["oldTokenBase64Url"], 64, work, minimum=64)
-            new = registration._encoded_original(stored["newTokenBase64Url"], 64, work, minimum=64)
-            delivery_bytes = registration._encoded_original(stored["deliveryEnvelopeBase64Url"], delivery.ENVELOPE_BYTES,
-                work, minimum=delivery.ENVELOPE_BYTES)
-            write_bytes = registration._encoded_original(stored["writeProofBase64Url"], writes.MAX_WRITE_PROOF_BYTES, work)
-            query_bytes = registration._encoded_original(stored["headQueryBase64Url"], plan.state.head.MAX_QUERY_BYTES, work)
-            observation_bytes = registration._encoded_original(stored["headObservationBase64Url"], plan.state.head.MAX_BYTES, work)
-            enrolled = registration._encoded_original(stored["stateEnrollmentBase64Url"],
-                plan.state.head.authorization.MAX_ENROLLMENT_BYTES, work)
-            vector_bytes = registration._encoded_original(stored["completeRootVectorBase64Url"], plan.state.vector.MAX_BYTES, work)
-            _bytes_equal(enrolled, configured[18], work, "independently configured state enrollment")
-            _bytes_equal(vector_bytes, configured[20], work, "independently configured complete vector")
-            check()
-            actual = plan._verify_on_work(context, envelope_bytes=envelope_bytes, request=request, scope=scope,
-                assertion_bytes=original_assertion, old_token_bytes=old, new_token_bytes=new,
-                delivery_envelope_bytes=delivery_bytes, delivery_custody_key=configured[10],
-                business_before_roots=owned["business"], authorization_before_roots=owned["authorization"],
-                before_proofs=proofs, read_heads=heads, query_frontiers=frontiers, expected_counted_heads=owned["heads"],
-                write_proof_bytes=write_bytes, planner_public_key=configured[6], live_window=window,
-                state_enrollment_bytes=configured[18], state_root_public_key=configured[19],
-                complete_root_vector_bytes=configured[20], head_query_bytes=query_bytes,
-                head_observation_bytes=observation_bytes,
-                work=work, transport_deadline_ns=bound)
-            if check() >= payload["expiresAtEpochNs"]:
+                expected_counted_heads=expected_counted_heads, expected_journal_digest=None,
+                live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+            plan._fresh_replayed(full.payload, full.invocation, full.write_result,
+                plan._live(full.invocation, work), work)
+            if check() >= full.payload["expiresAtEpochNs"]:
                 _fail("activation retained plan expired before return")
-            return actual
+            return full.write_result.transition
         finally:
             lock.release()
+
+    def prepare_execution_bundle(self, *, envelope_bytes, expected_request, expected_scope,
+            business_before_roots, authorization_before_roots, expected_counted_heads,
+            expected_journal_digest, bundle_key, live_window, work, transport_deadline_ns):
+        """Prepare private ciphertext only; no durable export or transport claim."""
+        key, expected_digest = bundle_key, expected_journal_digest
+        if type(key) is not bytes or len(key) != bundle.KEY_BYTES or type(expected_digest) is not str:
+            _fail("activation bundle preparation requires an independent key and exact journal locator")
+        registration._digest(expected_digest)
+        # Immutable key/locator originals are held before readiness or clock
+        # callbacks; they are never selected from a retained document.
+        configured = OidcSessionActivationPlanOwner._snapshot_configuration(self)
+        lock = self._lock
+        if not lock.acquire(blocking=False):
+            _fail("activation plan owner is already in use")
+        try:
+            evidence.capture._SharedLedger(work)
+            work.charge(input_bytes=4 * bundle.KEY_BYTES)
+            if key == configured[10] or key == configured[4][2]:
+                _fail("activation bundle key must differ from delivery and journal keys")
+            original, journal_scope, window, bound, check, full = OidcSessionActivationPlanOwner._verify_retained_locked(
+                self, configured=configured, envelope_bytes=envelope_bytes,
+                expected_request=expected_request, expected_scope=expected_scope,
+                business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+                expected_counted_heads=expected_counted_heads, expected_journal_digest=expected_digest,
+                live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+            context = {"schema": bundle.CONTEXT_SCHEMA, "operation": OPERATION,
+                **journal_scope, "journalDigest": expected_digest}
+            live = plan._live(full.invocation, work)
+            check()
+            plan._fresh_replayed(full.payload, full.invocation, full.write_result, live, work)
+            if check() >= full.payload["expiresAtEpochNs"]:
+                _fail("activation retained plan expired before bundle preparation")
+            candidate = bundle._seal_on_work(original_bytes=original, bundle_key=key, context=context,
+                live_window=window, transport_deadline_ns=bound, work=work)
+            check()
+            plan._fresh_replayed(full.payload, full.invocation, full.write_result, live, work)
+            if check() >= full.payload["expiresAtEpochNs"]:
+                _fail("activation retained plan expired after bundle preparation")
+            return candidate
+        finally:
+            lock.release()
+
+    def _verify_retained_locked(self, *, configured, envelope_bytes, expected_request, expected_scope,
+            business_before_roots, authorization_before_roots, expected_counted_heads,
+            expected_journal_digest, live_window, work, transport_deadline_ns):
+        """Same-call originals/full replay only; caller retains the actual lock."""
+        if type(envelope_bytes) is not bytes or not 2 <= len(envelope_bytes) <= contract.MAX_BYTES:
+            _fail("activation retained verification requires its known signed original")
+        owned, window, bound = _capture(values={"request": expected_request, "scope": expected_scope},
+            business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+            expected_counted_heads=expected_counted_heads, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, configured=configured, work=work)
+        request, scope = owned["values"]["request"], owned["values"]["scope"]
+        registration._closed(scope, plan._SCOPE_FIELDS, "independent retained activation scope")
+        fixed = _fixed_scope(configured, work)
+        registration._same({name: scope[name] for name in fixed}, fixed, work, "configured retained activation scope")
+        registration._same(request["requestDigest"], plan.commitment._typed_request_digest(request, work=work),
+            work, "independent retained request")
+        check = OidcSessionActivationPlanOwner._guard(self, configured, window, bound, work)
+        check()
+        payload = _authenticate_known(envelope_bytes, request, scope, configured, window, check, work)
+        journal_scope = _journal_scope(configured, request, envelope_bytes, work)
+        if expected_journal_digest is None:
+            original = custody.ActivationOriginalJournal.read(configured[3], scope=journal_scope,
+                live_window=window, work=work, transport_deadline_ns=bound)
+        else:
+            original = custody.ActivationOriginalJournal.read_bound(configured[3], scope=journal_scope,
+                expected_journal_digest=expected_journal_digest,
+                live_window=window, work=work, transport_deadline_ns=bound)
+        if original is None:
+            _fail("activation exact retained original is absent")
+        stored = custody._decode_original_on_work(original, scope=journal_scope, work=work)
+        registration._same(stored["request"], request, work, "independent retained request")
+        registration._same(stored["scope"], scope, work, "independent retained scope")
+        raw = stored["readInputs"]
+        for name, value in (("businessBeforeRoots", owned["business"]),
+                ("authorizationBeforeRoots", owned["authorization"]), ("countedBeforeHeads", owned["heads"])):
+            work.prepare_copy(value)
+            registration._same(raw[name], list(value), work, "independent retained " + name)
+        signed = registration._encoded_original(stored["planEnvelopeBase64Url"], contract.MAX_BYTES, work)
+        _bytes_equal(signed, envelope_bytes, work, "signed envelope")
+        selected, proofs, heads, frontiers, records = _restore_inputs(raw, work)
+        database_now = registration._utc(stored["databaseNow"], "retained database time", work)
+        context = core.KernelContext(OPERATION, request["arguments"], selected, database_now,
+            request["requestDigest"], query_reads=records)
+        original_assertion = registration._encoded_original(stored["assertionBase64Url"], assertion.MAX_ASSERTION_BYTES, work)
+        old = registration._encoded_original(stored["oldTokenBase64Url"], 64, work, minimum=64)
+        new = registration._encoded_original(stored["newTokenBase64Url"], 64, work, minimum=64)
+        delivery_bytes = registration._encoded_original(stored["deliveryEnvelopeBase64Url"], delivery.ENVELOPE_BYTES,
+            work, minimum=delivery.ENVELOPE_BYTES)
+        write_bytes = registration._encoded_original(stored["writeProofBase64Url"], writes.MAX_WRITE_PROOF_BYTES, work)
+        query_bytes = registration._encoded_original(stored["headQueryBase64Url"], plan.state.head.MAX_QUERY_BYTES, work)
+        observation_bytes = registration._encoded_original(stored["headObservationBase64Url"], plan.state.head.MAX_BYTES, work)
+        enrolled = registration._encoded_original(stored["stateEnrollmentBase64Url"],
+            plan.state.head.authorization.MAX_ENROLLMENT_BYTES, work)
+        vector_bytes = registration._encoded_original(stored["completeRootVectorBase64Url"], plan.state.vector.MAX_BYTES, work)
+        _bytes_equal(enrolled, configured[18], work, "independently configured state enrollment")
+        _bytes_equal(vector_bytes, configured[20], work, "independently configured complete vector")
+        check()
+        full = plan._verify_full_on_work(context, envelope_bytes=envelope_bytes, request=request, scope=scope,
+            assertion_bytes=original_assertion, old_token_bytes=old, new_token_bytes=new,
+            delivery_envelope_bytes=delivery_bytes, delivery_custody_key=configured[10],
+            business_before_roots=owned["business"], authorization_before_roots=owned["authorization"],
+            before_proofs=proofs, read_heads=heads, query_frontiers=frontiers, expected_counted_heads=owned["heads"],
+            write_proof_bytes=write_bytes, planner_public_key=configured[6], live_window=window,
+            state_enrollment_bytes=configured[18], state_root_public_key=configured[19],
+            complete_root_vector_bytes=configured[20], head_query_bytes=query_bytes,
+            head_observation_bytes=observation_bytes,
+            work=work, transport_deadline_ns=bound)
+        registration._same(full.plan_digest, journal_scope["planDigest"], work, "retained full plan identity")
+        if check() >= payload["expiresAtEpochNs"]:
+            _fail("activation retained plan expired before return")
+        return original, journal_scope, window, bound, check, full
 
     def close(self):
         if type(self) is not OidcSessionActivationPlanOwner or self._pid != os.getpid():

@@ -108,6 +108,18 @@ The head input is an exact tuple of thirteen closed dictionaries with
 `indexId`, `indexRevision`, `rootDigest` and `leafCount` in source-fixed order.
 Neither call accepts a successful replay carrier or caller-computed transition.
 
+The private `_verify_full_on_work` has exactly the same explicit inputs as
+`_verify_on_work` and performs that same genuine verification and indexed replay
+once. Its frozen internal `_VerifiedPlan` retains `invocation` (the owned
+`_Invocation`), `write_result` (the actual `writes._ReplayedWrites`), `payload`
+(the owned authenticated payload dictionary), and `plan_digest` (the actual
+envelope identity under `contract.IDENTITY_DOMAIN`). The existing verifier is
+an explicit-signature wrapper returning only `write_result.transition`; no
+caller can submit this result instead of originals. This private data includes
+secret-bearing replay inputs and must not be serialized or exposed publicly.
+The envelope digest and return remain within the original replay's final live
+guard, supplied work, window and inherited deadline. No allowance is reopened.
+
 The independent scope is exactly `userId`, `sessionId`, `credentialId`,
 `credentialRecordId`, `challengeId`, `rpId`, `origin`, `authenticationPolicy`,
 `trustPolicy`, `configurationDigest`, `plannerIdentity`, `plannerSpkiDigest`,
@@ -182,9 +194,11 @@ signed envelope is returned; no original or private key is returned with it.
 The verifier requires the originals again, independently binds request and
 planner/configuration pins, verifies the actual signature, reconstructs the
 proof/context/input bodies, then invokes actual indexed replay and compares
-all four complete body commitments. It returns only that newly computed
-ordinary `KernelTransition`, not authority to
-execute it. A forged result, correct signature over incorrect effects, altered
+all four complete body commitments. The existing transition-only wrapper
+returns only that newly computed ordinary `KernelTransition`; the private full
+variant retains the same call's authenticated inputs and actual indexed result
+without repeating replay. Neither return is authority to execute it. A forged
+result, correct signature over incorrect effects, altered
 original, substituted head, invalid write frontier or supplied secret digest
 cannot substitute for this replay. No caller can supply derived after-roots.
 

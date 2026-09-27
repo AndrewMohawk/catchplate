@@ -10,12 +10,32 @@ The private methods are:
 
 - `append(*, scope, original_bytes, live_window, work, transport_deadline_ns=None) -> str`: retain the first exact original and return its local ciphertext SHA-256 digest.
 - `read(*, scope, live_window, work, transport_deadline_ns=None) -> bytes | None`: return the exact decrypted private original, or bounded local absence after inventory checks.
+- `read_bound(*, scope, expected_journal_digest, live_window, work, transport_deadline_ns=None) -> bytes | None`: require the independently supplied canonical ciphertext SHA-256 locator before private decryption, then return the exact canonical original or bounded local absence.
 - `_snapshot_configuration()`: return the held tuple `(source_revision, configuration_digest, journal_key, delivery_key, (device, inode, uid, gid), maximum_records, quota_bytes)` under actual PID/readiness/lock guards. It performs no unmetered inventory scan. This tuple contains private keys and must never be logged or returned publicly.
 - `close()`: close only the journal's independently opened directory description; never delete retained records or unlock a borrowed descriptor.
 
 The exact four-field storage scope is `sourceRevision`, `configurationDigest`, `requestDigest`, `planDigest`. Source and configuration must equal the independently configured owner. The request digest joins the retained typed request; the plan digest is computed from the actual signed envelope original using `serverware.policyAuthorityOidcSessionActivationPlanIdentity/v2`. This binding is not signature verification or semantic replay.
 
 Private `_encode_original_on_work(value, *, scope, work)` and `_decode_original_on_work(original_bytes, *, scope, work)` own/canonically encode or decode the fixed document. Their caller must preserve its existing live guard around these helpers. The journal's actual append/read paths do so. No successful verification object is accepted or returned.
+
+`read_bound` captures the complete scope and exact digest before clock or I/O
+callbacks. The expected digest comes from the actual `PreparedActivationPlan`
+original, not from the file being selected or a returned success/status claim.
+Under the existing readiness lock and continuity checks, the journal performs
+its real stable file read and hashes those ciphertext bytes. Before `_unseal`
+or AES-GCM decryption, that hash must match both the expected locator and the
+retained first-record digest; the first scope and actual file identity must
+also match. Authenticated opening then repeats the original scope and canonical
+document checks. A mismatch poisons the journal; it is not retry permission.
+
+The old `read` signature and behavior remain available through the same private
+read path. Neither method changes files, bypasses locks or inventory checks,
+or returns a verification carrier. Missing local custody returns `None`
+only after the normal checks; even a valid expected locator does not prove a
+record exists or establish a remote outcome. A caller exporting an
+[encrypted execution bundle](oidc-session-activation-execution-bundle.md) must
+keep the returned plaintext private and independently enforce bundle-key and
+authority admission; this bound read is not itself a public export API.
 
 The canonical private document has exactly sixteen fields:
 
@@ -66,7 +86,7 @@ An exact repeat for the same locator reads/decrypts/compares the first original 
 
 ## Boundaries
 
-Constructor, append and read retain the supplied current window and inherited absolute deadline, including sticky rollback checks around bounded storage/crypto activity. Checks are not a hard kernel watchdog for a blocked filesystem/native call. Snapshot performs only held configuration/readiness checks; all inventory I/O is metered on constructor, append or read. A later local read may use a new current processing allowance, but does not renew any original plan, assertion, token delivery or execution authority.
+Constructor, append, read and read_bound retain the supplied current window and inherited absolute deadline, including sticky rollback checks around bounded storage/crypto activity. Checks are not a hard kernel watchdog for a blocked filesystem/native call. Snapshot performs only held configuration/readiness checks; all inventory I/O is metered on constructor, append or either read path. A later local read may use a new current processing allowance, but does not renew any original plan, assertion, token delivery or execution authority.
 
 The journal provides local first-original durability and ciphertext authentication, not an independent anti-rollback/latest-head witness. A missing record does not establish that no remote SQL effect occurred. File hashes, timestamps and successful decryptions are not authority tokens. Private reads never project plaintext tokens to public HTTP; memory erasure is not claimed.
 

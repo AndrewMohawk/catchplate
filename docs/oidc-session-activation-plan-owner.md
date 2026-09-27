@@ -46,9 +46,11 @@ the original assertion, read proofs and [indexed writes](oidc-session-activation
 Independent expected heads are retained separately; signed/stored heads never
 admit their own authority.
 
-Before returning, the owner durably appends the exact closed 12-field private
+Before returning, the owner durably appends the exact closed 16-field v2 private
 original document to the [encrypted journal](oidc-session-activation-journal.md),
 including the actual signed envelope and exact nine-field read-input inventory.
+The four state originals are enrollment, complete vector, head query and head
+observation; none is replaced by a claimed successful state result.
 It checks the unchanged processing bound and actual signed expiry before and
 after retention. The frozen `PreparedActivationPlan` contains only immutable
 `request_bytes`, `scope_bytes`, `envelope_bytes`, `plan_digest` and
@@ -77,6 +79,56 @@ recomputed `KernelTransition`, not an execution capability. Journal AEAD and
 stored roots are never substituted for that admission. This method generates
 no token, signs nothing and performs no SQL.
 
+The shared private retained-original path runs under the actual owner operation
+lock. It calls `_verify_full_on_work` once and uses only that invocation's
+authenticated payload, original inputs, indexed replay and live guard. The
+existing owner method's `verify_retained` signature remains unchanged
+and still projects only the actual `KernelTransition`; the full internal result
+is never accepted as an incoming proof or execution capability.
+
+## Prepare a private execution-bundle candidate
+
+```text
+prepare_execution_bundle(*, envelope_bytes, expected_request, expected_scope,
+    business_before_roots, authorization_before_roots, expected_counted_heads,
+    expected_journal_digest, bundle_key, live_window, work,
+    transport_deadline_ns) -> bytes
+```
+
+This is private candidate preparation, **not a durable export or service**.
+The independently supplied canonical journal ciphertext digest and exact
+32-byte bundle key are held before readiness/clock callbacks. The actual key
+must differ from both configured delivery and journal keys. Its independent
+provenance remains an upstream admission obligation; inequality is not key
+enrollment.
+
+The owner retains its operation lock and configuration continuity across the
+whole call. The shared path authenticates the known original plan signature
+before journal lookup. This branch uses the actual journal `read_bound`, so the
+real retained ciphertext hash, first scope/digest and file identity match the
+independent locator before decryption. It then joins original request, scope,
+enrollment, complete vector, primary roots and thirteen heads, reconstructs the
+bounded originals and performs one genuine full plan/transition replay.
+
+Only afterward does the owner construct the codec's fixed seven-field context
+from its schema/operation, actual journal scope and expected journal digest.
+The [execution-bundle codec](oidc-session-activation-execution-bundle.md) seals
+the exact unchanged private document. Original replay liveness, signed-plan
+expiry, observation/delivery bounds and owner continuity are rechecked before
+and after sealing and through return, on the same work/window and inherited
+deadline. No expired output may be returned, and no key or plaintext is a
+public result.
+
+Fresh encryption can produce a different ciphertext on repeated candidate
+preparation, even for identical originals. There is no first-exact bundle
+publication, durable bundle identity, acknowledgment, retry policy or discovery
+in this method. **Actual immutable first-exact publication and separately
+admitted recovery remain required before any transport serves a bundle.**
+Candidate bytes are not one-use execution authority, a committed delivery or a
+session-activation result.
+
+## Live-only boundary and deferred verification
+
 This is **live-only** retained verification. The caller's current processing
 window cannot renew the original plan, assertion, challenge, session or delivery
 interval; an expired original remains rejected. A historical admission and
@@ -97,4 +149,8 @@ Frozen verification should cover genuine acquisition/sign/append/readback,
 wrong keys/configuration/PID, concurrent calls, altered stored or independent
 heads, forged known envelopes rejected before journal reads, missing/conflicting
 originals, write-proof tampering, late publication/expiry, shared-work exhaustion
-and absence of plaintext tokens from results and errors. None has run yet.
+and absence of plaintext tokens from results and errors. Candidate coverage
+must also reject reused custody keys, wrong journal digests before decryption,
+changed original state/root scopes, and expiry during sealing; it must preserve
+the transition-only retained verifier and distinguish randomized candidates from
+durable first-exact exports. None has run yet.

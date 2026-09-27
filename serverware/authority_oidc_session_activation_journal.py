@@ -478,6 +478,23 @@ class ActivationOriginalJournal:
     def read(self, *, scope, live_window, work, transport_deadline_ns=None):
         """Read exact local plaintext privately; absence says nothing about SQL."""
         held = _scope(scope)
+        return ActivationOriginalJournal._read_captured(self, held=held, expected_journal_digest=None,
+            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+
+    def read_bound(self, *, scope, expected_journal_digest, live_window, work, transport_deadline_ns=None):
+        """Join the independent ciphertext locator before any private decryption."""
+        held = _scope(scope)
+        expected = expected_journal_digest
+        if type(expected) is not str:
+            _fail("activation bound journal read requires an independent canonical ciphertext digest")
+        shape._digest(expected)
+        # The complete scope and immutable digest are held before process,
+        # clock, readiness or file callbacks. Neither is learned from the file.
+        return ActivationOriginalJournal._read_captured(self, held=held, expected_journal_digest=expected,
+            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+
+    def _read_captured(self, *, held, expected_journal_digest, live_window, work, transport_deadline_ns):
+        """Shared real read path; None preserves the original unbound API."""
         self._require_process()
         _window_value, current = delivery._window(live_window, transport_deadline_ns, work)
         with self._io.ready():
@@ -493,9 +510,18 @@ class ActivationOriginalJournal:
                     current()
                     return None
                 raw, identity = self._read_file(name, work, current)
+                actual_digest = None
+                if expected_journal_digest is not None:
+                    actual_digest = self._digest(raw, work, current)
+                    if (previous[0] != _scope_tuple(held) or identity != previous[2]
+                            or actual_digest != previous[1] or actual_digest != expected_journal_digest):
+                        _fail("activation bound journal ciphertext differs from its independent locator or first original")
+                # A bound read reaches AES-GCM only after the real ciphertext
+                # hash and first-record scope/identity/digest all match.
                 actual_scope, original = self._unseal(raw, work, current)
                 if (previous[0] != _scope_tuple(held) or _scope_tuple(actual_scope) != previous[0]
-                        or identity != previous[2] or self._digest(raw, work, current) != previous[1]):
+                        or identity != previous[2]
+                        or (actual_digest if actual_digest is not None else self._digest(raw, work, current)) != previous[1]):
                     _fail("activation journal read differs from its retained first original")
                 self._continuity(work, current)
                 current()

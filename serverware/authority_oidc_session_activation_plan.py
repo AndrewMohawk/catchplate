@@ -50,6 +50,15 @@ class _Invocation:
     monotonic_deadline: int
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _VerifiedPlan:
+    """Private same-call replay data, never an accepted authority carrier."""
+    invocation: _Invocation
+    write_result: writes._ReplayedWrites
+    payload: dict
+    plan_digest: str
+
+
 def _fail(message):
     raise OidcSessionActivationPlanError(message)
 
@@ -370,18 +379,18 @@ def _produce_on_work(context, *, request, scope, assertion_bytes, old_token_byte
     return envelope
 
 
-def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes, old_token_bytes,
+def _verify_full_on_work(context, *, envelope_bytes, request, scope, assertion_bytes, old_token_bytes,
         new_token_bytes, delivery_envelope_bytes, delivery_custody_key, business_before_roots,
         authorization_before_roots, before_proofs, read_heads, query_frontiers,
         expected_counted_heads, write_proof_bytes, planner_public_key,
         state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
         head_query_bytes, head_observation_bytes,
         live_window, work, transport_deadline_ns=None):
-    """Verify the signature, repeat original replay and compare every commitment.
+    """Verify originals once and retain this call's genuine full replay data.
 
     This active-window API does not renew expired plans or authenticate history.
-    Its actual KernelTransition return is ordinary data, not an executor input
-    capability or an alternative to independently admitted current roots.
+    Its private result is not an executor input capability or an alternative
+    to independently admitted current roots. No input accepts this carrier.
     """
     if not isinstance(planner_public_key, evidence.keys.Ed25519PublicKey):
         _fail("activation plan verification requires an independently admitted public key")
@@ -417,4 +426,34 @@ def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes,
     for field, expected_value in body_fields.items():
         registration._same(payload[field], expected_value, work, "activation plan original " + field)
     _fresh_replayed(payload, invocation, actual, live, work)
-    return actual.transition
+    plan_digest = evidence.plan._frame(contract.IDENTITY_DOMAIN, (envelope_bytes,), work)
+    verified = _VerifiedPlan(invocation, actual, payload, plan_digest)
+    _fresh_replayed(payload, invocation, actual, live, work)
+    return verified
+
+
+def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes, old_token_bytes,
+        new_token_bytes, delivery_envelope_bytes, delivery_custody_key, business_before_roots,
+        authorization_before_roots, before_proofs, read_heads, query_frontiers,
+        expected_counted_heads, write_proof_bytes, planner_public_key,
+        state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
+        head_query_bytes, head_observation_bytes,
+        live_window, work, transport_deadline_ns=None):
+    """Return only the actual transition from one genuine original verification.
+
+    This active-window API preserves the transition-only interface. Its return
+    is ordinary data, not execution authority or historical admission.
+    """
+    full = _verify_full_on_work(context, envelope_bytes=envelope_bytes,
+        request=request, scope=scope, assertion_bytes=assertion_bytes,
+        old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+        before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
+        expected_counted_heads=expected_counted_heads, write_proof_bytes=write_proof_bytes,
+        planner_public_key=planner_public_key,
+        state_enrollment_bytes=state_enrollment_bytes, state_root_public_key=state_root_public_key,
+        complete_root_vector_bytes=complete_root_vector_bytes,
+        head_query_bytes=head_query_bytes, head_observation_bytes=head_observation_bytes,
+        live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+    return full.write_result.transition

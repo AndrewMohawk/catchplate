@@ -2,10 +2,10 @@
 
 This source slice adds a separate, root-delegated caller permission for the
 fixed `webauthn.registration.evidence.admit` successor operation. It is a
-prerequisite for producing an execution grant, not a public registration route,
-reservation or database operation. Separate source now supplies a
+prerequisite for producing an execution grant, not a reservation or database
+operation. Separate source now supplies a
 [cold authorizer](registration-execution-authorizer.md) and an opt-in
-[private control-plane caller path](control-plane-registration-execution.md).
+[control-plane caller path with explicit public preparation gates](control-plane-registration-execution.md#public-preparation-endpoints).
 The current tree is unbuilt and unexecuted.
 
 ## Evidence signing is not execution permission
@@ -63,7 +63,17 @@ A supplied request dictionary, plan digest or successful-verification object
 cannot replace those originals.
 
 The actual authenticated application must separately admit this new execution
-purpose and the caller's present permission before invoking the producer.
+purpose and the caller's present permission before invoking the producer. The
+new [prepare-execution handlers](control-plane-registration-execution.md#public-preparation-endpoints)
+perform that admission using current operator/session authority, fresh
+first-credential bootstrap permission or the new mutation assertion and
+configured two-person approval. Those branches cannot substitute for each other:
+no-history preparation rejects MFA and requires a fresh configured bootstrap
+token even in development; any-history preparation rejects that token and binds
+the assertion/approval to the actual registration challenge and request digest.
+The deterministic binding commits the actual
+registration originals and new purpose; an evidence-only MFA wrapper is not
+the required assertion. Private direct callers retain the same obligation.
 Possession of the old enrollment grant or evidence originals does not supply
 that permission. The return value is original signed authorization bytes, not
 an accepted request object or a successful-execution result.
@@ -96,9 +106,10 @@ and registration-evidence signer owners are not silently extended or given
 SQL authority. The opt-in control-plane enrollment bootstrap v3 now retains the
 separate caller key and three original enrollments, with private methods for
 authorization, one authorizer exchange and genuine local grant verification.
-V2 remains evidence-only. Actual present caller/new-purpose admission and public
-handler/UI orchestration remain separate requirements; no public registration
-route is activated by this composition. The existing preparation returns raw10
+V2 remains evidence-only. Separate source now adds two explicit public
+preparation handlers with actual present-caller/new-purpose gates; the old
+`/prepare` and `/verify` routes are unchanged. This API-only preparation neither
+executes the grant nor completes the operator UI workflow. The private preparation returns raw10
 in memory; the separate [prepare-and-retain composition](control-plane-registration-execution.md#explicit-local-retention)
 now durably stores those originals and returns only a local content ID.
 This retention-only record is not a one-use reservation or renewed authority.
@@ -110,7 +121,7 @@ genuine grant/plan admission, complete roots and history, independently current
 checkpoints, protected custody, durable one-attempt handling and actual
 transaction ownership. Public finalization remains separate.
 
-Independent caller admission, protected key/service provisioning, rollback
+Later execution-action admission, protected key/service provisioning, rollback
 protection, immutable preparation and consolidated frozen-source verification
 remain outstanding. A root-delegated assertion is not proof that a deployed
 process performed those steps.

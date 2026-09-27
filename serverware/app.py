@@ -148,7 +148,9 @@ from serverware.auth import (
     admin_status,
     issue_csrf_cookie,
     oidc_browser_session_for_request,
+    oidc_browser_session_from_token,
     oidc_identity_from_browser_session,
+    oidc_identity_from_session_token,
     oidc_pending_session_identity,
     oidc_session_token_digest,
     require_admin,
@@ -298,6 +300,10 @@ _REGISTRATION_PREPARATION_PATHS = frozenset({
     "/api/webauthn/register/prepare",
     "/api/auth/session/webauthn/register/prepare",
 })
+_REGISTRATION_EXECUTION_PREPARATION_PATHS = frozenset({
+    "/api/webauthn/register/prepare-execution",
+    "/api/auth/session/webauthn/register/prepare-execution",
+})
 _REGISTRATION_PREPARATION_MAX_BYTES = 512 * 1024
 _REGISTRATION_PREPARATION_JSON_LIMITS = JsonLimits(
     max_bytes=_REGISTRATION_PREPARATION_MAX_BYTES,
@@ -408,24 +414,29 @@ async def csrf_middleware(request: Request, call_next):
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
     request_path = request.scope.get("path")
+    execution_preparation_request = (
+        request.method == "POST" and request_path in _REGISTRATION_EXECUTION_PREPARATION_PATHS
+    )
     registration_preparation_request = (
         request.method == "POST" and request_path in _REGISTRATION_PREPARATION_PATHS
-    )
+    ) or execution_preparation_request
+    preparation_error = (_registration_execution_preparation_error
+        if execution_preparation_request else _registration_preparation_error)
     if registration_preparation_request:
         # This new route family has one exact framing path. Do not change the
         # existing browser /verify parser, defaults or finalization behavior.
         lengths = request.headers.getlist("content-length")
         if not lengths:
-            return _registration_preparation_error(411, "registration_preparation_length_required")
+            return preparation_error(411, "registration_preparation_length_required")
         if (len(lengths) != 1 or re.fullmatch(r"[1-9][0-9]{0,5}", lengths[0]) is None
                 or request.headers.getlist("transfer-encoding")
                 or request.headers.getlist("content-encoding")
                 or request.scope.get("query_string", b"") != b""):
-            return _registration_preparation_error(400, "registration_preparation_framing_invalid")
+            return preparation_error(400, "registration_preparation_framing_invalid")
         if request.headers.getlist("content-type") != ["application/json"]:
-            return _registration_preparation_error(415, "registration_preparation_json_required")
+            return preparation_error(415, "registration_preparation_json_required")
         if int(lengths[0]) > _REGISTRATION_PREPARATION_MAX_BYTES:
-            return _registration_preparation_error(413, "registration_preparation_body_too_large")
+            return preparation_error(413, "registration_preparation_body_too_large")
     setup_canary_request = (
         request.method == "POST"
         and isinstance(request_path, str)
@@ -477,6 +488,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         "/api/authority/control-plane/custody/reconcile": 256,
         "/api/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/auth/session/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
+        "/api/webauthn/register/prepare-execution": _REGISTRATION_PREPARATION_MAX_BYTES,
+        "/api/auth/session/webauthn/register/prepare-execution": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/authority/webauthn/challenges":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/data-plane/policy-candidate/artifact":
@@ -542,7 +555,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         async for chunk in request.stream():
             if (registration_preparation_request
                     and len(chunk) > content_length - len(body)):
-                return _registration_preparation_error(400, "registration_preparation_framing_invalid")
+                return preparation_error(400, "registration_preparation_framing_invalid")
             body.extend(chunk)
             if len(body) > request_limit:
                 return JSONResponse(
@@ -553,15 +566,20 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         request._stream_consumed = False
         if registration_preparation_request:
             if len(body) != content_length:
-                return _registration_preparation_error(400, "registration_preparation_framing_invalid")
+                return preparation_error(400, "registration_preparation_framing_invalid")
             try:
                 document = parse_strict_json_object(request._body,
                     limits=_REGISTRATION_PREPARATION_JSON_LIMITS)
-                request.state.registration_preparation_payload = (
-                    WebAuthnRegistrationPrepare.model_validate(_plain_setup_json(document))
-                )
+                if execution_preparation_request:
+                    request.state.registration_execution_preparation_payload = (
+                        WebAuthnRegistrationExecutionPrepare.model_validate(_plain_setup_json(document))
+                    )
+                else:
+                    request.state.registration_preparation_payload = (
+                        WebAuthnRegistrationPrepare.model_validate(_plain_setup_json(document))
+                    )
             except (ReceiptVerificationError, ValidationError, ValueError, RecursionError):
-                return _registration_preparation_error(400, "registration_preparation_json_invalid")
+                return preparation_error(400, "registration_preparation_json_invalid")
     response = await call_next(request)
     if (strict_json_request or request_path == "/api/policy/canary/status"
             or isinstance(request_path, str)
@@ -1633,6 +1651,23 @@ class WebAuthnRegistrationPrepare(BaseModel):
 
     label: str = Field(max_length=4096)
     response: dict[str, Any]
+
+
+class WebAuthnRegistrationExecutionMfa(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    assertion: dict[str, Any] | None = None
+    approval_id: str | None = Field(default=None, alias="approvalId", min_length=1, max_length=4096)
+
+
+class WebAuthnRegistrationExecutionPrepare(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    purpose: Literal["authorize-registration-evidence-execution"]
+    label: str = Field(max_length=4096)
+    response: dict[str, Any]
+    bootstrap_token: str | None = Field(default=None, alias="bootstrapToken", max_length=1024)
+    mfa: WebAuthnRegistrationExecutionMfa | None = None
 
 
 class WebAuthnRecoveryStart(BaseModel):
@@ -3030,10 +3065,11 @@ def operator_oidc_callback(
     return response
 
 
-def _oidc_session_for_request(request: Request) -> tuple[str, dict[str, Any]]:
+def _oidc_session_for_request(request: Request, *, fresh: bool = False) -> tuple[str, dict[str, Any]]:
     token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
     try:
-        session = oidc_browser_session_for_request(request)
+        session = (oidc_browser_session_from_token(token) if fresh
+            else oidc_browser_session_for_request(request))
     except (OIDCAuthError, OIDCAuthoritativeStateError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not token or not session:
@@ -3041,8 +3077,8 @@ def _oidc_session_for_request(request: Request) -> tuple[str, dict[str, Any]]:
     return token, session
 
 
-def _pending_oidc_session_for_request(request: Request) -> tuple[str, dict[str, Any]]:
-    token, session = _oidc_session_for_request(request)
+def _pending_oidc_session_for_request(request: Request, *, fresh: bool = False) -> tuple[str, dict[str, Any]]:
+    token, session = _oidc_session_for_request(request, fresh=fresh)
     if session.get("status") != "pending_webauthn":
         raise HTTPException(
             status_code=409, detail="OIDC browser session is not awaiting WebAuthn"
@@ -3162,6 +3198,138 @@ def _registration_preparation_error(status_code: int, error: str) -> JSONRespons
             "remoteState": "unknown"}})
 
 
+def _registration_execution_preparation_error(status_code: int, error: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff"},
+        content={"detail": {"error": error, "registrationCompleted": False,
+            "executionStarted": False, "remoteState": "unknown"}})
+
+
+def _registration_execution_preparation_payload(request: Request) -> WebAuthnRegistrationExecutionPrepare:
+    payload = getattr(request.state, "registration_execution_preparation_payload", None)
+    if type(payload) is not WebAuthnRegistrationExecutionPrepare:
+        raise HTTPException(status_code=400, detail="execution preparation framing is required",
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+    return payload
+
+
+def _registration_execution_owner():
+    """Check opt-in cold scope before spending MFA or approval authority."""
+    from serverware import control_plane_enrollment_startup as enrollment
+
+    owner = enrollment.require_started()
+    if type(owner) is not enrollment._EnrollmentOwner or not owner.execution_enabled:
+        raise HTTPException(status_code=503, detail="registration execution preparation is not enabled")
+    return owner
+
+
+def _require_registration_execution_bootstrap(token: str | None) -> None:
+    # This is a fresh independent presentation for the NEW purpose. Unlike
+    # legacy options, this route has no development-bootstrap bypass.
+    if len(WEBAUTHN_BOOTSTRAP_TOKEN) < 32:
+        raise HTTPException(status_code=503, detail="registration execution bootstrap is not configured safely")
+    if token is None or not hmac.compare_digest(
+            WEBAUTHN_BOOTSTRAP_TOKEN.encode("utf-8"), token.encode("utf-8")):
+        raise HTTPException(status_code=403, detail="fresh bootstrap authorization is required for execution preparation")
+
+
+def _registration_execution_current_operator(request: Request, expected: AdminIdentity) -> AdminIdentity:
+    # Explicitly repeat real request authentication and current authoritative
+    # role lookup after assertion/approval work, not an identity DTO check.
+    current = require_admin(request,
+        x_serverware_admin_token=request.headers.get("X-Serverware-Admin-Token"))
+    if current.auth_method == "oidc-session":
+        # require_admin may have reused this request's session cache. The
+        # uncached path repeats DB-time expiry/revocation, bound-credential and
+        # current trust checks, not merely the cached identity's RBAC lookup.
+        try:
+            current = oidc_identity_from_session_token(request.cookies.get(OIDC_SESSION_COOKIE_NAME))
+        except OIDCAuthoritativeStateError:
+            raise HTTPException(status_code=503, detail="registration preparation session state unavailable") from None
+        except OIDCAccessDenied:
+            raise HTTPException(status_code=403, detail="registration preparation session access denied") from None
+        except OIDCAuthError:
+            raise HTTPException(status_code=401, detail="registration preparation session is no longer valid") from None
+        if current is None:
+            raise HTTPException(status_code=401, detail="registration preparation session is required")
+    current = require_role("admin", "approver")(current)
+    if (current.user_id, current.auth_method) != (expected.user_id, expected.auth_method):
+        raise HTTPException(status_code=409, detail="registration preparation caller changed")
+    return current
+
+
+def _require_registration_execution_session_csrf(request: Request) -> None:
+    # This route always acts as the pending COOKIE subject. An unrelated valid
+    # bearer/admin header must not select the global middleware's CSRF bypass.
+    cookie = request.cookies.get(CSRF_COOKIE_NAME)
+    headers = request.headers.getlist(CSRF_HEADER_NAME)
+    if (not cookie or len(cookie) > 1024 or len(headers) != 1
+            or not headers[0] or len(headers[0]) > 1024
+            or not hmac.compare_digest(cookie.encode("utf-8"), headers[0].encode("utf-8"))):
+        raise HTTPException(status_code=403, detail="CSRF token required for pending-session execution preparation")
+
+
+def _require_registration_execution_bootstrap_branch(payload: WebAuthnRegistrationExecutionPrepare) -> None:
+    if payload.mfa is not None:
+        raise HTTPException(status_code=400, detail="first enrollment requires bootstrap authorization, not mfa")
+    _require_registration_execution_bootstrap(payload.bootstrap_token)
+
+
+def _require_registration_execution_existing_authorization(
+    *, originals: _RegistrationOriginals, payload: WebAuthnRegistrationExecutionPrepare,
+    identity: AdminIdentity,
+) -> None:
+    from serverware import control_plane_registration_execution_intent as intent
+
+    if payload.bootstrap_token is not None:
+        raise HTTPException(status_code=400, detail="bootstrap authorization cannot replace existing-credential authorization")
+    binding = intent.request_binding(originals)
+    digest = _control_plane_payload_digest(binding)
+    resource_id = binding["challengeId"]
+    mfa = payload.mfa.model_dump(by_alias=True, exclude_none=True) if payload.mfa is not None else None
+    assertion = mfa.get("assertion") if mfa is not None else None
+    if not assertion:
+        raise HTTPException(status_code=412, detail={
+            "error": "control_plane_webauthn_required",
+            "message": "Fresh WebAuthn assertion required for registration execution preparation",
+            "action": intent.ACTION, "resourceId": resource_id, "payloadDigest": digest})
+    # Do not use the generic helper's authority-evidence shortcut, or its
+    # development opt-out. Successful actual local verification is required.
+    try:
+        verify_control_plane_mutation_assertion(user_id=identity.user_id,
+            action=intent.ACTION, resource_id=resource_id, payload_digest=digest,
+            authn_policy=_control_plane_mutation_authn_policy(), assertion=assertion)
+    except WebAuthnError:
+        raise HTTPException(status_code=403, detail="registration execution MFA authorization was denied") from None
+    _require_control_plane_two_person(action=intent.ACTION, resource_id=resource_id,
+        payload_digest=digest, mfa=mfa, identity=identity, request=binding)
+
+
+def _registration_execution_prepared_response(originals: _RegistrationOriginals, owner) -> JSONResponse:
+    """Called only after this handler's real current new-purpose admission."""
+    from serverware import control_plane_registration_preparation as preparation
+    from serverware import control_plane_registration_execution_intent as intent
+
+    if _registration_execution_owner() is not owner:
+        raise HTTPException(status_code=503, detail="registration execution owner changed")
+    try:
+        local_digest = preparation.prepare_and_retain_registration_execution_grant(originals)
+        if type(local_digest) is not str or re.fullmatch(r"sha256:[0-9a-f]{64}", local_digest) is None:
+            raise ValueError("execution preparation did not return its local identity")
+    except Exception:
+        # Approval, signer authority or durable storage can precede failure.
+        # Reveal no originals or internal text, and never authorize a retry.
+        return _registration_execution_preparation_error(503, "registration_execution_preparation_unavailable")
+    return JSONResponse(status_code=202,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff"},
+        content={"schema": "serverware.webAuthnRegistrationExecutionPreparation/v1",
+            "status": "retained-execution-grant", "purpose": intent.PURPOSE,
+            "localDigest": local_digest, "registrationCompleted": False,
+            "executionStarted": False})
+
+
 def _registration_preparation_payload(request: Request) -> WebAuthnRegistrationPrepare:
     payload = getattr(request.state, "registration_preparation_payload", None)
     if type(payload) is not WebAuthnRegistrationPrepare:
@@ -3207,6 +3375,42 @@ def operator_session_webauthn_register_prepare(
         return _registration_preparation_error(400, "registration_preparation_originals_invalid")
     except Exception:
         return _registration_preparation_error(503, "registration_preparation_unavailable")
+
+
+@app.post("/api/auth/session/webauthn/register/prepare-execution", status_code=202)
+def operator_session_webauthn_register_prepare_execution(
+    request: Request,
+    payload: WebAuthnRegistrationExecutionPrepare = Depends(_registration_execution_preparation_payload),
+) -> JSONResponse:
+    try:
+        _require_registration_execution_session_csrf(request)
+        _, session = _pending_oidc_session_for_request(request, fresh=True)
+        owner = _registration_execution_owner()
+        with trust_bundle_lock(exclusive=False):
+            user_id = str(session["user_id"])
+            if db.list_webauthn_credentials(user_id, include_revoked=True):
+                raise HTTPException(status_code=409, detail="first enrollment is closed because credential history exists")
+            _require_registration_execution_bootstrap_branch(payload)
+            # Snapshot actual DB/session scope before original capture. Repeat
+            # uncached session/RBAC and empty-history admission before signing.
+            session_fields = ("id", "user_id", "expires_at", "pending_expires_at")
+            held_scope = tuple(session[field] for field in session_fields)
+            held_roles = frozenset(session["roles"])
+            originals = _oidc_registration_originals(
+                label=payload.label, response=payload.response, session=session)
+            _, current = _pending_oidc_session_for_request(request, fresh=True)
+            if (tuple(current[field] for field in session_fields) != held_scope
+                    or frozenset(current["roles"]) != held_roles):
+                raise HTTPException(status_code=409, detail="registration preparation session changed")
+            if db.list_webauthn_credentials(user_id, include_revoked=True):
+                raise HTTPException(status_code=409, detail="first enrollment is closed because credential history exists")
+            return _registration_execution_prepared_response(originals, owner)
+    except HTTPException:
+        raise
+    except WebAuthnError:
+        return _registration_execution_preparation_error(400, "registration_execution_originals_invalid")
+    except Exception:
+        return _registration_execution_preparation_error(503, "registration_execution_preparation_unavailable")
 
 
 @app.post("/api/auth/session/webauthn/register/options")
@@ -4127,6 +4331,7 @@ def _control_plane_requester_roles(action: str) -> set[str]:
         return {"policy_author"}
     if action in {
         "webauthn.credential.register",
+        "webauthn.registration.execution.prepare",
         "webauthn.credential.revoke",
         "break_glass.grant",
     }:
@@ -15465,6 +15670,39 @@ def webauthn_register_prepare(
         return _registration_preparation_error(400, "registration_preparation_originals_invalid")
     except Exception:
         return _registration_preparation_error(503, "registration_preparation_unavailable")
+
+
+@app.post("/api/webauthn/register/prepare-execution", status_code=202)
+def webauthn_register_prepare_execution(
+    request: Request,
+    payload: WebAuthnRegistrationExecutionPrepare = Depends(_registration_execution_preparation_payload),
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> JSONResponse:
+    try:
+        owner = _registration_execution_owner()
+        with trust_bundle_lock(exclusive=False):
+            current = _registration_execution_current_operator(request, identity)
+            originals = _operator_registration_originals(
+                label=payload.label, response=payload.response, identity=current)
+            had_history = bool(db.list_webauthn_credentials(current.user_id, include_revoked=True))
+            if had_history:
+                _require_registration_execution_existing_authorization(
+                    originals=originals, payload=payload, identity=current)
+            else:
+                _require_registration_execution_bootstrap_branch(payload)
+            current = _registration_execution_current_operator(request, current)
+            if bool(db.list_webauthn_credentials(current.user_id, include_revoked=True)) != had_history:
+                raise HTTPException(status_code=409, detail="registration preparation authorization branch changed")
+            # Admission above is for this preparation action only. Genuine
+            # source/grant replay follows; current-root reservation and actual
+            # one-use execution remain separate, and are not implied by 202.
+            return _registration_execution_prepared_response(originals, owner)
+    except HTTPException:
+        raise
+    except WebAuthnError:
+        return _registration_execution_preparation_error(400, "registration_execution_originals_invalid")
+    except Exception:
+        return _registration_execution_preparation_error(503, "registration_execution_preparation_unavailable")
 
 
 @app.post("/api/webauthn/register/verify")

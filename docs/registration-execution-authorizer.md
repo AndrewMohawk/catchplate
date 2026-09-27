@@ -44,6 +44,16 @@ admission through
 [`authority_registration_execution_response`](../serverware/authority_registration_execution_response.py)
 before returning those unchanged bytes. It does not retry or mint a success
 token; present operator/session permission must still precede the private call.
+The two explicit [public preparation handlers](control-plane-registration-execution.md#public-preparation-endpoints)
+now perform purpose-specific bootstrap or mutation-assertion/two-person checks
+before that caller path, rechecking the current actor/session and credential
+history's presence/absence before requesting the grant, not reserving a stable
+complete history. Bootstrap and assertion branches are
+mutually exclusive; development settings cannot bypass the new-purpose checks.
+Their 202 response identifies locally retained
+originals and explicitly reports that registration is incomplete and execution
+has not started. The authorizer itself does not authenticate browser sessions
+or treat the old evidence-only permission as execution permission.
 
 The key admitted by this owner is the dedicated **grant-authorizer** key. The
 caller authorization key, planner key and evidence key remain distinct; no
@@ -144,8 +154,9 @@ complete-history, protected-custody, one-attempt, SQL and postcommit-completion
 requirements remain unchanged. The caller-side private preparation still returns
 an in-memory raw10 bundle; its separate [prepare-and-retain composition](control-plane-registration-execution.md#explicit-local-retention)
 durably stores the originals and returns only a local content ID, not a completed
-registration or one-use execution ledger. Present new-purpose caller admission,
-public execution-handler/admission-UI integration,
+registration or one-use execution ledger. The new public preparation gates do
+not supply the later execution action or complete operator UI workflow.
+Reservation/current-root and protected execution/finalization integration,
 independently provisioned accounts/keys/bootstrap/listener, rollback protection, immutable
 release admission and consolidated frozen-source verification remain open.
 

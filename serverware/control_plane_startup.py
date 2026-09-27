@@ -90,7 +90,7 @@ def validate_control_plane_configuration() -> None:
     # Production and explicitly configured development must have completed
     # cold admission in the runner, never lazily after imports or DB startup.
     control_plane_custody_startup.require_started()
-    control_plane_enrollment_startup.require_started()
+    enrollment_owner = control_plane_enrollment_startup.require_started()
     production = production_release()
     if PRODUCTION_IMAGE and not production:
         raise RuntimeError(
@@ -155,10 +155,15 @@ def validate_control_plane_configuration() -> None:
     if not CONTROL_PLANE_TWO_PERSON_REQUIRED:
         raise RuntimeError("production requires two-person control-plane authorization")
     configured_actions = set(CONTROL_PLANE_TWO_PERSON_ACTIONS)
-    if "*" not in configured_actions and not _PRODUCTION_TWO_PERSON_ACTIONS.issubset(
+    required_actions = set(_PRODUCTION_TWO_PERSON_ACTIONS)
+    # Only the actual root-admitted cold owner enables this distinct purpose;
+    # evidence-only v2 and an explicitly disabled owner keep the old action set.
+    if enrollment_owner is not None and enrollment_owner.execution_enabled:
+        required_actions.add("webauthn.registration.execution.prepare")
+    if "*" not in configured_actions and not required_actions.issubset(
         configured_actions
     ):
-        missing = sorted(_PRODUCTION_TWO_PERSON_ACTIONS - configured_actions)
+        missing = sorted(required_actions - configured_actions)
         raise RuntimeError(
             "production two-person control is missing mandatory actions: "
             + ", ".join(missing)

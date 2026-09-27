@@ -18,28 +18,26 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Production acceptance: 0 of 6 gates verified; 6 remain. Integration in progress; verification and release blocked; Nitro/KMS and witnesses not provisioned; live flows pending.](docs/images/production-progress.svg)](docs/production-status.md)
+[![Tracked source implementation: 31 of 46 checkpoints landed, 15 open including next checkpoint F05. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 4/8; workloads and native 3/6; providers and operations 0/7. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
-**0 of 6 production gates verified · 6 remaining.** This is release readiness,
-not percentage of code written, effort remaining, or an ETA.
+**31 of 46 tracked source checkpoints landed · 15 open.** Each tile maps to a
+[named checklist item](docs/production-status.md#next-source-milestones): ✓ landed,
+→ next, — open. Counts describe implementation checkpoints, not percentage of
+code, equal amounts of work, or an ETA. Current source is unbuilt and unexecuted.
 
-- **Landed:** finalization reservation service, durable original delivery,
-  returned-response verification and explicit state-service peer admission
-  ([0af140d](https://github.com/example/private-deployment)).
-  Source-only; not deployed or runtime-verified.
-- **Next:** connect separately authorized caller-side reservation and retained
-  outcomes; then protected execution, completion and separate OIDC activation.
-  Full verification follows implementation and source freeze; current source is
-  unbuilt and unexecuted.
-- **External prerequisites:** an immutable dependency snapshot and independently
-  operated signing, Nitro/KMS and witness services, which are not yet provisioned.
+- **Just landed:** separately authorized finalization reservation, durable
+  returned originals and the sixth portal action
+  ([af9ba66](https://github.com/example/private-deployment)).
+- **Next (F05):** independent pending-state admission, followed by protected
+  finalization execution, completion and separate OIDC activation.
+- **Production acceptance: 0/6 verified.** Full verification follows source
+  freeze. Immutable dependencies and independently operated signing, Nitro/KMS
+  and witness services remain prerequisites; the services are not provisioned.
 
-[Open the progress tracker →](docs/production-status.md) for committed milestones,
-the [next integration checklist](docs/production-status.md#next-source-milestones),
-all six remaining gates, blockers and their completion criteria.
-**Zero verified gates does not mean zero implementation progress.**
+[Open the full tracker →](docs/production-status.md) for every tile, committed
+evidence, broader remaining work and the separate production release gates.
 
-<!-- At each milestone update this summary and docs/production-status.md. Update the SVG, alt text and counts together when exact-release evidence closes a gate. Reopen invalidated gates; never infer readiness from commit/test counts. -->
+<!-- Update named checkpoints, both implementation image descriptions, counts and SVG together at each milestone. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

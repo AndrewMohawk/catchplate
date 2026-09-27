@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="430" viewBox="0 0 800 430" role="img" aria-labelledby="title description">
+  <title id="title">Tracked source implementation: 31 of 46 checkpoints landed; 15 open, including 1 next</title>
+  <desc id="description">Six rows show one equal-sized segment per named source checkpoint. Evidence handoff E01 through E10: 10 of 10 landed. Historical recovery H01 through H05: 4 of 5 landed; H05 open. Permissions and grants G01 through G10: 10 of 10 landed. Finalization and sessions F01 through F08: 4 of 8 landed; F05 is next, not in progress; F06 through F08 open. Workloads and native N01 through N06: 3 of 6 landed; N04 through N06 open. Providers and operations O01 through O07: 0 of 7 landed. A check means landed, an arrow means next, and a dash means open. All 15 unlanded checkpoints remain open, including the one next checkpoint. These counts describe only the tracked source-integration checklist, not whole-product completion, code or effort percentages, runtime verification, production acceptance or an estimated completion date.</desc>
+  <rect x="1" y="1" width="798" height="428" rx="12" fill="#0f172a" stroke="#475569"/>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <defs>
+      <g id="landed">
+        <rect width="46" height="40" rx="5" fill="#064e3b" stroke="#34d399"/>
+        <text x="23" y="18" text-anchor="middle" font-size="18" font-weight="700" fill="#d1fae5">✓</text>
+      </g>
+      <g id="open">
+        <rect width="46" height="40" rx="5" fill="#1e293b" stroke="#94a3b8"/>
+        <text x="23" y="18" text-anchor="middle" font-size="17" fill="#e2e8f0">—</text>
+      </g>
+      <g id="next">
+        <rect width="46" height="40" rx="5" fill="#422006" stroke="#fbbf24" stroke-width="2"/>
+        <text x="23" y="18" text-anchor="middle" font-size="19" font-weight="700" fill="#fde68a">→</text>
+      </g>
+    </defs>
+    <text x="24" y="31" fill="#f8fafc" font-size="16" font-weight="700">TRACKED SOURCE IMPLEMENTATION</text>
+    <text x="776" y="31" fill="#6ee7b7" font-size="16" font-weight="700" text-anchor="end">31 OF 46 LANDED</text>
+    <text x="24" y="55" fill="#cbd5e1" font-size="13">15 open · 1 next (F05) · source-only, not runtime-verified</text>
+
+    <g transform="translate(0 77)">
+      <text x="24" y="16" fill="#f8fafc" font-size="14" font-weight="600">Evidence handoff</text>
+      <text x="24" y="34" fill="#cbd5e1" font-size="12">E01–E10 · 10 / 10 landed</text>
+      <g fill="#d1fae5" font-size="11" text-anchor="middle">
+        <g transform="translate(238)"><use href="#landed"/><text x="23" y="33">E01</text></g>
+        <g transform="translate(292)"><use href="#landed"/><text x="23" y="33">E02</text></g>
+        <g transform="translate(346)"><use href="#landed"/><text x="23" y="33">E03</text></g>
+        <g transform="translate(400)"><use href="#landed"/><text x="23" y="33">E04</text></g>
+        <g transform="translate(454)"><use href="#landed"/><text x="23" y="33">E05</text></g>
+        <g transform="translate(508)"><use href="#landed"/><text x="23" y="33">E06</text></g>
+        <g transform="translate(562)"><use href="#landed"/><text x="23" y="33">E07</text></g>
+        <g transform="translate(616)"><use href="#landed"/><text x="23" y="33">E08</text></g>
+        <g transform="translate(670)"><use href="#landed"/><text x="23" y="33">E09</text></g>
+        <g transform="translate(724)"><use href="#landed"/><text x="23" y="33">E10</text></g>
+      </g>
+    </g>
+    <g transform="translate(0 127)">
+      <text x="24" y="16" fill="#f8fafc" font-size="14" font-weight="600">Historical recovery</text>
+      <text x="24" y="34" fill="#cbd5e1" font-size="12">H01–H05 · 4 / 5 landed</text>
+      <g fill="#d1fae5" font-size="11" text-anchor="middle">
+        <g transform="translate(238)"><use href="#landed"/><text x="23" y="33">H01</text></g>
+        <g transform="translate(292)"><use href="#landed"/><text x="23" y="33">H02</text></g>
+        <g transform="translate(346)"><use href="#landed"/><text x="23" y="33">H03</text></g>
+        <g transform="translate(400)"><use href="#landed"/><text x="23" y="33">H04</text></g>
+        <g transform="translate(454)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">H05</text></g>
+      </g>
+    </g>
+    <g transform="translate(0 177)">
+      <text x="24" y="16" fill="#f8fafc" font-size="14" font-weight="600">Permissions &amp; grants</text>
+      <text x="24" y="34" fill="#cbd5e1" font-size="12">G01–G10 · 10 / 10 landed</text>
+      <g fill="#d1fae5" font-size="11" text-anchor="middle">
+        <g transform="translate(238)"><use href="#landed"/><text x="23" y="33">G01</text></g>
+        <g transform="translate(292)"><use href="#landed"/><text x="23" y="33">G02</text></g>
+        <g transform="translate(346)"><use href="#landed"/><text x="23" y="33">G03</text></g>
+        <g transform="translate(400)"><use href="#landed"/><text x="23" y="33">G04</text></g>
+        <g transform="translate(454)"><use href="#landed"/><text x="23" y="33">G05</text></g>
+        <g transform="translate(508)"><use href="#landed"/><text x="23" y="33">G06</text></g>
+        <g transform="translate(562)"><use href="#landed"/><text x="23" y="33">G07</text></g>
+        <g transform="translate(616)"><use href="#landed"/><text x="23" y="33">G08</text></g>
+        <g transform="translate(670)"><use href="#landed"/><text x="23" y="33">G09</text></g>
+        <g transform="translate(724)"><use href="#landed"/><text x="23" y="33">G10</text></g>
+      </g>
+    </g>
+    <g transform="translate(0 227)">
+      <text x="24" y="16" fill="#f8fafc" font-size="14" font-weight="600">Finalization &amp; sessions</text>
+      <text x="24" y="34" fill="#cbd5e1" font-size="12">F01–F08 · 4 / 8 landed</text>
+      <g font-size="11" text-anchor="middle">
+        <g transform="translate(238)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F01</text></g>
+        <g transform="translate(292)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F02</text></g>
+        <g transform="translate(346)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F03</text></g>
+        <g transform="translate(400)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F04</text></g>
+        <g transform="translate(454)" fill="#fde68a"><use href="#next"/><text x="23" y="33">F05</text></g>
+        <g transform="translate(508)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">F06</text></g>
+        <g transform="translate(562)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">F07</text></g>
+        <g transform="translate(616)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">F08</text></g>
+      </g>
+    </g>
+    <g transform="translate(0 277)">
+      <text x="24" y="16" fill="#f8fafc" font-size="14" font-weight="600">Workloads &amp; native</text>
+      <text x="24" y="34" fill="#cbd5e1" font-size="12">N01–N06 · 3 / 6 landed</text>
+      <g font-size="11" text-anchor="middle">
+        <g transform="translate(238)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">N01</text></g>
+        <g transform="translate(292)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">N02</text></g>
+        <g transform="translate(346)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">N03</text></g>
+        <g transform="translate(400)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">N04</text></g>
+        <g transform="translate(454)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">N05</text></g>
+        <g transform="translate(508)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">N06</text></g>
+      </g>
+    </g>
+    <g transform="translate(0 327)">
+      <text x="24" y="16" fill="#f8fafc" font-size="14" font-weight="600">Providers &amp; operations</text>
+      <text x="24" y="34" fill="#cbd5e1" font-size="12">O01–O07 · 0 / 7 landed</text>
+      <g fill="#e2e8f0" font-size="11" text-anchor="middle">
+        <g transform="translate(238)"><use href="#open"/><text x="23" y="33">O01</text></g>
+        <g transform="translate(292)"><use href="#open"/><text x="23" y="33">O02</text></g>
+        <g transform="translate(346)"><use href="#open"/><text x="23" y="33">O03</text></g>
+        <g transform="translate(400)"><use href="#open"/><text x="23" y="33">O04</text></g>
+        <g transform="translate(454)"><use href="#open"/><text x="23" y="33">O05</text></g>
+        <g transform="translate(508)"><use href="#open"/><text x="23" y="33">O06</text></g>
+        <g transform="translate(562)"><use href="#open"/><text x="23" y="33">O07</text></g>
+      </g>
+    </g>
+
+    <text x="24" y="393" fill="#d1fae5" font-size="13">✓ Landed</text>
+    <text x="138" y="393" fill="#fde68a" font-size="13">→ Next, not in progress</text>
+    <text x="344" y="393" fill="#e2e8f0" font-size="13">— Open</text>
+    <text x="24" y="415" fill="#cbd5e1" font-size="12">Checklist milestones only — not whole-product completion, effort or production acceptance.</text>
+  </g>
+</svg>

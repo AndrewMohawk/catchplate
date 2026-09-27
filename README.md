@@ -18,7 +18,7 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Tracked source implementation: 33 of 46 checkpoints landed, 13 open including F07 in progress. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 6/8; workloads and native 3/6; providers and operations 0/7. F07 detail: 3 of 8 substeps landed, 5 open; caller configuration is next. Child counts are not added to the overall total. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Tracked source implementation: 33 of 46 checkpoints landed, 13 open including F07 in progress. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 6/8; workloads and native 3/6; providers and operations 0/7. F07 detail: 6 of 8 substeps landed, 2 open; public permissions are next. Child counts are not added to the overall total. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 **33 of 46 tracked source checkpoints landed · 13 open.** Each tile maps to a
 [named checklist item](docs/production-status.md#next-source-milestones): ✓ landed,
@@ -34,11 +34,11 @@ code, equal amounts of work, or an ETA. Current source is unbuilt and unexecuted
 | Workloads and native · 3/6 | TLS-bound attestation, identity authoring, signed-handoff client | Provision service identities, finish native enrollment and enclave integration |
 | Providers and operations · 0/7 | Lower-level adapters and tooling exist; these integration closures remain open | OAuth ownership/custody, revocation, protected side effects, publication recovery, RBAC rollback protection, telemetry |
 
-**Current focus — F07: 3/8 substeps landed.** The worker, original-signature checks
-and state-service peer landed in
-[d472bdb](https://github.com/example/private-deployment).
-Next: caller configuration. Then historical ownership, durable outcomes/recovery,
-public permissions and portal controls. The [eight-step checklist](docs/production-status.md#f07-detail-finalization-completion-and-recovery)
+**Current focus — F07: 6/8 substeps landed.** Caller configuration, historical
+ownership and durable completion/recovery now connect the existing service
+([24d146e](https://github.com/example/private-deployment)).
+Next: separate public permissions, including post-SQL pending-session handling;
+then portal controls. The [eight-step checklist](docs/production-status.md#f07-detail-finalization-completion-and-recovery)
 shows each part; these are inside F07, not extra milestones in the 46-item total.
 
 **Production acceptance: 0/6 verified.** Full verification follows source freeze.

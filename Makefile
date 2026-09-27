@@ -1152,6 +1152,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_delivery_completion_admission.py \
 	serverware/authority_oidc_session_activation_delivery_completion.py \
 	serverware/authority_oidc_session_activation_delivery_completion_recovery.py \
+	serverware/oidc_session_activation_delivery_completion_bootstrap.py \
+	serverware/oidc_session_activation_delivery_completion_entrypoint.py \
+	serverware/oidc_session_activation_delivery_completion_startup.py \
+	serverware/oidc_session_activation_delivery_completion_launcher.py \
+	serverware/oidc_session_activation_delivery_completion_runner.py \
+	serverware/authority_oidc_session_activation_delivery_completion_transport.py \
+	serverware/authority_oidc_session_activation_delivery_completion_response.py \
 	serverware/oidc_session_activation_delivery_planner_bootstrap.py \
 	serverware/oidc_session_activation_delivery_planner_entrypoint.py \
 	serverware/oidc_session_activation_delivery_planner_launcher.py \
@@ -3184,6 +3191,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_delivery_completion_admission.py \
 				serverware/authority_oidc_session_activation_delivery_completion.py \
 				serverware/authority_oidc_session_activation_delivery_completion_recovery.py \
+				serverware/oidc_session_activation_delivery_completion_bootstrap.py \
+				serverware/oidc_session_activation_delivery_completion_entrypoint.py \
+				serverware/oidc_session_activation_delivery_completion_startup.py \
+				serverware/oidc_session_activation_delivery_completion_launcher.py \
+				serverware/oidc_session_activation_delivery_completion_runner.py \
+				serverware/authority_oidc_session_activation_delivery_completion_transport.py \
+				serverware/authority_oidc_session_activation_delivery_completion_response.py \
 				serverware/oidc_session_activation_delivery_planner_bootstrap.py \
 				serverware/oidc_session_activation_delivery_planner_entrypoint.py \
 				serverware/oidc_session_activation_delivery_planner_launcher.py \

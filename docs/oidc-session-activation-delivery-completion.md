@@ -58,12 +58,21 @@ originals to independently supplied bytes. The result contains only the exact
 durably retained ACK and its request identity. It is not a fresh permission,
 current-session assertion, browser token or plaintext release.
 
-## Remaining integration
+## Cold integration and remaining scope
 
-These are source library components inside token-release row 14, not that row's
-completion. Dedicated cold signing/readers/TLS/journal resource delivery,
-completion-purpose state routing, actual startup/service and private response
-admission remain to be connected. Generic original replay/grant/recovery entry
-points remain closed to consume. Exact committed-original token release and its
-cold response/handoff remain separate later rows; production acceptance still
-requires immutable release evidence and independently provisioned services.
+The `.170` source connects these libraries to [eight-FD resource delivery](oidc-session-activation-delivery-completion-delivery.md),
+the actual [cold worker](oidc-session-activation-delivery-completion-service.md),
+a distinct [state-v9 completion/lookup peer](current-root-delivery-completion-peer.md)
+and genuine [private response receiving](oidc-session-activation-delivery-completion-response.md).
+The same startup allowance survives permanent privilege drop; an actual current
+custody guard must still pass before any successful or uncertain response.
+First-exact publication is never undone merely because transmission failed.
+
+Private receiving requires its own independently root-admitted completion
+custody at UID/GID 65497, so the service admits that purpose rather than generic
+application peer 65532. This is not OS isolation between same-UID processes.
+Cold public-caller packaging, public permission and portal dispatch remain later
+handoff work. Generic original replay/grant/recovery entry points remain closed
+to consume. Exact committed-original token release and its cold response/handoff
+remain separate rows; production acceptance still requires immutable release
+evidence, frozen verification and independently provisioned services.

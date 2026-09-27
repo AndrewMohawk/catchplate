@@ -161,8 +161,10 @@ class CurrentRootCompletionDelivery:
                     live()
 
                 live()
-                evidence.production._callback(work,
-                    lambda: storage.CurrentRootJournal.recover(journal, recover_record))
+                # Native record reads precharge their exact pinned sizes. The
+                # semantic reducer charges this same ledger outside the
+                # metrics-constant native callback; no per-record allowance.
+                storage.CurrentRootJournal.recover(journal, recover_record, work=work)
                 live()
             if (self._sequence, self._head_digest) != expected:
                 raise CurrentRootDeliveryError("delivery journal differs from independently current local checkpoint")

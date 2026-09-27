@@ -170,7 +170,7 @@ class CurrentRootJournal:
             self.poison()
             raise
 
-    def _read_record(self, name, sequence, digest, *, synchronize=False):
+    def _read_record(self, name, sequence, digest, *, synchronize=False, work=None):
         descriptor = os.open(name,
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
             dir_fd=self._directory_fd)
@@ -181,29 +181,40 @@ class CurrentRootJournal:
                     or (before.st_uid, before.st_gid) != self._binding[2:]
                     or not 1 <= before.st_size <= MAX_RECORD_BYTES):
                 raise CurrentRootJournalError("current-root record is not bounded immutable private material")
-            encoded = bytearray()
-            while len(encoded) < before.st_size:
-                chunk = os.read(descriptor, min(_READ_CHUNK, before.st_size - len(encoded)))
-                if not chunk:
-                    raise CurrentRootJournalError("current-root record was truncated")
-                encoded.extend(chunk)
-            if os.read(descriptor, 1):
-                raise CurrentRootJournalError("current-root record grew while reading")
-            original = bytes(encoded)
-            if "sha256:" + hashlib.sha256(original).hexdigest() != digest:
-                raise CurrentRootJournalError("current-root record differs from its named raw digest")
-            if synchronize:
-                os.fsync(descriptor)
-            identity = _identity(before)
-            if (identity != _identity(os.fstat(descriptor))
-                    or identity != _identity(os.stat(name, dir_fd=self._directory_fd,
-                        follow_symlinks=False))):
-                raise CurrentRootJournalError("current-root record changed during its stable read")
-            return original, CurrentRootRecord(sequence, digest, len(original)), identity
+            def read_original():
+                encoded = bytearray()
+                while len(encoded) < before.st_size:
+                    chunk = os.read(descriptor, min(_READ_CHUNK, before.st_size - len(encoded)))
+                    if not chunk:
+                        raise CurrentRootJournalError("current-root record was truncated")
+                    encoded.extend(chunk)
+                if os.read(descriptor, 1):
+                    raise CurrentRootJournalError("current-root record grew while reading")
+                original = bytes(encoded)
+                if "sha256:" + hashlib.sha256(original).hexdigest() != digest:
+                    raise CurrentRootJournalError("current-root record differs from its named raw digest")
+                if synchronize:
+                    os.fsync(descriptor)
+                identity = _identity(before)
+                if (identity != _identity(os.fstat(descriptor))
+                        or identity != _identity(os.stat(name, dir_fd=self._directory_fd,
+                            follow_symlinks=False))):
+                    raise CurrentRootJournalError("current-root record changed during its stable read")
+                return original, CurrentRootRecord(sequence, digest, len(original)), identity
+
+            if work is None:
+                return read_original()
+            from serverware import authority_revocation_capability_production as production
+
+            # The pinned size bounds reading, copying and raw hashing before
+            # allocation. Only native I/O lives inside the stable callback;
+            # the protocol reducer below legitimately charges the same work.
+            work.charge(hashes=1, input_bytes=3 * before.st_size + 1)
+            return production._callback(work, read_original)
         finally:
             os.close(descriptor)
 
-    def recover(self, validate_record):
+    def recover(self, validate_record, *, work=None):
         """Replay once via the owning service's fixed validator, then fsync.
 
         The callback receives (sequence, original_bytes) in contiguous order.
@@ -212,6 +223,11 @@ class CurrentRootJournal:
         Even complete recovery does not admit the latest semantic checkpoint.
         """
         self._require_process()
+        if work is not None:
+            from serverware.authority_query_read_work import _ValidationWork
+
+            if type(work) is not _ValidationWork:
+                raise CurrentRootJournalError("current-root recovery requires its actual inherited work")
         if not callable(validate_record):
             raise CurrentRootJournalError("current-root recovery requires the fixed service validator")
         with self._io.lock:
@@ -236,7 +252,8 @@ class CurrentRootJournal:
                 for position, (sequence, digest, name) in enumerate(names, start=1):
                     if sequence != position:
                         raise CurrentRootJournalError("current-root journal has a missing or repeated sequence")
-                    original, record, identity = self._read_record(name, sequence, digest, synchronize=True)
+                    original, record, identity = self._read_record(name, sequence, digest,
+                        synchronize=True, work=work)
                     validate_record(sequence, original)
                     self._require_process()
                     if (self._state != "recovering" or self._stamp() != before

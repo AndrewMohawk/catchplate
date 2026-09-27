@@ -1053,6 +1053,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_execution_bundle.py \
 	serverware/authority_oidc_session_activation_execution_replay.py \
 	serverware/authority_oidc_session_activation_execution_expectations.py \
+	serverware/authority_oidc_session_activation_execution_history.py \
+	serverware/authority_oidc_session_activation_history_exchange.py \
 	serverware/authority_oidc_session_activation_execution_custody.py \
 	serverware/oidc_session_activation_execution_custody_bootstrap.py \
 	serverware/authority_oidc_session_activation_execution_authorization.py \
@@ -3002,6 +3004,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_execution_bundle.py \
 				serverware/authority_oidc_session_activation_execution_replay.py \
 				serverware/authority_oidc_session_activation_execution_expectations.py \
+				serverware/authority_oidc_session_activation_execution_history.py \
+				serverware/authority_oidc_session_activation_history_exchange.py \
 				serverware/authority_oidc_session_activation_execution_custody.py \
 				serverware/oidc_session_activation_execution_custody_bootstrap.py \
 				serverware/authority_oidc_session_activation_execution_authorization.py \

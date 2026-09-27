@@ -8,6 +8,7 @@ No signing, SQL, currentness, population authority or token delivery occurs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Callable
 
 from serverware import authority_complete_read_write as combined
@@ -61,6 +62,23 @@ class _ReplayedWrites:
     counted_after_heads: tuple[combined.CompleteReadWriteHead, ...]
     live: Callable[[], int]
     valid_until_epoch_ns: int
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _HistoricalReplayedWrites:
+    """Historical facts only; live guards current processing, not old expiry."""
+
+    transition: core.KernelTransition
+    write_proof_bytes: bytes
+    write_proof_digest: str
+    transition_bytes: bytes
+    transition_digest: str
+    business_after_roots: tuple
+    authorization_after_roots: tuple
+    counted_after_heads: tuple[combined.CompleteReadWriteHead, ...]
+    live: Callable[[], int]
+    valid_until_epoch_ns: int
+    historical_plan_interval: tuple[int, int]
 
 
 def _fail(message):
@@ -202,12 +220,12 @@ def _decode_on_work(raw, *, work) -> _DecodedWrites:
     return result
 
 
-def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+def _replay_originals_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
         delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
         expected_credential_id, expected_credential_record_id, expected_challenge_id,
         rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
-        live_window, work, transport_deadline_ns=None) -> _ReplayedWrites:
+        live_window, work, transport_deadline_ns, historical_plan_interval):
     """Replay all original semantics and writes relative to independent roots/heads.
 
     The expected thirteen closed head dictionaries are independent inputs, not
@@ -231,6 +249,15 @@ def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_byte
     window = activation.assertion.clock._validate(live_window)
     if transport_deadline_ns is not None:
         registration._integer(transport_deadline_ns, "activation inherited deadline", 1)
+    interval = historical_plan_interval
+    if interval is not None:
+        if type(interval) is not tuple or len(interval) != 2:
+            _fail("activation historical plan interval must be the exact signed pair")
+        for item in interval:
+            registration._integer(item, "activation historical plan time", 1)
+        if not 0 < interval[1] - interval[0] <= registration.authority.VERIFIER_RESPONSE_MAX_AGE_NS:
+            _fail("activation historical plan interval exceeds its original bound")
+        registration._integer(transport_deadline_ns, "activation historical processing deadline", 1)
     database_now = context.database_now
     scope = activation.assertion._Capture(ledger,
         maximum_bytes=activation.assertion.MAX_CONTEXT_BYTES).visit({
@@ -243,6 +270,21 @@ def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_byte
         business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
         before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers, work=work)
     expected = _heads(scope["expectedHeads"])
+    epoch, monotonic = window[0], window[2]
+    bound = min(window[4], transport_deadline_ns) if transport_deadline_ns is not None else window[4]
+
+    def processing_live():
+        nonlocal epoch, monotonic
+        now = activation.assertion.clock._check_on_work(window, work=work)
+        observed = registration.evidence.production._callback(work, time.monotonic_ns)
+        registration._integer(observed, "activation historical monotonic sample", 1)
+        if now < epoch or observed < monotonic or observed >= bound:
+            _fail("activation historical processing expired or clocks reversed")
+        epoch, monotonic = now, observed
+        return now
+
+    if interval is not None:
+        processing_live()
     decoded = _decode_on_work(write_proof_bytes, work=work)
     registration._same(decoded.request_digest, owned["request_digest"], work, "write request identity")
     registration._same([_head_record(head) for head in decoded.counted_before_heads],
@@ -255,7 +297,9 @@ def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_byte
             _fail("activation read head differs from the independent write union")
     current = core.KernelContext(OPERATION, owned["arguments"], owned["selected_rows"], database_now,
         owned["request_digest"], query_reads=records)
-    full = activation._full_transition_with_liveness_on_work(current,
+    # Only these fixed original-only entrypoints are selected. A successful
+    # transition or externally supplied verifier callback is never an input.
+    transition_originals = dict(
         assertion_bytes=assertion_bytes, old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
         delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
         expected_user_id=scope["user"], expected_session_id=scope["session"], expected_credential_id=scope["credential"],
@@ -264,6 +308,31 @@ def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_byte
         business_before_roots=owned["business_before_roots"], authorization_before_roots=owned["authorization_before_roots"],
         before_proofs=owned["before_proofs"], read_heads=heads, query_frontiers=frontiers,
         live_window=window, work=work, transport_deadline_ns=transport_deadline_ns)
+    if interval is None:
+        full = activation._full_transition_with_liveness_on_work(current, **transition_originals)
+    else:
+        processing_live()
+        full = activation._full_transition_historical_on_work(current,
+            **transition_originals, historical_plan_interval=interval)
+        if type(full) is not activation._HistoricalFullTransition:
+            _fail("activation historical transition returned another result family")
+        registration._same(full.historical_plan_interval, interval, work, "historical transition interval")
+        if interval[1] > full.valid_until_epoch_ns:
+            _fail("activation historical plan exceeds original row or delivery expiry")
+
+    def replay_live():
+        if interval is None:
+            now = full.live()
+            if now >= full.valid_until_epoch_ns:
+                _fail("activation originals expired during indexed replay")
+            return now
+        processing_live()
+        checked = full.live()
+        now = processing_live()
+        if now < checked:
+            _fail("activation historical processing clock reversed after transition")
+        return now
+
     actual = full.transition
     actual_ids = tuple(sorted(identity for table in {item["table"] for item in actual.mutations}
         for identity in projection.index_ids_for_table(table)))
@@ -285,8 +354,7 @@ def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_byte
         if ((head.index_root.count == 0) != (head.index_root.digest == empty.digest)
                 or head.index_root.count > primary_by_table[profile.table].leaf_count):
             _fail("activation independent write head population or empty root differs")
-    if full.live() >= full.valid_until_epoch_ns:
-        _fail("activation originals expired before indexed replay")
+    replay_live()
     calculated = indexed.evaluate_indexed_primary_batch(
         table_contracts=primary_table_contracts(OPERATION), business_before_roots=business,
         authorization_before_roots=authorization, selected_rows=owned["selected_rows"],
@@ -296,8 +364,7 @@ def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_byte
     # source limits were clipped to its actual remaining budget before entry.
     ledger.charge(hashes=calculated.metrics.hashes, input_bytes=calculated.metrics.input_bytes,
         json_nodes=calculated.metrics.primary.json_nodes)
-    if full.live() >= full.valid_until_epoch_ns:
-        _fail("activation originals expired during indexed replay")
+    replay_live()
     after = dict(head_map)
     for head in calculated.after_heads:
         after[head.index_id] = combined.CompleteReadWriteHead(head.index_id, head.index_revision, head.index_root)
@@ -313,8 +380,60 @@ def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_byte
     if len(raw) > MAX_TRANSITION_BYTES:
         _fail("activation transition commitment exceeds its source byte ceiling")
     digest = registration.evidence.plan._frame(TRANSITION_DOMAIN, (raw,), work)
-    if full.live() >= full.valid_until_epoch_ns:
-        _fail("activation originals expired before indexed commitment return")
-    return _ReplayedWrites(actual, write_proof_bytes, write_digest, raw, digest,
+    replay_live()
+    if interval is None:
+        return _ReplayedWrites(actual, write_proof_bytes, write_digest, raw, digest,
+            calculated.primary.business_after_roots, calculated.primary.authorization_after_roots,
+            after_heads, full.live, full.valid_until_epoch_ns)
+    result = _HistoricalReplayedWrites(actual, write_proof_bytes, write_digest, raw, digest,
         calculated.primary.business_after_roots, calculated.primary.authorization_after_roots,
-        after_heads, full.live, full.valid_until_epoch_ns)
+        after_heads, replay_live, full.valid_until_epoch_ns, interval)
+    replay_live()
+    return result
+
+
+def _replay_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
+        expected_credential_id, expected_credential_record_id, expected_challenge_id,
+        rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
+        live_window, work, transport_deadline_ns=None) -> _ReplayedWrites:
+    """Preserved live entrypoint; expired originals still fail closed."""
+    return _replay_originals_on_work(context, assertion_bytes=assertion_bytes,
+        old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        expected_credential_id=expected_credential_id, expected_credential_record_id=expected_credential_record_id,
+        expected_challenge_id=expected_challenge_id, rp_id=rp_id, origin=origin,
+        authn_policy=authn_policy, trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, expected_counted_heads=expected_counted_heads,
+        write_proof_bytes=write_proof_bytes, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns, historical_plan_interval=None)
+
+
+def _replay_historical_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
+        expected_credential_id, expected_credential_record_id, expected_challenge_id,
+        rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
+        historical_plan_interval, live_window, work, transport_deadline_ns=None) -> _HistoricalReplayedWrites:
+    """Rebuild original indexed effects; caller authenticates the signed interval.
+
+    The current supplied allowance stays live. Original lifetimes are checked
+    algebraically by the genuine historical semantic worker, never by passing
+    an old issue time as a current clock. This is not execution authority.
+    """
+    if historical_plan_interval is None:
+        _fail("activation historical replay requires its authenticated original interval")
+    return _replay_originals_on_work(context, assertion_bytes=assertion_bytes,
+        old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        expected_credential_id=expected_credential_id, expected_credential_record_id=expected_credential_record_id,
+        expected_challenge_id=expected_challenge_id, rp_id=rp_id, origin=origin,
+        authn_policy=authn_policy, trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, expected_counted_heads=expected_counted_heads,
+        write_proof_bytes=write_proof_bytes, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns, historical_plan_interval=historical_plan_interval)

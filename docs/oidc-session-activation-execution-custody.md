@@ -125,6 +125,15 @@ Non-activation families reject an activation custody argument. Historical
 completion entrypoints explicitly reject activation; there is no backdated
 clock or live-replay-as-history fallback.
 
+Separate [historical original replay and caller/grant exchange](oidc-session-activation-historical-exchange.md)
+now use genuine [historical plan](oidc-session-activation-historical-plan.md) and
+[head/state admission](oidc-session-activation-historical-state.md). Their real
+current processing allowance is distinct from expired original validity. These
+partial completion/reconciliation primitives do not extend this owner's role
+table, change its live APIs or confer current execution permission. Dedicated
+historical cold custody and its independent purpose/key admission remain open;
+none of the three live roles can be relabelled to provide them.
+
 The [sender's durable first-exact export](oidc-session-activation-execution-export.md)
 is a separate implemented source path. The **grant** receiver now has connected
 source for its independent [role bootstrap](oidc-session-activation-execution-authorizer-bootstrap.md),
@@ -145,7 +154,7 @@ genuine independent pending admission and the actual issuer/IDs-only executor
 through its [dedicated service](oidc-session-activation-execution-sql-service.md).
 Its attempt journal is separate and irreversible; no signed ACK supplies its
 own independent pending authority. The unsigned commit observation does not
-close completion/history, public recovery or protected token release. The
+close completion/reconciliation, public recovery or protected token release. The
 public caller's separate purpose/key lifecycle and present permission remain
 open too. These source connections do not establish session currentness or
 production acceptance.

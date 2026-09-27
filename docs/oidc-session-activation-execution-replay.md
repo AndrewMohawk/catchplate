@@ -72,9 +72,16 @@ with its separately checkpointed irreversible attempt journal. No pending head
 is learned from the ACK being verified, and no uncertain attempt is retried.
 These source joins do not establish present public caller permission, the
 caller's purpose/key lifecycle or production acceptance.
-Completion entrypoints explicitly reject activation: recovery needs genuine
-historical admission, not this API relabelled as recovery. Completion/history,
-public recovery and protected token release remain separate work.
+Generic completion entrypoints still explicitly reject activation; this live
+API is not relabelled as recovery. Separate [historical encrypted replay and
+caller/grant exchange](oidc-session-activation-historical-exchange.md) now
+authenticate expired original intervals and perform genuine
+[historical plan replay](oidc-session-activation-historical-plan.md), including
+[original head/state admission](oidc-session-activation-historical-state.md),
+under a real current processing window. These are partial completion/reconciliation
+primitives, not present execution permission. They do not change any of the
+three live cold owners or supply dedicated historical cold custody, completion
+signing/delivery, public recovery or protected token release.
 
 Planned frozen verification, **not run**: reject wrong keys/context/original
 inventory; authenticate the known signature before bundle opening; reject any

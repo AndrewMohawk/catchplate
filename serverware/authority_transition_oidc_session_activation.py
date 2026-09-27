@@ -11,7 +11,7 @@ real shared audit-capacity finalizer; it still proves no committed execution.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 import time
 
@@ -54,6 +54,15 @@ class _FullTransition:
     transition: core.KernelTransition
     live: Callable[[], int]
     valid_until_epoch_ns: int
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _HistoricalFullTransition:
+    """Historical effects and current processing guard; never live authority."""
+    transition: core.KernelTransition
+    live: Callable[[], int]
+    valid_until_epoch_ns: int
+    historical_plan_interval: tuple
 
 
 def _fail(message):
@@ -164,11 +173,12 @@ def _trust_scope(context, policy, now_ns, work):
     return trust.high_water_digest(document, work=work)
 
 
-def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+def _business_originals_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
         delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
         expected_credential_id, expected_credential_record_id, expected_challenge_id,
         rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
-        before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None):
+        before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None,
+        historical_plan_interval=None):
     """Replay originals once and retain only this call's owned context and clock.
 
     Raw QueryRead records come from the exact context; raw primary/range proofs
@@ -177,6 +187,8 @@ def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_by
     No entrypoint accepts the returned private context/effects/liveness carrier.
     """
     ledger = registration.capture._SharedLedger(work)
+    historical = (None if historical_plan_interval is None
+        else assertion._historical_interval(historical_plan_interval))
     if (type(context) is not core.KernelContext or context.operation != OPERATION
             or type(context.selected_rows) is not tuple or len(context.selected_rows) != MAX_SELECTED_ROWS
             or context.verified_webauthn_evidence is not None):
@@ -192,7 +204,11 @@ def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_by
         registration._integer(transport_deadline_ns, "activation inherited deadline", 1)
         bound = min(bound, transport_deadline_ns)
     database_now = context.database_now
+    if historical is not None and (type(database_now) is not datetime or database_now.tzinfo is not timezone.utc):
+        _fail("activation historical database cutoff is not an exact original UTC value")
     now_ns = registration._now(database_now)
+    if historical is not None and not 0 < now_ns < historical[1]:
+        _fail("activation historical database cutoff does not precede original plan expiry")
     query_reads = context.query_reads
     work.prepare_copy(context.selected_rows)
     owned = assertion._Capture(ledger, maximum_bytes=assertion.MAX_CONTEXT_BYTES).visit({
@@ -227,8 +243,11 @@ def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_by
         if epoch < last_epoch or monotonic < last_monotonic or monotonic >= bound:
             _fail("activation transition deadline expired or reversed")
         last_epoch, last_monotonic = epoch, monotonic
-        if not window[0] - window[6] <= now_ns <= epoch + window[6] or now_ns >= window[3]:
-            _fail("activation database time is outside the original processing scope")
+        if historical is None:
+            if not window[0] - window[6] <= now_ns <= epoch + window[6] or now_ns >= window[3]:
+                _fail("activation database time is outside the original processing scope")
+        elif now_ns > epoch + window[6] or historical[0] > epoch + window[6]:
+            _fail("activation historical database cutoff or issue is in the future")
         return epoch
 
     live()
@@ -237,12 +256,17 @@ def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_by
     credential_selected = current._exact("webauthn_credentials", {"id": values["credential_record_id"]}, work=work)
     session, challenge, credential = (support._row(item, work=work)
         for item in (session_selected, challenge_selected, credential_selected))
-    intent = assertion._derive_on_work(assertion_bytes=assertion_bytes, session_row=session,
+    assertion_arguments = dict(assertion_bytes=assertion_bytes, session_row=session,
         challenge_row=challenge, credential_row=credential, expected_user_id=owned["user"],
         expected_session_id=owned["session"], expected_credential_id=owned["credential"],
         rp_id=owned["rpId"], origin=owned["origin"], authn_policy=owned["policy"], trust_policy=owned["trust"],
         old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes, live_window=window, work=work,
         transport_deadline_ns=bound)
+    if historical is None:
+        intent = assertion._derive_on_work(**assertion_arguments)
+    else:
+        intent = assertion._derive_historical_on_work(**assertion_arguments,
+            original_database_now_epoch_ns=now_ns, historical_plan_interval=historical)
     registration._same((intent["subject"]["credentialRecordId"], intent["subject"]["challengeId"],
         intent["sessionCas"]["expectedTokenDigest"], intent["sessionCas"]["newTokenDigest"], intent["assertionDigest"]),
         (values["credential_record_id"], values["challenge_id"], values["old_token_digest"],
@@ -274,8 +298,13 @@ def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_by
         "challengeId": values["challenge_id"], "assertionDigest": values["assertion_digest"],
         "oldTokenDigest": values["old_token_digest"], "newTokenDigest": values["new_token_digest"],
         "createdAt": now_iso, "expiresAt": delivery_expiry}
-    delivery_row = delivery._delivery_row_on_work(envelope_bytes=delivery_envelope_bytes,
+    delivery_arguments = dict(envelope_bytes=delivery_envelope_bytes,
         custody_key=delivery_custody_key, scope=scope, live_window=window, work=work, transport_deadline_ns=bound)
+    if historical is None:
+        delivery_row = delivery._delivery_row_on_work(**delivery_arguments)
+    else:
+        delivery_row = delivery._delivery_row_historical_on_work(**delivery_arguments,
+            historical_plan_interval=historical)
     work.prepare_copy(challenge)
     used_challenge = {**challenge, "used_at": now_iso}
     work.prepare_copy(credential)
@@ -311,9 +340,30 @@ def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_by
     work.prepare_copy(effects)
     work.prepare_encoding(result)
     valid_until = min(intent["validUntilEpochNs"], assertion._time(delivery_expiry, "delivery expiry", work))
-    if live() >= valid_until:
+    epoch = live()
+    if historical is None and epoch >= valid_until:
         _fail("activation originals expired before effect derivation finished")
+    if historical is not None and historical[1] > valid_until:
+        _fail("activation historical plan exceeds original assertion or delivery lifetime")
     return current, effects, result, live, valid_until
+
+
+def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
+        expected_credential_id, expected_credential_record_id, expected_challenge_id,
+        rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None):
+    """Retain the original live-only business API and its unchanged time rules."""
+    return _business_originals_on_work(context,
+        assertion_bytes=assertion_bytes, old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        expected_credential_id=expected_credential_id, expected_credential_record_id=expected_credential_record_id,
+        expected_challenge_id=expected_challenge_id, rp_id=rp_id, origin=origin, authn_policy=authn_policy,
+        trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns)
 
 
 def _transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
@@ -356,6 +406,21 @@ def _full_transition_with_liveness_on_work(context, *, assertion_bytes, old_toke
         authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
         read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window, work=work,
         transport_deadline_ns=transport_deadline_ns)
+    return _finish_full_transition(owned, effects, result, live, valid_until, work)
+
+
+def _finish_full_transition(owned, effects, result, live, valid_until, work,
+                            *, historical_plan_interval=None):
+    """Finalize actual same-call effects once; never consume an external carrier."""
+    historical = historical_plan_interval
+
+    def check():
+        epoch = live()
+        if historical is None and epoch >= valid_until:
+            _fail("activation originals expired during full transition derivation")
+        if historical is not None and historical[1] > valid_until:
+            _fail("activation historical plan exceeds its original transition lifetime")
+
     # Everything below uses the actual proof-owned context from the same call,
     # never the caller's possibly changed context/rows or a successful DTO input.
     spec = registration.authority.operation_spec(OPERATION)
@@ -383,8 +448,7 @@ def _full_transition_with_liveness_on_work(context, *, assertion_bytes, old_toke
     business_work = 8 + business_rows + 4 * len(business)
     if business_work > spec["maximumBusinessWorkUnits"]:
         _fail("activation kernel exceeds its business work allowance")
-    if live() >= valid_until:
-        _fail("activation originals expired before capacity finalization")
+    check()
     # The common finalizer validates the real existing capacity row, derives
     # the complete outbox delta and appends its own full-row CAS. Missing/full/
     # malformed capacity is an error; this adapter never initializes a counter.
@@ -403,9 +467,38 @@ def _full_transition_with_liveness_on_work(context, *, assertion_bytes, old_toke
     planned = tuple(ordered)
     work.prepare_encoding(result)
     transition = core.KernelTransition(mutations=planned, result=result, work_units=total_work)
-    if live() >= valid_until:
-        _fail("activation originals expired during full transition derivation")
+    check()
+    if historical is not None:
+        return _HistoricalFullTransition(transition, live, valid_until, historical)
     return _FullTransition(transition, live, valid_until)
+
+
+def _full_transition_historical_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
+        expected_credential_id, expected_credential_record_id, expected_challenge_id,
+        rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, historical_plan_interval,
+        live_window, work, transport_deadline_ns=None):
+    """Reverify historical originals and effects with a separate current guard.
+
+    The authenticated plan's interval and original UTC database cutoff constrain
+    original semantics algebraically. The supplied current processing window is
+    never reopened, backdated or compared to historical row/delivery expiry.
+    This returns data only, not execution, token release or retry permission.
+    """
+    historical = assertion._historical_interval(historical_plan_interval)
+    owned, effects, result, live, valid_until = _business_originals_on_work(context,
+        assertion_bytes=assertion_bytes, old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        expected_credential_id=expected_credential_id, expected_credential_record_id=expected_credential_record_id,
+        expected_challenge_id=expected_challenge_id, rp_id=rp_id, origin=origin, authn_policy=authn_policy,
+        trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns, historical_plan_interval=historical)
+    return _finish_full_transition(owned, effects, result, live, valid_until, work,
+        historical_plan_interval=historical)
 
 
 def _full_transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,

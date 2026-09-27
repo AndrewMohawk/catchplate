@@ -153,7 +153,8 @@ in addition to the request window, inherited deadline and selected row lifetimes
 Retained verification repeats the same original observation within that interval;
 it neither generates another challenge nor claims a newly observed head. V1 plans
 lacking these commitments are not admitted as v2. Source/configuration migration
-and expired-history authority remain separate work.
+remains separate; the distinct historical verifier below authenticates originals
+without making an expired observation current.
 
 This is an observation of the enrolled, independently admitted local state owner.
 It does not reserve that head, make the host rollback-resistant or authorize SQL.
@@ -208,8 +209,9 @@ original observation, invocation, configured age, provider/session/pending-sessi
 challenge and delivery intervals. Sticky liveness checks bracket signing and
 verification and run again before return. After genuine write replay, both
 paths retain that same call's `live` closure and `valid_until_epoch_ns`; signing
-cannot discard its narrower original lifetime. Verification is active-window only;
-it cannot re-date an expired plan or establish cross-host historical admission.
+cannot discard its narrower original lifetime. These live verification APIs are
+active-window only; they cannot re-date an expired plan or establish cross-host
+historical admission.
 
 The actual [acquisition owner](oidc-session-activation-planning.md) supplies
 read and write originals from one read-only database snapshot. The source
@@ -225,6 +227,30 @@ and callers cannot publicly supply this private key/policy interface.
 The separate [cold service](oidc-session-activation-planner-delivery.md) now
 authenticates root originals before this composition, including its complete
 planning snapshot; fresh off-host latest-head authority remains separate.
+
+## Separate historical replay
+
+The [historical full-plan verifier](oidc-session-activation-historical-plan.md)
+adds `_verify_historical_full_on_work` with the same original inputs and a
+distinct private `_HistoricalVerifiedPlan`. It authenticates the original
+signature before passing its interval to genuine historical assertion, delivery,
+complete-read and indexed-write replay. All detached commitments and derived
+roots/heads are checked again. No live API accepts that result instead of originals.
+
+[Historical head/state admission](oidc-session-activation-historical-state.md)
+rechecks the exact enrollment/query/observation/vector and nonpending state.
+Because plan issue records the processing opening rather than signing time,
+the original plan/head intervals must have a possible live overlap under enrolled
+state skew and age; plan expiry still cannot exceed head expiry. No computed
+historical instant is supplied as a clock. Current processing retains its actual
+supplied window, deadline and cumulative work without old-expiry clipping.
+
+The [historical encrypted-original and caller/grant exchange](oidc-session-activation-historical-exchange.md)
+uses these separate primitives as partial completion/reconciliation source work.
+They grant no current execution permission, change none of the three live cold
+owners and leave generic activation completion rejected. Dedicated historical
+cold custody, completion signing/delivery and reconciliation remain unfinished;
+protected token release and public activation/recovery remain separate.
 
 ## Remaining implementation boundary
 

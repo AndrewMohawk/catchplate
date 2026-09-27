@@ -8,14 +8,18 @@ and does not turn a pending state into permission to plan, execute or retry.
 Verification authenticates the enrolled local owner's observation at the
 independently supplied instant. It does not prove off-host antirollback,
 future freshness, SQL effects or execution authority. The returned dict is
-ordinary data, not a reusable admission capability. No I/O, clock, random
-generation, new work allowance or mutation is performed here.
+ordinary data, not a reusable admission capability. The separate historical
+entrypoint uses real clocks only for its supplied current processing window
+and future-issue rejection; it never calls live verification at an old issue
+time. No I/O, random generation, new allowance or mutation is performed here.
 """
 from __future__ import annotations
 
 import base64
+import time
 
 from serverware import authority_current_root_authorization as authorization
+from serverware import authority_webauthn_evidence_plan_clock as clock
 from serverware.authority_query_read_work import QueryReadWorkError
 
 
@@ -140,7 +144,7 @@ def _read_observation(original, work):
     return owned
 
 
-def _scope(payload, material, now_epoch_ns, work):
+def _original_scope(payload, material, work):
     authorization._scope(payload, material, "state", work)
     if payload["sequence"] > material.payload["maxRecords"]:
         raise CurrentRootHeadError("observed head sequence exceeds original enrolled capacity")
@@ -149,6 +153,10 @@ def _scope(payload, material, now_epoch_ns, work):
         digest = authorization.vector._digest_on_work(raw, work=work)
         authorization.plan._same(payload["vectorDigest"], digest, work,
             "observed genesis vector differs from its actual enrolled original")
+
+
+def _scope(payload, material, now_epoch_ns, work):
+    _original_scope(payload, material, work)
     authorization._fresh(payload, material, now_epoch_ns)
 
 
@@ -181,6 +189,77 @@ def _verify_on_work(*, observation_bytes, query_bytes, enrollment_bytes,
     authorization.capability._canonical(original, envelope,
         authorization.capture._SharedLedger(work), MAX_BYTES, MAX_NODES)
     authorization._fresh(payload, material, held_now)
+    return payload
+
+
+def _verify_historical_with_enrollment_on_work(*, observation_bytes, query_bytes,
+        enrollment_bytes, root_public_key, live_window, transport_deadline_ns, work):
+    """Private same-call original facts, never accepted as another API's proof.
+
+    Enrollment and observation intervals are checked algebraically, while
+    future issuance and processing liveness use the actual current clock.
+    Expiry of the observation does not renew it or constrain this new, already
+    supplied processing window. No caller clock or successful carrier enters.
+    """
+    authorization.capture._SharedLedger(work)
+    original = authorization._original(observation_bytes, MAX_BYTES, "historical current-root head observation")
+    original_query = authorization._original(query_bytes, MAX_QUERY_BYTES, "historical current-root head query")
+    original_enrollment = authorization._original(enrollment_bytes,
+        authorization.MAX_ENROLLMENT_BYTES, "historical current-root enrollment")
+    held_key = root_public_key
+    authorization._public(held_key)
+    window = clock._validate(live_window)
+    authorization.shape._integer(transport_deadline_ns, minimum=1)
+    bound = min(window[4], transport_deadline_ns)
+    # Own both original graphs before key or clock callbacks; all later
+    # comparisons refer only to these captured immutable-original inputs.
+    query = _decode_query_on_work(original_query, work=work)
+    envelope = _read_observation(original, work)
+    last_epoch, last_monotonic = window[0], window[2]
+
+    def current():
+        nonlocal last_epoch, last_monotonic
+        now = clock._check_on_work(window, work=work)
+        monotonic = authorization.production._callback(work, time.monotonic_ns)
+        authorization.shape._integer(monotonic, minimum=1)
+        if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+            raise CurrentRootHeadError("historical head processing expired or its clocks reversed")
+        last_epoch, last_monotonic = now, monotonic
+        return now
+
+    current()
+    material = authorization._admit_enrollment_on_work(enrollment_bytes=original_enrollment,
+        root_public_key=held_key, work=work)
+    current()
+    payload = envelope["payload"]
+    # The same enrolled role, generation, positive bounded original interval,
+    # capacity and true genesis checks as live admission, without _fresh().
+    _original_scope(payload, material, work)
+    authorization._verify_signature(envelope, OBSERVATION_SCHEMA,
+        material.state_public_key, MAX_BYTES, work)
+    if payload["issuedAtEpochNs"] > current() + material.payload["maxClockSkewNs"]:
+        raise CurrentRootHeadError("historical head observation is issued in the current future")
+    authorization.plan._same(query["enrollmentDigest"], material.enrollment_digest, work,
+        "historical head query original enrollment")
+    query_digest = authorization.plan._frame(QUERY_IDENTITY_DOMAIN, (original_query,), work)
+    for name, expected in (("queryDigest", query_digest), ("challenge", query["challenge"]),
+            ("contextDigest", query["contextDigest"]), ("vectorDigest", query["expectedVectorDigest"]),
+            ("operation", query["operation"])):
+        authorization.plan._same(payload[name], expected, work,
+            "historical head observation original query " + name)
+    authorization.capability._canonical(original, envelope,
+        authorization.capture._SharedLedger(work), MAX_BYTES, MAX_NODES)
+    if payload["issuedAtEpochNs"] > current() + material.payload["maxClockSkewNs"]:
+        raise CurrentRootHeadError("historical head observation future issue changed at return")
+    return payload, material
+
+
+def _verify_historical_on_work(*, observation_bytes, query_bytes, enrollment_bytes,
+        root_public_key, live_window, transport_deadline_ns, work):
+    """Authenticate original history only; return ordinary observation data."""
+    payload, _material = _verify_historical_with_enrollment_on_work(observation_bytes=observation_bytes,
+        query_bytes=query_bytes, enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
     return payload
 
 

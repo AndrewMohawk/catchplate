@@ -14,6 +14,7 @@ import time
 
 from serverware import authority_registration_execution_authorization as primitives
 from serverware import authority_oidc_session_activation_execution_expectations as expectations_wire
+from serverware import authority_oidc_session_activation_execution_history as history
 from serverware import authority_oidc_session_activation_execution_replay as activation
 from serverware import authority_successor_execution_window as window_policy
 from serverware.authority_query_read_work import QueryReadWorkError
@@ -89,6 +90,30 @@ class _VerifiedAuthorization:
     expires_at_epoch_ns: int
     window: tuple
     deadline_ns: int
+    last_epoch_ns: int
+    last_monotonic_ns: int
+    live: object
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalAuthorization:
+    """Same-call original facts, never a current permission or accepted proof."""
+
+    request_digest: str
+    operation_id: str
+    authorization_digest: str
+    plan_digest: str
+    retained_record_digest: str
+    journal_digest: str
+    before_vector_digest: str
+    database_id: str
+    generation_digest: str
+    current_root_enrollment_digest: str
+    grant_enrollment_digest: str
+    issued_at_epoch_ns: int
+    expires_at_epoch_ns: int
+    maximum_age_ns: int
+    maximum_clock_skew_ns: int
     last_epoch_ns: int
     last_monotonic_ns: int
     live: object
@@ -363,6 +388,89 @@ def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes, curr
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work, extra_originals=(original,))
     return _verify_held_on_work(held, original, work)
+
+
+def _verify_historical_on_work(*, authorization_bytes, authorization_enrollment_bytes, current_root_enrollment_bytes,
+        grant_enrollment_bytes, root_public_key, configuration_digest, planner_public_key, operation_public_key,
+        originals, expectations, before_vector_bytes, live_window, transport_deadline_ns, work):
+    """Authenticate historical post-plan intent without reviving its authority.
+
+    Independent original scope, keys and enrollments are required. The current
+    supplied processing window is never capped to an expired original scope,
+    authorization or plan deadline. Full encrypted-original replay remains a
+    separate mandatory composition; this result cannot stand in for it.
+    """
+    capture._SharedLedger(work)
+    original = authorization._original(authorization_bytes, MAX_AUTHORIZATION_BYTES,
+        "historical activation caller authorization")
+    raw, before = grants.replay._originals(OPERATION, originals, before_vector_bytes)
+    caller = authorization._original(authorization_enrollment_bytes, MAX_ENROLLMENT_BYTES,
+        "historical activation caller enrollment")
+    current_raw = authorization._original(current_root_enrollment_bytes, authorization.MAX_ENROLLMENT_BYTES,
+        "historical current-root enrollment")
+    grant = authorization._original(grant_enrollment_bytes, grants.MAX_ENROLLMENT_BYTES,
+        "historical grant enrollment")
+    if sum(len(value) for value in (*raw, before, caller, current_raw, grant, original)) > grants.replay.MAX_ORIGINAL_BYTES:
+        _fail("historical activation authority originals exceed the aggregate bound")
+    root, planner, operation_key, config = root_public_key, planner_public_key, operation_public_key, configuration_digest
+    for key in (root, planner, operation_key):
+        authorization._public(key)
+    shape._digest(config)
+    window = clock._validate(live_window)
+    shape._integer(transport_deadline_ns, minimum=1)
+    bound = min(window[4], transport_deadline_ns)
+    # This owns the complete request/scope graph before its hash callbacks;
+    # every other external original, scalar and key is already held above.
+    owned = expectations_wire._capture_on_work(expectations, work=work)
+    history._expectations(owned["request"], owned["scope"], window, work)
+    plan._same(owned["scope"]["configurationDigest"], config, work,
+        "historical activation caller configuration")
+    held = _Inputs(raw, before, caller, current_raw, grant, root, planner, operation_key,
+        config, owned, window, bound)
+    current = _clock(held, work)
+    current()
+    enrolled = _enrollment(held, work)
+    envelope = _read(original, enrollment=False, work=work)
+    payload, policy = envelope["payload"], enrolled.payload
+    primitives._signature(envelope, enrolled.caller_public_key, MAX_AUTHORIZATION_BYTES, work)
+    for name in _SCOPE_FIELDS:
+        plan._same(payload[name], policy[name], work, "historical activation execution request " + name)
+    plan._same(payload["authorizationEnrollmentDigest"], enrolled.enrollment_digest, work,
+        "historical activation caller enrollment")
+    plan._same(payload["callerMeasurementDigest"], policy["callerKey"]["measurementDigest"], work,
+        "historical activation caller measurement")
+    authorization._interval(payload, policy["maximumAgeNs"])
+    issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
+    last_epoch, last_monotonic = window[0], window[2]
+
+    def live():
+        nonlocal last_epoch, last_monotonic
+        now, mono = current()
+        if issued > now + policy["maximumClockSkewNs"]:
+            _fail("historical activation caller authorization is issued in the current future")
+        last_epoch, last_monotonic = now, mono
+        return now
+
+    live()
+    actual_plan, plan_digest = history._authenticate(raw[0], owned["request"],
+        owned["scope"], planner, live, work)
+    facts = {name: owned["request"][name] for name in ("requestDigest", "operationId")}
+    facts.update({"planDigest": plan_digest,
+        "retainedRecordDigest": plan._frame(activation.IDENTITY_DOMAIN, raw, work),
+        "journalDigest": owned["journalDigest"],
+        "beforeVectorDigest": grants.replay.vector._digest_on_work(before, work=work)})
+    for name in _FACT_FIELDS:
+        plan._same(payload[name], facts[name], work, "historical activation exact original " + name)
+    if not actual_plan["issuedAtEpochNs"] <= issued < expires <= actual_plan["expiresAtEpochNs"]:
+        _fail("historical activation post-plan authorization escapes its original plan interval")
+    identity = plan._frame(REQUEST_IDENTITY_DOMAIN, (original,), work)
+    primitives._unchanged(original, envelope, MAX_AUTHORIZATION_BYTES, work)
+    live()
+    return _HistoricalAuthorization(facts["requestDigest"], facts["operationId"], identity,
+        plan_digest, facts["retainedRecordDigest"], facts["journalDigest"], facts["beforeVectorDigest"],
+        policy["databaseId"], policy["generationDigest"], policy["currentRootEnrollmentDigest"],
+        policy["grantEnrollmentDigest"], issued, expires, policy["maximumAgeNs"],
+        policy["maximumClockSkewNs"], last_epoch, last_monotonic, live)
 
 
 def _produce_on_work(*, authorization_enrollment_bytes, current_root_enrollment_bytes, grant_enrollment_bytes,

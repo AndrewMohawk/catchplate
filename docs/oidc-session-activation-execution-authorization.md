@@ -44,10 +44,29 @@ base64url `authorizationId`. There is no caller nonce or synthetic clock input.
 The producer re-verifies the signed output before return. Neither a nonce nor
 the signature grants one-use execution: that remains reservation/SQL work.
 
-All processing retains the supplied opening samples and inherited monotonic
+All live processing retains the supplied opening samples and inherited monotonic
 deadline. Enrollment limits, authorization expiry and original plan expiry may
 only narrow that bracket. No new window, work allowance or historical expiry
 bypass is created. Existing registration/finalization timelines are unchanged.
+
+## Separate historical original verification
+
+`_verify_historical_on_work` has the same explicit original-input signature as
+the live verifier, but returns distinct private `_HistoricalAuthorization`
+facts. Actual root-enrolled caller signature, key/purpose/audience, canonical
+scope and exact plan/raw2/journal/before-vector joins remain mandatory. The
+original post-plan containment above and enrolled age are checked algebraically;
+future issue uses the actual current clock and enrolled skew. The unchanged
+current work/window/deadline is never clipped to an expired original interval.
+
+This is [historical caller admission](oidc-session-activation-historical-state.md#historical-caller-authorization),
+not current permission or a new authorization producer. The separate
+[historical exchange](oidc-session-activation-historical-exchange.md) composes it
+with genuine encrypted-original replay and original grant verification.
+Live producer/verifier behavior and all three live cold owners are unchanged;
+generic activation completion still rejects. Dedicated historical cold custody,
+completion/reconciliation and protected token release are not supplied by this
+partial source work. Unknown source/configuration cohorts remain rejected.
 
 ## Fixed receiving composition
 
@@ -87,8 +106,8 @@ The dedicated [SQL receiver](oidc-session-activation-execution-sql-service.md)
 now joins independent pending admission to the actual one-use issuer/executor.
 The public caller still needs a separate purpose/key lifecycle and fresh actor
 permission; old registration/control-plane evidence keys cannot silently gain
-this purpose. No AES keys are given to a signing-only caller. Genuine
-completion/history, public recovery and protected token release remain
-separate. This is not a complete activation or
+this purpose. No AES keys are given to a signing-only caller. Completion
+signing/delivery and reconciliation, public recovery and protected token release
+remain separate. This is not a complete activation or
 session-currentness result. No tests, imports, builds or runtime verification
 were run.

@@ -84,9 +84,22 @@ def _window(live_window, transport_deadline_ns, work):
     return window, current
 
 
-def _prepare(custody_key, scope, live_window, transport_deadline_ns, work):
+def _historical_interval(value):
+    if type(value) is not tuple or len(value) != 2:
+        _fail("activation delivery historical interval is not an exact immutable pair")
+    issued = registration._integer(value[0], "historical delivery plan issue", 1)
+    expires = registration._integer(value[1], "historical delivery plan expiry", 1)
+    if issued >= expires:
+        _fail("activation delivery historical interval is empty or reversed")
+    return issued, expires
+
+
+def _prepare_originals(custody_key, scope, live_window, transport_deadline_ns, work,
+                       *, historical_plan_interval=None):
     """Capture the closed scalar scope before clocks, codecs or crypto callbacks."""
     ledger = registration.capture._SharedLedger(work)
+    historical = (None if historical_plan_interval is None
+        else _historical_interval(historical_plan_interval))
     if type(custody_key) is not bytes or len(custody_key) != KEY_BYTES:
         _fail("activation delivery requires an independent exact 32-byte custody key")
     if type(scope) is not dict or len(scope) != len(_SCOPE_LIMITS):
@@ -124,10 +137,15 @@ def _prepare(custody_key, scope, live_window, transport_deadline_ns, work):
     now = check()
     if created_ns > now + window[6]:
         _fail("activation delivery creation exceeds the admitted current clock skew")
+    if historical is not None:
+        if historical[0] > now + window[6]:
+            _fail("activation delivery historical plan issue is in the future")
+        if not created_ns < historical[1] <= expires_ns:
+            _fail("activation delivery lifetime does not contain the original plan interval")
 
     def current():
         now = check()
-        if now >= expires_ns:
+        if historical is None and now >= expires_ns:
             _fail("activation delivery original has expired")
         return now
 
@@ -139,6 +157,10 @@ def _prepare(custody_key, scope, live_window, transport_deadline_ns, work):
     aad = DOMAIN + raw_scope
     current()
     return owned, aad, current
+
+
+def _prepare(custody_key, scope, live_window, transport_deadline_ns, work):
+    return _prepare_originals(custody_key, scope, live_window, transport_deadline_ns, work)
 
 
 def _token_digest(token, work, current):
@@ -240,6 +262,29 @@ def _delivery_row_on_work(*, envelope_bytes, custody_key, scope, live_window, wo
     envelope = _envelope(envelope_bytes, work)
     owned, aad, current = _prepare(custody_key, scope, live_window, transport_deadline_ns, work)
     _open_captured(envelope, custody_key, owned, aad, work, current)
+    return _row_captured(envelope, owned, current, work)
+
+
+def _delivery_row_historical_on_work(*, envelope_bytes, custody_key, scope,
+                                    historical_plan_interval, live_window, work,
+                                    transport_deadline_ns=None):
+    """Reopen a historical original and derive row data, never release its token.
+
+    The caller authenticates the plan interval and derives scope from original
+    rows. Current processing checks remain live; past expiry only bounds that
+    original interval. No sealing, expiry renewal or recovery send occurs here.
+    """
+    registration.capture._SharedLedger(work)
+    historical = _historical_interval(historical_plan_interval)
+    envelope = _envelope(envelope_bytes, work)
+    owned, aad, current = _prepare_originals(custody_key, scope, live_window,
+        transport_deadline_ns, work, historical_plan_interval=historical)
+    _open_captured(envelope, custody_key, owned, aad, work, current)
+    return _row_captured(envelope, owned, current, work)
+
+
+def _row_captured(envelope, owned, current, work):
+    """Render only this invocation's authenticated ciphertext and owned scope."""
     work.charge(input_bytes=ENVELOPE_BYTES + 134 + len(STORED_PREFIX))
     current()
     try:

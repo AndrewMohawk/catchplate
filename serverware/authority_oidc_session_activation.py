@@ -18,6 +18,7 @@ from serverware import webauthn_credential_trust as trust
 
 
 SCHEMA = "serverware.oidcSessionActivationCasIntent/v1"
+HISTORICAL_SCHEMA = "serverware.oidcSessionActivationHistoricalCasIntent/v1"
 MAX_ASSERTION_BYTES = 128 * 1024
 MAX_CONTEXT_BYTES = 2 * 1024 * 1024
 MAX_CONTEXT_NODES = 100_000
@@ -164,12 +165,33 @@ def _current_trust(credential, policy, roots, work):
     return status
 
 
-def _derive_on_work(*, assertion_bytes, session_row, challenge_row, credential_row,
+def _historical_interval(value):
+    """Capture only an immutable original interval; it grants no processing time."""
+    if type(value) is not tuple or len(value) != 2:
+        _fail("activation historical plan interval is not an exact immutable pair")
+    issued = registration._integer(value[0], "historical plan issue", 1)
+    expires = registration._integer(value[1], "historical plan expiry", 1)
+    if issued >= expires:
+        _fail("activation historical plan interval is empty or reversed")
+    return issued, expires
+
+
+def _derive_originals_on_work(*, assertion_bytes, session_row, challenge_row, credential_row,
                     expected_user_id, expected_session_id, expected_credential_id,
                     rp_id, origin, authn_policy, trust_policy, old_token_bytes, new_token_bytes,
-                    live_window, work, transport_deadline_ns=None):
-    """Verify original bytes and derive data; no caller may treat the result as permission."""
+                    live_window, work, transport_deadline_ns=None,
+                    historical_plan_interval=None, original_database_now_epoch_ns=None):
+    """Common original semantics with separate live and historical time rules."""
     ledger = registration.capture._SharedLedger(work)
+    historical = None
+    if historical_plan_interval is not None:
+        historical = _historical_interval(historical_plan_interval)
+        cutoff = registration._integer(original_database_now_epoch_ns,
+            "historical database cutoff", 1)
+        if cutoff >= historical[1]:
+            _fail("activation historical database cutoff does not precede plan expiry")
+    elif original_database_now_epoch_ns is not None:
+        _fail("activation historical cutoff requires its original plan interval")
     if type(assertion_bytes) is not bytes or not 2 <= len(assertion_bytes) <= MAX_ASSERTION_BYTES:
         _fail("activation assertion is not a bounded immutable original")
     old_token_bytes, new_token_bytes = _token(old_token_bytes, work), _token(new_token_bytes, work)
@@ -198,6 +220,8 @@ def _derive_on_work(*, assertion_bytes, session_row, challenge_row, credential_r
         return now
 
     now = current()
+    if historical is not None and (historical[0] > now + window[6] or cutoff > now + window[6]):
+        _fail("activation historical issue or database cutoff is in the future")
     for value, label, maximum in ((user, "user", 4096), (session_id, "session", 128),
             (credential_id, "credential", 1366), (owned["rpId"], "RP ID", 4096),
             (owned["origin"], "origin", 8192)):
@@ -230,18 +254,25 @@ def _derive_on_work(*, assertion_bytes, session_row, challenge_row, credential_r
         _fail("activation challenge is not an unused session-binding challenge")
     expiry = {field: _time(session[field], field, work) for field in (
         "provider_expires_at", "expires_at", "pending_expires_at")}
-    if not now < expiry["pending_expires_at"] <= expiry["expires_at"] <= expiry["provider_expires_at"]:
-        _fail("activation session interval is expired or inconsistent")
+    if historical is None:
+        if not now < expiry["pending_expires_at"] <= expiry["expires_at"] <= expiry["provider_expires_at"]:
+            _fail("activation session interval is expired or inconsistent")
+    elif not (cutoff < historical[1] <= expiry["pending_expires_at"]
+            <= expiry["expires_at"] <= expiry["provider_expires_at"]):
+        _fail("activation historical session does not contain the original plan interval")
     challenge_expiry = _time(challenge["expires_at"], "challenge expiry", work)
-    if challenge_expiry <= now:
+    if historical is None and challenge_expiry <= now:
         _fail("activation challenge expired")
+    if historical is not None and historical[1] > challenge_expiry:
+        _fail("activation historical challenge expires before the original plan")
     for row, fields in ((session, ("created_at", "updated_at")),
             (challenge, ("created_at",)),
             (credential, ("created_at", "updated_at", "attestation_verified_at"))):
         for field in fields:
-            if _time(row[field], field, work) > now:
+            if _time(row[field], field, work) > (now if historical is None else cutoff):
                 _fail("activation row time is in the future")
-    if credential["last_used_at"] is not None and _time(credential["last_used_at"], "last use", work) > now:
+    if (credential["last_used_at"] is not None
+            and _time(credential["last_used_at"], "last use", work) > (now if historical is None else cutoff)):
         _fail("activation credential last use is in the future")
     registration._digest(session["token_digest"])
     registration._digest(session["oidc_token_digest"])
@@ -305,11 +336,14 @@ def _derive_on_work(*, assertion_bytes, session_row, challenge_row, credential_r
     signed = auth_raw + bytes.fromhex(client_digest[7:])
     attestation.verify_es256_signature(public_key, signature, signed,
         "OIDC activation assertion signature is invalid", _work=work)
-    # Project the inherited cap from the same original opening bracket, never
-    # from a fresh sample. This epoch field is not a replacement for that cap.
-    valid_until = min(window[3], window[0] + bound - window[1],
-        expiry["pending_expires_at"], challenge_expiry)
-    result = {"schema": SCHEMA, "sourceRevision": registration.authority.SOURCE_REVISION,
+    # Live admission projects its inherited cap from the unchanged opening.
+    # Historical admission returns only the original semantic expiry ceiling;
+    # the separate current() guard still enforces today's processing cap.
+    valid_until = (min(window[3], window[0] + bound - window[1],
+        expiry["pending_expires_at"], challenge_expiry) if historical is None
+        else min(expiry["pending_expires_at"], challenge_expiry))
+    result = {"schema": SCHEMA if historical is None else HISTORICAL_SCHEMA,
+        "sourceRevision": registration.authority.SOURCE_REVISION,
         "subject": {"userId": user, "sessionId": session_id, "credentialId": credential_id,
             "credentialRecordId": credential["id"], "challengeId": challenge["id"]},
         "rowDigests": {"session": _commitment("sessionRow", session, work),
@@ -329,6 +363,40 @@ def _derive_on_work(*, assertion_bytes, session_row, challenge_row, credential_r
             "activationTrustBundleDigest": status.current_trust_bundle_digest,
             "activationTrustBundleSequence": status.current_trust_bundle_sequence,
             "activationAuthenticatorClass": status.effective_authenticator_class}}
-    if current() >= valid_until:
+    final_now = current()
+    if historical is None and final_now >= valid_until:
         _fail("activation originals expired during derivation")
     return result
+
+
+def _derive_on_work(*, assertion_bytes, session_row, challenge_row, credential_row,
+                    expected_user_id, expected_session_id, expected_credential_id,
+                    rp_id, origin, authn_policy, trust_policy, old_token_bytes, new_token_bytes,
+                    live_window, work, transport_deadline_ns=None):
+    """Verify live originals; the ordinary result is not activation permission."""
+    return _derive_originals_on_work(assertion_bytes=assertion_bytes, session_row=session_row,
+        challenge_row=challenge_row, credential_row=credential_row, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, expected_credential_id=expected_credential_id,
+        rp_id=rp_id, origin=origin, authn_policy=authn_policy, trust_policy=trust_policy,
+        old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes, live_window=live_window,
+        work=work, transport_deadline_ns=transport_deadline_ns)
+
+
+def _derive_historical_on_work(*, assertion_bytes, session_row, challenge_row, credential_row,
+                    expected_user_id, expected_session_id, expected_credential_id,
+                    rp_id, origin, authn_policy, trust_policy, old_token_bytes, new_token_bytes,
+                    original_database_now_epoch_ns, historical_plan_interval,
+                    live_window, work, transport_deadline_ns=None):
+    """Reverify original assertion semantics, never a live or executable result.
+
+    The caller must authenticate the original plan interval and database cutoff
+    independently. They are historical data, never a replacement current clock.
+    """
+    return _derive_originals_on_work(assertion_bytes=assertion_bytes, session_row=session_row,
+        challenge_row=challenge_row, credential_row=credential_row, expected_user_id=expected_user_id,
+        expected_session_id=expected_session_id, expected_credential_id=expected_credential_id,
+        rp_id=rp_id, origin=origin, authn_policy=authn_policy, trust_policy=trust_policy,
+        old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes, live_window=live_window,
+        work=work, transport_deadline_ns=transport_deadline_ns,
+        historical_plan_interval=_historical_interval(historical_plan_interval),
+        original_database_now_epoch_ns=original_database_now_epoch_ns)

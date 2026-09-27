@@ -3,8 +3,9 @@
 This is **partial step 20 source**, unbuilt, unexecuted and unprovisioned. It adds
 root-original-admitted delivery-key custody, fresh original release-intent
 admission, independently signed committed-consumption proof admission and exact
-authenticated ciphertext metadata inspection. It does **not** release a token,
-retain an authorized durable outcome, execute SQL or complete the browser flow.
+authenticated ciphertext metadata inspection. A separately root-authorized
+store now supports first-exact token-free outcome retention. It does **not**
+release a token, execute SQL or complete the browser flow.
 
 ## Distinct root scope
 
@@ -119,6 +120,34 @@ genuinely verify packet/replay/commit/completion originals on the separate
 completion side. The receiver checks its signed evidence; it does not repeat
 historical decryption or treat a successful Python object as that evidence.
 
+`retain_outcome_on_work` accepts the same original proof/intent and independent
+pins as `verify_committed_on_work`, plus the exact independently constructed
+[`ReleaseOutcomeStore`](oidc-session-activation-release-outcome-store.md). It
+performs the genuine admissions itself under the custody lock; a previous
+successful verification call cannot authorize it. The store must separately
+authenticate a [root storage authorization](oidc-session-activation-release-outcome-authorization.md)
+for this exact release-custody original, receiver, configuration, database,
+generation, delivery and independently pinned directory/checkpoint. The
+existing custody v1 does not implicitly grant filesystem authority.
+
+The resulting [outcome record](oidc-session-activation-release-outcome.md) holds
+only metadata and commitments to the exact proof, intent, enrollments, state
+receipt, ciphertext and consume outcome. It contains no old/new plaintext token,
+private key or caller-supplied successful proof object. Storage authorization is
+checked separately rather than included in the outcome digest: a renewed
+checkpoint grant must be able to pin an unchanged record without a circular
+hash. The stable slot depends on database, generation and delivery, not a fresh
+intent nonce. Changed records conflict instead of replacing the first record.
+
+The same original custody/intent/proof guards enclose actual no-replace
+publication, normal-close durable readback, store identity and digest checks.
+The method returns the exact retained record digest, not a claim that the token
+was delivered or permission for a later call. Any failure after store invocation,
+including a late outer guard failure, closes both owners and preserves visible
+bytes. It never deletes, retries, regenerates or reconsumes. Cold checkpoint
+admission is not hostile-host antirollback or authorization for plaintext
+recovery; independent witness and explicit recovery work remain separate.
+
 Every check, inspection and original admission reauthenticates root scope, identity and key
 under the same supplied work. Narrowing preserves original epoch/monotonic
 opening samples and caps at the fresh release interval and inherited deadline.
@@ -135,9 +164,9 @@ proof object is not that evidence. The legacy environment-secret decrypt/direct
 database recovery helper is not invoked.
 
 Fresh intent and signed committed facts now have a same-call original-consuming
-join, but future plaintext egress must perform that join again inside the actual
-release operation and durably retain the exact allowed outcome before opening.
-The standalone admission returns no authorization for such a future call.
-Durable outcome/recovery, guarded plaintext egress, cold key/FD service, public
+join and first-exact durable retention, but future plaintext egress must perform
+that join and the durable binding inside the actual release operation before
+opening. Neither the standalone admission nor retained digest authorizes a
+future call. Authorized recovery, guarded plaintext egress, cold key/FD service, public
 permission, token response and current-session confirmation remain open.
 No test, parser, interpreter, build, provisioning or runtime verification was run.

@@ -4,7 +4,8 @@ Original root scope is reauthenticated before every check, original-intent
 admission, signed committed-proof admission and exact AEAD metadata inspection.
 Fresh intent alone proves caller authority and old-token possession, not
 committed consumption. The separate proof join still grants no token egress. This
-owner still has no token-release method, SQL, journal, transport or public HTTP
+owner can retain a token-free exact outcome through separately root-authorized
+storage. It still has no token-release method, SQL, transport or public HTTP
 result, and no successful admission result can be supplied as release proof.
 """
 from __future__ import annotations
@@ -22,6 +23,8 @@ from serverware import authority_oidc_session_activation_release_intent as inten
 from serverware import oidc_session_activation_release_proof as release_proof
 from serverware import oidc_session_activation_release_proof_enrollment as proof_enrollment
 from serverware import authority_oidc_session_activation_release_proof as proof_admission
+from serverware import oidc_session_activation_release_outcome as outcomes
+from serverware import authority_oidc_session_activation_release_outcome_store as outcome_storage
 from serverware import authority_successor_execution_window as processing_window
 
 
@@ -348,12 +351,44 @@ class OidcSessionActivationReleaseCustody:
             expected_producer_identity, expected_caller_id, expected_consume_binding,
             expected_state_receipt_digest, old_token_bytes,
             live_window, transport_deadline_ns, work):
-        """Join signed committed facts and fresh intent; grant no token egress.
+        """Join original committed facts and fresh intent; return no authority."""
+        self._committed_on_work(proof_bytes=proof_bytes, proof_enrollment_bytes=proof_enrollment_bytes,
+            intent_bytes=intent_bytes, intent_enrollment_bytes=intent_enrollment_bytes,
+            expected_producer_id=expected_producer_id, expected_producer_identity=expected_producer_identity,
+            expected_caller_id=expected_caller_id, expected_consume_binding=expected_consume_binding,
+            expected_state_receipt_digest=expected_state_receipt_digest, old_token_bytes=old_token_bytes,
+            outcome_store=None, live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
-        This authenticates originals in one held custody invocation, not a
-        cached intent result or reusable permission for later token access.
+    def retain_outcome_on_work(self, *, proof_bytes, proof_enrollment_bytes,
+            intent_bytes, intent_enrollment_bytes, expected_producer_id,
+            expected_producer_identity, expected_caller_id, expected_consume_binding,
+            expected_state_receipt_digest, old_token_bytes, outcome_store,
+            live_window, transport_deadline_ns, work):
+        """Authenticate originals and durably bind one exact token-free outcome.
+
+        The returned digest identifies retained bytes, never token delivery or
+        permission for another call. No successful proof object is accepted.
         """
+        if type(outcome_store) is not outcome_storage.ReleaseOutcomeStore:
+            _fail("release outcome requires its actual distinct storage owner")
+        return self._committed_on_work(proof_bytes=proof_bytes, proof_enrollment_bytes=proof_enrollment_bytes,
+            intent_bytes=intent_bytes, intent_enrollment_bytes=intent_enrollment_bytes,
+            expected_producer_id=expected_producer_id, expected_producer_identity=expected_producer_identity,
+            expected_caller_id=expected_caller_id, expected_consume_binding=expected_consume_binding,
+            expected_state_receipt_digest=expected_state_receipt_digest, old_token_bytes=old_token_bytes,
+            outcome_store=outcome_store, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work)
+
+    def _committed_on_work(self, *, proof_bytes, proof_enrollment_bytes,
+            intent_bytes, intent_enrollment_bytes, expected_producer_id,
+            expected_producer_identity, expected_caller_id, expected_consume_binding,
+            expected_state_receipt_digest, old_token_bytes, outcome_store,
+            live_window, transport_deadline_ns, work):
+        """One original-consuming locked composition, with optional retention."""
         ledger = evidence.capture._SharedLedger(work)
+        store = outcome_store
+        if store is not None and type(store) is not outcome_storage.ReleaseOutcomeStore:
+            _fail("release outcome requires its exact storage owner")
         proof_raw = bootstrap.authorization._original(proof_bytes,
             release_proof.MAX_BYTES, "release committed proof original")
         proof_enrolled = bootstrap.authorization._original(proof_enrollment_bytes,
@@ -390,6 +425,7 @@ class OidcSessionActivationReleaseCustody:
         lock = self._lock
         if not lock.acquire(blocking=False):
             _fail("activation release custody is already in use")
+        outcome_started = False
         try:
             material, current = self._reauthenticate_locked(configured, window, bound, work)
             intent, intent_scope, release, forbidden = self._intent_locked(
@@ -433,14 +469,63 @@ class OidcSessionActivationReleaseCustody:
                 maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
             final_current = self._guard(configured, final_window,
                 min(bound, final_window[4]), work)
-            for guard in (intent.live, admitted.live, intent.live, admitted.live):
-                now = guard()
-                if now < self._last_epoch:
-                    _fail("release custody clock reversed across original proof admission")
-                object.__setattr__(self, "_last_epoch", now)
-                current()
-                final_current()
-            # No token, outcome claim or permission for another call escapes.
+
+            def joined_current():
+                for guard in (intent.live, admitted.live, intent.live, admitted.live):
+                    now = guard()
+                    if now < self._last_epoch:
+                        _fail("release custody clock reversed across original proof admission")
+                    object.__setattr__(self, "_last_epoch", now)
+                    current()
+                    final_current()
+
+            joined_current()
+            if store is None:
+                return None
+            store_type = outcome_storage.ReleaseOutcomeStore
+            store_configuration = store_type._snapshot_configuration(store)
+            joined_current()
+            record = outcomes._encode_on_work(
+                scope={name: admitted.payload[name] for name in release_proof.SCOPE_FIELDS},
+                release_binding={name: admitted.payload[name] for name in release_proof.RELEASE_FIELDS},
+                evidence_binding={"releaseCustodyDigest": custody_digest,
+                    "releaseIntentDigest": intent.intent_digest, "stateReceiptDigest": receipt,
+                    "releaseProofDigest": admitted.proof_digest,
+                    "proofEnrollmentDigest": admitted.payload["enrollmentDigest"],
+                    "intentEnrollmentDigest": intent.payload["enrollmentDigest"]},
+                caller_id=intent.payload["callerId"], work=work)
+            expected_outcome = outcomes._digest_on_work(record, work)
+            binding = {name: intent_scope[name] for name in (
+                "configurationDigest", "databaseId", "generationDigest",
+                "runtimeClosureDigest", "receiverIdentity")}
+            binding.update(deliveryId=material.delivery_scope["deliveryId"],
+                releaseCustodyDigest=custody_digest)
+            joined_current()
+            # The actual store reauthenticates its distinct root grant and
+            # exact binding before any first publication. Its current grant
+            # identity is not part of this stable retained outcome identity.
+            outcome_started = True
+            observed = store_type.retain_on_work(store, record_bytes=record,
+                root_public_key=configured.root_public_key, expected_binding=binding,
+                live_window=final_window, transport_deadline_ns=min(bound, final_window[4]), work=work)
+            joined_current()
+            if store_type._snapshot_configuration(store) is not store_configuration:
+                _fail("release outcome store changed during retention")
+            registration._same(observed, expected_outcome, work, "durable exact release outcome identity")
+            joined_current()
+            return observed
+        except BaseException:
+            if outcome_started:
+                # Publication may already be durable. Never delete or retry;
+                # close both owners even when a final guard fails afterward.
+                object.__setattr__(self, "_closed", True)
+                object.__setattr__(self, "_configured", None)
+                object.__setattr__(self, "_seal", None)
+                try:
+                    outcome_storage.ReleaseOutcomeStore.close(store)
+                except BaseException:
+                    pass
+            raise
         finally:
             lock.release()
 

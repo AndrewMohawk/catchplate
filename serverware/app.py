@@ -20949,16 +20949,22 @@ UI_HTML = r"""
     function custodyMetadata(value) {
       const fields = ['localDigest', 'family', 'selector', 'sourceRevision', 'preparedBytes', 'attempted', 'observed'];
       const selectors = {evidence: ['registration', 'installation'], transition:
-        ['webauthn.registration.finalize', 'webauthn.trust.stage', 'webauthn.trust.complete']};
+        ['webauthn.registration.finalize', 'webauthn.trust.stage', 'webauthn.trust.complete'],
+        'registration-execution': ['webauthn.registration.evidence.admit']};
       if (!custodyClosed(value, fields) || !custodyDigest(value.localDigest)
           || typeof value.family !== 'string' || typeof value.selector !== 'string'
           || !Object.prototype.hasOwnProperty.call(selectors, value.family)
           || !selectors[value.family].includes(value.selector) || !custodySource(value.sourceRevision)
           || !Number.isSafeInteger(value.preparedBytes) || value.preparedBytes < 1
-          || value.preparedBytes > 64 * 1024 * 1024 + 323
+          || value.preparedBytes > 64 * 1024 * 1024 + (value.family === 'registration-execution' ? 346 : 323)
           || typeof value.attempted !== 'boolean' || typeof value.observed !== 'boolean'
-          || (value.observed && !value.attempted)) throw new Error('Custody metadata response is malformed. Remote state remains unknown.');
+          || (value.observed && !value.attempted)
+          || (value.family === 'registration-execution' && (value.attempted || value.observed))) throw new Error('Custody metadata response is malformed. Remote state remains unknown.');
       return Object.fromEntries(fields.map((field) => [field, value[field]]));
+    }
+
+    function custodyCanReconcile(item) {
+      return (item.family === 'evidence' || item.family === 'transition') && item.attempted === true;
     }
 
     function custodyDetail(value, digest, fresh) {
@@ -20997,10 +21003,12 @@ UI_HTML = r"""
         <td data-label="Local record"><code class="custody-digest">${esc(item.localDigest)}</code></td>
         <td data-label="Operation / source">${esc(item.family)} / ${esc(item.selector)}<br><span class="muted">${esc(item.sourceRevision)}</span></td>
         <td data-label="Prepared bytes">${esc(item.preparedBytes)}</td>
-        <td data-label="Local markers">${item.attempted ? 'Attempted — never resend' : 'Prepared — not attempted'}<br>${item.observed ? 'First unsigned observation stored' : 'No local observation; remote state unknown'}</td>
+        <td data-label="Local markers">${item.family === 'registration-execution'
+          ? 'Retained only — no delivery contract<br>Local original metadata only'
+          : `${item.attempted ? 'Attempted — never resend' : 'Prepared — not attempted'}<br>${item.observed ? 'First unsigned observation stored' : 'No local observation; remote state unknown'}`}</td>
         <td data-label="Actions"><div class="toolbar">
           <button class="secondary" type="button" data-custody-action="inspect" data-local-digest="${esc(item.localDigest)}" ${custodyView.busy ? 'disabled' : ''}>Inspect</button>
-          <button class="secondary" type="button" data-custody-action="reconcile" data-local-digest="${esc(item.localDigest)}" ${custodyView.busy || !item.attempted ? 'disabled' : ''}>Reconcile readback</button>
+          <button class="secondary" type="button" data-custody-action="reconcile" data-local-digest="${esc(item.localDigest)}" ${custodyView.busy || !custodyCanReconcile(item) ? 'disabled' : ''}>Reconcile readback</button>
         </div></td></tr>`).join('') || `<tr class="empty-row"><td colspan="5" class="muted">${custodyView.loaded ? 'No local records. This is not proof of remote absence.' : 'Use Refresh inventory to load metadata.'}</td></tr>`;
       $('custody-page').textContent = custodyView.loaded
         ? `${custodyView.records.length ? start + 1 : 0}–${start + page.length} of ${custodyView.records.length} local records (maximum 4096)`
@@ -21009,9 +21017,13 @@ UI_HTML = r"""
       $('custody-next').disabled = custodyView.busy || start + page.length >= custodyView.records.length;
       const detail = custodyView.detail;
       $('custody-record-detail').innerHTML = detail ? `<h3>Local record inspection</h3>
-        <p>${detail.freshReadback ? 'The last explicit readback matched the retained originals. This is not ongoing freshness or business success.' : 'Local inspection only; no fresh remote read was performed.'}</p>
+        <p>${detail.record.family === 'registration-execution'
+          ? 'Retained only — no delivery contract. Local original metadata only.'
+          : detail.freshReadback ? 'The last explicit readback matched the retained originals. This is not ongoing freshness or business success.' : 'Local inspection only; no fresh remote read was performed.'}</p>
         <dl>${Object.entries(detail.record).map(([key, value]) => `<dt>${esc(key)}</dt><dd><code>${esc(value)}</code></dd>`).join('')}</dl>
-        <h3>First unsigned observation</h3>${detail.observation
+        <h3>${detail.record.family === 'registration-execution' ? 'Retention boundary' : 'First unsigned observation'}</h3>${detail.record.family === 'registration-execution'
+          ? '<p>No delivery or reconciliation action is available for this family. Local retention does not establish current authority, one-use consumption or execution.</p>'
+          : detail.observation
           ? `<p class="muted">First-observation provenance is preserved across matching fresh reads; its source and configuration are not current authority.</p><dl>${Object.entries(detail.observation).map(([key, value]) => `<dt>${esc(key)}</dt><dd><code>${esc(value)}</code></dd>`).join('')}</dl>`
           : '<p>No local observation is stored. Remote absence, rollback and resend permission are not established.</p>'}` : '';
     }
@@ -21030,7 +21042,7 @@ UI_HTML = r"""
       if (!['inventory', 'inspect', 'reconcile'].includes(action)
           || (action !== 'inventory' && (!custodyDigest(digest)
             || !custodyView.records.some((item) => item.localDigest === digest
-              && (action !== 'reconcile' || item.attempted))))) throw new Error('Select an eligible local custody record.');
+              && (action !== 'reconcile' || custodyCanReconcile(item)))))) throw new Error('Select an eligible local custody record.');
       const epoch = custodyEpoch, scope = custodyAuthScope, token = adminToken();
       const stillCurrent = () => epoch === custodyEpoch && scope === custodyCurrentScope() && token === adminToken();
       custodyView.busy = true;
@@ -21054,14 +21066,16 @@ UI_HTML = r"""
           custodyView.records = records;
           custodyView.loaded = true;
           custodyView.page = 0;
-          custodyView.message = 'Local metadata loaded. Inspect is local-only; reconciliation requires an explicit readback action.';
+          custodyView.message = 'Local metadata loaded. Inspect is local-only; only attempted evidence/transition records support explicit readback.';
         } else {
           const detail = custodyDetail(value, digest, action === 'reconcile');
           custodyView.detail = detail;
           custodyView.records = custodyView.records.map((item) => item.localDigest === digest ? detail.record : item);
           custodyView.message = action === 'reconcile'
             ? 'Fresh authenticated readback matched the originals. First unsigned observation preserved; no business completion or resend permission.'
-            : 'Local metadata and first observation inspected. This did not establish fresh remote state.';
+            : detail.record.family === 'registration-execution'
+              ? 'Retained only — no delivery contract. Local original metadata inspected; no authority or execution established.'
+              : 'Local metadata and first observation inspected. This did not establish fresh remote state.';
         }
         setStatus(custodyView.message);
         return {pending: true};

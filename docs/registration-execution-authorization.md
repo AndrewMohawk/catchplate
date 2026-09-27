@@ -98,8 +98,10 @@ separate caller key and three original enrollments, with private methods for
 authorization, one authorizer exchange and genuine local grant verification.
 V2 remains evidence-only. Actual present caller/new-purpose admission and public
 handler/UI orchestration remain separate requirements; no public registration
-route is activated by this composition. The returned raw10 grant bundle is
-in-memory only, not a durable grant journal or a one-use reservation.
+route is activated by this composition. The existing preparation returns raw10
+in memory; the separate [prepare-and-retain composition](control-plane-registration-execution.md#explicit-local-retention)
+now durably stores those originals and returns only a local content ID.
+This retention-only record is not a one-use reservation or renewed authority.
 
 No reserve, current-root pending decision, custody packet, attempt marker or SQL
 write follows from issuing or verifying this authorization. The separate

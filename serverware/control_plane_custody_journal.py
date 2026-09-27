@@ -8,6 +8,8 @@ removed. Recovery rejects unknown and temporary files rather than guessing
 whether an interrupted publication may safely be discarded.
 An OBSERVED marker records only first successful readback metadata; it is
 neither terminal business state nor authority to bypass fresh verification.
+Registration execution-grant records are a separate retention-only family;
+they never admit attempted or observed markers or legacy forwarding.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -24,6 +26,7 @@ import stat
 
 from serverware import control_plane_custody_records as records
 from serverware import control_plane_custody_observations as observations
+from serverware import control_plane_registration_execution_records as execution_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -34,6 +37,7 @@ _ATTEMPT_BYTES = 40
 _OBSERVATION_RESERVE = observations.MAX_OBSERVATION_BYTES
 _HEX = frozenset("0123456789abcdef")
 _READ_CHUNK = 1024 * 1024
+_MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES)
 
 
 class CustodyJournalError(RuntimeError):
@@ -75,13 +79,25 @@ def _identity(metadata):
         metadata.st_mtime_ns, metadata.st_ctime_ns)
 
 
+def _decode_prepared(encoded):
+    """Dispatch only the two fixed original-record formats, never a plugin."""
+    if type(encoded) is not bytes:
+        raise CustodyJournalError("prepared record is not immutable bytes")
+    if encoded[:8] == records.PREPARED_RECORD_MAGIC:
+        return records.decode_prepared(encoded)
+    if encoded[:8] == execution_records.PREPARED_RECORD_MAGIC:
+        return execution_records.decode_prepared(encoded)
+    raise CustodyJournalError("prepared record version is unsupported")
+
+
 class CustodyJournal:
     """One PID-bound, explicitly provisioned, append-only local journal.
 
     Construction completes the only recovery scan before making the owner
     available. Quota reserves forty attempt bytes and the maximum observation
-    frame for each prepared record still missing those markers. Preparation
-    cannot consume its own marker capacity. At most three times maximum_records
+    frame for each legacy prepared record still missing those markers.
+    Retention-only execution grants reserve no marker bytes. Preparation cannot
+    consume another record's marker capacity. At most three times maximum_records
     published files are admitted; old records are never rewritten or removed.
     """
 
@@ -120,7 +136,7 @@ class CustodyJournal:
             self._directory_metadata(self._directory_fd)
             fcntl.flock(self._directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._io = WitnessJournalIO(self._directory_fd,
-                maximum_record_bytes=records.MAX_RECORD_BYTES)
+                maximum_record_bytes=_MAX_RECORD_BYTES)
             self._directory_stamp = self._io.recover(self._recover)
         except BaseException:
             self._closed = True
@@ -213,14 +229,14 @@ class CustodyJournal:
                         or any(character not in _HEX for character in suffix)):
                     raise CustodyJournalError("journal contains an unknown or temporary file")
                 digest = "sha256:" + suffix
-                maximum = (records.MAX_RECORD_BYTES if kind == "prepared" else
+                maximum = (_MAX_RECORD_BYTES if kind == "prepared" else
                     _ATTEMPT_BYTES if kind == "attempted" else observations.MAX_OBSERVATION_BYTES)
                 encoded, identity = self._read_file(name,
                     maximum_bytes=min(maximum, self._quota - self._used_bytes), synchronize=True)
                 self._used_bytes += len(encoded)
                 self._file_identities[name] = identity
                 if kind == "prepared":
-                    record = records.decode_prepared(encoded)
+                    record = _decode_prepared(encoded)
                     if record.digest != digest or digest in prepared:
                         raise CustodyJournalError("prepared filename differs from its original content")
                     prepared[digest] = JournalEntry(digest, record.family, record.selector,
@@ -238,10 +254,15 @@ class CustodyJournal:
                     observed.add(digest)
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
+        retention_only = {digest for digest, entry in prepared.items()
+            if entry.family == execution_records.FAMILY}
+        if (attempted | observed) & retention_only:
+            raise CustodyJournalError("retention-only grant record cannot have delivery markers")
         if not observed <= attempted:
             raise CustodyJournalError("journal observation has no prepared and attempted original")
-        self._reserved_bytes = ((len(prepared) - len(attempted)) * _ATTEMPT_BYTES
-            + (len(prepared) - len(observed)) * _OBSERVATION_RESERVE)
+        marker_records = len(prepared) - len(retention_only)
+        self._reserved_bytes = ((marker_records - len(attempted)) * _ATTEMPT_BYTES
+            + (marker_records - len(observed)) * _OBSERVATION_RESERVE)
         if self._used_bytes + self._reserved_bytes > self._quota:
             raise CustodyJournalError("journal has insufficient reserved marker capacity")
         self._entries = {digest: replace(entry, attempted=digest in attempted, observed=digest in observed)
@@ -256,11 +277,13 @@ class CustodyJournal:
             raise CustodyJournalError("local prepared record is absent")
         name = _name("prepared", digest)
         encoded, identity = self._read_file(name, maximum_bytes=info.prepared_bytes)
-        record = records.decode_prepared(encoded)
+        record = _decode_prepared(encoded)
         if (identity != self._file_identities[name] or record.digest != digest
                 or (record.family, record.selector, record.source_revision)
                     != (info.family, info.selector, info.source_revision)):
             raise CustodyJournalError("prepared record changed after admitted recovery")
+        if info.family == execution_records.FAMILY and (info.attempted or info.observed):
+            raise CustodyJournalError("retention-only grant record cannot have delivery markers")
         if info.attempted:
             marker_name = _name("attempted", digest)
             marker, marker_identity = self._read_file(marker_name, maximum_bytes=_ATTEMPT_BYTES)
@@ -302,15 +325,17 @@ class CustodyJournal:
             except BaseException:
                 self._io.poison()
                 raise
+        record = _decode_prepared(encoded)
+        marker_reserve = (0 if record.family == execution_records.FAMILY else
+            _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
         if (len(self._entries) >= self._maximum_records
-                or len(encoded) + _ATTEMPT_BYTES + _OBSERVATION_RESERVE
+                or len(encoded) + marker_reserve
                     > self._quota - self._used_bytes - self._reserved_bytes):
             raise CustodyJournalError("journal preparation capacity is exhausted")
-        record = records.decode_prepared(encoded)
         try:
             self._publish("prepared", digest, encoded)
             self._used_bytes += len(encoded)
-            self._reserved_bytes += _ATTEMPT_BYTES + _OBSERVATION_RESERVE
+            self._reserved_bytes += marker_reserve
             self._entries[digest] = JournalEntry(digest, record.family, record.selector,
                 record.source_revision, len(encoded), False)
             self._require_ready()
@@ -330,6 +355,13 @@ class CustodyJournal:
         with self._io.ready():
             self._require_ready()
             return self._append(*records.encode_transition(operation, originals))
+
+    def append_registration_execution_grant(self, originals):
+        """Durably retain original raw10, without forwarding or execution authority."""
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            return self._append(*execution_records.encode(originals))
 
     def load(self, localdigest):
         digest = _digest(localdigest)
@@ -354,6 +386,8 @@ class CustodyJournal:
             entry = self._entries.get(digest)
             if entry is None:
                 raise CustodyJournalError("cannot attempt an absent local record")
+            if entry.family == execution_records.FAMILY:
+                raise CustodyJournalError("retention-only grant record cannot be attempted")
             if entry.attempted:
                 raise CustodyJournalError("local record already has an attempt; repeat delivery is forbidden")
             try:
@@ -381,6 +415,8 @@ class CustodyJournal:
         with self._io.ready():
             self._require_ready()
             entry = self._entries.get(digest)
+            if entry is not None and entry.family == execution_records.FAMILY:
+                raise CustodyJournalError("retention-only grant record cannot have an observation")
             if entry is None or not entry.attempted:
                 raise CustodyJournalError("readback observation requires a prepared and attempted record")
             try:

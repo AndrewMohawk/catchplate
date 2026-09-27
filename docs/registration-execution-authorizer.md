@@ -141,9 +141,11 @@ The service has no durable one-use ledger. Producing a grant does not create a
 reservation, protected execution packet, attempt marker or database effect, and
 it does not authorize credential finalization. The separate current-root,
 complete-history, protected-custody, one-attempt, SQL and postcommit-completion
-requirements remain unchanged. The caller-side private orchestration returns
-an unpersisted raw10 original bundle, not a completed registration or durable
-grant journal. Present new-purpose caller admission, public-route/UI integration,
+requirements remain unchanged. The caller-side private preparation still returns
+an in-memory raw10 bundle; its separate [prepare-and-retain composition](control-plane-registration-execution.md#explicit-local-retention)
+durably stores the originals and returns only a local content ID, not a completed
+registration or one-use execution ledger. Present new-purpose caller admission,
+public execution-handler/admission-UI integration,
 independently provisioned accounts/keys/bootstrap/listener, rollback protection, immutable
 release admission and consolidated frozen-source verification remain open.
 

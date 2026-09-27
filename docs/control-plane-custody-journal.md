@@ -1,7 +1,7 @@
 # Opaque caller custody journal
 
-Caller storage, private forwarding and explicit read-only reconciliation at
-authority source `.121`; unbuilt and unexecuted. Local storage remains separate
+Caller storage, private forwarding and explicit read-only reconciliation;
+unbuilt and unexecuted. Local storage remains separate
 from signed custody/replay authority.
 
 `control_plane_custody_records.py` encodes exact original bytes without admitting
@@ -12,7 +12,7 @@ their signatures, history, keys or policy:
 - Transition raw-seven: intent, relay, envelope, proof, inputs, context and
   independent historical expectations.
 
-The fixed prepared-record frame commits the family, purpose/operation selector,
+The legacy `SWCPR001` prepared-record frame commits the family, purpose/operation selector,
 source token, lengths and every original byte. Its SHA-256 identity uses
 `serverware.controlPlaneCustodyPreparedRecord/v1`. Originals are bounded to
 64 MiB in aggregate, with each of the first two controls at most 4 MiB; an
@@ -30,12 +30,17 @@ quotas. It does not choose or create an ambient storage location.
 nonblocking exclusive lease and binds the owner to the opening process. The
 directory must have mode 0700; record files must have mode 0400, one link and
 the pinned ownership. Source ceilings remain 8 GiB and 4096 prepared records
-(at most 12288 physical files). Each prepared record reserves its fixed 40-byte
+(at most 12288 physical files). Each legacy prepared record reserves its fixed 40-byte
 attempt marker and the maximum 370-byte observation frame while those markers
 are missing. Existing prepared/attempted journals recover without rewriting
 their originals, but must have enough configured quota for the missing
 observation reservation. Insufficient quota fails admission; it does not cause
 cleanup, automatic quota expansion or removal of an attempt barrier.
+
+The separate registration execution-grant profile counts toward the same byte
+and record quotas, but reserves no attempt or observation space: it has no
+delivery contract. The following lifecycle applies only to the five legacy
+evidence/transition profiles.
 
 ```text
 exact originals -> immutable PREPARED record
@@ -63,6 +68,47 @@ There is no automatic retry, regeneration or reconciliation authority. A local
 journal also cannot prove resistance to an administrator restoring older storage.
 The one-attempt rule is per exact local record, not logical-operation
 deduplication across new controls or source revisions.
+
+## Registration execution-grant retention
+
+The independent
+[`control_plane_registration_execution_records.py`](../serverware/control_plane_registration_execution_records.py)
+codec preserves ten originals: caller authorization, planning request3,
+planning response4, complete before-vector and signed grant. Its fixed family
+is `registration-execution`, with selector
+`webauthn.registration.evidence.admit`. The frame is `SWCPG001`, a two-byte
+source-token length, the original ASCII source token, ten big-endian eight-byte
+lengths and the exact bodies. Per-object and planning-group limits also apply;
+the complete bodies are bounded to 64 MiB and the header to 346 bytes.
+The local content identity uses the separate
+`serverware.controlPlaneRegistrationExecutionGrantRecord/v1` domain. The old
+`SWCPR001` bytes, hashes and five profiles are unchanged.
+
+`CustodyJournal.append_registration_execution_grant(originals)` returns only
+the local digest. It uses the existing private immutable-file publication:
+exact writes, mode 0400, file fsync, no-replace publication, directory fsync
+and exact readback. An exact duplicate rechecks the existing original instead
+of replacing it. Publication failures poison the owner; a published file is
+not removed or treated as proof that the operation failed before storage.
+These guarantees depend on the provisioned filesystem honoring fsync, not a
+hard syscall deadline or an independent anti-rollback witness.
+
+Recovery and `load` dispatch only the two fixed formats and preserve the
+record's original source revision. They reject attempt or observation markers
+on a grant record; `claim_attempt` and `record_observation` also reject this
+family. The client rejects it before forwarding or reconciliation. Inventory
+and the existing admin recovery workspace expose retention-only metadata, not
+raw originals or an execution action.
+
+The private [prepare-and-retain composition](control-plane-registration-execution.md#explicit-local-retention)
+performs genuine admission before storage. The lower-level codec and journal
+do not authenticate the bytes. `load_registration_execution_grant` returns an
+opaque `PreparedRecord`, retaining source, family, selector, digest and all ten
+originals for future genuine replay; loading does not renew signed lifetimes
+or establish current keys, roots, policy or permission. Older readers reject
+the new magic and fail closed rather than downgrade, migrate or clean it up.
+Old-source originals remain readable by this codec, not automatically replayable
+or authoritative under the current source.
 
 ## Private configured forwarding
 

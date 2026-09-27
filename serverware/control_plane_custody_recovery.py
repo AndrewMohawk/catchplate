@@ -122,6 +122,10 @@ def reconcile(local_digest):
     try:
         owner = _owner()
         entry = _entry(owner, local_digest)
+        # Only the fixed legacy families have a delivery/readback protocol.
+        # Execution grants and unknown future families are retention-only here.
+        if entry.family not in ("evidence", "transition"):
+            raise CustodyRecordNotAttempted("local custody record does not support delivery readback")
         if entry.attempted is not True:
             raise CustodyRecordNotAttempted("local custody record has no delivery attempt")
         # This exact method performs fresh authenticated readback, compares all

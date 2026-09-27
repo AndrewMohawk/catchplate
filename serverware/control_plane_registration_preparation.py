@@ -15,6 +15,10 @@ success: current roots, complete OIDC sibling/history and atomic business
 execution remain separate prerequisites. The separate finalization preparation
 entrypoint consumes retained signer originals, derives sibling selectors only
 after genuine replay, and durably retains prepared raw7 without signing anew.
+The opt-in execution-grant entrypoints require separate present-caller purpose
+admission; they either return verified original raw10 in memory or retain it
+under its distinct local record format. Storage does not renew the original
+verification window or establish a reservation, delivery attempt or SQL effect.
 """
 from __future__ import annotations
 
@@ -196,8 +200,8 @@ def prepare_and_forward_registration_custody(originals):
         custody, "registration", prepared, deadline_ns=window[4])
 
 
-def prepare_registration_execution_grant(originals):
-    """Private authenticated-app action; return original grant-bundle raw10.
+def _prepare_registration_execution_grant_on_work(originals, work):
+    """Prepare raw10 and retain its actual cold storage owner and live window.
 
     The real operator/OIDC handler must separately admit the present caller and
     new execution-request purpose before this call. Existing public custody-only
@@ -210,9 +214,7 @@ def prepare_registration_execution_grant(originals):
     from serverware import control_plane_custody_startup as custody_startup
     from serverware import control_plane_enrollment_startup as enrollment_startup
     from serverware import authority_webauthn_enrollment_issuer as issuer
-    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
-    work = _ValidationWork(QueryReadValidationLimits())
     callback = issuer.evidence.production._callback
     enrollment = callback(work, enrollment_startup.require_started)
     if (type(enrollment) is not enrollment_startup._EnrollmentOwner
@@ -243,7 +245,38 @@ def prepare_registration_execution_grant(originals):
     if total > issuer.authority.MAX_RESULT_BYTES:
         raise RegistrationPreparationError("registration execution originals exceed the source aggregate")
     work.charge(input_bytes=total)
-    return (authorization, *planning, grant)
+    return custody, (authorization, *planning, grant), window
+
+
+def prepare_registration_execution_grant(originals):
+    """Return original in-memory raw10 after actual private caller preparation.
+
+    The authenticated application must first admit the present caller and new
+    purpose. No storage, public route, one-use reservation or SQL is implied.
+    """
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    _custody, prepared, _window = _prepare_registration_execution_grant_on_work(
+        originals, _ValidationWork(QueryReadValidationLimits()))
+    return prepared
+
+
+def prepare_and_retain_registration_execution_grant(originals):
+    """Durably retain genuine prepared raw10; return only its local content ID.
+
+    Real present-caller/new-purpose admission must precede this private call.
+    The original verification window is never renewed: append may finish after
+    it expires, retaining opaque evidence rather than live execution authority.
+    Later use requires genuine admission of those unchanged originals. This
+    never forwards, marks an attempt, reserves a root or finalizes a credential.
+    """
+    from serverware import control_plane_custody_client as custody_client
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    custody, prepared, _window = _prepare_registration_execution_grant_on_work(
+        originals, _ValidationWork(QueryReadValidationLimits()))
+    return custody_client.ControlPlaneCustodyClient.append_registration_execution_grant(
+        custody, prepared)
 
 
 def prepare_registration_finalization(*, request_originals, response_originals):

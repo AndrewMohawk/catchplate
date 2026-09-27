@@ -1,6 +1,6 @@
 # Control-plane custody recovery
 
-Source-only `.121` implementation; unbuilt and unexecuted. These admin routes
+Source-only implementation; unbuilt and unexecuted. These admin routes
 inspect the existing cold-started caller journal and explicitly reconcile an
 attempted record. They do not provision storage or create a new custody owner.
 See [the journal boundary](control-plane-custody-journal.md) for provisioning,
@@ -16,6 +16,13 @@ operator token, sign-in/session identity or roles change; obsolete in-flight
 responses are discarded. An entered token may reveal the workspace before its
 role is known, but the server must admit `admin` before any metadata is returned.
 Unavailable custody remains separate from the other portal workspaces.
+
+Registration execution-grant records appear as **Retained only — no delivery
+contract**. Their fixed family/selector and at-most-64-MiB-plus-346-byte frame
+are admitted as metadata only, with both `attempted` and `observed` false.
+Inspect is available; Reconcile is disabled and rejected by the server.
+This adds no public execution handler, new-purpose admission UI or raw-original
+download. See [grant retention](control-plane-custody-journal.md#registration-execution-grant-retention).
 
 ## Admin API
 
@@ -53,7 +60,7 @@ because a fresh read matched it.
 | Status | Meaning |
 | --- | --- |
 | `404` | The local inventory lacks this record. It does not establish remote absence. |
-| `409` | The local record has no delivery attempt and cannot use reconciliation. |
+| `409` | The local record has no delivery attempt or belongs to the retention-only grant family and cannot use reconciliation. |
 | `503` | The configured owner, transport, local observation or authenticated readback is unavailable. The outcome remains uncertain. |
 
 These errors report `remoteState: "unknown"` with a fixed error code, not an

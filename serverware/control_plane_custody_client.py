@@ -19,6 +19,9 @@ successful exact readback records a local observation, not execution authority.
 The cold startup owner also reuses this admission for existing legacy dispatch;
 that dispatch does not acquire custody-journal retry or durability guarantees.
 There is no automatic signing, preparation, retry or new HTTP execution route.
+The separate registration execution-grant family is retention-only: fixed
+append/load methods preserve raw10, while legacy forwarding and reconciliation
+reject it before any network exchange or delivery marker.
 """
 from __future__ import annotations
 
@@ -385,6 +388,36 @@ class ControlPlaneCustodyClient:
         binding = _snapshot(self)
         return journal.CustodyJournal.append_transition(binding.journal, operation, originals)
 
+    def append_registration_execution_grant(self, originals):
+        """Retain the separate raw10 grant bundle, without a delivery attempt.
+
+        The journal uses its distinct format and content-identity domain. A
+        returned local digest establishes neither genuine grant verification
+        nor current authorization, remote custody or credential finalization.
+        """
+        binding = _snapshot(self)
+        return journal.CustodyJournal.append_registration_execution_grant(
+            binding.journal, originals)
+
+    def load_registration_execution_grant(self, localdigest):
+        """Return exact opaque originals and their retained source revision.
+
+        Loading is not renewed grant admission. Historical originals remain
+        available even if their authority has expired; a future action must
+        genuinely verify the original grant and its independently current scope.
+        """
+        from serverware import control_plane_registration_execution_records as grants
+
+        digest = journal._digest(localdigest)
+        binding = _snapshot(self)
+        record = journal.CustodyJournal.load(binding.journal, digest)
+        if (type(record) is not records.PreparedRecord or record.digest != digest
+                or (record.family, record.selector) != (grants.FAMILY, grants.OPERATION)):
+            raise CustodyClientError("local record is not the distinct registration execution grant bundle")
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while reading execution grant originals")
+        return record
+
     def append_and_forward_evidence(self, purpose, originals, *, deadline_ns=None):
         """Append actual raw6 durably, then attempt its forwarding exactly once.
 
@@ -452,6 +485,8 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("journal did not return its actual prepared originals")
         digest, source = record.digest, record.source_revision
         family, selector, originals = record.family, record.selector, record.originals
+        if family not in ("evidence", "transition"):
+            raise CustodyClientError("retention-only originals have no custody forwarding contract")
         if source != authority.SOURCE_REVISION:
             raise CustodyClientError("old-source custody originals require versioned historical replay")
         originals = transport._validate_originals(family, selector, originals)
@@ -502,6 +537,8 @@ class ControlPlaneCustodyClient:
         if record.source_revision != authority.SOURCE_REVISION:
             raise CustodyClientError("old-source custody originals require versioned historical replay")
         family, selector = record.family, record.selector
+        if family not in ("evidence", "transition"):
+            raise CustodyClientError("retention-only originals have no custody reconciliation contract")
         originals = reconciliation._validate_originals(family, selector, record.originals)
         _process(binding)
         started_monotonic_ns = time.monotonic_ns()

@@ -1,9 +1,9 @@
-# Control-plane registration execution-grant preparation
+# Control-plane registration execution-grant preparation and retention
 
 This source slice adds an opt-in, protected caller key and a private composition
-that obtains and locally verifies a registration evidence execution grant.
-It is unbuilt and unexecuted. No public route, operator/session gate or UI flow
-is activated; the actual authenticated application must separately authorize
+that obtains, locally verifies and optionally retains a registration evidence
+execution grant. It is unbuilt and unexecuted. No public execution handler or
+admission UI is activated; the actual authenticated application must separately authorize
 the present caller and the new execution-request purpose before invoking it.
 
 ## A new purpose, not an upgraded enrollment grant
@@ -117,16 +117,52 @@ or transferable successful-verification token. This tuple is not persisted by
 the helper and cannot be assumed live after its return; later consumers must
 retain and genuinely admit the original bytes under their own required gates.
 
+## Explicit local retention
+
+The separate private
+[`prepare_and_retain_registration_execution_grant(originals)`](../serverware/control_plane_registration_preparation.py)
+performs the same genuine preparation, then appends its exact raw10 bundle
+through the actual cold custody client. It returns only the local content ID
+after durable publication, not a grant-verification receipt or execution result.
+The existing in-memory preparation API is unchanged. Real present-caller and
+new-purpose admission must precede either composition; neither installs a
+public handler.
+
+`ControlPlaneCustodyClient.append_registration_execution_grant(originals)`
+uses the [journal's separate retention-only format](control-plane-custody-journal.md#registration-execution-grant-retention).
+Its `SWCPG001` frame and
+`serverware.controlPlaneRegistrationExecutionGrantRecord/v1` digest domain
+keep this raw10 inventory distinct from the five existing evidence/transition
+profiles. The lower-level append only stores opaque bytes; it does not perform
+the genuine authorization and grant replay done by the preparation composition.
+
+`load_registration_execution_grant(localdigest)` returns the existing opaque
+`PreparedRecord`: original bytes, their original `source_revision`, local
+digest, fixed `registration-execution` family and
+`webauthn.registration.evidence.admit` selector. Preserving that provenance
+does not claim current-source compatibility or current authority. Future use
+must genuinely replay the originals against independently admitted keys,
+configuration and current state, respecting their original issue/expiry bounds.
+Neither loading nor appending opens a new authorization window. Publication
+may complete after the verified grant expires; it then retains history, not
+live permission.
+
+The existing admin [recovery workspace](control-plane-custody-recovery.md)
+can inspect local metadata for these records, labeled retention-only. It does
+not expose originals or enable reconciliation, forwarding, reservation or
+execution. Journal fsync and recovery guarantees depend on the provisioned
+filesystem and do not establish off-host custody or resistance to rollback.
+
 ## Remaining integration and release boundaries
 
 The dedicated [grant-authorizer service](registration-execution-authorizer.md)
-and this caller path do not reserve a current root, create a durable grant
-journal or protected execution packet, mark an attempt, execute SQL or finalize
-a credential. Those remain separate
+and this caller path do not reserve a current root, create a protected execution
+packet, mark an attempt, execute SQL or finalize a credential. The local
+retention journal is not a one-use execution ledger. Those remain separate
 [successor execution](authority-successor-execution.md) requirements.
 
-Actual public handler orchestration, present operator/session authorization for
-the new purpose and its UI remain open. Independent key/account/FD/listener
+Actual public execution-handler orchestration, present operator/session
+authorization for the new purpose and its admission UI remain open. Independent key/account/FD/listener
 provisioning, admitted immutable runtime/release closure, rollback and witness
 requirements, and consolidated frozen-source verification also remain open.
 Neither source presence nor a returned signed grant is production acceptance.

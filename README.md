@@ -51,9 +51,9 @@ defines each scope and its dependencies. Open items can already contain partial 
 
 Five remain: **reservation/pending admission (in progress)**, one-use consume SQL,
 durable completion/recovery, exact committed-original release, and cold response/handoff.
-The [reservation source batch](https://github.com/example/private-deployment)
-lands its libraries and bootstrap; cold reserver delivery/startup and the cold SQL
-pending consumer remain. No runtime grant, reservation or service is demonstrated.
+The [reservation foundations](https://github.com/example/private-deployment)
+and [cold reserver delivery/startup plus SQL bootstrap](https://github.com/example/private-deployment)
+are source-landed. Actual cold SQL pending OS delivery/startup remains. No runtime claim.
 
 <details>
 <summary>Completed source detail: authorization 12/12 and grant issuance 5/5</summary>

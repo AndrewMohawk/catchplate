@@ -42,7 +42,7 @@ remain open.
 **OIDC session activation — 19/26 detailed source steps landed; 7 unfinished.**
 ✓ Landed (19) · → In progress (1) · — Other open (6).
 
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 19 keeps five landed diagnostic components. Inside step 20, current proofs/possession/effects/indexed derivation and metadata-only release-key custody are source-landed; protected consume planning/issuance/SQL/recovery is NEXT/open; committed-original release/exact outcome and cold service/handoff are open. These components add no steps. Source-only, not token release, current session state or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Inside step 20, current proofs/possession/indexed effects and metadata-only key custody are 2/5 source-landed diagnostic parts. Protected consume planning/issuance/SQL/recovery is in progress: read acquisition, signed original replay, completed-activation provenance and dedicated state observation are partial source work; retained/cold planning and execution connection are NEXT. Exact committed-original release and cold handoff remain open. Diagnostics add no steps; no token release, current-session or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
@@ -51,14 +51,14 @@ Counts are not effort percentages or an ETA.
 
 **Step 19 is source-landed**; its [five-part evidence ledger](docs/production-status.md#completion-detail-f084e6) preserves the completed scope.
 
-**Step 20 in progress — 2/5 diagnostic source parts landed:** ✓ Current proofs,
-old-token possession and indexed effects · ✓ Dedicated metadata-only key custody.
-The [partial release batch](https://github.com/example/private-deployment)
-and [five-part ledger](docs/production-status.md#token-release-detail-f084e7)
-keep the remaining scope explicit: **NEXT is protected consume planning/issuance/
-SQL/recovery**; committed-original release/exact outcome and cold service/handoff
-are still open. No consumption execution, plaintext release, current-session
-guarantee or production verification is claimed.
+**Step 20 in progress — 2/5 diagnostic source parts landed.** Proofs/indexed effects
+and metadata-only key custody are done in source. The
+[consume-planning batch](https://github.com/example/private-deployment)
+advances part c with read acquisition, signed original replay, completed-activation
+provenance and a dedicated state observation. **NEXT: admitted consume custody,
+durable/cold planning and issuance/reservation/SQL/recovery.** Exact committed-original
+release and cold handoff remain open; the [five-part ledger](docs/production-status.md#token-release-detail-f084e7)
+keeps their criteria separate. No consumption execution or plaintext release is claimed.
 
 Full verification follows source freeze. Immutable dependencies and independently
 operated signing, Nitro/KMS and witness services remain prerequisites; the

@@ -23,11 +23,11 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-- **Landed:** durable registration-grant storage, recovery and metadata inspection
-  ([6aec6b5](https://github.com/example/private-deployment));
-  this does not execute registration.
-- **Next:** finish caller authorization and public registration workflows, then
-  the remaining workload/native integration. Full verification follows completed
+- **Landed:** explicit operator and pending-OIDC grant preparation with fresh
+  authorization ([6eceea3](https://github.com/example/private-deployment));
+  it retains a grant but does not execute registration.
+- **Next:** connect current-root reservation, one-use execution and credential
+  finalization, then remaining workload/native integration. Full verification follows completed
   implementation and source freeze; current source is unbuilt and unexecuted.
 - **External prerequisites:** an immutable dependency snapshot and independently
   operated signing, Nitro/KMS and witness services, which are not yet provisioned.

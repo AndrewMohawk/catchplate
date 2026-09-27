@@ -86,12 +86,14 @@ parsed result is not a transferable permission token.
 
 ## Remaining cold and production boundaries
 
-This batch creates no process owner, inherited-FD inventory, listener, HTTP
-route, private-key mount, service unit or installer setting. A future cold owner
-must independently admit the purpose-only key, root/configuration/enrollment
-originals and original lifetime without sharing general response, planner or
-evidence keys. Existing cold enrollment and registration-signer owners are not
-silently extended to hold this new authority.
+The separate [cold execution-grant authorizer](registration-execution-authorizer.md)
+now has source for its own process owner, fixed four-FD delivery, private
+original-input transport and uninstalled packaging. It owns the dedicated
+grant-authorizer key, not the caller-authorization key. Existing cold enrollment
+and registration-evidence signer owners are not silently extended or given
+SQL authority. A protected caller-side owner and actual present caller admission
+for the new request-signing purpose remain separate requirements; no public
+registration route is activated by this composition.
 
 No reserve, current-root pending decision, custody packet, attempt marker or SQL
 write follows from issuing or verifying this authorization. The separate

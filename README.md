@@ -26,13 +26,13 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 not percentage of code written, effort remaining, or an ETA.
 
 **Latest landed milestone:** the
-[registration execution caller](docs/control-plane-registration-execution.md)
-now joins opt-in v3 caller-key ownership, original planning transport and local
-returned-grant verification in
-[commit 2b49c2c](https://github.com/example/private-deployment).
-**Next:** retain the new grant bundle under its own protected custody contract,
-then join present-caller/new-purpose admission and public workflows. Reservation,
-protected SQL execution and credential finalization remain open.
+[registration execution-grant journal](docs/control-plane-registration-execution.md#explicit-local-retention)
+now retains exact originals under a separate format, with recovery and
+metadata-only portal inspection, in
+[commit 6aec6b5](https://github.com/example/private-deployment).
+**Next:** join present-caller/new-purpose admission and public workflows to the
+retained originals. Current-root reservation, one-use execution, protected SQL
+and credential finalization remain open; local storage supplies none of them.
 
 [Open the progress tracker →](docs/production-status.md) for landed milestones,
 all six remaining gates, and their completion criteria. Independent signing,

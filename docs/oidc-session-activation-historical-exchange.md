@@ -70,13 +70,16 @@ resolve unknown historical cohorts or close the separate H05 requirement.
 
 ## Remaining completion work
 
-These APIs are not a public route, installed service or cold key-delivery path.
+The `.155` [dedicated completion composition](oidc-session-activation-completion-recovery.md)
+now connects a separate historical bootstrap/owner, original reservation/pending
+admission, actual immutable commit/custody readers, enrolled completion signing,
+first-exact retention, delivery and no-repeat reconciliation in private source.
 The live receiving bootstrap still permits only grant, reserve and SQL-issuer
-purposes; none is silently upgraded to historical custody. Next work must
-independently admit a dedicated historical purpose and its keys/policy, connect
-original reservation/pending admission and actual immutable commit/custody
-readers, use the enrolled completion signer, retain exact completion before
-state delivery and reconcile uncertainty without replaying SQL.
+purposes; none is silently upgraded to historical custody. Dedicated cold
+completion key/FD delivery, reader/TLS/journal admission, service launch,
+state-peer profile and response integration remain open. These primitives are
+not a public route or an installed completion service, and the generic
+activation completion rejection remains unchanged.
 
 Protected token release, public target-bound permission/recovery and portal
 confirmation remain separate. Step19 is **in progress**, not landed; the active

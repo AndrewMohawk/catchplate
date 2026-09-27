@@ -500,6 +500,57 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, work, live_window=None,
         raise OidcSessionActivationPlannerBootstrapError("activation planner bootstrap admission failed") from exc
 
 
+def _verify_historical_on_work(*, bootstrap_bytes, root_public_key, live_window,
+        transport_deadline_ns, work):
+    """Authenticate original v3 scope as history, never as a renewed launch.
+
+    The returned ordinary material retains the original attestation interval.
+    Its opening_sample is this real historical-processing sample, not evidence
+    that the old interval is live. Only a separately authenticated fresh outer
+    receiving purpose may authorize present use of these historical facts.
+    """
+    try:
+        original, root = bootstrap_bytes, root_public_key
+        if type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES:
+            _fail("historical activation bootstrap is not a bounded immutable original")
+        authorization._public(root)
+        window = clock._validate(live_window)
+        shape._integer(transport_deadline_ns, minimum=1)
+        deadline = min(window[4], transport_deadline_ns)
+        current = _processing(window, deadline, work)
+        current()
+        envelope = codec._decode(original, work)
+        shape._object(envelope, _ENVELOPE_FIELDS, "signed historical activation bootstrap")
+        shape._literal(envelope["schema"], SCHEMA)
+        shape._base64url(envelope["signatureBase64Url"], signature=True)
+        if type(envelope["payload"]) is not dict:
+            _fail("historical activation bootstrap payload is not an exact object")
+        codec._canonical(original, envelope, work)
+        unsigned = configuration._configuration_wire(envelope["payload"], capture._SharedLedger(work))
+        current()
+        capability._signature(root, envelope["signatureBase64Url"], SCHEMA, unsigned,
+            capture._SharedLedger(work))
+        current()
+        codec._canonical(original, envelope, work)
+        payload = envelope["payload"]
+        # Reuse only closed original grammar and genuine timeless admission:
+        # current source/configuration/generation, runtime cohort, dedicated
+        # planner/key/policy, complete vector and signed state enrollment.
+        _payload_shape(payload, work)
+        if payload["issuedAtEpochNs"] > current():
+            _fail("historical activation bootstrap is future-issued")
+        opening = clock._sample_on_work(work)
+        current()
+        material = _material(payload, root, opening, original, work, current)
+        codec._canonical(original, envelope, work)
+        current()
+        return material
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, OidcSessionActivationPlannerBootstrapError):
+            raise
+        raise OidcSessionActivationPlannerBootstrapError("historical activation planner bootstrap admission failed") from exc
+
+
 def _produce_on_work(*, payload, root_private_key, root_public_key, work,
         live_window=None, transport_deadline_ns=None):
     """Sign independently established launch/snapshot claims, never invent them."""

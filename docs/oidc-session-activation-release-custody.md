@@ -1,9 +1,10 @@
 # Delivery-key custody without token egress
 
 This is **partial step 20 source**, unbuilt, unexecuted and unprovisioned. It adds
-root-original-admitted delivery-key custody and exact authenticated ciphertext
-metadata inspection. It does **not** release a token, prove a fresh release
-intent, prove protected consumption, execute SQL or complete the browser flow.
+root-original-admitted delivery-key custody, fresh original release-intent
+admission and exact authenticated ciphertext metadata inspection. It does
+**not** release a token, prove protected consumption, execute SQL or complete
+the browser flow.
 
 ## Distinct root scope
 
@@ -21,8 +22,11 @@ digest, exact eleven-field AEAD scope, fresh outer interval and the fixed
 `oidc.session.activation-delivery.consume` operation. It also pins
 `releaseIntentDigest` and `consumeRequestDigest`. These are **independent expected
 identities only**, not a claim that either original intent or committed
-consumption has been verified. No signed status or scalar success is accepted
-instead of those future original admissions.
+consumption has been verified. The separate original-intent method below now
+authenticates intent; the bootstrap alone still does not. `releaseIntentDigest`
+is the domain-framed identity of the exact signed intent original under
+`serverware.oidcSessionActivationReleaseIntentIdentity/v1`, not a raw byte hash.
+No signed status or scalar success replaces committed-consumption admission.
 
 The original planner signature/configuration/policies/vector/enrollment are
 genuinely admitted historically within the current source cohort. Its dedicated
@@ -75,10 +79,23 @@ A nonblocking owner lock excludes overlapping checks and inspection.
   under the held key and root-owned scope. It returns only owned ordinary
   `{deliveryScope, deliveryEnvelopeDigest}` metadata. No row, plaintext token,
   intent-verification claim or consumption receipt is returned or retained.
+- `verify_intent_on_work(*, intent_bytes, intent_enrollment_bytes,
+  expected_caller_id, expected_consume_binding, old_token_bytes, live_window,
+  transport_deadline_ns, work)` joins the exact independently root-pinned
+  intent identity before genuine [original-intent admission](oidc-session-activation-release-intent-admission.md).
+  It derives configuration, generation, runtime, receiver and database scope
+  from the actual custody/planner/state originals; the caller and five consume
+  identity pins remain independently supplied expectations. Its enrolled intent
+  signer must differ from the actual root, planner, computation, completion and
+  state keys. The actual old-token original must match the signed delivery
+  scope. Both custody and intent retain current expiry/clock guards under the
+  same work/window. This method returns **nothing**: it does not establish
+  committed consumption, decrypt a token, create an outcome or mint reusable
+  permission for a later release call.
 - `close()` closes the same-process owner and drops held references; this is not
   a claim of guaranteed memory erasure.
 
-Every check/inspection reauthenticates original root scope, identity and key
+Every check/inspection/intent admission reauthenticates original root scope, identity and key
 under the same supplied work. Narrowing preserves original epoch/monotonic
 opening samples and caps at the fresh release interval and inherited deadline.
 Sticky guards surround callbacks and final return. Old planner expiry is never
@@ -93,9 +110,10 @@ consumption through the separate protected operation. A pure kernel transition,
 proof object is not that evidence. The legacy environment-secret decrypt/direct
 database recovery helper is not invoked.
 
-Future plaintext egress must first join actual original intent and protected
-plan/commit evidence to these independently expected identities and the exact
-delivery, then retain the exact allowed outcome for separately authorized
-recovery. That original-consuming integration, cold key/FD service, public
+Fresh intent now has its own original-consuming admission, but future plaintext
+egress must join that intent and actual protected plan/commit evidence in the
+same release call to these independent identities and the exact delivery, then
+retain the exact allowed outcome for separately authorized recovery. That
+committed-original integration, cold key/FD service, public
 permission, token response and current-session confirmation remain open.
 No test, parser, interpreter, build, provisioning or runtime verification was run.

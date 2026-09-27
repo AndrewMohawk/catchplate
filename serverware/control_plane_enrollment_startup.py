@@ -206,6 +206,15 @@ class _EnrollmentOwner:
             and finalization.reservation_endpoint is not None
             and finalization.reservation_predecessor is not None)
 
+    @property
+    def finalization_sql_enabled(self):
+        """Admitted cold configuration only, not dispatch or action-time currentness."""
+        _live(self)
+        finalization = None if self._material is None else self._material.finalization
+        return (self._finalization_key is not None and finalization is not None
+            and finalization.sql_endpoint is not None
+            and finalization.current_pending is not None)
+
     def _authorize_registration_finalization(self, *, request_originals, response_originals,
             sibling_challenge_ids, live_window, work, transport_deadline_ns=None):
         """Private finalization-only continuation after fresh present permission."""

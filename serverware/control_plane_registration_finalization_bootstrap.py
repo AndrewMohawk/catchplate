@@ -8,6 +8,8 @@ Returned material is private owned data, not present-caller authorization.
 No key generation, descriptor access, transport or replacement work occurs here.
 Nested v1 remains grant-only. Explicit nested v2 additionally pins one fixed
 reserver endpoint and independent state predecessor, with no new descriptor.
+Nested v3 adds independently root-signed current-pending scope and a fixed SQL
+endpoint. These are cold configuration assertions, not an action-time witness.
 """
 from __future__ import annotations
 
@@ -22,12 +24,15 @@ from serverware import authority_webauthn_transition_custody_configuration as tr
 
 SCHEMA = "serverware.controlPlaneRegistrationFinalization/v1"
 V2_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v2"
+V3_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v3"
 CALLER_KEY_FD = 204
 AUTHORIZER_SOCKET_PATH = "/run/serverware/registration-finalization-authorizer.sock"
 RESERVER_SOCKET_PATH = "/run/serverware/registration-finalization/reserver.sock"
+SQL_SOCKET_PATH = "/run/serverware/registration-finalization/sql.sock"
 _FIELDS = frozenset({"schema", "finalizationCallerPrivateKeyFd", "currentRootEnrollment",
     "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"})
 _V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "statePredecessor"})
+_V3_FIELDS = _V2_FIELDS | frozenset({"sqlEndpoint", "currentPending"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _ORIGINAL_LIMITS = (("currentRootEnrollment", caller.authorization.MAX_ENROLLMENT_BYTES),
@@ -50,10 +55,12 @@ class _FinalizationMaterial:
     authorizer_endpoint: tuple
     reservation_endpoint: tuple | None = None
     reservation_predecessor: tuple | None = None
+    sql_endpoint: tuple | None = None
+    current_pending: tuple | None = None
 
 
 def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
-    if type(_path) is not str or _path not in (AUTHORIZER_SOCKET_PATH, RESERVER_SOCKET_PATH):
+    if type(_path) is not str or _path not in (AUTHORIZER_SOCKET_PATH, RESERVER_SOCKET_PATH, SQL_SOCKET_PATH):
         raise RegistrationFinalizationBootstrapError("finalization endpoint profile is not source fixed")
     shape._object(value, _ENDPOINT_FIELDS, "registration finalization endpoint")
     shape._literal(value["socketPath"], _path)
@@ -70,13 +77,18 @@ def _reserver_endpoint(value):
     return _endpoint(value, _path=RESERVER_SOCKET_PATH)
 
 
+def _sql_endpoint(value):
+    return _endpoint(value, _path=SQL_SOCKET_PATH)
+
+
 def _shape(value):
     if value is None:
         return
     if (type(value) is not dict or type(value.get("schema")) is not str
-            or value["schema"] not in (SCHEMA, V2_SCHEMA)):
+            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA)):
         raise RegistrationFinalizationBootstrapError("registration finalization scope version differs")
-    shape._object(value, _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS,
+    shape._object(value, _V3_FIELDS if value["schema"] == V3_SCHEMA else
+        _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS,
         "control-plane registration finalization scope")
     shape._integer(value["finalizationCallerPrivateKeyFd"], 1023, minimum=32)
     if value["finalizationCallerPrivateKeyFd"] != CALLER_KEY_FD:
@@ -87,7 +99,7 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
-    if value["schema"] == V2_SCHEMA:
+    if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
         _reserver_endpoint(value["reserverEndpoint"])
         predecessor = value["statePredecessor"]
         shape._object(predecessor, frozenset({"sequence", "headDigest", "nextFence"}),
@@ -97,6 +109,18 @@ def _shape(value):
         shape._integer(predecessor["nextFence"], minimum=1)
         if predecessor["sequence"] == 0 and predecessor["nextFence"] != 1:
             raise RegistrationFinalizationBootstrapError("genesis finalization predecessor requires fence one")
+    if value["schema"] == V3_SCHEMA:
+        _sql_endpoint(value["sqlEndpoint"])
+        pending = value["currentPending"]
+        shape._object(pending, frozenset({"sequence", "headDigest", "fence"}),
+            "independent finalization current pending scope")
+        shape._integer(pending["sequence"], caller.authorization.MAX_RECORDS, minimum=1)
+        shape._digest(pending["headDigest"])
+        shape._integer(pending["fence"], minimum=1)
+        if (pending["sequence"] != predecessor["sequence"] + 1
+                or pending["fence"] != predecessor["nextFence"]):
+            raise RegistrationFinalizationBootstrapError(
+                "finalization pending scope is not this cold predecessor's successor")
 
 
 def _admit_on_work(*, registration_finalization, configuration_payload,
@@ -169,7 +193,8 @@ def _admit_on_work(*, registration_finalization, configuration_payload,
             if caller_pin == pin:
                 raise RegistrationFinalizationBootstrapError("finalization caller key reuses another configured purpose")
         reservation_endpoint = reservation_predecessor = None
-        if value["schema"] == V2_SCHEMA:
+        sql_endpoint = current_pending = None
+        if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
             # Capacity and genesis come from actual admission of this same
             # original root enrollment, never from a received state receipt.
             current = caller.authorization._admit_enrollment_on_work(enrollment_bytes=current_raw,
@@ -190,9 +215,19 @@ def _admit_on_work(*, registration_finalization, configuration_payload,
             reservation_endpoint = _reserver_endpoint(value["reserverEndpoint"])
             reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
                 predecessor["nextFence"])
+            if value["schema"] == V3_SCHEMA:
+                pending = value["currentPending"]
+                if pending["sequence"] >= current.payload["maxRecords"]:
+                    raise RegistrationFinalizationBootstrapError(
+                        "finalization pending scope has no enrolled completion capacity")
+                # Supplied only by this authenticated original root bootstrap.
+                # Neither a returned reserve receipt nor local retained bytes
+                # can enroll, update or independently prove these current pins.
+                sql_endpoint = _sql_endpoint(value["sqlEndpoint"])
+                current_pending = (pending["sequence"], pending["headDigest"], pending["fence"])
         return _FinalizationMaterial(CALLER_KEY_FD, admitted.caller_public_key,
             current_raw, grant_raw, authorization_raw, _endpoint(value["authorizerEndpoint"]),
-            reservation_endpoint, reservation_predecessor)
+            reservation_endpoint, reservation_predecessor, sql_endpoint, current_pending)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RegistrationFinalizationBootstrapError):
             raise

@@ -8,7 +8,8 @@ credential registration, OIDC activation or independent currentness evidence.
 
 [The nested bootstrap](../serverware/control_plane_registration_finalization_bootstrap.py)
 admits `serverware.controlPlaneRegistrationFinalization/v2` only inside the
-existing root-signed control-plane parent v4. Nested v1 remains unchanged and
+existing root-signed control-plane parent v4. An explicit nested v3 extension
+below adds SQL endpoint/current-pending configuration only. Nested v1 remains unchanged and
 grant-only; it has no reservation endpoint or predecessor. No new key descriptor,
 environment fallback, key generation or evidence-admit permission is added.
 
@@ -35,6 +36,42 @@ The private cold material retains `reservation_endpoint` and
 `reservation_predecessor`; both are `None` for v1. See the
 [caller custody contract](control-plane-registration-finalization-custody.md)
 for parent admission and key custody.
+
+## Opt-in current-pending pins, not a witness
+
+`serverware.controlPlaneRegistrationFinalization/v3` is exactly the eight v2
+fields plus `sqlEndpoint` and `currentPending`, under the same signed parent
+v4 and dedicated FD204. Nested v1/v2 remain unchanged and do not gain SQL
+configuration implicitly.
+
+`sqlEndpoint` has the closed endpoint shape above, with fixed path
+`/run/serverware/registration-finalization/sql.sock`, integer timeout 1–30
+seconds and root-activated listener peer `0:0`. `currentPending` is exactly
+`{sequence, headDigest, fence}`: a positive sequence, canonical SHA-256 head
+and positive fence. Its sequence must equal the independently root-signed
+`statePredecessor.sequence + 1`, and its fence must equal that predecessor's
+`nextFence`. Actual admission of the original current-root enrollment requires
+the pending sequence to remain below its enrolled record limit, preserving
+completion capacity.
+
+The private material retains `sql_endpoint` and `current_pending`; both remain
+`None` under v1/v2. The owner exposes `finalization_sql_enabled` as a
+configuration-presence check with its existing live-owner guard. It performs no
+SQL dispatch, database query, nonce lookup or current-head observation. There
+is no new key, descriptor or environment variable.
+
+The head must be independently supplied in the signed cold bootstrap, never
+copied from the reserve acknowledgment or local reservation slot. Root signing
+authenticates the assertion's origin, not its continuing truth at action time.
+Even the existing nonce-bound state-owner lookup is an authenticated observation
+of that owner's state, not independent hostile-host antirollback or an atomic
+off-host action-time lease. A later SQL caller still needs genuine original
+pending/grant/plan admission and the actual protected database checks; static
+pins do not close the external currentness/one-use production gate.
+
+This source addition does not connect a private SQL dispatch method or a cold
+finalization SQL service. Pending-scope-to-action orchestration remains open;
+the presence of the profile is not completion of that integration milestone.
 
 ## One original-bound exchange
 

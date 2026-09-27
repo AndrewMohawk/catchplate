@@ -15,7 +15,7 @@ The original root-signed envelope uses
 `serverware.signedControlPlaneEnrollmentBootstrap/v4`; its payload uses
 `serverware.controlPlaneEnrollmentBootstrap/v4`. It retains every parent v3
 field and adds required `registrationFinalization`, either null, the exact
-six-field v1 object below, or the explicit nested v2 extension described next.
+six-field v1 object below, or the explicit nested v2/v3 extensions described next.
 The complete canonical original remains bounded to
 4 MiB and authenticated by the already admitted runtime root.
 
@@ -44,6 +44,13 @@ genuinely checks the finalization-specific root delegation and original
 current-root/grant enrollment, configuration, generation and audience bindings.
 Its planner and operation keys come from the actual finalization transition
 configuration, never the registration evidence-admission policy.
+
+The stdlib-only [early descriptor projection](../serverware/authority_fd_entrypoint.py)
+now accepts each closed nested v1/v2/v3 shape and its source-fixed endpoints;
+the older v1-only projection would have rejected v2 before child startup. All
+three profiles still select the same FD204. This delivery check authenticates
+no root, signature, generation or currentness: full child admission remains
+mandatory before the key or configuration is used.
 
 Parent v2/v3 and their producers retain their prior behavior, including their
 previously allowed generic issuer descriptor range. Only v4 reserves FD204:
@@ -75,6 +82,31 @@ acknowledgment against those independently held pins. No response updates the
 expected predecessor, changes the original lifetime or authorizes SQL.
 See the [caller reservation contract](control-plane-finalization-reservation.md)
 and [public permission flow](public-registration-finalization-reservation.md).
+
+## Opt-in SQL/current-pending configuration
+
+Nested `serverware.controlPlaneRegistrationFinalization/v3` retains the exact
+eight v2 fields and adds only `sqlEndpoint` and `currentPending`. Its SQL
+endpoint is `/run/serverware/registration-finalization/sql.sock`, with the same
+closed endpoint fields, integer timeout 1–30 seconds and root listener `0:0`.
+`currentPending` is the exact independently root-signed
+`{sequence, headDigest, fence}`. The sequence and fence are positive; the head
+is canonical SHA-256. The sequence must equal the signed predecessor sequence
+plus one, and the fence must equal its `nextFence`. The genuine current-root
+enrollment's capacity must leave a completion slot after that pending sequence.
+
+Private material adds `sql_endpoint` and `current_pending`, both `None` for
+v1/v2. `finalization_sql_enabled` reports this configured pair under existing
+owner/lifetime checks; it does not send SQL or grant present execution consent.
+The unchanged signed parent v4 and FD204 carry this opt-in profile without a
+new key, descriptor, environment variable or fallback.
+
+No returned reserve receipt, retained record or observed database value supplies
+the independent pending head. A root-signed cold pin remains a provenance-bound
+assertion, not proof that an off-host head is still current at action time.
+Actual original admission, protected one-use database effects, independent
+currentness and the cold dispatch/coordinator connection remain separate.
+See the [pending-scope boundary](control-plane-finalization-reservation.md#opt-in-current-pending-pins-not-a-witness).
 
 ## Actual key delivery and lifetime
 
@@ -118,13 +150,16 @@ and durable original association. The service source and packaging remain
 unbuilt, unexecuted and unprovisioned; the fixed path is not evidence of socket
 availability or deployment. The explicit nested v2 reservation flow still
 requires the independently provisioned reserver and state v2 peer admission.
-Protected pending/SQL/completion orchestration and separate OIDC session
-activation remain outstanding.
+Nested v3 now supplies explicit SQL/current-pending configuration, but does not
+add the private SQL dispatch method or cold finalization SQL worker. Protected
+pending/SQL/completion orchestration and separate OIDC session activation remain
+outstanding; a configured property is not a completed source-integration gate.
 Trusted-host-local descriptor continuity is not independent enclave evidence.
 
 This implementation has not been built or executed. Deferred frozen validation
 includes old-profile compatibility; closed v4/null-slot and nested-version
-rejection; independently pinned predecessor/capacity checks; tampered or
+rejection; independently pinned predecessor/capacity checks; inconsistent v3
+pending successor/fence/capacity and endpoint rejection; tampered or
 cross-purpose enrollment rejection; actual separate key/FD pair admission;
 missing, reused or changed key rejection; PID/custody/descriptor drift; and
 shutdown/failure preventing reuse. These are planned checks, not passing results.

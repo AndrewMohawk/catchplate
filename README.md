@@ -23,12 +23,13 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-- **Landed:** separate completion recovery with its own signing key, protected
-  readers and durable original request/acknowledgment delivery
-  ([dc0a902](https://github.com/example/private-deployment)).
-  It is not deployed, connected to public routes or credential finalization.
-- **Next:** close remaining reader admission gaps, then integrate the authorized
-  public execution workflow and separate credential finalization.
+- **Landed:** independently pinned completion-reader catalog checks and
+  verification of returned signed completion originals
+  ([a5cd661](https://github.com/example/private-deployment)).
+  Source-only; not deployed or connected to public execution or finalization.
+- **Next:** integrate authenticated caller-side SQL/completion handoff and
+  durable outcome storage, then the authorized public execution workflow and
+  separate credential finalization.
   Full verification follows implementation and source freeze; current source is
   unbuilt and unexecuted.
 - **External prerequisites:** an immutable dependency snapshot and independently

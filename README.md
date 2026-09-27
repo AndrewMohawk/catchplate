@@ -1,5 +1,3 @@
-> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
-
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -26,48 +24,54 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 **Still to do across the project:** historical authority (1 checkpoint), session
 activation (1), workload/native integration (3), and providers/operations (7).
 The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
-names each scope. Landed source does not imply current executability: the
-[shared execution replay inventory](docs/production-status.md#current-integration-boundary)
-now includes activation and dedicated cold grant, reserve, SQL and completion
-roles in committed source. Protected token release and public/portal activation
-remain open.
+names each scope; the active session work is expanded below.
+
+### Now building: protected token release
+
+**6/16 implementation-detail units landed · 3 in progress · 7 other open.**
+These are the pieces **inside activation step 20**, not 16 additional project
+milestones. Each numbered segment below has a name and written status.
+
+[![Protected token release, step 20: 01–06 landed in source; 07 consume-history custody, 08 durable plan retention and 09 cold planner construction in progress and uncommitted; 10 planner service, 11 private issuance, 12 reservation, 13 one-use SQL, 14 recovery, 15 exact token release and 16 release handoff open. Six of sixteen detail units landed; not production verification.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+
+**Done** means committed source, **in progress** includes unfinished/uncommitted
+work, and **open** means its full criterion has not landed. The
+[16-row checklist](docs/production-status.md#token-release-implementation-detail)
+links each done item to its commit and states what closes every unfinished item.
+Counts are not effort percentages or an ETA.
+
+**After token release:** target-bound permission, public activation and recovery,
+explicit portal actions, fresh portal permission, and truthful session confirmation
+are still open. The full activation workflow remains **19/26 landed**.
 
 <details>
-<summary>All 46 source checkpoints and the nested milestone bars</summary>
+<summary>All 46 project checkpoints and all 26 activation steps</summary>
 
 [![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 19/26 finer steps shown below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
-</details>
+**OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
-**OIDC session activation — 19/26 detailed source steps landed; 7 unfinished.**
-✓ Landed (19) · → In progress (1) · — Other open (6).
-
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Inside step 20, current proofs/possession/indexed effects and metadata-only key custody are 2/5 source-landed diagnostic parts. Protected consume planning/issuance/SQL/recovery is in progress: read acquisition, signed original replay, completed-activation provenance and dedicated state observation are partial source work; retained/cold planning and execution connection are NEXT. Exact committed-original release and cold handoff remain open. Diagnostics add no steps; no token release, current-session or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 6 landed, 3 in progress and 7 open. Consume custody, retention and cold construction are in progress; planner service is next queued. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
-Grouping milestones are not counted twice; these 26 steps all belong to F08.
-Counts are not effort percentages or an ETA.
+The 26 steps belong to F08; step 20's 16 detail units subdivide its existing five
+diagnostic groups (**2/5 landed**). None is added to the parent counts.
 
-**Step 19 is source-landed**; its [five-part evidence ledger](docs/production-status.md#completion-detail-f084e6) preserves the completed scope.
+</details>
 
-**Step 20 in progress — 2/5 diagnostic source parts landed.** Proofs/indexed effects
-and metadata-only key custody are done in source. The
-[consume-planning batch](https://github.com/example/private-deployment)
-advances part c with read acquisition, signed original replay, completed-activation
-provenance and a dedicated state observation. **NEXT: admitted consume custody,
-durable/cold planning and issuance/reservation/SQL/recovery.** Exact committed-original
-release and cold handoff remain open; the [five-part ledger](docs/production-status.md#token-release-detail-f084e7)
-keeps their criteria separate. No consumption execution or plaintext release is claimed.
+**Production blockers — 0/6 gates verified:** integration is unfinished;
+immutable dependencies, frozen verification and independent release evidence
+are pending; signing, Nitro/KMS and witness services are not provisioned;
+live operator/hardware/provider acceptance awaits deployment.
 
-Full verification follows source freeze. Immutable dependencies and independently
-operated signing, Nitro/KMS and witness services remain prerequisites; the
-services are not provisioned.
+Full verification follows source freeze. No consumption execution or plaintext
+release is claimed for the new protected path.
 
 [Open the full tracker →](docs/production-status.md) for checkpoint evidence and
 the [six separate production gates](docs/production-status.md#remaining-production-gates).
 
-<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg and implementation-progress.svg together. The active bar counts 26 fixed named F08 steps once, excluding grouping parents; diagnostic detail inside a step is not additive. Document any inventory/denominator change. Every segment needs a visible number, named status and linked evidence. NEXT is open, not an active or completed claim. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg, implementation-progress.svg and token-release-progress.svg together. Activation has 26 fixed named F08 steps; token release has 16 detail units inside step 20, replacing c with twelve parts within the existing five diagnostic groups (5 - 1 + 12 = 16). Neither grouping parents nor diagnostic children are additive. Every segment needs a visible number, name, status and linked criterion/evidence. Uncommitted work cannot be landed. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

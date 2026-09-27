@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1606" viewBox="0 0 1000 1606" role="img" aria-labelledby="title description">
-  <title id="title">Source implementation: 34 of 46 parent checkpoints landed; 12 open including F08. F08 has 19 of 26 leaves landed, step 20 in progress and 6 other open. Inside step 20, consume planning/execution is in progress; retained/cold planning and execution connection NEXT.</title>
-  <desc id="description">Six cards list all 46 stable parent checkpoints: evidence 10/10, history 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. Parent 34/46, F08 direct 3/6, protected 4/5, planning 5/5, cold admission 3/3 and execution 6/7 are unchanged. Private replay stays 8/8. Completion step 19 remains source-landed. The active inventory stays 19/26 landed, with step 20 in progress and 6 other open. Step 20 keeps 2/5 diagnostic parts landed in 4db227b75b13b104b51a3b2b3bda0ea5db8d46c7: current proofs/possession/indexed effects and metadata-only release-key custody. Part c protected consume planning/issuance/SQL/recovery is IN PROGRESS: 7713e4cd5d6745ca0977cf1122e4b366cf03fcf8 adds read-only acquisition, signed original replay, completed-activation provenance, distinct state observation and stateless acquire/sign owner. NEXT is admitted UID 65501 historical custody, durable retention/cold planning and issuance/reservation/one-use SQL/recovery. Committed-original release/exact outcome and cold service/handoff remain OPEN. Diagnostics add no leaves. Generic activation completion remains rejected; its dedicated path requires historical custody. No consume SQL, plaintext release, current-session or off-host currentness is established. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
+  <title id="title">Source implementation: 34 of 46 parents landed; 12 open including F08. F08 has 19/26 leaves landed. Step 20 remains in progress, with a separate 16-unit detail view.</title>
+  <desc id="description">Six cards list all 46 stable parents: evidence 10/10, history 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. F08 direct 3/6, protected 4/5, planning 5/5, cold admission 3/3, execution 6/7 and private replay 8/8 remain unchanged. The active inventory stays 19/26 landed, with step 20 in progress and 6 other open. Step 20 has 2/5 diagnostic groups landed; its separate 16-unit detail shows 6 landed, 3 in progress and 7 open. Consume custody, retention and cold construction are underway but uncommitted; planner service is next queued. Exact release and cold handoff remain open. Nested counts are not additive. No consume SQL, plaintext release or current-session claim. Source is unbuilt and unexecuted; production acceptance remains 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="1604" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="40" fill="#f8fafc" font-size="26" font-weight="700">Implementation, checkpoint by checkpoint</text>
@@ -216,7 +216,7 @@
         <rect x="204" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4b landed: encrypted-original helper, not durable custody</title></rect>
         <rect x="388" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4c landed: business effects</title></rect>
         <rect x="572" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4d landed: protected planning, 5 of 5 source pieces</title></rect>
-        <rect x="756" y="45" width="176" height="28" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4e in progress: 6/7 pieces landed; private replay 8/8. Step 20 keeps 2/5 diagnostic parts landed. Consume planning/execution is IN PROGRESS; retained/cold planning and execution connection NEXT. Committed-original release and cold handoff remain OPEN. No plaintext release or current-session guarantee.</title></rect>
+        <rect x="756" y="45" width="176" height="28" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4e in progress: 6/7 pieces landed; private replay 8/8. Step 20 has 2/5 diagnostic groups landed; finer detail 6/16 landed, 3 in progress, 7 open. Exact release and cold handoff remain open. No plaintext release or current-session guarantee.</title></rect>
       </g>
       <g text-anchor="middle" font-size="13" font-weight="700">
         <text x="108" y="64" fill="#0f172a">✓ a · Read proofs</text>
@@ -241,7 +241,7 @@
         <text x="660" y="136" fill="#0f172a">✓ d.4 · Configured owner</text>
         <text x="844" y="136" fill="#0f172a">✓ d.5 · Cold admission</text>
       </g>
-      <text x="20" y="169" fill="#94a3b8" font-size="13">19/26 landed · Release 2/5 parts · consume planning IN PROGRESS · NEXT: retained/cold execution connection.</text>
+      <text x="20" y="169" fill="#94a3b8" font-size="13">19/26 landed · Release groups 2/5 · finer detail 6/16 landed, 3 in progress, 7 open · see detail ledger.</text>
     </g>
 
     <text x="24" y="1537" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>

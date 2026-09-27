@@ -42,6 +42,10 @@ class _AdmittedCompletion:
     effects_digest: str
     authorization_digest: str
     live: object
+    activation_request_digest: str
+    activation_delivery_id: str
+    activation_delivery_scope_digest: str
+    activation_delivery_envelope_digest: str
 
 
 def _admit_on_work(*, originals, expectations, planner_public_key,
@@ -171,6 +175,10 @@ def _admit_on_work(*, originals, expectations, planner_public_key,
     live()
     candidate = pending._PendingCompletion(OPERATION, marker, replayed.after_vector_bytes,
         reserve, receipt_raw, snapshot_raw, (request["issuedAtEpochNs"], request["expiresAtEpochNs"]))
-    result = _AdmittedCompletion(candidate, effects_digest, verified.authorization_digest, live)
+    # These scalar identities come only from the same genuine historical
+    # replay, never from a caller-supplied success object or truncated UUID.
+    result = _AdmittedCompletion(candidate, effects_digest, verified.authorization_digest, live,
+        replayed.activation_request_digest, replayed.activation_delivery_id,
+        replayed.activation_delivery_scope_digest, replayed.activation_delivery_envelope_digest)
     live()
     return result

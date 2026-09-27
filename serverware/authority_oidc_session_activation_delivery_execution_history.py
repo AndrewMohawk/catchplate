@@ -48,6 +48,10 @@ class _HistoricalReplayedDelivery:
     valid_until_epoch_ns: int
     live: object
     selected_rows: tuple
+    activation_request_digest: str
+    activation_delivery_id: str
+    activation_delivery_scope_digest: str
+    activation_delivery_envelope_digest: str
 
 
 def _fail(message):
@@ -213,9 +217,20 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
         _fail("historical consume output changed its original interval or token-free effects")
     work.prepare_copy(output["mutations"])
     work.prepare_copy(output["selectedRows"])
+    # Preserve the full original activation identity already verified by this
+    # invocation. A deterministic delivery UUID alone cannot establish it.
+    provenance = full.provenance
+    if type(provenance) is not history.plan.provenance._VerifiedProvenance:
+        _fail("historical consume lacks genuine same-call activation provenance")
+    activation_request = registration._digest(provenance.activation_request_digest)
+    activation_delivery_id = registration._text(provenance.delivery_id,
+        "historical activation delivery identity", 128, work)
+    activation_scope_digest = registration._digest(provenance.delivery_scope_digest)
+    activation_envelope_digest = registration._digest(provenance.delivery_envelope_digest)
     result = _HistoricalReplayedDelivery(OPERATION, output["request"], raw_pair, record_digest,
         before_bytes, after_bytes, before_digest, after_digest, output["result"], interval,
         plan_digest, tuple(output["mutations"]), work_units, result_window, result_bound,
-        full.valid_until_epoch_ns, check, tuple(output["selectedRows"]))
+        full.valid_until_epoch_ns, check, tuple(output["selectedRows"]), activation_request,
+        activation_delivery_id, activation_scope_digest, activation_envelope_digest)
     check()
     return result

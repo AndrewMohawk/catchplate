@@ -18,7 +18,7 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Named source checkpoints: 34 of 46 landed, 12 open including F08 in progress. F08 remains 3 of 6 child steps landed. The F08.4 drill-down shows read proofs, encrypted originals and business effects landed; protected planning in progress; custody/execution open. Within planning, capacity adapter and signed-original mechanics are landed; indexed writes and configured owner are in progress, not yet committed; cold admission is open. Named child steps do not add parent checkpoints. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Named source checkpoints: 34 of 46 landed, 12 open including F08 in progress. F08 remains 3 of 6 child steps landed. The F08.4 drill-down shows read proofs, encrypted originals and business effects landed; protected planning in progress; custody/execution open. Within planning, capacity adapter, signed-original mechanics, indexed writes and configured owner/private retention are landed; cold admission remains open. Named child steps do not add parent checkpoints. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 **34 of 46 tracked source checkpoints landed · 12 open, including F08 in progress.**
 Each segment has a named entry in the graphic: ✓ landed, → in progress, — open.
@@ -55,7 +55,8 @@ The new [F08.4 drill-down](docs/production-status.md#f08-detail-oidc-session-act
 shows **read proofs, encrypted originals and business effects landed**;
 protected planning is in progress, and custody/execution is open. Within planning,
 the [capacity adapter and signed mechanics are landed](https://github.com/example/private-deployment);
-indexed writes and the configured owner are **in progress, not yet committed**.
+[indexed write evidence and configured encrypted retention are now landed](https://github.com/example/private-deployment).
+That makes **4/5 planner pieces landed**, while protected planning stays open.
 **Cold admission remains open:** independently admit cold configuration, keys and
 policy, and authenticate current roots/heads before planning. The reusable owner
 alone is not that authority; action-time one-use execution remains separate.

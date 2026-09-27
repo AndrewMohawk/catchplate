@@ -22,7 +22,7 @@ REGISTRATION_HANDOFF_CSS = r"""
 REGISTRATION_HANDOFF_HTML = r"""
       <section id="registration-handoff-workspace" aria-labelledby="registration-handoff-heading">
         <h2 id="registration-handoff-heading">Retained registration actions</h2>
-        <p>Use the evidence grant local ID from a real retained preparation. These actions are separate: no automatic chaining or retry. A local ID is a locator, not ownership or execution permission.</p>
+        <p>The first five actions use a real retained evidence grant local ID. Reserve finalization uses the separate finalization grant ID below. These actions are separate: no automatic chaining or retry. A local ID is a locator, not ownership or execution permission.</p>
         <div class="registration-handoff-fields">
           <div><label for="registration-handoff-locator">Evidence grant local ID</label>
             <input id="registration-handoff-locator" maxlength="71" spellcheck="false" autocomplete="off" placeholder="sha256:…" aria-describedby="registration-handoff-boundary"></div>
@@ -33,6 +33,9 @@ REGISTRATION_HANDOFF_HTML = r"""
               <option value="pending">Pending OIDC first enrollment · fresh bootstrap</option>
             </select></div>
         </div>
+        <div><label for="registration-handoff-finalization-locator">Finalization grant local ID · Reserve finalization only</label>
+          <input id="registration-handoff-finalization-locator" maxlength="71" spellcheck="false" autocomplete="off" placeholder="sha256:…" aria-describedby="registration-handoff-boundary">
+          <p class="hint">Paste a real retained finalization grant ID, or use the separate ID filled after Prepare finalization grant. This is not the evidence ID or the older preparation-only finalization ID.</p></div>
         <p class="hint">The server decides whether this branch is permitted. A historical enrollment mode does not grant present permission. Bootstrap tokens are masked and cleared, never saved by this panel.</p>
         <div class="registration-handoff-actions">
           <button id="registration-handoff-execute" type="button">Execute evidence</button>
@@ -40,12 +43,13 @@ REGISTRATION_HANDOFF_HTML = r"""
           <button id="registration-handoff-recover" type="button">Recover completion</button>
           <button id="registration-handoff-finalize" type="button">Prepare finalization</button>
           <button id="registration-handoff-grant" type="button">Prepare finalization grant</button>
+          <button id="registration-handoff-reserve" type="button">Reserve finalization</button>
         </div>
         <div class="registration-handoff-actions">
           <button id="registration-handoff-use-inspected" class="secondary" type="button">Use inspected grant local ID</button>
           <a href="#custody-workspace">Admin-only local metadata inspection</a>
         </div>
-        <p id="registration-handoff-boundary" class="hint">Execute evidence is not credential finalization. Request completion uses live originals; Recover completion uses separately authorized historical recovery and never retries SQL. Prepare finalization retains an inspection/preparation-only plan that cannot gain execution permission retroactively. Prepare finalization grant obtains dedicated authorization before a NEW plan, complete vector and grant; it does not reserve or execute finalization. Registration is not finalized and no session is activated here.</p>
+        <p id="registration-handoff-boundary" class="hint">Execute evidence is not credential finalization. Request completion uses live originals; Recover completion uses separately authorized historical recovery and never retries SQL. Prepare finalization retains an inspection/preparation-only plan that cannot gain execution permission retroactively. Prepare finalization grant obtains dedicated authorization before a NEW plan, complete vector and grant. Reserve finalization is a separate fresh-authorized request using that grant ID; a recorded reservation is not currentness or SQL permission. Registration is not finalized and no session is activated here.</p>
         <p id="registration-handoff-status" role="status" aria-live="polite">No action submitted. Registration not finalized.</p>
         <p id="registration-handoff-negotiation" class="hint" aria-live="polite"></p>
         <div class="registration-handoff-actions">
@@ -66,6 +70,7 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
       recover: {label: 'Recover completion', suffix: 'recover-completion', purpose: 'recover-registration-evidence-completion', action: 'webauthn.registration.execution.recover', schema: 'serverware.webAuthnRegistrationCompletionRecovery/v1', status: 'completion-recovered', authenticated: true},
       finalize: {label: 'Prepare finalization', suffix: 'prepare-finalization', purpose: 'prepare-retained-registration-finalization', action: 'webauthn.registration.finalization.prepare', schema: 'serverware.webAuthnRegistrationFinalizationPreparation/v1', status: 'finalization-prepared'},
       grant: {label: 'Prepare finalization grant', suffix: 'prepare-finalization-grant', purpose: 'prepare-registration-finalization-grant', action: 'webauthn.registration.finalization.authorize', schema: 'serverware.webAuthnRegistrationFinalizationGrantPreparation/v1', status: 'finalization-grant-prepared'},
+      reserve: {label: 'Reserve finalization', suffix: 'reserve-finalization', purpose: 'reserve-registration-finalization', action: 'webauthn.registration.finalization.reserve', schema: 'serverware.webAuthnRegistrationFinalizationReservation/v1', status: 'reservation-recorded'},
     });
     let registrationHandoffEpoch = 0;
     let registrationHandoffBusy = false;
@@ -77,11 +82,11 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
       return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
     }
 
-    function registrationHandoffSelection() {
-      const digest = $('registration-handoff-locator').value.trim();
+    function registrationHandoffSelection(kind) {
+      const digest = $(kind === 'reserve' ? 'registration-handoff-finalization-locator' : 'registration-handoff-locator').value.trim();
       const mode = $('registration-handoff-mode').value;
       if (!registrationHandoffDigest(digest) || !['operator', 'operator-bootstrap', 'pending'].includes(mode)) {
-        throw new Error('Enter a real retained evidence grant local ID and select the present caller flow.');
+        throw new Error('Enter the real retained ' + (kind === 'reserve' ? 'finalization' : 'evidence') + ' grant local ID and select the present caller flow.');
       }
       return {digest, mode};
     }
@@ -99,14 +104,14 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
     }
 
     function renderRegistrationHandoff() {
-      let selected = null;
-      try { selected = registrationHandoffSelection(); } catch (_) {}
       for (const kind of Object.keys(registrationHandoffActions)) {
+        let selected = null;
+        try { selected = registrationHandoffSelection(kind); } catch (_) {}
         $('registration-handoff-' + kind).disabled = registrationHandoffBusy || Boolean(registrationHandoffPending)
           || !selected || registrationHandoffSubmitted.size >= 128
           || registrationHandoffSubmitted.has(selected.digest + ':' + kind);
       }
-      for (const name of ['locator', 'mode', 'use-inspected']) $('registration-handoff-' + name).disabled = registrationHandoffBusy;
+      for (const name of ['locator', 'finalization-locator', 'mode', 'use-inspected']) $('registration-handoff-' + name).disabled = registrationHandoffBusy;
       const pending = registrationHandoffPending;
       $('registration-handoff-continue').hidden = !pending;
       $('registration-handoff-cancel').hidden = !pending;
@@ -180,11 +185,14 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
       const fields = ['schema', 'status', 'purpose', 'localDigest', 'registrationCompleted', 'currentnessEstablished', 'automaticRetryAllowed'];
       const preparationLocator = kind === 'finalize' ? 'finalizationLocalDigest'
         : kind === 'grant' ? 'finalizationGrantLocalDigest' : null;
-      fields.push(...(preparationLocator ? [preparationLocator, 'operation', 'finalizationExecuted'] : ['observationAuthenticated']));
+      fields.push(...(preparationLocator ? [preparationLocator, 'operation', 'finalizationExecuted']
+        : kind === 'reserve' ? ['operation', 'reservationRecorded', 'finalizationExecuted'] : ['observationAuthenticated']));
       if (!custodyClosed(value, fields) || value.schema !== action.schema || value.status !== action.status
           || value.purpose !== action.purpose || value.localDigest !== selected.digest
           || value.registrationCompleted !== false || value.currentnessEstablished !== false || value.automaticRetryAllowed !== false
-          || (!preparationLocator && value.observationAuthenticated !== action.authenticated)
+          || (!preparationLocator && kind !== 'reserve' && value.observationAuthenticated !== action.authenticated)
+          || (kind === 'reserve' && (value.operation !== 'webauthn.registration.finalize'
+            || value.reservationRecorded !== true || value.finalizationExecuted !== false))
           || (preparationLocator && (!registrationHandoffDigest(value[preparationLocator])
             || value.operation !== 'webauthn.registration.finalize' || value.finalizationExecuted !== false))) {
         throw new Error('Unexpected server result. Remote state is unknown; do not repeat the action.');
@@ -194,6 +202,7 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
         $('registration-finalization-locator').hidden = false;
       }
       if (kind === 'grant') {
+        $('registration-handoff-finalization-locator').value = value.finalizationGrantLocalDigest;
         $('registration-finalization-grant-locator').textContent = `Separate finalization GRANT local ID: ${value.finalizationGrantLocalDigest} — grant prepared, not reserved or executed. Evidence input and inspection/preparation-only locator remain unchanged.`;
         $('registration-finalization-grant-locator').hidden = false;
       }
@@ -203,6 +212,8 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
           ? 'Server reports finalization-prepared and retained. Finalization NOT executed; registration not finalized; session not activated.'
           : kind === 'grant'
             ? 'Server reports finalization-grant-prepared and retained. Dedicated authorization preceded a NEW plan and grant; no reservation or finalization SQL was performed. Registration not finalized; session not activated.'
+            : kind === 'reserve'
+              ? 'Server reports reservation-recorded for the finalization grant. Reservation originals are retained; currentness is NOT established and finalization SQL was NOT executed. Registration not finalized; session not activated. No automatic retry or next action.'
             : `Server reports ${action.status} with authenticated originals. This does not establish currentness, finalize registration or activate a session.`;
     }
 
@@ -212,7 +223,7 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
       const epoch = registrationHandoffEpoch, token = adminToken();
       const stillCurrent = () => epoch === registrationHandoffEpoch && token === adminToken();
       try {
-        selected = registrationHandoffSelection();
+        selected = registrationHandoffSelection(kind);
         action = registrationHandoffActions[kind];
         if (!action || registrationHandoffSubmitted.size >= 128
             || registrationHandoffSubmitted.has(selected.digest + ':' + kind)) throw new Error('This page already submitted that action. Inspect retained state; do not repeat it.');
@@ -287,6 +298,8 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
           registrationHandoffMessage(submitted
             ? (error instanceof ApiError && error.status < 500
               ? `Server denied the explicit request (HTTP ${error.status}). No automatic retry; registration not finalized.`
+              : kind === 'reserve'
+                ? 'Reservation response unavailable or unrecognized. Remote state is UNKNOWN; reservation or local retention may have occurred. Do not repeat this request. Finalization SQL was not requested.'
               : 'Response unavailable or unrecognized. Remote state is UNKNOWN; the action may have taken effect. Do not retry SQL. Use separate recovery only with fresh server authorization.')
             : 'Authorization cancelled, changed or unavailable before action submission. No action request was sent by this click.', true);
         }
@@ -306,6 +319,7 @@ REGISTRATION_HANDOFF_SCRIPT = r"""
       });
       $('registration-handoff-cancel').addEventListener('click', clearRegistrationHandoffPrompt);
       $('registration-handoff-locator').addEventListener('input', clearRegistrationHandoffPrompt);
+      $('registration-handoff-finalization-locator').addEventListener('input', clearRegistrationHandoffPrompt);
       $('registration-handoff-mode').addEventListener('change', clearRegistrationHandoffPrompt);
       $('admin-token').addEventListener('input', clearRegistrationHandoffPrompt);
       $('operator-sign-out').addEventListener('click', clearRegistrationHandoffPrompt);

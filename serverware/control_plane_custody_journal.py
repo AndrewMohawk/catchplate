@@ -13,6 +13,8 @@ they never admit attempted or observed markers or legacy forwarding.
 An ASSOCIATED marker commits only an exact local signer/grant relationship
 after both original records are durable; it supplies no verification or authority.
 Separate registration outcomes retain opaque originals under that association.
+Finalization reservation raw3 has its own immutable slot under the complete
+finalization/evidence/signer chain; storage supplies no outcome authentication.
 A SQL-CLAIMED record burns only one local dispatch, never remote SQL permission.
 
 The private directory open-file description owns the singleton flock. The
@@ -35,6 +37,7 @@ from serverware import control_plane_registration_signer_records as signer_recor
 from serverware import control_plane_registration_associations as associations
 from serverware import control_plane_registration_finalization_records as finalization_records
 from serverware import control_plane_registration_finalization_associations as finalization_associations
+from serverware import control_plane_registration_finalization_reservation_records as finalization_reservations
 from serverware import control_plane_registration_outcome_records as outcome_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
@@ -47,7 +50,8 @@ _OBSERVATION_RESERVE = observations.MAX_OBSERVATION_BYTES
 _HEX = frozenset("0123456789abcdef")
 _READ_CHUNK = 1024 * 1024
 _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES,
-    signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES)
+    signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES,
+    finalization_reservations.MAX_RECORD_BYTES)
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
     finalization_records.FAMILY})
 
@@ -144,10 +148,13 @@ class CustodyJournal:
     marker bytes. Complete preparations preflight both records and their final
     association without consuming another record's reserved marker capacity.
     Finalization grants link only to an already complete evidence/signer pair;
-    their separate association is published last. At most seven times
+    their separate association is published last. Each may retain one opaque
+    reservation raw3 under that complete association. At most seven times
     maximum_records published files are admitted, including associations and
-    fixed registration outcomes. Old records are never
-    rewritten or removed; legacy marker byte reservations remain intact.
+    fixed registration outcomes: legacy records use at most three, evidence
+    grants seven, signer records one and finalization grants three each.
+    Old records are never rewritten or removed; legacy marker byte
+    reservations remain intact.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -169,6 +176,7 @@ class CustodyJournal:
         self._entries = {}
         self._associations = {}
         self._finalization_associations = {}
+        self._finalization_reservations = {}
         self._registration_outcomes = {}
         self._file_identities = {}
         self._used_bytes = 0
@@ -264,6 +272,7 @@ class CustodyJournal:
         observed = set()
         associated = {}
         finalization_associated = {}
+        finalization_reserved = {}
         registration_outcomes = {}
         uncertain_completions = set()
         count = 0
@@ -283,6 +292,8 @@ class CustodyJournal:
                     kind = "associated"
                 elif name.startswith("finalization-associated-"):
                     kind = "finalization-associated"
+                elif name.startswith("finalization-reserved-"):
+                    kind = "finalization-reserved"
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -299,6 +310,7 @@ class CustodyJournal:
                     observations.MAX_OBSERVATION_BYTES if kind == "observed" else
                     associations.MAX_ASSOCIATION_BYTES if kind == "associated" else
                     finalization_associations.MAX_ASSOCIATION_BYTES if kind == "finalization-associated" else
+                    finalization_reservations.MAX_RECORD_BYTES if kind == "finalization-reserved" else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -332,6 +344,11 @@ class CustodyJournal:
                     if association.finalization_digest != digest or digest in finalization_associated:
                         raise CustodyJournalError("finalization association filename differs from its original")
                     finalization_associated[digest] = association
+                elif kind == "finalization-reserved":
+                    reservation = finalization_reservations.decode(encoded)
+                    if reservation.finalization_digest != digest or digest in finalization_reserved:
+                        raise CustodyJournalError("finalization reservation differs from its fixed filename")
+                    finalization_reserved[digest] = (reservation.source_revision, reservation.digest)
                 else:
                     outcome = outcome_records.decode(encoded)
                     by_kind = registration_outcomes.setdefault(digest, {})
@@ -362,6 +379,9 @@ class CustodyJournal:
         for association in finalization_associated.values():
             _finalization_association_scope(association, self._entries, associated)
         self._finalization_associations = finalization_associated
+        for digest, metadata in finalization_reserved.items():
+            self._finalization_reservation_scope(digest, metadata)
+        self._finalization_reservations = finalization_reserved
         for digest, by_kind in registration_outcomes.items():
             self._registration_outcome_scope(digest, by_kind)
             if "completion-reconciled" in by_kind and digest not in uncertain_completions:
@@ -445,6 +465,32 @@ class CustodyJournal:
                     and "sql-claimed" not in by_kind
                 or "completion-reconciled" in by_kind and "completion-outcome" not in by_kind):
             raise CustodyJournalError("registration outcome lacks its retained original prerequisites")
+
+    def _finalization_reservation_scope(self, digest, metadata):
+        association = self._finalization_associations.get(digest)
+        if association is None:
+            raise CustodyJournalError("finalization reservation lacks its complete original association")
+        _finalization_association_scope(association, self._entries, self._associations)
+        if metadata[0] != association.source_revision:
+            raise CustodyJournalError("finalization reservation crosses retained source revisions")
+
+    def _read_finalization_reservation(self, digest):
+        association, _ = self._read_finalization_association(digest)
+        self._load(digest)
+        self._load(association.evidence_digest)
+        self._load(association.signer_digest)
+        metadata = self._finalization_reservations.get(digest)
+        if metadata is None:
+            return None
+        self._finalization_reservation_scope(digest, metadata)
+        name = _name("finalization-reserved", digest)
+        encoded, identity = self._read_file(name,
+            maximum_bytes=finalization_reservations.MAX_RECORD_BYTES)
+        reservation = finalization_reservations.decode(encoded)
+        if (identity != self._file_identities[name] or reservation.finalization_digest != digest
+                or (reservation.source_revision, reservation.digest) != metadata):
+            raise CustodyJournalError("finalization reservation changed after admitted recovery")
+        return reservation
 
     def _read_registration_outcomes(self, digest):
         association, _ = self._read_association(digest)
@@ -695,6 +741,65 @@ class CustodyJournal:
                 signer, _ = self._load(association.signer_digest)
                 self._require_ready()
                 return finalization, association.evidence_digest, (evidence, signer)
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def append_registration_finalization_reservation(self, finalization_digest, originals):
+        """Retain one exact raw3 after the actual complete original association.
+
+        The caller must authenticate the originals before calling this opaque
+        store. Repeat identical bytes are idempotent; conflicts never replace
+        earlier originals. No dispatch claim or remote currentness is implied.
+        """
+        digest = _digest(finalization_digest)
+        held = finalization_reservations._originals(originals)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._finalization_associations:
+                raise CustodyJournalError("finalization reservation requires a complete local preparation")
+            try:
+                current = self._read_finalization_reservation(digest)
+                record, encoded = finalization_reservations.encode(digest, held,
+                    source_revision=self._finalization_associations[digest].source_revision)
+                if current is not None:
+                    if current.originals != record.originals or current.digest != record.digest:
+                        raise CustodyJournalError("finalization reservation cannot replace its first originals")
+                    self._require_ready()
+                    return current.digest
+                self._require_ready()
+            except BaseException:
+                self._io.poison()
+                raise
+            if (len(self._file_identities) >= 7 * self._maximum_records
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal finalization reservation capacity is exhausted")
+            try:
+                self._publish("finalization-reserved", digest, encoded)
+                self._used_bytes += len(encoded)
+                self._finalization_reservations[digest] = (record.source_revision, record.digest)
+                retained = self._read_finalization_reservation(digest)
+                if retained != record:
+                    raise CustodyJournalError("finalization reservation publication differs from original")
+                self._require_ready()
+                return record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_registration_finalization_reservation(self, finalization_digest):
+        """Return opaque raw3 record, or None only under a complete original chain."""
+        digest = _digest(finalization_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._finalization_associations:
+                raise CustodyJournalError("finalization reservation requires a complete local preparation")
+            try:
+                result = self._read_finalization_reservation(digest)
+                self._require_ready()
+                return result
             except BaseException:
                 self._io.poison()
                 raise

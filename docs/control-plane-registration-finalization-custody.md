@@ -14,8 +14,9 @@ nor turns its key custody into present-caller permission.
 The original root-signed envelope uses
 `serverware.signedControlPlaneEnrollmentBootstrap/v4`; its payload uses
 `serverware.controlPlaneEnrollmentBootstrap/v4`. It retains every parent v3
-field and adds required `registrationFinalization`, either null or the exact
-six-field object below. The complete canonical original remains bounded to
+field and adds required `registrationFinalization`, either null, the exact
+six-field v1 object below, or the explicit nested v2 extension described next.
+The complete canonical original remains bounded to
 4 MiB and authenticated by the already admitted runtime root.
 
 | Nested field | Fixed contract |
@@ -49,6 +50,31 @@ previously allowed generic issuer descriptor range. Only v4 reserves FD204:
 an enabled profile must use its distinct dedicated slot; a null profile rejects
 that slot in the admitted inventory or already open at cold admission. Neither
 an absent v4 field nor an older profile implicitly enables finalization.
+
+## Opt-in reservation scope
+
+Nested `serverware.controlPlaneRegistrationFinalization/v2` retains the six
+fields above and requires exactly `reserverEndpoint` and `statePredecessor`.
+The complete parent v4 root signature authenticates these fields; no newer
+parent schema, new key, descriptor or environment variable is needed. Nested
+v1 remains grant-only and cannot silently acquire reservation authority.
+
+`reserverEndpoint` uses the same closed endpoint shape with fixed path
+`/run/serverware/registration-finalization/reserver.sock`, integer timeout
+1–30 seconds and listener peer `0:0`. `statePredecessor` is exactly
+`{sequence, headDigest, nextFence}`. Genuine current-root enrollment admission
+binds its capacity and generation. A genesis sequence requires the original
+enrollment digest and fence one; every predecessor must leave room for both
+reserve and completion. A signed old head is not automatically a current head:
+the provisioner must independently establish these pins before cold admission.
+
+The owner exposes `finalization_reservation_enabled` and the separate private
+`_request_registration_finalization_reservation`. It authenticates the complete
+original grant before one exchange and verifies returned reserve/snapshot/state
+acknowledgment against those independently held pins. No response updates the
+expected predecessor, changes the original lifetime or authorizes SQL.
+See the [caller reservation contract](control-plane-finalization-reservation.md)
+and [public permission flow](public-registration-finalization-reservation.md).
 
 ## Actual key delivery and lifetime
 
@@ -90,12 +116,15 @@ The private request method is now connected in source to the
 and public grant-preparation facade, including same-read full-vector acquisition
 and durable original association. The service source and packaging remain
 unbuilt, unexecuted and unprovisioned; the fixed path is not evidence of socket
-availability or deployment. Independent reserve, protected SQL and completion
-orchestration, plus separate OIDC session activation, remain outstanding.
+availability or deployment. The explicit nested v2 reservation flow still
+requires the independently provisioned reserver and state v2 peer admission.
+Protected pending/SQL/completion orchestration and separate OIDC session
+activation remain outstanding.
 Trusted-host-local descriptor continuity is not independent enclave evidence.
 
 This implementation has not been built or executed. Deferred frozen validation
-includes old-profile compatibility; closed v4/null-slot rejection; tampered or
+includes old-profile compatibility; closed v4/null-slot and nested-version
+rejection; independently pinned predecessor/capacity checks; tampered or
 cross-purpose enrollment rejection; actual separate key/FD pair admission;
 missing, reused or changed key rejection; PID/custody/descriptor drift; and
 shutdown/failure preventing reuse. These are planned checks, not passing results.

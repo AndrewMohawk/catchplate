@@ -6,6 +6,8 @@ purpose, its configured transition key and a separate caller public key. No
 evidence-execution enrollment, key, endpoint or permission is substituted.
 Returned material is private owned data, not present-caller authorization.
 No key generation, descriptor access, transport or replacement work occurs here.
+Nested v1 remains grant-only. Explicit nested v2 additionally pins one fixed
+reserver endpoint and independent state predecessor, with no new descriptor.
 """
 from __future__ import annotations
 
@@ -19,10 +21,13 @@ from serverware import authority_webauthn_transition_custody_configuration as tr
 
 
 SCHEMA = "serverware.controlPlaneRegistrationFinalization/v1"
+V2_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v2"
 CALLER_KEY_FD = 204
 AUTHORIZER_SOCKET_PATH = "/run/serverware/registration-finalization-authorizer.sock"
+RESERVER_SOCKET_PATH = "/run/serverware/registration-finalization/reserver.sock"
 _FIELDS = frozenset({"schema", "finalizationCallerPrivateKeyFd", "currentRootEnrollment",
     "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"})
+_V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "statePredecessor"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _ORIGINAL_LIMITS = (("currentRootEnrollment", caller.authorization.MAX_ENROLLMENT_BYTES),
@@ -43,11 +48,15 @@ class _FinalizationMaterial:
     grant_enrollment_bytes: bytes
     authorization_enrollment_bytes: bytes
     authorizer_endpoint: tuple
+    reservation_endpoint: tuple | None = None
+    reservation_predecessor: tuple | None = None
 
 
-def _endpoint(value):
-    shape._object(value, _ENDPOINT_FIELDS, "registration finalization authorizer endpoint")
-    shape._literal(value["socketPath"], AUTHORIZER_SOCKET_PATH)
+def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
+    if type(_path) is not str or _path not in (AUTHORIZER_SOCKET_PATH, RESERVER_SOCKET_PATH):
+        raise RegistrationFinalizationBootstrapError("finalization endpoint profile is not source fixed")
+    shape._object(value, _ENDPOINT_FIELDS, "registration finalization endpoint")
+    shape._literal(value["socketPath"], _path)
     shape._integer(value["requestTimeoutSeconds"], 30, minimum=1)
     for name in ("listenerUid", "listenerGid"):
         shape._integer(value[name], 2**32 - 2)
@@ -57,11 +66,18 @@ def _endpoint(value):
     return value["socketPath"], value["requestTimeoutSeconds"], 0, 0
 
 
+def _reserver_endpoint(value):
+    return _endpoint(value, _path=RESERVER_SOCKET_PATH)
+
+
 def _shape(value):
     if value is None:
         return
-    shape._object(value, _FIELDS, "control-plane registration finalization scope")
-    shape._literal(value["schema"], SCHEMA)
+    if (type(value) is not dict or type(value.get("schema")) is not str
+            or value["schema"] not in (SCHEMA, V2_SCHEMA)):
+        raise RegistrationFinalizationBootstrapError("registration finalization scope version differs")
+    shape._object(value, _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS,
+        "control-plane registration finalization scope")
     shape._integer(value["finalizationCallerPrivateKeyFd"], 1023, minimum=32)
     if value["finalizationCallerPrivateKeyFd"] != CALLER_KEY_FD:
         raise RegistrationFinalizationBootstrapError("finalization caller key FD is not source fixed")
@@ -71,6 +87,16 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
+    if value["schema"] == V2_SCHEMA:
+        _reserver_endpoint(value["reserverEndpoint"])
+        predecessor = value["statePredecessor"]
+        shape._object(predecessor, frozenset({"sequence", "headDigest", "nextFence"}),
+            "independent finalization reservation predecessor")
+        shape._integer(predecessor["sequence"], caller.authorization.MAX_RECORDS)
+        shape._digest(predecessor["headDigest"])
+        shape._integer(predecessor["nextFence"], minimum=1)
+        if predecessor["sequence"] == 0 and predecessor["nextFence"] != 1:
+            raise RegistrationFinalizationBootstrapError("genesis finalization predecessor requires fence one")
 
 
 def _admit_on_work(*, registration_finalization, configuration_payload,
@@ -142,8 +168,31 @@ def _admit_on_work(*, registration_finalization, configuration_payload,
             work.prepare_comparison(caller_pin, pin)
             if caller_pin == pin:
                 raise RegistrationFinalizationBootstrapError("finalization caller key reuses another configured purpose")
+        reservation_endpoint = reservation_predecessor = None
+        if value["schema"] == V2_SCHEMA:
+            # Capacity and genesis come from actual admission of this same
+            # original root enrollment, never from a received state receipt.
+            current = caller.authorization._admit_enrollment_on_work(enrollment_bytes=current_raw,
+                root_public_key=root, work=work)
+            for actual, expected in (
+                    (current.enrollment_digest, admitted.payload["currentRootEnrollmentDigest"]),
+                    (current.payload["generationDigest"], mapped.generation_digest),
+                    (current.payload["databaseId"], admitted.payload["databaseId"])):
+                plan._same(actual, expected, work,
+                    "finalization predecessor differs from actual configured enrollment")
+            predecessor = value["statePredecessor"]
+            if predecessor["sequence"] + 2 > current.payload["maxRecords"]:
+                raise RegistrationFinalizationBootstrapError(
+                    "finalization predecessor has no enrolled reserve and completion capacity")
+            if predecessor["sequence"] == 0:
+                plan._same(predecessor["headDigest"], current.enrollment_digest, work,
+                    "finalization independent genesis head differs")
+            reservation_endpoint = _reserver_endpoint(value["reserverEndpoint"])
+            reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
+                predecessor["nextFence"])
         return _FinalizationMaterial(CALLER_KEY_FD, admitted.caller_public_key,
-            current_raw, grant_raw, authorization_raw, _endpoint(value["authorizerEndpoint"]))
+            current_raw, grant_raw, authorization_raw, _endpoint(value["authorizerEndpoint"]),
+            reservation_endpoint, reservation_predecessor)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RegistrationFinalizationBootstrapError):
             raise

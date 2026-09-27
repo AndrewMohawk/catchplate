@@ -18,6 +18,11 @@ returned original grant against the full vector. The public grant-preparation
 facade invokes the complete new-plan/vector/grant path under separate present
 permission and retains the exact resulting originals. The private raw8-only
 planning continuation remains unexposed.
+
+An explicit nested-v2 reserve continuation authenticates complete original
+raw10 before one transport and verifies returned raw3 against independently
+root-admitted predecessor pins. It does not store originals, execute SQL or
+infer latest state from the acknowledgment.
 """
 from __future__ import annotations
 
@@ -273,3 +278,55 @@ def _request_on_owner(owner, *, originals, before_vector_bytes, live_window,
     admitted.check()
     callback(work, lambda: transport._check_deadline(bound))
     return original_grant
+
+
+def _reserve_on_owner(owner, *, originals, live_window, transport_deadline_ns, work):
+    """Admit original raw10, exchange once, and return genuinely verified raw3.
+
+    Present caller/new-purpose admission precedes this private entrypoint.
+    No current scope is adopted from a returned receipt, and no failure grants
+    retry permission after the possible remote reserve side effect.
+    """
+    from serverware import authority_registration_finalization_execution_admission as receiving
+    from serverware import authority_registration_finalization_reservation_response as response
+    from serverware import authority_registration_finalization_reservation_transport as transport
+
+    held = transport._originals(originals, response=False)
+    shape._integer(transport_deadline_ns, minimum=1)
+    common, _private, window, bound, current = _scope(owner, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work)
+    finalization = owner._material.finalization
+    if finalization.reservation_endpoint is None or finalization.reservation_predecessor is None:
+        raise startup.EnrollmentStartupError("dedicated finalization reservation permission is disabled")
+    endpoint = transport._endpoint(finalization.reservation_endpoint)
+    sequence, head, fence = response.records._predecessor_scope(*finalization.reservation_predecessor)
+    # The per-request endpoint cap starts at the original opening bracket,
+    # not after admission and never after a previous send attempt.
+    bound = min(bound, window[1] + endpoint[1] * 1_000_000_000)
+    inventory_bytes = sum(len(raw) for raw in held) + sum(len(common[name]) for name in (
+        "authorization_enrollment_bytes", "current_root_enrollment_bytes", "grant_enrollment_bytes"))
+    if inventory_bytes > evidence.authority.MAX_RESULT_BYTES:
+        raise startup.EnrollmentStartupError("finalization reserve exceeds its original aggregate bound")
+    admitted = receiving._admit_on_configuration(**common, originals=held[1:8],
+        before_vector_bytes=held[8], authorization_bytes=held[0], grant_bytes=held[9],
+        live_window=window, transport_deadline_ns=bound, work=work)
+    bound = min(bound, admitted.deadline_ns)
+    current()
+    admitted.live()
+    callback = evidence.production._callback
+    callback(work, lambda: transport._check_deadline(bound))
+    returned = callback(work,
+        lambda: transport._socket_request(endpoint, originals=held, deadline_ns=bound))
+    current()
+    admitted.live()
+    returned = transport._originals(returned, response=True)
+    if inventory_bytes + sum(len(raw) for raw in returned) > evidence.authority.MAX_RESULT_BYTES:
+        raise startup.EnrollmentStartupError("returned finalization reserve exceeds the original aggregate bound")
+    verified = response._verify_on_configuration(**common, originals=held,
+        response_originals=returned, expected_predecessor_sequence=sequence,
+        expected_predecessor_head_digest=head, expected_fence=fence,
+        live_window=admitted.window, transport_deadline_ns=bound, work=work)
+    current()
+    admitted.live()
+    callback(work, lambda: transport._check_deadline(bound))
+    return verified

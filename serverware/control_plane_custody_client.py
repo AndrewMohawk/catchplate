@@ -557,6 +557,32 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while loading finalization preparation")
         return result
 
+    def append_registration_finalization_reservation(self, finalization_digest, originals):
+        """Retain raw3 under the complete finalization chain, never authenticate it."""
+        local = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_finalization_reservation(
+            binding.journal, local, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining finalization reservation")
+        return journal._digest(digest)
+
+    def load_registration_finalization_reservation(self, finalization_digest):
+        """Reread opaque reservation and complete chain; absence is not remote failure."""
+        from serverware import control_plane_registration_finalization_reservation_records as reservations
+
+        local = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        record = journal.CustodyJournal.load_registration_finalization_reservation(binding.journal, local)
+        if record is not None:
+            if (type(record) is not reservations.FinalizationReservationRecord
+                    or record.finalization_digest != local):
+                raise CustodyClientError("finalization reservation original scope differs")
+            journal._digest(record.digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while loading finalization reservation")
+        return record
+
     def append_registration_reservation(self, local_digest, originals):
         """Retain bounded raw3; independent reserve authentication remains required."""
         binding = _snapshot(self)

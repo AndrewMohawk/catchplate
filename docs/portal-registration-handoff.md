@@ -1,10 +1,13 @@
 # Portal retained registration actions
 
-The **Registration actions** workspace operates on a real evidence grant
+The **Registration actions** workspace's first five actions operate on a real evidence grant
 `localDigest` from retained preparation. Paste that locator, or explicitly copy
 one already inspected in the admin-only custody inventory. Inspection supplies
 local metadata only—not ownership, complete association, currentness or action
 permission. The panel neither invents IDs nor loads raw registration originals.
+The sixth action uses its separately labeled finalization-grant input: paste
+that real locator, or use the ID filled by a successful fifth action. Neither
+the evidence input nor the older preparation-only finalization ID is replaced.
 
 Each button selects one real endpoint and requires an explicit click:
 
@@ -15,6 +18,7 @@ Each button selects one real endpoint and requires an explicit click:
 | Recover completion | Separately authorized historical completion recovery; never SQL retry. |
 | Prepare finalization | Prepare and retain the separate `webauthn.registration.finalize` request; no finalization execution. |
 | Prepare finalization grant | Dedicated authorization before a new plan, complete before vector and retained grant; no reservation or finalization SQL. |
+| Reserve finalization | Explicit fresh-authorized reservation of the separate finalization grant and retention of verified returned raw3; no finalization SQL or current-head authority. |
 
 The first three use the existing
 [public handoff](public-registration-handoff.md) and
@@ -37,8 +41,22 @@ with status `finalization-grant-prepared`, the unchanged evidence `localDigest`,
 a separate `finalizationGrantLocalDigest`, operation
 `webauthn.registration.finalize`, and all four execution/registration/currentness/
 automatic-retry flags false. It does not upgrade the older raw7 preparation.
-The grant locator has its own display: neither the evidence input nor the
-inspection/preparation-only finalization locator is overwritten.
+The grant locator has its own display and user-editable input: neither the
+evidence input nor the inspection/preparation-only finalization locator is
+overwritten. Filling that input makes no further request.
+
+**[Reserve finalization](public-registration-finalization-reservation.md)** uses `/api/webauthn/register/reserve-finalization` or
+its `/api/auth/session/webauthn/register/reserve-finalization` counterpart,
+purpose `reserve-registration-finalization`, and action
+`webauthn.registration.finalization.reserve`. Its closed ten-field success
+contract is `serverware.webAuthnRegistrationFinalizationReservation/v1`, status
+`reservation-recorded`, the submitted finalization-grant `localDigest`, operation
+`webauthn.registration.finalize`, `reservationRecorded: true`, and
+`finalizationExecuted`, `registrationCompleted`, `currentnessEstablished` and
+`automaticRetryAllowed` all false. Server-side original authentication precedes
+[opaque local retention](control-plane-custody-journal.md#retained-finalization-reservation).
+The browser does not independently verify the originals or infer a current
+pending head from their acknowledgment.
 
 ## Fresh authorization, no action chaining
 
@@ -78,7 +96,9 @@ on the server's actual original verification, not an independent browser proof.
 `finalization-prepared` displays the separate finalization locator as
 **prepared, not executed**. `finalization-grant-prepared` displays the distinct
 grant locator as **not reserved or executed**, never as completed credentials
-or a session-activation receipt. Every path keeps registration not finalized,
+or a session-activation receipt. The separate `reservation-recorded` result
+means the returned reservation originals were retained, not finalization SQL,
+credential completion or independent currentness. Every path keeps registration not finalized,
 currentness unestablished, and automatic retry disallowed. No completion result
 activates a pending session.
 
@@ -93,5 +113,7 @@ finalization execution remain separate. Planned frozen browser verification
 covers both caller paths, cookie CSRF with an entered token, action-bound fresh
 assertions/approvals, bootstrap clearing across refresh, stale async results,
 exact status/uncertainty handling, and absence of automatic dispatch or retries.
+The sixth-action checks also cover independent evidence/finalization locators,
+pasted locators after refresh, exact reservation response shape and per-locator/action latches.
 
 Source: [portal fragment](../serverware/portal_registration_handoff.py).

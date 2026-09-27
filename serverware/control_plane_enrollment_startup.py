@@ -198,6 +198,14 @@ class _EnrollmentOwner:
         _live(self)
         return self._finalization_key is not None
 
+    @property
+    def finalization_reservation_enabled(self):
+        _live(self)
+        finalization = None if self._material is None else self._material.finalization
+        return (self._finalization_key is not None and finalization is not None
+            and finalization.reservation_endpoint is not None
+            and finalization.reservation_predecessor is not None)
+
     def _authorize_registration_finalization(self, *, request_originals, response_originals,
             sibling_challenge_ids, live_window, work, transport_deadline_ns=None):
         """Private finalization-only continuation after fresh present permission."""
@@ -219,6 +227,20 @@ class _EnrollmentOwner:
             return finalization._request_on_owner(self, originals=originals,
                 before_vector_bytes=before_vector_bytes, live_window=live_window,
                 work=work, transport_deadline_ns=transport_deadline_ns)
+
+    def _request_registration_finalization_reservation(self, *, originals, live_window,
+            transport_deadline_ns, work):
+        """One genuine raw10-to-raw3 reserve exchange after separate present permission.
+
+        Only explicit nested finalization v2 supplies its independent scope.
+        This neither stores the response nor establishes latest state or SQL authority.
+        """
+        from serverware import control_plane_registration_finalization_execution as finalization
+
+        _require_pid()
+        with _LOCK:
+            return finalization._reserve_on_owner(self, originals=originals,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
     @property
     def reservation_enabled(self):

@@ -31,6 +31,10 @@ nonblocking exclusive lease and binds the owner to the opening process. The
 directory must have mode 0700; record files must have mode 0400, one link and
 the pinned ownership. Source ceilings remain 8 GiB and 4096 prepared records;
 the bounded recovery scan allows at most `7 * maximum_records` physical files.
+The ceiling remains sufficient without expansion: each legacy record has at
+most three files, evidence grant seven, signer record one, and finalization
+grant three including its association and reservation slot. Shared references
+do not duplicate those files.
 Each legacy prepared record reserves its fixed 40-byte
 attempt marker and the maximum 370-byte observation frame while those markers
 are missing. Existing prepared/attempted journals recover without rewriting
@@ -223,6 +227,47 @@ family. No finalization reserve, SQL attempt, authenticated outcome or OIDC
 activation is implied. The lower-level association authenticates no signatures,
 business evidence, permission or currentness; genuine replay remains a separate
 prerequisite on use. This path is source-only, unbuilt and unexecuted.
+
+## Retained finalization reservation
+
+`append_registration_finalization_reservation(finalization_digest, originals)`
+on the journal and cold client stores one exact returned raw3: signed reserve,
+snapshot and state acknowledgment. The real caller must authenticate these
+originals first; storage performs only bounded carrier and local association
+checks. It requires the actual completed finalization grant/evidence/signer
+chain and rereads both markers and all three original records.
+
+The distinct [codec](../serverware/control_plane_registration_finalization_reservation_records.py)
+uses magic `SWCPV001` and identity domain
+`serverware.controlPlaneRegistrationFinalizationReservationRecord/v1`. Its
+frame binds the retained original source token and finalization-grant raw32
+local digest, then three u64 lengths and exact bodies. Caps are the actual
+finalization reserve transport's 256 KiB request, 16 KiB snapshot and 16 KiB
+acknowledgment; the maximum header is 322 bytes. No prior format, family,
+content identity or source token is rewritten.
+
+Publication uses `finalization-reserved-<finalization grant digest hex>` only
+after the complete association exists. Exact bytes consume the existing quota
+and one bounded physical slot, without consuming another record's reserved
+legacy marker capacity. The existing no-replace, file/directory-fsync and
+identity/readback checks apply. An exact repeat is idempotent; conflicting
+originals or changed linkage fail and poison the owner. Late failure can follow
+durable publication and never authorizes automatic network retry.
+
+`load_registration_finalization_reservation(finalization_digest)` returns
+`None` only after rereading a valid complete association with no reservation
+slot. Otherwise it returns the ordinary frozen `FinalizationReservationRecord`
+with `source_revision`, `finalization_digest`, exact `originals` and local
+`digest`. Recovery/load reject missing, changed, cross-source or wrong-family
+references. Absence is not proof of remote failure; presence is not signature
+verification, independently current pending-head authority or caller consent.
+
+This slot adds no attempt marker, SQL dispatch, legacy forwarding/reconcile
+action, completed credential or OIDC activation. Existing metadata inventory
+still shows the separate prepared records, not a new readiness badge. The
+sixth [portal action](portal-registration-handoff.md) is explicit and separately
+authorized; it does not chain from grant preparation. This path remains
+source-only and unexecuted.
 
 ## Bounded registration completion reconciliation
 

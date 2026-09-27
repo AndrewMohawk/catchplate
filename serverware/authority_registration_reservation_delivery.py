@@ -91,6 +91,10 @@ def _owner_profile(owner):
 
     if type(owner) is finalization.FinalizationReservationDelivery:
         return 1
+    from serverware import authority_oidc_session_activation_reservation_delivery as activation
+
+    if type(owner) is activation.OidcSessionActivationReservationDelivery:
+        return 2
     raise RegistrationReservationDeliveryError("reservation delivery owner type is not source fixed")
 
 
@@ -100,13 +104,24 @@ def _record_codec(owner):
         raise RegistrationReservationDeliveryError("reservation delivery profile changed after construction")
     if selected == 0:
         return records
-    from serverware import authority_registration_finalization_reservation_records as finalization
+    if selected == 1:
+        from serverware import authority_registration_finalization_reservation_records as finalization
 
-    return finalization
+        return finalization
+    from serverware import authority_oidc_session_activation_reservation_records as activation
+
+    return activation
+
+
+def _delivery_guard(owner, live_window, inherited, work):
+    if _owner_profile(owner) == 2:
+        # Activation may not manufacture a replacement allowance at delivery.
+        authorization.shape._integer(inherited, minimum=1)
+    return _live_guard(live_window, inherited, work)
 
 
 class _RegistrationReservationDeliveryBase:
-    """Shared mechanics for two exact fixed-operation durable owner types.
+    """Shared mechanics for three exact fixed-operation durable owner types.
 
     Journal ownership transfers at construction, including failure cleanup. Its
     preprovisioned directory must be separate from state/completion/SQL-attempt
@@ -123,6 +138,13 @@ class _RegistrationReservationDeliveryBase:
 
     def __init__(self, *, journal, enrollment_bytes, root_public_key,
             expected_local_sequence, expected_local_head_digest):
+        self._initialize(journal=journal, enrollment_bytes=enrollment_bytes,
+            root_public_key=root_public_key, expected_local_sequence=expected_local_sequence,
+            expected_local_head_digest=expected_local_head_digest)
+
+    def _initialize(self, *, journal, enrollment_bytes, root_public_key,
+            expected_local_sequence, expected_local_head_digest, live_window=None,
+            work=None, transport_deadline_ns=None):
         self._record_profile = _owner_profile(self)
         if type(journal) is not storage.CurrentRootJournal:
             raise RegistrationReservationDeliveryError("reservation delivery requires its actual separate journal")
@@ -141,18 +163,42 @@ class _RegistrationReservationDeliveryBase:
             authorization.shape._integer(expected_local_sequence, storage.MAX_RECORDS)
             authorization.shape._digest(expected_local_head_digest)
             expected = expected_local_sequence, expected_local_head_digest
+            live = None
+            if self._record_profile == 2:
+                evidence.capture._SharedLedger(work)
+                live, _bound = _delivery_guard(self, live_window, transport_deadline_ns, work)
+                live()
+                admission_work = work
+            else:
+                if live_window is not None or work is not None or transport_deadline_ns is not None:
+                    raise RegistrationReservationDeliveryError("legacy reservation cold allowance is fixed")
+                admission_work = _cold_work()
             material = authorization._admit_enrollment_on_work(enrollment_bytes=original,
-                root_public_key=held_root, work=_cold_work())
+                root_public_key=held_root, work=admission_work)
+            if live is not None:
+                live()
             self._enrollment_bytes, self._root_public_key = original, held_root
             self._enrollment_digest = self._head_digest = material.enrollment_digest
             self._age, self._skew = material.payload["maxControlAgeNs"], material.payload["maxClockSkewNs"]
             self._maximum_records = journal.maximum_records
             if self._maximum_records != material.payload["maxRecords"]:
                 raise RegistrationReservationDeliveryError("reservation journal capacity differs from enrollment")
-            storage.CurrentRootJournal.recover(journal, self._recover_record)
+            if live is None:
+                storage.CurrentRootJournal.recover(journal, self._recover_record)
+            else:
+                def recover_record(sequence, record_bytes):
+                    live()
+                    self._recover_record_on_work(sequence, record_bytes, work)
+                    live()
+
+                evidence.production._callback(work,
+                    lambda: storage.CurrentRootJournal.recover(journal, recover_record))
+                live()
             if (self._sequence, self._head_digest) != expected:
                 raise RegistrationReservationDeliveryError("reservation history differs from independently current checkpoint")
             self._require_ready()
+            if live is not None:
+                live()
         except BaseException:
             self._poison_and_close()
             raise
@@ -231,7 +277,9 @@ class _RegistrationReservationDeliveryBase:
         self._sequence, self._head_digest = record.sequence, record.record_digest
 
     def _recover_record(self, sequence, original):
-        work = _cold_work()
+        self._recover_record_on_work(sequence, original, _cold_work())
+
+    def _recover_record_on_work(self, sequence, original, work):
         record = _record_codec(self)._decode_on_work(original, enrollment_bytes=self._enrollment_bytes,
             root_public_key=self._root_public_key, work=work)
         if record.sequence != sequence:
@@ -273,7 +321,7 @@ class _RegistrationReservationDeliveryBase:
         scope = codec._predecessor_scope(expected_predecessor_sequence,
             expected_predecessor_head_digest, expected_fence)
         locator = execution_record_digest
-        live, _bound = _live_guard(live_window, transport_deadline_ns, work)
+        live, _bound = _delivery_guard(self, live_window, transport_deadline_ns, work)
         self._require_process()
         with self._lock:
             self._require_ready()
@@ -315,7 +363,7 @@ class _RegistrationReservationDeliveryBase:
         authorization.shape._digest(request_digest)
         identity = request_digest
         configured = transport.CurrentRootDecisionClient._snapshot_configuration(client)
-        live, bound = _live_guard(live_window, transport_deadline_ns, work)
+        live, bound = _delivery_guard(self, live_window, transport_deadline_ns, work)
         self._require_process()
         with self._lock:
             self._require_ready()

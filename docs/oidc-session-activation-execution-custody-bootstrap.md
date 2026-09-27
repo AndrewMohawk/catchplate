@@ -105,6 +105,10 @@ independently admitted root key supplied to this API.
 flags must be false. Neither the root-asserted vector nor this receiving-purpose
 signature grants action-time currentness, permission, one-use consumption or
 SQL authority. This profile provides no historical fallback for expired plans.
-Generic grant/reserve/pending/packet/SQL integration, dedicated key delivery,
-historical recovery, public permission and protected token delivery remain
-separate implementation and acceptance work.
+Generic frame/replay integration is source-connected, as are the dedicated
+[grant](oidc-session-activation-execution-authorizer-delivery.md) and
+[reserve](oidc-session-activation-execution-reserver-delivery.md) cold receiving
+roles. Independent pending consumption and dedicated SQL receiver delivery,
+one-use execution, historical recovery, public permission and protected token
+delivery remain separate implementation and acceptance work. No service, key
+or runtime was provisioned or verified by these source changes.

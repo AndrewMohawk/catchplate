@@ -1,4 +1,4 @@
-"""Canonical local originals for one fixed registration reserve operation.
+"""Canonical local originals for source-fixed reserve operation profiles.
 
 The local chain and its independently admitted checkpoint are separate from
 the state owner's predecessor sequence/head. This codec authenticates enrolled
@@ -29,6 +29,9 @@ RECORD_IDENTITY_DOMAIN = "serverware.registrationExecutionReservationRecordIdent
 _FINALIZATION_OPERATION = "webauthn.registration.finalize"
 _FINALIZATION_SCHEMA = "serverware.registrationFinalizationReservationRecord/v1"
 _FINALIZATION_IDENTITY_DOMAIN = "serverware.registrationFinalizationReservationRecordIdentity/v1"
+_ACTIVATION_OPERATION = "oidc.session.activate"
+_ACTIVATION_SCHEMA = "serverware.oidcSessionActivationReservationRecord/v1"
+_ACTIVATION_IDENTITY_DOMAIN = "serverware.oidcSessionActivationReservationRecordIdentity/v1"
 MAX_REQUEST_BYTES = authorization.MAX_BYTES
 MAX_SNAPSHOT_BYTES = computation.MAX_SNAPSHOT_BYTES
 MAX_BYTES = journal.MAX_RECORD_BYTES
@@ -49,11 +52,14 @@ class RegistrationReservationRecordError(ValueError):
 
 
 def _profile(profile):
-    """Only two source-fixed private profiles; never a supplied codec/operation."""
-    if type(profile) is not int or profile not in (0, 1):
+    """Only three source-fixed private profiles; never a supplied codec/operation."""
+    if type(profile) is not int or profile not in (0, 1, 2):
         raise RegistrationReservationRecordError("reservation record profile is not source fixed")
-    return ((OPERATION, RECORD_SCHEMA, RECORD_IDENTITY_DOMAIN) if profile == 0 else
-        (_FINALIZATION_OPERATION, _FINALIZATION_SCHEMA, _FINALIZATION_IDENTITY_DOMAIN))
+    if profile == 0:
+        return OPERATION, RECORD_SCHEMA, RECORD_IDENTITY_DOMAIN
+    if profile == 1:
+        return _FINALIZATION_OPERATION, _FINALIZATION_SCHEMA, _FINALIZATION_IDENTITY_DOMAIN
+    return _ACTIVATION_OPERATION, _ACTIVATION_SCHEMA, _ACTIVATION_IDENTITY_DOMAIN
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -127,7 +133,7 @@ def _verify_profile_on_work(profile, *, request_bytes, snapshot_bytes, receipt_b
         request_bytes=held_request, enrollment_bytes=held_enrollment,
         root_public_key=held_key, work=work)
     if request["action"] != "reserve" or request["operation"] != operation:
-        raise RegistrationReservationRecordError("reservation record requires the fixed registration reserve")
+        raise RegistrationReservationRecordError("reservation record requires its fixed reserve operation")
     if predecessor + 2 > material.payload["maxRecords"]:
         raise RegistrationReservationRecordError("reservation predecessor leaves no enrolled completion capacity")
     for name, expected in (("predecessorSequence", predecessor),

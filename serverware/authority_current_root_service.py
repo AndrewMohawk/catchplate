@@ -12,7 +12,9 @@ allowance. That owner joins the authenticated action before replay/publication
 and returns only a durably published receipt (or an exact historical receipt).
 Legacy bounded queries are restricted to admitted completion peers. The explicit
 v4 activation-planner peer has a distinct head-only query, never those legacy
-purposes. Both reach genuine owner paths without a service parser or allowance.
+purposes. V5 adds a separate activation reserve peer, restricted to the signed
+activation operation before historical receipt return or new publication.
+All reach genuine owner paths without a service parser or allowance.
 No independent signer, SQL, success substitute or automatic retry exists here.
 Failure after publication or send is not evidence of rollback/absence.
 """
@@ -34,7 +36,7 @@ class CurrentRootServiceError(RuntimeError):
 
 
 def _validate_configuration(config):
-    if type(config) is not tuple or len(config) not in (6, 7, 8, 9):
+    if type(config) is not tuple or len(config) not in (6, 7, 8, 9, 10):
         raise CurrentRootServiceError("current-root service configuration is not a fixed profile")
     owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = config[:6]
     if type(owner) is not decisions.CurrentRootDecisionOwner:
@@ -53,9 +55,12 @@ def _validate_configuration(config):
     if len(config) >= 8 and (type(config[7]) is not tuple or len(config[7]) != 2
             or any(type(value) is not int for value in config[7]) or config[7] != (65508, 65508)):
         raise CurrentRootServiceError("current-root finalization completion peer differs from fixed source")
-    if len(config) == 9 and (type(config[8]) is not tuple or len(config[8]) != 2
+    if len(config) >= 9 and (type(config[8]) is not tuple or len(config[8]) != 2
             or any(type(value) is not int for value in config[8]) or config[8] != (65507, 65507)):
         raise CurrentRootServiceError("current-root activation planner peer differs from fixed source")
+    if len(config) == 10 and (type(config[9]) is not tuple or len(config[9]) != 2
+            or any(type(value) is not int for value in config[9]) or config[9] != (65505, 65505)):
+        raise CurrentRootServiceError("current-root activation reserve peer differs from fixed source")
     return config
 
 
@@ -134,6 +139,18 @@ class CurrentRootDecisionService:
         object.__setattr__(result, "_pid", os.getpid())
         return result
 
+    @classmethod
+    def _with_activation_reserver(cls, *, owner, timeout_seconds):
+        """Cold v5 only: fixed activation reserve peer, not planner authority."""
+        if cls is not CurrentRootDecisionService:
+            raise CurrentRootServiceError("current-root activation profile requires the exact service")
+        configured = _validate_configuration((owner, 65514, 65514, 65515, 65515,
+            timeout_seconds, (65510, 65510), (65508, 65508), (65507, 65507), (65505, 65505)))
+        result = object.__new__(CurrentRootDecisionService)
+        object.__setattr__(result, "_configuration", configured)
+        object.__setattr__(result, "_pid", os.getpid())
+        return result
+
     def serve_connection(self, connection, *, transport_deadline_ns=None):
         """Own one accepted socket, serve at most one request, then close it."""
         if type(connection) is not socket.socket:
@@ -144,7 +161,8 @@ class CurrentRootDecisionService:
             reserve_peer, complete_peer = (reserve_uid, reserve_gid), (complete_uid, complete_gid)
             finalization_peer = configured[6] if len(configured) >= 7 else None
             finalization_complete_peer = configured[7] if len(configured) >= 8 else None
-            activation_planner_peer = configured[8] if len(configured) == 9 else None
+            activation_planner_peer = configured[8] if len(configured) >= 9 else None
+            activation_reserve_peer = configured[9] if len(configured) == 10 else None
             deadline_ns = io._deadline_ns(timeout)
             if transport_deadline_ns is not None:
                 if type(transport_deadline_ns) is not int or transport_deadline_ns < 1:
@@ -155,13 +173,16 @@ class CurrentRootDecisionService:
                 lambda: _accepted_peer(connection))
             peer = (uid, gid)
             if peer not in (reserve_peer, complete_peer, finalization_peer,
-                    finalization_complete_peer, activation_planner_peer):
+                    finalization_complete_peer, activation_planner_peer, activation_reserve_peer):
                 raise CurrentRootServiceError("current-root socket peer is not admitted")
             prefix = transport._recv_prefix(connection, deadline_ns=deadline_ns)
             expected_operation = None
             if prefix == transport.RESERVE_REQUEST_MAGIC:
                 action, required_peer = "reserve", reserve_peer
-                if finalization_peer is not None:
+                if activation_reserve_peer is not None and peer == activation_reserve_peer:
+                    required_peer = activation_reserve_peer
+                    expected_operation = "oidc.session.activate"
+                elif finalization_peer is not None:
                     if peer == finalization_peer:
                         required_peer = finalization_peer
                         expected_operation = "webauthn.registration.finalize"

@@ -133,9 +133,17 @@ and actual service using [post-plan caller authorization](oidc-session-activatio
 and genuine grant production. This does not provision its UID, keys or listener,
 and the packaged image and service remain unbuilt/unexecuted.
 
-Dedicated **reserve and SQL** receiving delivery/service composition remain
-open. So do the public caller's separate purpose/key lifecycle and present
-permission, completion/history, public recovery and protected token release.
-Neither generic dispatch nor the connected grant role completes a one-use
-activation flow or establishes session currentness. Those remaining steps need
+The **reserve** receiver also has connected [independent launch and checkpoint
+admission](oidc-session-activation-execution-reserver-bootstrap.md), fixed
+[eight-FD delivery](oidc-session-activation-execution-reserver-delivery.md),
+genuine caller/grant/private replay and durable first-exact request/ACK storage.
+Its state-v5 peer can reserve only this signed operation. An authenticated ACK
+does not become its own independently current pending head.
+
+Dedicated **SQL** receiving delivery/service composition and the actual cold
+invocation of independent pending admission remain open. So do the public
+caller's separate purpose/key lifecycle and present permission,
+completion/history, public recovery and protected token release. Neither
+generic dispatch nor the connected grant/reserve roles complete a one-use
+activation flow or establish session currentness. Those remaining steps need
 their own authority and production acceptance.

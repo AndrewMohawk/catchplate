@@ -64,9 +64,12 @@ its [root-admitted bootstrap](oidc-session-activation-execution-authorizer-boots
 [private key/FD delivery](oidc-session-activation-execution-authorizer-delivery.md)
 and actual service to [genuine caller authorization and grant production](oidc-session-activation-execution-authorization.md).
 This is unbuilt/unexecuted source, not a production grant-delivery result.
-Dedicated **reserve/SQL** receiving delivery and service composition, the public
-caller's purpose/key lifecycle and present permission, and end-to-end one-use
-protected execution remain open. A connected grant role does not close the
+The dedicated [reserve receiver](oidc-session-activation-execution-reserver-delivery.md)
+now connects genuine caller/grant replay and durable exact reserve/ACK storage.
+Dedicated **SQL** receiving delivery/service composition, independently current
+pending consumption, the public caller's purpose/key lifecycle and present
+permission, and end-to-end one-use protected execution remain open. Connected
+grant/reserve roles do not close the
 full grant/reserve/pending/packet/SQL workflow or its production acceptance.
 Completion entrypoints explicitly reject activation: recovery needs genuine
 historical admission, not this API relabelled as recovery. Completion/history,

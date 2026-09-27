@@ -70,7 +70,7 @@ At genesis the local head is the actual enrollment digest; later heads use the
 distinct local record identity domain. Authentic recovery of a prefix does not
 establish that it is the current prefix.
 
-Private shared mechanics select only the two exact source-owned delivery
+Private shared mechanics select only the three exact source-owned delivery
 classes and fixed record profiles. Existing evidence-reservation public APIs,
 formats and domains remain unchanged; callers cannot supply a codec or
 operation. This avoids duplicating the durable state machine while retaining

@@ -23,12 +23,12 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-- **Landed:** an isolated, single-request SQL worker with protected startup,
-  fixed database/TLS scope and a separate one-use attempt journal
-  ([52d8fca](https://github.com/example/private-deployment)).
-  It is not deployed or connected to public reservation routes.
-- **Next:** separately owned completion recovery and credential finalization,
-  then the explicitly authorized public execution workflow.
+- **Landed:** separate completion recovery with its own signing key, protected
+  readers and durable original request/acknowledgment delivery
+  ([dc0a902](https://github.com/example/private-deployment)).
+  It is not deployed, connected to public routes or credential finalization.
+- **Next:** close remaining reader admission gaps, then integrate the authorized
+  public execution workflow and separate credential finalization.
   Full verification follows implementation and source freeze; current source is
   unbuilt and unexecuted.
 - **External prerequisites:** an immutable dependency snapshot and independently

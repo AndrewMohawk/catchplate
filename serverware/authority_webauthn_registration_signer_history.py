@@ -8,7 +8,11 @@ WebAuthn ceremony/attestation semantics, and regenerates the exact evidence
 admission request. Past expiry is historical data, not renewed signing or SQL
 authority. Existing live signers/verifiers and their expiry checks are untouched.
 
-The six returned subject scalars are ordinary observations. They must be joined
+The six returned subject scalars are ordinary observations. A separate private
+finalization derivation also returns the complete typed request and exact input
+bytes from this same replay, using bounded sibling hints already authenticated
+by the finalization's complete-vector replay. Those hints alone prove no live
+population. Both outputs must be joined
 to the separately authenticated actual execution grant/planning request and the
 present caller's recovery purpose. There is no token input, transport, key
 creation, signing, storage, SQL, replacement work allowance or fallback clock.
@@ -205,17 +209,28 @@ def _evidence_on_work(original, *, claims, public_key, identity, signer_spki,
         evidence.MAX_EVIDENCE_BYTES, evidence.MAX_EVIDENCE_NODES)
 
 
-def _verify_subject_on_configuration(*, payload, configuration_digest, generation,
+def _replay_on_configuration(*, payload, configuration_digest, generation,
         runtime_role_identities, request_originals, response_originals,
-        live_window, work, transport_deadline_ns=None):
-    """Return exact six-field historical subject data from full original replay.
-
-    No prior subject, successful verification result, caller-selected identity,
-    historical-now argument or separately posted request commitment is accepted.
-    Current caller/recovery permission and an actual execution-grant join remain
-    mandatory outside this helper.
-    """
+        finalization, sibling_challenge_ids, live_window, work, transport_deadline_ns=None):
+    """One genuine historical replay; only the fixed output derivation differs."""
     ledger = evidence.capture._SharedLedger(work)
+    if (type(finalization) is not bool or type(sibling_challenge_ids) is not list
+            or len(sibling_challenge_ids) > replay.production.registration.MAX_SIBLINGS
+            or not finalization and sibling_challenge_ids
+            or any(type(value) is not str or not 1 <= len(value) <= 4096
+                for value in sibling_challenge_ids)):
+        raise HistoricalRegistrationSignerError("historical finalization sibling hints are not source bounded")
+    siblings = evidence.capture._JSONCapture(ledger,
+        maximum_bytes=authority.MAX_REQUEST_BYTES).visit(sibling_challenge_ids)
+    work.prepare_scan(siblings)
+    previous = None
+    for value in siblings:
+        replay.production.registration._text(value, "sibling challenge ID", 4096, work)
+        if previous is not None:
+            work.prepare_comparison(previous, value)
+            if previous >= value:
+                raise HistoricalRegistrationSignerError("historical finalization sibling hints are not sorted unique")
+        previous = value
     request_raw = replay.wire._request_originals(request_originals)
     response_raw = replay.wire._response_originals(response_originals)
     if sum(len(raw) for raw in (*request_raw, *response_raw)) > authority.MAX_RESULT_BYTES:
@@ -307,13 +322,13 @@ def _verify_subject_on_configuration(*, payload, configuration_digest, generatio
     verification_context = replay.trust._context_on_work(published_row=published_row,
         high_water_row=high_water, rp_id=rp_id, origin=origin, verified_at=instant, work=work)
     processing.check()
-    claims, _arguments, expected_identity, evidence_issued, evidence_expires = replay.production._claims_on_work(
+    claims, finalization_arguments, expected_identity, evidence_issued, evidence_expires = replay.production._claims_on_work(
         client_data_json=derived.client_data_json, attestation_object=derived.attestation_object,
         credential_id=derived.credential_id, transports=derived.transports,
         scope=derived.scope, verification_context=verification_context,
         challenge_row=challenge_row, expected_authorization=grant_context["expectedAuthorization"],
         high_water_row=high_water, published_row=published_row, oidc_session_row=session_row,
-        sibling_challenge_ids=[], signer_identity=identity, maximum_age_ns=evidence_age, work=work)
+        sibling_challenge_ids=siblings, signer_identity=identity, maximum_age_ns=evidence_age, work=work)
     processing.check()
     _evidence_on_work(response_raw[0], claims=claims, public_key=public_key,
         identity=expected_identity, signer_spki=signer_spki,
@@ -340,6 +355,40 @@ def _verify_subject_on_configuration(*, payload, configuration_digest, generatio
         source_request.MAX_CONTEXT_BYTES, source_request.MAX_CONTEXT_NODES)
     evidence.capability._canonical(request_bytes, request, ledger,
         authority.MAX_REQUEST_BYTES, source_request.MAX_CONTEXT_NODES)
-    return {"userId": grant_context["userId"], "challengeId": grant_context["registrationChallengeId"],
+    subject = {"userId": grant_context["userId"], "challengeId": grant_context["registrationChallengeId"],
         "sessionId": grant_context["oidcSessionId"], "mode": grant_context["expectedAuthorization"]["mode"],
         "requestDigest": request["requestDigest"], "operationId": request["operationId"]}
+    if not finalization:
+        return subject
+    final_request = replay._finalization_request_on_work(finalization_arguments, response_raw[0], work)
+    final_inputs = replay.registration_replay._encode_inputs_on_work(work=work)
+    processing.check()
+    return subject, final_request, final_inputs
+
+
+def _verify_subject_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, request_originals, response_originals,
+        live_window, work, transport_deadline_ns=None):
+    """Return six original subject scalars, never present recovery permission."""
+    return _replay_on_configuration(payload=payload, configuration_digest=configuration_digest,
+        generation=generation, runtime_role_identities=runtime_role_identities,
+        request_originals=request_originals, response_originals=response_originals,
+        finalization=False, sibling_challenge_ids=[], live_window=live_window,
+        work=work, transport_deadline_ns=transport_deadline_ns)
+
+
+def _verify_finalization_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, request_originals, response_originals,
+        sibling_challenge_ids, live_window, work, transport_deadline_ns=None):
+    """Return (evidence subject, finalization request, exact finalization inputs).
+
+    The consumer must compare the complete request and inputs to the actual
+    historical finalization replay and join the evidence subject to the actual
+    evidence exchange. No historical timestamp becomes now, original interval
+    is renewed, successful token is accepted or present permission is returned.
+    """
+    return _replay_on_configuration(payload=payload, configuration_digest=configuration_digest,
+        generation=generation, runtime_role_identities=runtime_role_identities,
+        request_originals=request_originals, response_originals=response_originals,
+        finalization=True, sibling_challenge_ids=sibling_challenge_ids,
+        live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)

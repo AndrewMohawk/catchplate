@@ -10,6 +10,8 @@ Nested v1 remains grant-only. Explicit nested v2 additionally pins one fixed
 reserver endpoint and independent state predecessor, with no new descriptor.
 Nested v3 adds independently root-signed current-pending scope and a fixed SQL
 endpoint. These are cold configuration assertions, not an action-time witness.
+Nested v4 additionally pins the completion endpoint, request packet locator and
+original authorization identity within that same configured historical cohort.
 """
 from __future__ import annotations
 
@@ -25,14 +27,18 @@ from serverware import authority_webauthn_transition_custody_configuration as tr
 SCHEMA = "serverware.controlPlaneRegistrationFinalization/v1"
 V2_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v2"
 V3_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v3"
+V4_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v4"
 CALLER_KEY_FD = 204
 AUTHORIZER_SOCKET_PATH = "/run/serverware/registration-finalization-authorizer.sock"
 RESERVER_SOCKET_PATH = "/run/serverware/registration-finalization/reserver.sock"
 SQL_SOCKET_PATH = "/run/serverware/registration-finalization/sql.sock"
+COMPLETION_SOCKET_PATH = "/run/serverware/registration-finalization/completion.sock"
 _FIELDS = frozenset({"schema", "finalizationCallerPrivateKeyFd", "currentRootEnrollment",
     "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"})
 _V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "statePredecessor"})
 _V3_FIELDS = _V2_FIELDS | frozenset({"sqlEndpoint", "currentPending"})
+_V4_FIELDS = _V3_FIELDS | frozenset({"completionEndpoint", "completionPacketDigest",
+    "completionAuthorizationDigest"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _ORIGINAL_LIMITS = (("currentRootEnrollment", caller.authorization.MAX_ENROLLMENT_BYTES),
@@ -57,10 +63,14 @@ class _FinalizationMaterial:
     reservation_predecessor: tuple | None = None
     sql_endpoint: tuple | None = None
     current_pending: tuple | None = None
+    completion_endpoint: tuple | None = None
+    completion_packet_digest: str | None = None
+    completion_authorization_digest: str | None = None
 
 
 def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
-    if type(_path) is not str or _path not in (AUTHORIZER_SOCKET_PATH, RESERVER_SOCKET_PATH, SQL_SOCKET_PATH):
+    if type(_path) is not str or _path not in (AUTHORIZER_SOCKET_PATH, RESERVER_SOCKET_PATH,
+            SQL_SOCKET_PATH, COMPLETION_SOCKET_PATH):
         raise RegistrationFinalizationBootstrapError("finalization endpoint profile is not source fixed")
     shape._object(value, _ENDPOINT_FIELDS, "registration finalization endpoint")
     shape._literal(value["socketPath"], _path)
@@ -81,13 +91,18 @@ def _sql_endpoint(value):
     return _endpoint(value, _path=SQL_SOCKET_PATH)
 
 
+def _completion_endpoint(value):
+    return _endpoint(value, _path=COMPLETION_SOCKET_PATH)
+
+
 def _shape(value):
     if value is None:
         return
     if (type(value) is not dict or type(value.get("schema")) is not str
-            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA)):
+            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA, V4_SCHEMA)):
         raise RegistrationFinalizationBootstrapError("registration finalization scope version differs")
-    shape._object(value, _V3_FIELDS if value["schema"] == V3_SCHEMA else
+    shape._object(value, _V4_FIELDS if value["schema"] == V4_SCHEMA else
+        _V3_FIELDS if value["schema"] == V3_SCHEMA else
         _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS,
         "control-plane registration finalization scope")
     shape._integer(value["finalizationCallerPrivateKeyFd"], 1023, minimum=32)
@@ -99,7 +114,7 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
-    if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
+    if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
         _reserver_endpoint(value["reserverEndpoint"])
         predecessor = value["statePredecessor"]
         shape._object(predecessor, frozenset({"sequence", "headDigest", "nextFence"}),
@@ -109,7 +124,7 @@ def _shape(value):
         shape._integer(predecessor["nextFence"], minimum=1)
         if predecessor["sequence"] == 0 and predecessor["nextFence"] != 1:
             raise RegistrationFinalizationBootstrapError("genesis finalization predecessor requires fence one")
-    if value["schema"] == V3_SCHEMA:
+    if value["schema"] in (V3_SCHEMA, V4_SCHEMA):
         _sql_endpoint(value["sqlEndpoint"])
         pending = value["currentPending"]
         shape._object(pending, frozenset({"sequence", "headDigest", "fence"}),
@@ -121,6 +136,10 @@ def _shape(value):
                 or pending["fence"] != predecessor["nextFence"]):
             raise RegistrationFinalizationBootstrapError(
                 "finalization pending scope is not this cold predecessor's successor")
+    if value["schema"] == V4_SCHEMA:
+        _completion_endpoint(value["completionEndpoint"])
+        shape._digest(value["completionPacketDigest"])
+        shape._digest(value["completionAuthorizationDigest"])
 
 
 def _admit_on_work(*, registration_finalization, configuration_payload,
@@ -194,7 +213,8 @@ def _admit_on_work(*, registration_finalization, configuration_payload,
                 raise RegistrationFinalizationBootstrapError("finalization caller key reuses another configured purpose")
         reservation_endpoint = reservation_predecessor = None
         sql_endpoint = current_pending = None
-        if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
+        completion_endpoint = completion_packet_digest = completion_authorization_digest = None
+        if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
             # Capacity and genesis come from actual admission of this same
             # original root enrollment, never from a received state receipt.
             current = caller.authorization._admit_enrollment_on_work(enrollment_bytes=current_raw,
@@ -215,7 +235,7 @@ def _admit_on_work(*, registration_finalization, configuration_payload,
             reservation_endpoint = _reserver_endpoint(value["reserverEndpoint"])
             reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
                 predecessor["nextFence"])
-            if value["schema"] == V3_SCHEMA:
+            if value["schema"] in (V3_SCHEMA, V4_SCHEMA):
                 pending = value["currentPending"]
                 if pending["sequence"] >= current.payload["maxRecords"]:
                     raise RegistrationFinalizationBootstrapError(
@@ -225,9 +245,17 @@ def _admit_on_work(*, registration_finalization, configuration_payload,
                 # can enroll, update or independently prove these current pins.
                 sql_endpoint = _sql_endpoint(value["sqlEndpoint"])
                 current_pending = (pending["sequence"], pending["headDigest"], pending["fence"])
+                if value["schema"] == V4_SCHEMA:
+                    # Independent root assertions, never populated from an
+                    # unsigned SQL result or a returned completion carrier.
+                    # The packet is a request locator, not a response claim.
+                    completion_endpoint = _completion_endpoint(value["completionEndpoint"])
+                    completion_packet_digest = value["completionPacketDigest"]
+                    completion_authorization_digest = value["completionAuthorizationDigest"]
         return _FinalizationMaterial(CALLER_KEY_FD, admitted.caller_public_key,
             current_raw, grant_raw, authorization_raw, _endpoint(value["authorizerEndpoint"]),
-            reservation_endpoint, reservation_predecessor, sql_endpoint, current_pending)
+            reservation_endpoint, reservation_predecessor, sql_endpoint, current_pending,
+            completion_endpoint, completion_packet_digest, completion_authorization_digest)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RegistrationFinalizationBootstrapError):
             raise

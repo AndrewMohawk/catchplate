@@ -1,0 +1,243 @@
+"""Historical retained ownership for finalization completion, never permission.
+
+The finalization grant's local association is only a locator. The actual cold
+owner supplies independently admitted same-cohort configuration, original
+enrollments, pending scope and completion authorization/packet pins. This path
+authenticates the historical finalization, its associated signer/evidence grant
+and acknowledged evidence completion, then regenerates the complete finalization
+request from THAT signer. A successful incoming subject object cannot skip it.
+
+One present processing window and work allowance span the replay. Historical
+expiry remains historical, never a clock or renewed SQL authority. There is no
+transport, signing, mutation, public permission or browser-session activation.
+Cross-generation authority resolution remains a separate unimplemented scope.
+"""
+from __future__ import annotations
+
+from serverware import authority_registration_finalization_history_exchange as history
+from serverware import authority_registration_finalization_completion_response as completion
+from serverware import authority_registration_finalization_reservation_transport as reservation_wire
+from serverware import authority_registration_completion_history as evidence_completion
+from serverware import authority_registration_history_exchange as evidence_history
+from serverware import authority_webauthn_registration_signer_history as signer_history
+from serverware import control_plane_registration_finalization_execution as caller
+from serverware import control_plane_registration_finalization_records as finalization_records
+from serverware import control_plane_registration_finalization_reservation_records as reservation_records
+from serverware import control_plane_registration_finalization_outcome_records as outcome_records
+from serverware import control_plane_registration_handoff_subject as subjects
+from serverware import control_plane_registration_handoff as handoff
+
+
+startup, evidence, clock = caller.startup, caller.evidence, caller.clock
+custody_client, custody_startup = caller.custody_client, caller.custody_startup
+journal, wire = custody_client.journal, completion.transport
+
+
+class FinalizationCompletionSubjectError(ValueError):
+    pass
+
+
+def _open_on_work(work):
+    """Open current processing from the actual cold owner, never an old time."""
+    startup._require_pid()
+    callback = evidence.production._callback
+    owner = callback(work, startup.require_started)
+    if (type(owner) is not startup._EnrollmentOwner
+            or not callback(work, lambda: owner.finalization_completion_enabled)
+            or not callback(work, lambda: owner.sql_handoff_enabled)
+            or callback(work, custody_startup.require_started) is not owner._custody):
+        raise FinalizationCompletionSubjectError("finalization completion is not cold-enabled")
+    material, binding = owner._material, owner._binding
+    endpoint = wire._endpoint(material.finalization.completion_endpoint)
+    window = clock._open_on_work(deadline_epoch_ns=binding.attestation_interval[1],
+        maximum_lifetime_ns=min(binding.maximum_deadline_ns, int(endpoint[1] * 1_000_000_000),
+            evidence.authority.VERIFIER_RESPONSE_MAX_AGE_NS),
+        maximum_clock_skew_ns=material.issuer_policy["maximumClockSkewNs"], work=work)
+    if (owner._material is not material or owner._binding is not binding
+            or callback(work, startup.require_started) is not owner
+            or callback(work, custody_startup.require_started) is not owner._custody):
+        raise FinalizationCompletionSubjectError("finalization completion startup changed")
+    clock._check_on_work(window, work=work)
+    return owner, material, binding, window
+
+
+def _scope_on_owner(owner, *, live_window, transport_deadline_ns, work):
+    """Preserve the original opening while checking actual current ownership."""
+    callback = evidence.production._callback
+    if (type(owner) is not startup._EnrollmentOwner
+            or not callback(work, lambda: owner.finalization_completion_enabled)
+            or not callback(work, lambda: owner.sql_handoff_enabled)):
+        raise FinalizationCompletionSubjectError("finalization completion requires enabled cold owners")
+    common, _private, window, bound, owner_live = caller._scope(owner,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+    material, binding, custody = owner._material, owner._binding, owner._custody
+    configured = material.finalization
+    endpoint = wire._endpoint(configured.completion_endpoint)
+    bound = min(bound, window[1] + int(endpoint[1] * 1_000_000_000))
+
+    def current():
+        owner_live()
+        if (owner._material is not material or owner._binding is not binding
+                or owner._custody is not custody or material.finalization is not configured
+                or callback(work, startup.require_started) is not owner
+                or callback(work, custody_startup.require_started) is not custody
+                or callback(work, lambda: custody_client._snapshot(custody)) is not binding):
+            raise FinalizationCompletionSubjectError("finalization completion owners changed")
+        clock._check_on_work(window, work=work)
+        callback(work, lambda: wire._check_deadline(bound))
+        owner_live()
+
+    current()
+    return common, endpoint, window, bound, current
+
+
+def _association_on_work(owner, digest, work):
+    callback = evidence.production._callback
+    association = callback(work,
+        lambda: custody_client.ControlPlaneCustodyClient.load_registration_finalization_preparation(
+            owner._custody, digest))
+    if (type(association) is not tuple or len(association) != 3
+            or type(association[0]) is not subjects.records.PreparedRecord
+            or type(association[2]) is not tuple or len(association[2]) != 2
+            or any(type(record) is not subjects.records.PreparedRecord for record in association[2])):
+        raise FinalizationCompletionSubjectError("finalization completion requires its complete retained association")
+    final_record, evidence_digest, pair = association
+    evidence_digest = journal._digest(evidence_digest)
+    evidence_record, signer_record = pair
+    if (final_record.digest != digest or evidence_record.digest != evidence_digest
+            or (final_record.family, final_record.selector)
+                != (finalization_records.FAMILY, finalization_records.OPERATION)
+            or (evidence_record.family, evidence_record.selector)
+                != (subjects.execution_records.FAMILY, subjects.execution_records.OPERATION)
+            or (signer_record.family, signer_record.selector)
+                != (subjects.signer_records.FAMILY, subjects.signer_records.OPERATION)
+            or final_record.source_revision != evidence.authority.SOURCE_REVISION
+            or evidence_record.source_revision != final_record.source_revision
+            or signer_record.source_revision != final_record.source_revision
+            or len({digest, evidence_digest, signer_record.digest}) != 3):
+        raise FinalizationCompletionSubjectError("finalization completion association source or family differs")
+    return final_record, evidence_digest, evidence_record, signer_record
+
+
+def _inspect_on_owner(owner, local_digest, *, live_window, transport_deadline_ns, work):
+    """Return same-call subject and raw originals; no API accepts them as proof."""
+    digest = journal._digest(local_digest)
+    common, endpoint, window, bound, current = _scope_on_owner(owner,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+    callback = evidence.production._callback
+    material, custody = owner._material, owner._custody
+    configured = material.finalization
+    final_record, evidence_digest, evidence_record, signer_record = _association_on_work(owner, digest, work)
+    held = reservation_wire._originals(final_record.originals, response=False)
+    evidence_originals = subjects.reservation_wire._originals(evidence_record.originals, response=False)
+    signer = subjects.signer_wire._request_originals(signer_record.originals)
+    reserved_record = callback(work,
+        lambda: custody_client.ControlPlaneCustodyClient.load_registration_finalization_reservation(custody, digest))
+    observed = callback(work,
+        lambda: custody_client.ControlPlaneCustodyClient.load_registration_finalization_outcomes(custody, digest))
+    prior = callback(work,
+        lambda: custody_client.ControlPlaneCustodyClient.load_registration_outcomes(custody, evidence_digest))
+    if (type(reserved_record) is not reservation_records.FinalizationReservationRecord
+            or reserved_record.finalization_digest != digest
+            or reserved_record.source_revision != final_record.source_revision
+            or type(observed) is not outcome_records.FinalizationOutcomes
+            or observed.finalization_digest != digest or observed.source_revision != final_record.source_revision
+            or observed.sql_attempt is None
+            or prior.local_digest != evidence_digest or prior.source_revision != final_record.source_revision
+            or prior.reservation is None or prior.sql_attempt is None):
+        raise FinalizationCompletionSubjectError("finalization completion lacks its original reservation or SQL claim")
+    reserved = reservation_wire._originals(reserved_record.originals, response=True)
+    prior_completed = prior.completion_reconciled or prior.completion_outcome
+    if prior_completed is None:
+        raise FinalizationCompletionSubjectError("finalization completion lacks associated evidence completion")
+    evidence_returned = handoff.completion_wire._originals(prior_completed.originals, response=True)
+    evidence_reserved = subjects.reservation_wire._originals(prior.reservation.originals, response=True)
+    if evidence_returned[0] != b"acknowledged":
+        raise FinalizationCompletionSubjectError("uncertain evidence completion cannot establish finalization ownership")
+    # Independent evidence pins belong to the actual cold owner, not the
+    # finalization response, stored marker, or original's own asserted identity.
+    evidence_common = dict(common,
+        authorization_enrollment_bytes=material.execution.authorization_enrollment_bytes,
+        grant_enrollment_bytes=material.execution.grant_enrollment_bytes,
+        current_root_enrollment_bytes=material.execution.current_root_enrollment_bytes)
+    enrollments = tuple(scope[name] for scope in (common, evidence_common) for name in (
+        "authorization_enrollment_bytes", "grant_enrollment_bytes", "current_root_enrollment_bytes"))
+    retained_outcomes = (prior.sql_outcome, prior.completion_outcome, prior.completion_reconciled,
+        observed.sql_outcome, observed.completion_outcome, observed.completion_reconciled)
+    original_bytes = sum(len(raw) for raw in (*held, *evidence_originals, *signer,
+        *reserved, *evidence_reserved, *enrollments))
+    original_bytes += sum(len(raw) for record in retained_outcomes if record is not None
+        for raw in record.originals)
+    if original_bytes > completion.MAX_ORIGINAL_BYTES:
+        raise FinalizationCompletionSubjectError("finalization completion retained inventory exceeds its aggregate bound")
+    current()
+    exchanged = history._verify_on_configuration(**common, originals=held,
+        live_window=window, work=work, transport_deadline_ns=bound)
+    evidence.plan._same(exchanged.authorization_digest, configured.completion_authorization_digest, work,
+        "finalization completion authorization differs from the independent cold pin")
+    current()
+    config = {name: common[name] for name in (
+        "payload", "configuration_digest", "generation", "runtime_role_identities")}
+    subject, regenerated, inputs = signer_history._verify_finalization_on_configuration(**config,
+        request_originals=signer[:8], response_originals=signer[8:],
+        sibling_challenge_ids=exchanged.request["arguments"]["sibling_challenge_ids"],
+        live_window=window, work=work, transport_deadline_ns=bound)
+    evidence.plan._same(regenerated, exchanged.request, work,
+        "historical finalization differs from its associated signer's complete request")
+    work.charge(input_bytes=len(inputs) + len(exchanged.inputs_bytes))
+    if inputs != exchanged.inputs_bytes:
+        raise FinalizationCompletionSubjectError("historical finalization inputs differ from the actual signer replay")
+    prior_exchange = evidence_history._verify_on_configuration(**evidence_common,
+        originals=evidence_originals, live_window=window, work=work, transport_deadline_ns=bound)
+    evidence.plan._same((subject["requestDigest"], subject["operationId"]),
+        (prior_exchange.request_digest, prior_exchange.operation_id), work,
+        "historical evidence exchange differs from the associated signer request")
+    current()
+    prior_pending = material.execution.current_pending
+    evidence_completion._verify_on_configuration(**evidence_common,
+        originals=evidence_originals, reservation_originals=evidence_reserved,
+        response_originals=evidence_returned, expected_pending_sequence=prior_pending[0],
+        expected_pending_head_digest=prior_pending[1], expected_fence=prior_pending[2],
+        live_window=window, work=work, transport_deadline_ns=bound)
+    current()
+    sequence, head, fence = configured.current_pending
+    candidate = completion.pending._admit_for_completion_on_work(operation=completion.OPERATION,
+        originals=exchanged.raw4, expectations=exchanged.expectations,
+        planner_public_key=exchanged.planner_public_key, operation_public_key=exchanged.operation_public_key,
+        enrollment_bytes=common["current_root_enrollment_bytes"], root_public_key=common["root_public_key"],
+        reserve_request_bytes=reserved[0], reserve_receipt_bytes=reserved[2], snapshot_bytes=reserved[1],
+        expected_database_id=exchanged.database_id, expected_generation_digest=exchanged.generation_digest,
+        expected_pending_sequence=sequence, expected_pending_head_digest=head, expected_fence=fence,
+        live_window=window, work=work, transport_deadline_ns=bound)
+    completion.completion._verify_grant_on_work(candidate=candidate, grant_raw=held[9],
+        grant_enrollment=common["grant_enrollment_bytes"], enrollment=common["current_root_enrollment_bytes"],
+        root_public_key=common["root_public_key"], planner_public_key=exchanged.planner_public_key,
+        operation_public_key=exchanged.operation_public_key,
+        authorization_digest=configured.completion_authorization_digest, work=work)
+    current()
+    arguments, intent = regenerated["arguments"], regenerated["arguments"]["semantic_intent"]
+    result = {"localDigest": digest, "userId": intent["userId"], "challengeId": intent["challengeId"],
+        "sessionId": arguments["oidc_session_id"], "mode": intent["authorizationMode"],
+        "requestDigest": regenerated["requestDigest"], "operationId": regenerated["operationId"]}
+    evidence.plan._same((result["userId"], result["challengeId"], result["sessionId"], result["mode"]),
+        (subject["userId"], subject["challengeId"], subject["sessionId"], subject["mode"]), work,
+        "historical finalization subject differs from its genuine associated signer")
+    current()
+    return result, held, reserved, observed, common, endpoint, window, bound, current, original_bytes
+
+
+def inspect_retained_finalization_completion_subject(local_digest):
+    """Return genuine seven-field ownership data, not present action permission."""
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    digest = journal._digest(local_digest)
+    work = _ValidationWork(QueryReadValidationLimits())
+    owner, material, binding, window = _open_on_work(work)
+    startup._require_pid()
+    with startup._LOCK:
+        if owner._material is not material or owner._binding is not binding:
+            raise FinalizationCompletionSubjectError("finalization completion startup changed before inspection")
+        result = _inspect_on_owner(owner, digest, live_window=window,
+            transport_deadline_ns=window[4], work=work)
+        result[8]()
+        return result[0]

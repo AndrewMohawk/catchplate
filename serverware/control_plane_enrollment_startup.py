@@ -215,6 +215,17 @@ class _EnrollmentOwner:
             and finalization.sql_endpoint is not None
             and finalization.current_pending is not None)
 
+    @property
+    def finalization_completion_enabled(self):
+        """Independent nested-v4 scope only, not present completion permission."""
+        _live(self)
+        finalization = None if self._material is None else self._material.finalization
+        return (self._finalization_key is not None and finalization is not None
+            and finalization.completion_endpoint is not None
+            and finalization.completion_packet_digest is not None
+            and finalization.completion_authorization_digest is not None
+            and finalization.current_pending is not None)
+
     def _authorize_registration_finalization(self, *, request_originals, response_originals,
             sibling_challenge_ids, live_window, work, transport_deadline_ns=None):
         """Private finalization-only continuation after fresh present permission."""
@@ -241,7 +252,7 @@ class _EnrollmentOwner:
             transport_deadline_ns, work):
         """One genuine raw10-to-raw3 reserve exchange after separate present permission.
 
-        Only explicit nested finalization v2/v3 supplies its independent scope.
+        Only explicit nested finalization v2/v3/v4 supplies its independent scope.
         This neither stores the response nor establishes latest state or SQL authority.
         """
         from serverware import control_plane_registration_finalization_execution as finalization
@@ -255,7 +266,7 @@ class _EnrollmentOwner:
             transport_deadline_ns, work):
         """One explicit private SQL exchange; separate present permission is required.
 
-        Nested v3 supplies independently root-admitted pending pins and endpoint.
+        Nested v3/v4 supplies independently root-admitted pending pins and endpoint.
         The actual retained association owns a durable no-retry dispatch claim
         and opaque outcome record. This does not authenticate signed completion
         or activate sessions. Failure may follow a remote attempt or commit.
@@ -266,6 +277,28 @@ class _EnrollmentOwner:
         with _LOCK:
             return sql._request_on_owner(self, local_digest=local_digest, originals=originals,
                 live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+
+    def _request_retained_registration_finalization_completion(self, *, local_digest,
+            expected_user_id, expected_session_id, live_window, transport_deadline_ns, work):
+        """Private original-bound completion after separate present permission."""
+        from serverware import control_plane_registration_finalization_completion as completion
+
+        _require_pid()
+        with _LOCK:
+            return completion._complete_on_owner(self, local_digest=local_digest,
+                expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+                recovery=False, live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+
+    def _recover_retained_registration_finalization_completion(self, *, local_digest,
+            expected_user_id, expected_session_id, live_window, transport_deadline_ns, work):
+        """Private uncertainty reconciliation after separate recovery permission."""
+        from serverware import control_plane_registration_finalization_completion as completion
+
+        _require_pid()
+        with _LOCK:
+            return completion._complete_on_owner(self, local_digest=local_digest,
+                expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+                recovery=True, live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
     @property
     def reservation_enabled(self):

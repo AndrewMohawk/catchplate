@@ -38,11 +38,13 @@ CONTROL_PLANE_COMPLETION_SOCKET = "/run/serverware/registration-execution/comple
 CONTROL_PLANE_FINALIZATION_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v1"
 CONTROL_PLANE_FINALIZATION_V2_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v2"
 CONTROL_PLANE_FINALIZATION_V3_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v3"
+CONTROL_PLANE_FINALIZATION_V4_SCHEMA = "serverware.controlPlaneRegistrationFinalization/v4"
 CONTROL_PLANE_FINALIZATION_KEY_NAME = "serverware-registration-finalization-caller-key"
 CONTROL_PLANE_FINALIZATION_KEY_FD = 204
 CONTROL_PLANE_FINALIZATION_SOCKET = "/run/serverware/registration-finalization-authorizer.sock"
 CONTROL_PLANE_FINALIZATION_RESERVATION_SOCKET = "/run/serverware/registration-finalization/reserver.sock"
 CONTROL_PLANE_FINALIZATION_SQL_SOCKET = "/run/serverware/registration-finalization/sql.sock"
+CONTROL_PLANE_FINALIZATION_COMPLETION_SOCKET = "/run/serverware/registration-finalization/completion.sock"
 TRUSTED_HOST_LOCAL_WITNESS_STATE_PATH = (
     "/var/lib/serverware/authority-witness"
 )
@@ -549,12 +551,16 @@ def _control_plane_finalization_key_slot(value, *, issuer_descriptor, bootstrap_
         "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
     version = value.get("schema") if type(value) is dict else None
     if type(version) is not str or version not in (CONTROL_PLANE_FINALIZATION_SCHEMA,
-            CONTROL_PLANE_FINALIZATION_V2_SCHEMA, CONTROL_PLANE_FINALIZATION_V3_SCHEMA):
+            CONTROL_PLANE_FINALIZATION_V2_SCHEMA, CONTROL_PLANE_FINALIZATION_V3_SCHEMA,
+            CONTROL_PLANE_FINALIZATION_V4_SCHEMA):
         raise RuntimeError("finalization caller delivery version is unsupported")
-    if version in (CONTROL_PLANE_FINALIZATION_V2_SCHEMA, CONTROL_PLANE_FINALIZATION_V3_SCHEMA):
+    if version in (CONTROL_PLANE_FINALIZATION_V2_SCHEMA, CONTROL_PLANE_FINALIZATION_V3_SCHEMA,
+            CONTROL_PLANE_FINALIZATION_V4_SCHEMA):
         fields |= {"reserverEndpoint", "statePredecessor"}
-    if version == CONTROL_PLANE_FINALIZATION_V3_SCHEMA:
+    if version in (CONTROL_PLANE_FINALIZATION_V3_SCHEMA, CONTROL_PLANE_FINALIZATION_V4_SCHEMA):
         fields |= {"sqlEndpoint", "currentPending"}
+    if version == CONTROL_PLANE_FINALIZATION_V4_SCHEMA:
+        fields |= {"completionEndpoint", "completionPacketDigest", "completionAuthorizationDigest"}
     if (type(value) is not dict or set(value) != fields
             or type(value["finalizationCallerPrivateKeyFd"]) is not int
             or value["finalizationCallerPrivateKeyFd"] != CONTROL_PLANE_FINALIZATION_KEY_FD
@@ -573,10 +579,13 @@ def _control_plane_finalization_key_slot(value, *, issuer_descriptor, bootstrap_
                 or any(character not in alphabet for character in encoded)):
             raise RuntimeError("finalization enrollment original exceeds its delivery bound")
     endpoints = (("authorizerEndpoint", CONTROL_PLANE_FINALIZATION_SOCKET),)
-    if version in (CONTROL_PLANE_FINALIZATION_V2_SCHEMA, CONTROL_PLANE_FINALIZATION_V3_SCHEMA):
+    if version in (CONTROL_PLANE_FINALIZATION_V2_SCHEMA, CONTROL_PLANE_FINALIZATION_V3_SCHEMA,
+            CONTROL_PLANE_FINALIZATION_V4_SCHEMA):
         endpoints += (("reserverEndpoint", CONTROL_PLANE_FINALIZATION_RESERVATION_SOCKET),)
-    if version == CONTROL_PLANE_FINALIZATION_V3_SCHEMA:
+    if version in (CONTROL_PLANE_FINALIZATION_V3_SCHEMA, CONTROL_PLANE_FINALIZATION_V4_SCHEMA):
         endpoints += (("sqlEndpoint", CONTROL_PLANE_FINALIZATION_SQL_SOCKET),)
+    if version == CONTROL_PLANE_FINALIZATION_V4_SCHEMA:
+        endpoints += (("completionEndpoint", CONTROL_PLANE_FINALIZATION_COMPLETION_SOCKET),)
     for name, path in endpoints:
         endpoint = value[name]
         if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds",
@@ -587,7 +596,8 @@ def _control_plane_finalization_key_slot(value, *, issuer_descriptor, bootstrap_
                 or any(type(endpoint[field]) is not int or endpoint[field] != 0
                     for field in ("listenerUid", "listenerGid"))):
             raise RuntimeError("finalization endpoint differs from its fixed delivery contract")
-    if version in (CONTROL_PLANE_FINALIZATION_V2_SCHEMA, CONTROL_PLANE_FINALIZATION_V3_SCHEMA):
+    if version in (CONTROL_PLANE_FINALIZATION_V2_SCHEMA, CONTROL_PLANE_FINALIZATION_V3_SCHEMA,
+            CONTROL_PLANE_FINALIZATION_V4_SCHEMA):
         predecessor = value["statePredecessor"]
         if type(predecessor) is not dict or set(predecessor) != {"sequence", "headDigest", "nextFence"}:
             raise RuntimeError("finalization predecessor delivery scope is not closed")
@@ -598,7 +608,7 @@ def _control_plane_finalization_key_slot(value, *, issuer_descriptor, bootstrap_
                 or type(fence) is not int or not 1 <= fence <= 2**63 - 1
                 or sequence == 0 and fence != 1):
             raise RuntimeError("finalization predecessor exceeds its delivery shape")
-    if version == CONTROL_PLANE_FINALIZATION_V3_SCHEMA:
+    if version in (CONTROL_PLANE_FINALIZATION_V3_SCHEMA, CONTROL_PLANE_FINALIZATION_V4_SCHEMA):
         pending = value["currentPending"]
         if type(pending) is not dict or set(pending) != {"sequence", "headDigest", "fence"}:
             raise RuntimeError("finalization pending delivery scope is not closed")
@@ -610,9 +620,16 @@ def _control_plane_finalization_key_slot(value, *, issuer_descriptor, bootstrap_
                 or not pending_head.startswith("sha256:")
                 or any(character not in "0123456789abcdef" for character in pending_head[7:])):
             raise RuntimeError("finalization pending scope differs from its cold predecessor")
+    if version == CONTROL_PLANE_FINALIZATION_V4_SCHEMA:
+        for name in ("completionPacketDigest", "completionAuthorizationDigest"):
+            digest = value[name]
+            if (type(digest) is not str or len(digest) != 71 or not digest.startswith("sha256:")
+                    or any(character not in "0123456789abcdef" for character in digest[7:])):
+                raise RuntimeError("finalization completion identity is not a canonical delivery pin")
     # This stdlib-only projection does not authenticate any original or enroll
     # a current head. The child still verifies root signatures, operation/key/
     # generation scope, actual enrollment capacity and independent pending pins.
+    # Nested v4 completion pins neither add an FD nor prove a returned packet.
     return CONTROL_PLANE_FINALIZATION_KEY_FD
 
 

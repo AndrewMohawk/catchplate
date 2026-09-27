@@ -15,7 +15,7 @@ The original root-signed envelope uses
 `serverware.signedControlPlaneEnrollmentBootstrap/v4`; its payload uses
 `serverware.controlPlaneEnrollmentBootstrap/v4`. It retains every parent v3
 field and adds required `registrationFinalization`, either null, the exact
-six-field v1 object below, or the explicit nested v2/v3 extensions described next.
+six-field v1 object below, or the explicit nested v2/v3/v4 extensions described next.
 The complete canonical original remains bounded to
 4 MiB and authenticated by the already admitted runtime root.
 
@@ -46,9 +46,9 @@ Its planner and operation keys come from the actual finalization transition
 configuration, never the registration evidence-admission policy.
 
 The stdlib-only [early descriptor projection](../serverware/authority_fd_entrypoint.py)
-now accepts each closed nested v1/v2/v3 shape and its source-fixed endpoints;
+now accepts each closed nested v1/v2/v3/v4 shape and its source-fixed endpoints;
 the older v1-only projection would have rejected v2 before child startup. All
-three profiles still select the same FD204. This delivery check authenticates
+four profiles still select the same FD204. This delivery check authenticates
 no root, signature, generation or currentness: full child admission remains
 mandatory before the key or configuration is used.
 
@@ -109,6 +109,48 @@ checks in the [private SQL caller/worker path](control-plane-finalization-sql.md
 Neither that source integration nor the cold pin establishes independent currentness.
 See the [pending-scope boundary](control-plane-finalization-reservation.md#opt-in-current-pending-pins-not-a-witness).
 
+## Opt-in completion caller configuration
+
+Nested `serverware.controlPlaneRegistrationFinalization/v4` retains all ten
+v3 fields and adds exactly three fields, for a closed thirteen-field object:
+
+| Added field | Fixed contract |
+| --- | --- |
+| `completionEndpoint` | The same four-field endpoint shape; `/run/serverware/registration-finalization/completion.sock`, integer timeout 1–30 seconds, listener peer `0:0` |
+| `completionPacketDigest` | Independently root-pinned canonical lowercase `sha256:` digest selecting the original custody packet requested from the completion service |
+| `completionAuthorizationDigest` | Independently root-pinned canonical lowercase `sha256:` identity of the original finalization caller authorization |
+
+Private material adds `completion_endpoint`, `completion_packet_digest` and
+`completion_authorization_digest`. All three are `None` for nested v1/v2/v3;
+none of those profiles, a null parent field, a partial extension or a returned
+SQL observation can silently enable completion. The parent envelope remains
+v4 and the key remains FD204: there is no additional key, descriptor, private
+key copy or environment fallback.
+
+The actual root signature authenticates the complete configuration, generation,
+three enrollment originals, predecessor/current-pending scope and these new
+pins. Nested admission continues to authenticate the same finalization-purpose
+enrollments and actual configured transition keys, including enrolled capacity
+and independent pending successor/fence joins. The early stdlib FD projection
+checks the same closed shape and endpoint/digest spelling, but supplies no
+cryptographic admission. Unknown fields and cross-version extensions fail
+closed in both paths; v1/v2/v3 retain their existing exact shapes.
+
+Historical replay must authenticate the original authorization and compare its
+actual identity with `completionAuthorizationDigest`. The independently
+configured packet digest selects the request; it is never adopted from an
+unsigned SQL locator. The [completion raw4 response](registration-finalization-completion-response.md)
+contains no packet ID, so receiving verification does **not** independently
+prove packet identity. It authenticates the original completion/state signatures
+and full finalization plan/grant/reserve/pending joins under the supplied scope.
+
+This extension covers only the same independently configured source/configuration/
+key cohort. It does not resolve unknown historical cohorts, renew old controls,
+establish action-time latest-head currentness or activate a browser session.
+Cross-generation historical authority remains H05. Actual retained ownership,
+present-purpose permission, original-bound exchange, receiving verification and
+durable outcome association remain separate from cold configuration admission.
+
 ## Actual key delivery and lifetime
 
 The root [descriptor entrypoint](../serverware/authority_fd_entrypoint.py) reads
@@ -156,15 +198,21 @@ SQL request method and dedicated cold worker. They authenticate original pending
 scope before actual protected issuance/execution; the caller joins every returned
 marker field to the verified original plan. A separate [public finalization
 execution action](public-registration-finalization-sql.md) now repeats retained
-ownership and joins durable local dispatch/outcome handling. Signed
-completion/recovery and separate OIDC session activation remain outstanding.
+ownership and joins durable local dispatch/outcome handling. The dedicated
+[completion service](registration-finalization-completion-service.md) and
+original-signature receiver exist in source; nested v4 supplies explicit caller
+configuration, not the complete public completion/recovery workflow. Public
+permissions, durable completion/reconciliation integration and separate OIDC
+session activation remain outstanding.
 A configured property alone is not a completed workflow.
 Trusted-host-local descriptor continuity is not independent enclave evidence.
 
 This implementation has not been built or executed. Deferred frozen validation
 includes old-profile compatibility; closed v4/null-slot and nested-version
 rejection; independently pinned predecessor/capacity checks; inconsistent v3
-pending successor/fence/capacity and endpoint rejection; tampered or
+pending successor/fence/capacity and endpoint rejection; nested v4's exact
+thirteen fields, fixed completion endpoint and independent digest spelling;
+old-profile completion fields remaining absent/disabled; tampered or
 cross-purpose enrollment rejection; actual separate key/FD pair admission;
 missing, reused or changed key rejection; PID/custody/descriptor drift; and
 shutdown/failure preventing reuse. These are planned checks, not passing results.

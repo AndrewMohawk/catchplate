@@ -76,6 +76,25 @@ class _VerifiedAuthorization:
     last_monotonic_ns: int
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalAuthorization:
+    """Original facts, not a live authorization or a reusable proof input."""
+
+    request_digest: str
+    operation_id: str
+    authorization_digest: str
+    database_id: str
+    generation_digest: str
+    current_root_enrollment_digest: str
+    grant_enrollment_digest: str
+    issued_at_epoch_ns: int
+    expires_at_epoch_ns: int
+    maximum_age_ns: int
+    maximum_clock_skew_ns: int
+    last_epoch_ns: int
+    last_monotonic_ns: int
+
+
 def _shape(payload, *, enrollment):
     shape._object(payload, ENROLLMENT_FIELDS if enrollment else REQUEST_FIELDS,
         "registration finalization authority")
@@ -274,5 +293,78 @@ def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes,
     primitives._unchanged(original, envelope, MAX_AUTHORIZATION_BYTES, work)
     live()
     return _VerifiedAuthorization(payload["requestDigest"], operation_id, identity,
+        policy["databaseId"], policy["generationDigest"], policy["currentRootEnrollmentDigest"],
+        policy["grantEnrollmentDigest"], issued, expires, maximum_age, skew, last_epoch, last_monotonic)
+
+
+def _verify_historical_on_work(*, authorization_bytes, authorization_enrollment_bytes,
+        current_root_enrollment_bytes, grant_enrollment_bytes, root_public_key,
+        configuration_digest, planner_public_key, evidence_public_key,
+        live_window, work, transport_deadline_ns=None):
+    """Authenticate original finalization scope without reviving its expiry.
+
+    The legacy key parameter spelling denotes the independently configured
+    finalization transition key here, never an evidence-admission fallback.
+    The supplied current processing window is retained, not opened or returned.
+    """
+    capture._SharedLedger(work)
+    original = authorization._original(authorization_bytes, MAX_AUTHORIZATION_BYTES,
+        "historical finalization request authorization")
+    enrollment_raw = authorization._original(authorization_enrollment_bytes,
+        MAX_ENROLLMENT_BYTES, "historical finalization caller enrollment")
+    current_raw = authorization._original(current_root_enrollment_bytes,
+        authorization.MAX_ENROLLMENT_BYTES, "historical finalization current-root enrollment")
+    grant_raw = authorization._original(grant_enrollment_bytes,
+        grants.MAX_ENROLLMENT_BYTES, "historical finalization grant enrollment")
+    config, root, planner, operation_key = (configuration_digest, root_public_key,
+        planner_public_key, evidence_public_key)
+    shape._digest(config)
+    for key in (root, planner, operation_key):
+        authorization._public(key)
+    window = clock._validate(live_window)
+    inherited = transport_deadline_ns
+    if inherited is not None:
+        shape._integer(inherited, minimum=1)
+    bound = window[4] if inherited is None else min(window[4], inherited)
+    last_epoch, last_monotonic = window[0], window[2]
+
+    def current():
+        nonlocal last_epoch, last_monotonic
+        now = clock._check_on_work(window, work=work)
+        monotonic = production._callback(work, time.monotonic_ns)
+        shape._integer(monotonic, minimum=1)
+        if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+            raise RegistrationFinalizationAuthorizationError("historical finalization processing expired or clocks reversed")
+        last_epoch, last_monotonic = now, monotonic
+        return now
+
+    current()
+    envelope = _read(original, enrollment=False, work=work)
+    material = _admit_enrollment_on_work(authorization_enrollment_bytes=enrollment_raw,
+        current_root_enrollment_bytes=current_raw, grant_enrollment_bytes=grant_raw,
+        root_public_key=root, configuration_digest=config,
+        planner_public_key=planner, evidence_public_key=operation_key, work=work)
+    current()
+    policy = material.payload
+    primitives._signature(envelope, material.caller_public_key, MAX_AUTHORIZATION_BYTES, work)
+    payload = envelope["payload"]
+    for name in _SCOPE_FIELDS:
+        plan._same(payload[name], policy[name], work, "historical finalization request " + name)
+    plan._same(payload["authorizationEnrollmentDigest"], material.enrollment_digest, work,
+        "historical finalization request caller enrollment")
+    plan._same(payload["callerMeasurementDigest"], policy["callerKey"]["measurementDigest"], work,
+        "historical finalization request caller measurement")
+    issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
+    maximum_age, skew = policy["maximumAgeNs"], policy["maximumClockSkewNs"]
+    authorization._interval(payload, maximum_age)
+    operation_id = plan._frame("serverware.policyAuthorityOperation/v2",
+        (OPERATION.encode("ascii"), payload["requestDigest"].encode("ascii")), work)
+    plan._same(payload["operationId"], operation_id, work,
+        "historical finalization request actual operation identity")
+    identity = plan._frame(REQUEST_IDENTITY_DOMAIN, (original,), work)
+    primitives._unchanged(original, envelope, MAX_AUTHORIZATION_BYTES, work)
+    if issued > current() + skew:
+        raise RegistrationFinalizationAuthorizationError("historical finalization authorization is future-issued")
+    return _HistoricalAuthorization(payload["requestDigest"], operation_id, identity,
         policy["databaseId"], policy["generationDigest"], policy["currentRootEnrollmentDigest"],
         policy["grantEnrollmentDigest"], issued, expires, maximum_age, skew, last_epoch, last_monotonic)

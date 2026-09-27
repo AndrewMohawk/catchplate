@@ -33,7 +33,8 @@ the pinned ownership. Source ceilings remain 8 GiB and 4096 prepared records;
 the bounded recovery scan allows at most `7 * maximum_records` physical files.
 The ceiling remains sufficient without expansion: each legacy record has at
 most three files, evidence grant seven, signer record one, and finalization
-grant five including its association, reservation, SQL claim and outcome slots.
+grant seven: prepared original, association, reservation, SQL claim, SQL
+outcome, completion outcome and completion reconciliation.
 Shared references do not duplicate those files.
 Each legacy prepared record reserves its fixed 40-byte
 attempt marker and the maximum 370-byte observation frame while those markers
@@ -282,9 +283,20 @@ The journal and cold custody client expose separate fixed-purpose methods:
   stores the first exact bounded unsigned SQL raw4 and returns its local content
   digest. It requires the claim. An exact repeat is idempotent; conflicting
   originals fail and poison the owner, never replace the first observation.
+- `append_registration_finalization_completion_outcome(finalization_digest, originals)`
+  retains the first exact finalization-completion raw4 and returns its local
+  content digest. It requires the complete original/reservation association
+  and irreversible SQL claim, even when no unsigned SQL response was received.
+- `append_registration_finalization_completion_reconciliation(finalization_digest, originals)`
+  retains one separate acknowledged raw4 only after an original uncertain
+  completion outcome. The caller must genuinely authenticate it first; storage
+  checks the bounded carrier and prerequisite relationships, not signatures.
+  Exact repeats are idempotent; conflicts cannot replace either record.
 - `load_registration_finalization_outcomes(finalization_digest)` returns the
   ordinary frozen `FinalizationOutcomes(source_revision, finalization_digest,
-  sql_attempt, sql_outcome)`. Each present record contains `source_revision`,
+  sql_attempt, sql_outcome, completion_outcome=None, completion_reconciled=None)`.
+  The two new fields default to `None` for existing construction compatibility.
+  Each present record contains `source_revision`,
   `finalization_digest`, fixed `kind`, exact immutable `originals` and local
   `digest`. Even an empty result requires rereading the complete original chain;
   any present claim/outcome also requires the original reservation.
@@ -295,28 +307,47 @@ uses `SWCPX001`, kind index `0` for `sql-claimed` (empty raw0) and `1` for
 `serverware.controlPlaneRegistrationFinalizationSqlClaimRecord/v1` and
 `serverware.controlPlaneRegistrationFinalizationSqlOutcomeRecord/v1` domains.
 The frame retains the original source token and finalization-grant raw32 digest,
-then fixed-count u64 lengths and exact bodies/EOF. It accepts only the actual
-finalization SQL transport carrier: `observed-commit` with two locators and an
+then fixed-count u64 lengths and exact bodies/EOF. The SQL outcome profile
+accepts the actual finalization SQL carrier: `observed-commit` with two locators and an
 unsigned marker, or `uncertain` with both locators present or both absent and no
-marker. Claim frames are at most 299 bytes; outcome frames are at most 4584
+marker. Claim frames are at most 299 bytes; SQL outcome frames remain at most 4584
 bytes (4253 body bytes plus a 331-byte header). All lengths precede body slicing.
-The older evidence outcome schema, magic, kind indices and domains are unchanged.
+Old SQL bytes, kind indices, identity domains and decoding bounds are unchanged,
+as are all older evidence-outcome formats.
 
-Publication uses `finalization-sql-claimed-<finalization grant digest hex>` and
-`finalization-sql-outcome-<finalization grant digest hex>`. Existing no-replace,
+New kind indices `2` (`completion-outcome`) and `3` (`completion-reconciled`)
+use distinct identity domains
+`serverware.controlPlaneRegistrationFinalizationCompletionOutcomeRecord/v1` and
+`serverware.controlPlaneRegistrationFinalizationCompletionReconciliationRecord/v1`.
+Both use the actual finalization-completion transport's bounded raw4 carrier:
+`acknowledged` with a content ID and original completion/state bytes, or
+`uncertain` with all three other bodies empty. Reconciliation allows only
+`acknowledged`. Each frame is at most 278942 bytes, including the maximum
+331-byte header; storage performs no socket I/O or signature verification.
+
+Publication uses `finalization-sql-claimed-<finalization grant digest hex>`,
+`finalization-sql-outcome-<finalization grant digest hex>`,
+`finalization-completion-outcome-<finalization grant digest hex>` and
+`finalization-completion-reconciled-<finalization grant digest hex>`. Existing no-replace,
 file/directory-fsync, identity/readback, owner/PID, quota and singleton-lock
 protections apply. Recovery rejects missing prerequisites, changed originals,
-wrong family/source and conflicting linkage. The unchanged `7 * maximum_records`
-scan ceiling includes these slots; finalization records now use at most five
-physical files. No legacy attempt/observation reservation is consumed or cleared.
+wrong family/source and conflicting linkage. Recovery and every load also
+reject reconciliation without its original uncertain completion; uncertainty
+is never overwritten. A SQL outcome is optional, but the SQL claim is not.
+The unchanged `7 * maximum_records` scan ceiling includes all seven possible
+finalization files. Shared evidence/signer references do not duplicate their
+files. The byte quota is not expanded. Existing legacy marker reservations are
+not consumed or cleared to make room for these outcomes.
 
 These methods do not admit signatures, invoke SQL, authenticate the unsigned
 marker or establish currentness. They impose no invocation clock, so a bounded
 late, uncertain or semantically rejected response can be preserved under the
 same real owner/journal protections before later semantic admission. A missing
 outcome, retention error or late failure never establishes no remote effect or
-authorizes another send. No claim is cleared; no completion, credential success,
-OIDC activation or automatic recovery follows. This remains source-only,
+authorizes another send. Retained completion bytes must be genuinely verified
+on reuse; a local content digest is not an authenticated result. No claim is
+cleared; no credential success, OIDC activation or automatic recovery follows
+from these records. This remains source-only,
 unbuilt and unexecuted.
 
 ## Bounded registration completion reconciliation

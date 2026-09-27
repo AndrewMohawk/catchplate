@@ -601,6 +601,26 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while retaining finalization SQL outcome")
         return journal._digest(digest)
 
+    def append_registration_finalization_completion_outcome(self, finalization_digest, originals):
+        """Retain bounded completion originals before separate semantic admission."""
+        local = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_finalization_completion_outcome(
+            binding.journal, local, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining finalization completion")
+        return journal._digest(digest)
+
+    def append_registration_finalization_completion_reconciliation(self, finalization_digest, originals):
+        """Retain a separate acknowledged carrier, never overwrite uncertainty."""
+        local = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_finalization_completion_reconciliation(
+            binding.journal, local, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining finalization reconciliation")
+        return journal._digest(digest)
+
     def load_registration_finalization_outcomes(self, finalization_digest):
         """Reread complete original linkage; absence never establishes nonexecution."""
         from serverware import control_plane_registration_finalization_outcome_records as outcomes
@@ -610,7 +630,8 @@ class ControlPlaneCustodyClient:
         result = journal.CustodyJournal.load_registration_finalization_outcomes(binding.journal, local)
         if (type(result) is not outcomes.FinalizationOutcomes or result.finalization_digest != local):
             raise CustodyClientError("finalization SQL outcomes differ from their local preparation")
-        for kind, record in zip(outcomes.KINDS, (result.sql_attempt, result.sql_outcome)):
+        for kind, record in zip(outcomes.KINDS, (result.sql_attempt, result.sql_outcome,
+                result.completion_outcome, result.completion_reconciled)):
             if record is not None:
                 if (type(record) is not outcomes.FinalizationOutcomeRecord
                         or record.finalization_digest != local or record.kind != kind

@@ -15,7 +15,8 @@ after both original records are durable; it supplies no verification or authorit
 Separate registration outcomes retain opaque originals under that association.
 Finalization reservation raw3 has its own immutable slot under the complete
 finalization/evidence/signer chain; storage supplies no outcome authentication.
-Separate finalization SQL claim/outcome records require that retained reservation.
+Separate finalization SQL/completion records require that retained reservation;
+completion reconciliation never replaces its original uncertain outcome.
 A SQL-CLAIMED record burns only one local dispatch, never remote SQL permission.
 
 The private directory open-file description owns the singleton flock. The
@@ -153,10 +154,11 @@ class CustodyJournal:
     association without consuming another record's reserved marker capacity.
     Finalization grants link only to an already complete evidence/signer pair;
     their separate association is published last. Each may retain one opaque
-    reservation raw3, one SQL claim and one SQL outcome under that association.
+    reservation raw3, one SQL claim, one SQL outcome, one completion outcome
+    and one completion reconciliation under that association.
     At most seven times maximum_records published files are admitted, including associations and
     fixed registration outcomes: legacy records use at most three, evidence
-    grants seven, signer records one and finalization grants five each.
+    grants seven, signer records one and finalization grants seven each.
     Old records are never rewritten or removed; legacy marker byte
     reservations remain intact.
     """
@@ -281,6 +283,7 @@ class CustodyJournal:
         finalization_sql = {}
         registration_outcomes = {}
         uncertain_completions = set()
+        uncertain_finalization_completions = set()
         count = 0
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
@@ -304,6 +307,10 @@ class CustodyJournal:
                     kind = "finalization-sql-claimed"
                 elif name.startswith("finalization-sql-outcome-"):
                     kind = "finalization-sql-outcome"
+                elif name.startswith("finalization-completion-outcome-"):
+                    kind = "finalization-completion-outcome"
+                elif name.startswith("finalization-completion-reconciled-"):
+                    kind = "finalization-completion-reconciled"
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -321,8 +328,8 @@ class CustodyJournal:
                     associations.MAX_ASSOCIATION_BYTES if kind == "associated" else
                     finalization_associations.MAX_ASSOCIATION_BYTES if kind == "finalization-associated" else
                     finalization_reservations.MAX_RECORD_BYTES if kind == "finalization-reserved" else
-                    finalization_outcomes.MAX_CLAIM_BYTES if kind == "finalization-sql-claimed" else
-                    finalization_outcomes.MAX_RECORD_BYTES if kind == "finalization-sql-outcome" else
+                    finalization_outcomes._maximum(_FINALIZATION_OUTCOME_FILES[kind])
+                        if kind in _FINALIZATION_OUTCOME_FILES else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -369,6 +376,8 @@ class CustodyJournal:
                             or outcome_kind in by_kind):
                         raise CustodyJournalError("finalization SQL outcome differs from its fixed filename")
                     by_kind[outcome_kind] = (outcome.source_revision, outcome.digest)
+                    if outcome_kind == "completion-outcome" and outcome.originals[0] == b"uncertain":
+                        uncertain_finalization_completions.add(digest)
                 else:
                     outcome = outcome_records.decode(encoded)
                     by_kind = registration_outcomes.setdefault(digest, {})
@@ -404,6 +413,8 @@ class CustodyJournal:
         self._finalization_reservations = finalization_reserved
         for digest, by_kind in finalization_sql.items():
             self._finalization_outcome_scope(digest, by_kind)
+            if "completion-reconciled" in by_kind and digest not in uncertain_finalization_completions:
+                raise CustodyJournalError("finalization reconciliation lacks original uncertainty")
         self._finalization_outcomes = finalization_sql
         for digest, by_kind in registration_outcomes.items():
             self._registration_outcome_scope(digest, by_kind)
@@ -528,8 +539,11 @@ class CustodyJournal:
             if reservation is None:
                 raise CustodyJournalError("finalization SQL outcome lacks retained reservation originals")
             self._finalization_reservation_scope(digest, reservation)
-        if "sql-outcome" in by_kind and "sql-claimed" not in by_kind:
-            raise CustodyJournalError("finalization SQL outcome lacks its irreversible local claim")
+        if (any(kind in by_kind for kind in ("sql-outcome", "completion-outcome", "completion-reconciled"))
+                and "sql-claimed" not in by_kind):
+            raise CustodyJournalError("finalization outcome lacks its irreversible local SQL claim")
+        if "completion-reconciled" in by_kind and "completion-outcome" not in by_kind:
+            raise CustodyJournalError("finalization reconciliation lacks its first completion outcome")
 
     def _read_finalization_outcomes(self, digest):
         # Even absence rereads both associations and all three prepared records.
@@ -543,8 +557,7 @@ class CustodyJournal:
             if kind not in by_kind:
                 continue
             name = _name("finalization-" + kind, digest)
-            maximum = (finalization_outcomes.MAX_CLAIM_BYTES if kind == "sql-claimed"
-                else finalization_outcomes.MAX_RECORD_BYTES)
+            maximum = finalization_outcomes._maximum(kind)
             encoded, identity = self._read_file(name, maximum_bytes=maximum)
             outcome = finalization_outcomes.decode(encoded)
             if (identity != self._file_identities[name]
@@ -552,8 +565,12 @@ class CustodyJournal:
                     or outcome.kind != kind or outcome.finalization_digest != digest):
                 raise CustodyJournalError("finalization SQL outcome changed after admitted recovery")
             loaded[kind] = outcome
+        if ("completion-reconciled" in loaded
+                and loaded["completion-outcome"].originals[0] != b"uncertain"):
+            raise CustodyJournalError("finalization reconciliation lacks original uncertainty")
         return finalization_outcomes.FinalizationOutcomes(association.source_revision, digest,
-            loaded.get("sql-claimed"), loaded.get("sql-outcome"))
+            loaded.get("sql-claimed"), loaded.get("sql-outcome"),
+            loaded.get("completion-outcome"), loaded.get("completion-reconciled"))
 
     def _read_registration_outcomes(self, digest):
         association, _ = self._read_association(digest)
@@ -886,12 +903,17 @@ class CustodyJournal:
                 raise
             if digest not in self._finalization_reservations:
                 raise CustodyJournalError("finalization SQL dispatch requires retained reservation originals")
-            if kind == "sql-outcome" and current.sql_attempt is None:
-                raise CustodyJournalError("finalization SQL outcome requires an irreversible local claim")
+            if kind != "sql-claimed" and current.sql_attempt is None:
+                raise CustodyJournalError("finalization outcome requires an irreversible local SQL claim")
+            if (kind == "completion-reconciled" and (current.completion_outcome is None
+                    or current.completion_outcome.originals[0] != b"uncertain")):
+                raise CustodyJournalError("finalization reconciliation requires retained original uncertainty")
             record, encoded = finalization_outcomes.encode(kind, digest, held,
                 source_revision=current.source_revision)
             if kind in by_kind:
-                existing = current.sql_outcome
+                existing = {"sql-outcome": current.sql_outcome,
+                    "completion-outcome": current.completion_outcome,
+                    "completion-reconciled": current.completion_reconciled}[kind]
                 if (existing.originals != record.originals or existing.digest != record.digest):
                     self._io.poison()
                     raise CustodyJournalError("finalization SQL outcome cannot replace its first exact originals")
@@ -929,6 +951,23 @@ class CustodyJournal:
         apply. An exact repeat is idempotent; a conflict cannot replace it.
         """
         return self._append_finalization_outcome(finalization_digest, "sql-outcome", originals)
+
+    def append_registration_finalization_completion_outcome(self, finalization_digest, originals):
+        """Retain first bounded completion raw4, not signature admission.
+
+        A SQL claim and the complete original/reservation chain are required;
+        an unsigned SQL outcome need not have been received. Exact repeats are
+        idempotent. Uncertainty is never overwritten or treated as permission.
+        """
+        return self._append_finalization_outcome(finalization_digest, "completion-outcome", originals)
+
+    def append_registration_finalization_completion_reconciliation(self, finalization_digest, originals):
+        """Retain acknowledged raw4 separately after prior completion uncertainty.
+
+        The caller must genuinely authenticate that acknowledgment first.
+        Storage admits only bounded opaque bytes and prerequisite relationships.
+        """
+        return self._append_finalization_outcome(finalization_digest, "completion-reconciled", originals)
 
     def load_registration_finalization_outcomes(self, finalization_digest):
         """Return ordinary local history, never remote success or retry permission."""

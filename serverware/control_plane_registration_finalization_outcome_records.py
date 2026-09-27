@@ -1,9 +1,9 @@
-"""Opaque finalization SQL observations and an irreversible local claim.
+"""Opaque finalization SQL/completion originals and an irreversible claim.
 
 The frame is magic8, kind u8, source-length u16, retained source ASCII,
 finalization preparation SHA256 raw32, fixed-count u64 body lengths, bodies
-and exact EOF. Claim and outcome have distinct content-identity domains;
-neither domain authenticates permission, SQL success or a current head.
+and exact EOF. Claim and outcomes have distinct content-identity domains;
+No domain authenticates permission, SQL success or a current head.
 There is no clock, signature verification, filesystem or transport here.
 """
 from __future__ import annotations
@@ -12,18 +12,27 @@ from dataclasses import dataclass
 import hashlib
 
 from serverware import authority_registration_finalization_sql_transport as sql
+from serverware import authority_registration_finalization_completion_transport as completion
 from serverware import control_plane_custody_records as records
 
 
 MAGIC = b"SWCPX001"
 CLAIM_IDENTITY_DOMAIN = "serverware.controlPlaneRegistrationFinalizationSqlClaimRecord/v1"
 OUTCOME_IDENTITY_DOMAIN = "serverware.controlPlaneRegistrationFinalizationSqlOutcomeRecord/v1"
-KINDS = ("sql-claimed", "sql-outcome")
-_DOMAINS = (CLAIM_IDENTITY_DOMAIN, OUTCOME_IDENTITY_DOMAIN)
-_COUNTS = (0, 4)
+COMPLETION_IDENTITY_DOMAIN = "serverware.controlPlaneRegistrationFinalizationCompletionOutcomeRecord/v1"
+RECONCILIATION_IDENTITY_DOMAIN = "serverware.controlPlaneRegistrationFinalizationCompletionReconciliationRecord/v1"
+# Existing SQL profile indices/domains and their encoded bytes never change.
+KINDS = ("sql-claimed", "sql-outcome", "completion-outcome", "completion-reconciled")
+_DOMAINS = (CLAIM_IDENTITY_DOMAIN, OUTCOME_IDENTITY_DOMAIN,
+    COMPLETION_IDENTITY_DOMAIN, RECONCILIATION_IDENTITY_DOMAIN)
+_COUNTS = (0, 4, 4, 4)
 _PREFIX_BYTES = 11
 MAX_CLAIM_BYTES = _PREFIX_BYTES + records.MAX_SOURCE_REVISION_BYTES + 32
-MAX_RECORD_BYTES = MAX_CLAIM_BYTES + 4 * 8 + sql.MAX_RESPONSE_BYTES
+MAX_SQL_OUTCOME_BYTES = MAX_CLAIM_BYTES + 4 * 8 + sql.MAX_RESPONSE_BYTES
+MAX_COMPLETION_OUTCOME_BYTES = MAX_CLAIM_BYTES + 4 * 8 + completion.MAX_RESPONSE_BYTES
+_MAXIMA = (MAX_CLAIM_BYTES, MAX_SQL_OUTCOME_BYTES,
+    MAX_COMPLETION_OUTCOME_BYTES, MAX_COMPLETION_OUTCOME_BYTES)
+MAX_RECORD_BYTES = max(_MAXIMA)
 _HEX = frozenset("0123456789abcdef")
 CustodyRecordError = records.CustodyRecordError
 
@@ -47,6 +56,8 @@ class FinalizationOutcomes:
     finalization_digest: str
     sql_attempt: FinalizationOutcomeRecord | None
     sql_outcome: FinalizationOutcomeRecord | None
+    completion_outcome: FinalizationOutcomeRecord | None = None
+    completion_reconciled: FinalizationOutcomeRecord | None = None
 
 
 def _local_digest(value):
@@ -62,6 +73,11 @@ def _profile(kind):
     return KINDS.index(kind)
 
 
+def _maximum(kind):
+    """Keep every fixed profile's original bound, including old SQL frames."""
+    return _MAXIMA[_profile(kind)]
+
+
 def _lengths(profile, lengths):
     if type(lengths) is not tuple or len(lengths) != _COUNTS[profile]:
         raise CustodyRecordError("finalization outcome length inventory differs")
@@ -70,6 +86,11 @@ def _lengths(profile, lengths):
             sql._response_lengths(lengths)
         except sql.AuthorityTransportError as exc:
             raise CustodyRecordError("finalization outcome originals exceed their fixed bounds") from exc
+    elif profile in (2, 3):
+        try:
+            completion._response_lengths(lengths)
+        except completion.AuthorityTransportError as exc:
+            raise CustodyRecordError("finalization completion originals exceed their fixed bounds") from exc
 
 
 def _originals(profile, originals):
@@ -82,6 +103,13 @@ def _originals(profile, originals):
             sql._originals(originals, response=True)
         except sql.AuthorityTransportError as exc:
             raise CustodyRecordError("finalization outcome original carrier differs") from exc
+    elif profile in (2, 3):
+        try:
+            completion._originals(originals, response=True)
+        except completion.AuthorityTransportError as exc:
+            raise CustodyRecordError("finalization completion original carrier differs") from exc
+    if profile == 3 and originals[0] != b"acknowledged":
+        raise CustodyRecordError("finalization reconciliation requires acknowledged originals")
     return originals
 
 
@@ -103,8 +131,7 @@ def encode(kind, finalization_digest, originals, *, source_revision):
     source = records._source_revision(source_revision)
     encoded = b"".join((MAGIC, bytes((profile,)), len(source).to_bytes(2, "big"), source,
         local, b"".join(len(raw).to_bytes(8, "big") for raw in held), *held))
-    maximum = MAX_CLAIM_BYTES if profile == 0 else MAX_RECORD_BYTES
-    if len(encoded) > maximum:
+    if len(encoded) > _MAXIMA[profile]:
         raise CustodyRecordError("finalization outcome exceeds its framed bound")
     return FinalizationOutcomeRecord(source_revision, finalization_digest, kind, held,
         _digest(profile, encoded)), encoded
@@ -118,6 +145,8 @@ def decode(encoded):
     if encoded[:8] != MAGIC or encoded[8] >= len(KINDS):
         raise CustodyRecordError("finalization outcome version or kind is unsupported")
     profile = encoded[8]
+    if len(encoded) > _MAXIMA[profile]:
+        raise CustodyRecordError("finalization outcome exceeds its fixed profile bound")
     source_length = int.from_bytes(encoded[9:11], "big")
     if not 1 <= source_length <= records.MAX_SOURCE_REVISION_BYTES:
         raise CustodyRecordError("finalization outcome source length is invalid")

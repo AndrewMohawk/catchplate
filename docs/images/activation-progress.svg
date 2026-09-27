@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="730" viewBox="0 0 1000 730" role="img" aria-labelledby="activation-title activation-description">
-  <title id="activation-title">OIDC activation: 18 of 26 named source steps landed; 8 open. Completion and historical reconciliation is next. Private replay/custody has 8 of 8 source components landed.</title>
-  <desc id="activation-description">Every numbered segment has a visible named checklist row and written status. Steps 01–18 are landed: retained finalization admission; assertion and CAS derivation; cookie binding and truthful login; complete original read proofs; encrypted token originals; business transition effects; full mutation and capacity adapter; signed-original mechanics; indexed write evidence; configured owner and private retention; root-authenticated config and snapshot; private service and key delivery; fresh latest-head admission; encrypted execution bundle; private activation replay; execution authorization grant; reservation and pending admission; one-use protected SQL. Step 19 completion and historical reconciliation is NEXT and open. Steps 20–26 are open: protected token release; target-bound permission; public activation dispatch; public recovery dispatch; explicit portal actions; fresh portal permission; truthful session confirmation. No leaf is in progress. bdac06bce0e5103922bcc27e4a6836ed50453e3f closes private SQL delivery/wiring, independent cold pending admission and protected issuer/IDs-only executor composition, not completion or token release. All eight private replay components are inside step 15, not additional tasks. Parent progress remains 34 of 46; production acceptance is 0 of 6 verified. Source is unbuilt, unexecuted and unprovisioned; counts are not effort, ETA or readiness percentages.</desc>
+  <title id="activation-title">OIDC activation: 18 of 26 named source steps landed; 8 unfinished: 1 in progress and 7 other open. Completion and historical reconciliation is in progress, not landed.</title>
+  <desc id="activation-description">Every numbered segment has a visible named checklist row and written status. Steps 01–18 are landed: retained finalization admission; assertion and CAS derivation; cookie binding and truthful login; complete original read proofs; encrypted token originals; business transition effects; full mutation and capacity adapter; signed-original mechanics; indexed write evidence; configured owner and private retention; root-authenticated config and snapshot; private service and key delivery; fresh latest-head admission; encrypted execution bundle; private activation replay; execution authorization grant; reservation and pending admission; one-use protected SQL. Step 19 completion and historical reconciliation is IN PROGRESS, not landed. Historical replay source landed in 74ff9e89edf577c7de1e8a107d2b9326052867cb: head/state originals, assertion and AEAD/effects/indexed plan, and encrypted raw2 with historical caller/grant joins. This is partial progress, not a completed leaf. NEXT within step 19: separately admitted historical cold custody and protected completion signing, durable delivery and no-repeat reconciliation. Generic activation completion still rejects until that path exists. Steps 20–26 remain open: protected token release; target-bound permission; public activation dispatch; public recovery dispatch; explicit portal actions; fresh portal permission; truthful session confirmation. bdac06bce0e5103922bcc27e4a6836ed50453e3f closes private SQL delivery/wiring, independent cold pending admission and protected issuer/IDs-only executor composition, not completion or token release. All eight private replay components are inside step 15, not additional tasks. Parent progress remains 34 of 46; production acceptance is 0 of 6 verified. Source is unbuilt, unexecuted and unprovisioned; counts are not effort, ETA or readiness percentages.</desc>
   <rect x="1" y="1" width="998" height="728" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">OIDC activation · granular source workflow</text>
     <text x="24" y="71" fill="#6ee7b7" font-size="23" font-weight="700">18 / 26 landed</text>
-    <text x="235" y="70" fill="#cbd5e1" font-size="17">8 open · no in-progress leaves</text>
+    <text x="235" y="70" fill="#cbd5e1" font-size="17">8 unfinished · 1 in progress + 7 other open</text>
     <text x="24" y="95" fill="#94a3b8" font-size="14">Fixed tracked steps · full names, closure criteria and commit evidence in the linked ledger</text>
     <g font-size="12" font-weight="700" text-anchor="middle">
       <g fill="#34d399">
@@ -29,7 +29,7 @@
         <rect x="564" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>16 · F08.4e.3 · Execution authorization grant · LANDED · d8e6bba</title></rect>
         <rect x="600" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>17 · F08.4e.4 · Reservation and pending admission · LANDED; independent cold pending receiver connected</title></rect>
         <rect x="636" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>18 · F08.4e.5 · One-use protected SQL · LANDED; durable attempt, actual issuer and IDs-only executor</title></rect>
-        <rect x="672" y="112" width="32" height="44" rx="5" fill="#0f172a" stroke="#60a5fa" stroke-width="2"><title>19 · F08.4e.6 · Completion and historical reconciliation · NEXT, OPEN</title></rect>
+        <rect x="672" y="112" width="32" height="44" rx="5" fill="#422006" stroke="#fbbf24"><title>19 · F08.4e.6 · Completion and historical reconciliation · IN PROGRESS, NOT LANDED. Partial historical original replay; next inside this step: historical cold custody and protected completion signing/durable delivery/reconciliation. Generic activation completion still rejects.</title></rect>
         <rect x="708" y="112" width="32" height="44" rx="5"><title>20 · F08.4e.7 · Protected token release · OPEN</title></rect>
         <rect x="744" y="112" width="32" height="44" rx="5"><title>21 · F08.5.1 · Target-bound permission · OPEN</title></rect>
         <rect x="780" y="112" width="32" height="44" rx="5"><title>22 · F08.5.2 · Public activation dispatch · OPEN</title></rect>
@@ -53,18 +53,18 @@
       <g fill="#052e26"><text x="544" y="131">15</text><text x="544" y="148">✓</text></g>
       <g fill="#e2e8f0">
         <text x="580" y="131" fill="#052e26">16</text><text x="616" y="131" fill="#052e26">17</text><text x="652" y="131" fill="#052e26">18</text>
-        <text x="688" y="131" fill="#93c5fd">19</text><text x="724" y="131">20</text><text x="760" y="131">21</text>
+        <text x="688" y="131" fill="#fde68a">19</text><text x="724" y="131">20</text><text x="760" y="131">21</text>
         <text x="796" y="131">22</text><text x="832" y="131">23</text><text x="868" y="131">24</text>
         <text x="904" y="131">25</text><text x="940" y="131">26</text>
         <text x="580" y="148" fill="#052e26">✓</text><text x="616" y="148" fill="#052e26">✓</text><text x="652" y="148" fill="#052e26">✓</text>
-        <text x="688" y="148" fill="#93c5fd">N</text><text x="724" y="148">—</text><text x="760" y="148">—</text>
+        <text x="688" y="148" fill="#fde68a">→</text><text x="724" y="148">—</text><text x="760" y="148">—</text>
         <text x="796" y="148">—</text><text x="832" y="148">—</text><text x="868" y="148">—</text>
         <text x="904" y="148">—</text><text x="940" y="148">—</text>
       </g>
     </g>
     <g font-size="13" font-weight="700">
       <text x="24" y="181" fill="#6ee7b7">✓ LANDED · 01–18</text>
-      <text x="365" y="181" fill="#93c5fd">N = NEXT, OPEN · 19</text>
+      <text x="365" y="181" fill="#fde68a">→ IN PROGRESS · 19</text>
       <text x="757" y="181" fill="#cbd5e1">— OPEN · 20–26</text>
     </g>
     <rect x="24" y="203" width="952" height="366" rx="12" fill="#172033" stroke="#475569"/>
@@ -89,7 +89,7 @@
       <text x="514" y="306">16</text><text x="550" y="306">Execution authorization grant</text>
       <text x="514" y="330">17</text><text x="550" y="330">Reservation and pending admission</text>
       <text x="514" y="354">18</text><text x="550" y="354">One-use protected SQL</text>
-      <text x="514" y="378" fill="#93c5fd">19</text><text x="550" y="378" fill="#93c5fd">Completion and reconciliation</text>
+      <text x="514" y="378" fill="#fde68a">19</text><text x="550" y="378" fill="#fde68a">Completion and reconciliation</text>
       <text x="514" y="402">20</text><text x="550" y="402">Protected token release</text>
       <text x="514" y="426">21</text><text x="550" y="426">Target-bound permission</text>
       <text x="514" y="450">22</text><text x="550" y="450">Public activation dispatch</text>
@@ -109,7 +109,7 @@
       <text x="888" y="258">✓ LANDED</text><text x="888" y="282">✓ LANDED</text>
       <text x="888" y="306">✓ LANDED</text><text x="888" y="330">✓ LANDED</text>
       <text x="888" y="354">✓ LANDED</text>
-      <text x="888" y="378" fill="#93c5fd">N · NEXT</text>
+      <text x="866" y="378" fill="#fde68a">→ IN PROGRESS</text>
       <text x="888" y="402" fill="#cbd5e1">— OPEN</text><text x="888" y="426" fill="#cbd5e1">— OPEN</text>
       <text x="888" y="450" fill="#cbd5e1">— OPEN</text><text x="888" y="474" fill="#cbd5e1">— OPEN</text>
       <text x="888" y="498" fill="#cbd5e1">— OPEN</text><text x="888" y="522" fill="#cbd5e1">— OPEN</text>
@@ -117,8 +117,8 @@
     </g>
     <text x="24" y="600" fill="#6ee7b7" font-size="17" font-weight="700">Inside step 15: 8/8 private replay/custody SOURCE components landed</text>
     <text x="24" y="625" fill="#cbd5e1" font-size="14">Grant + reserve + SQL delivery/wiring complete · named evidence ledger in linked tracker</text>
-    <text x="24" y="650" fill="#cbd5e1" font-size="14">Those eight components stay inside one step: not extra tasks, effort or production acceptance.</text>
-    <text x="24" y="678" fill="#93c5fd" font-size="14">NEXT: original historical replay + authenticated completion · no SQL retry or token-release claim</text>
+    <text x="24" y="650" fill="#fde68a" font-size="14">19 · Historical replay source landed (74ff9e8); generic activation completion still rejects.</text>
+    <text x="24" y="678" fill="#93c5fd" font-size="14">NEXT within 19: historical cold custody + protected completion signing / durable delivery / reconciliation</text>
     <text x="24" y="705" fill="#94a3b8" font-size="14">Source-only · unbuilt / unexecuted / unprovisioned · parent 34/46 · production verified 0/6</text>
   </g>
 </svg>

@@ -39,10 +39,10 @@ remain open.
 
 </details>
 
-**OIDC session activation — 18/26 detailed source steps landed; 8 open.**
-✓ Landed · NEXT Open and next · — Open. No leaf is marked in progress.
+**OIDC session activation — 18/26 detailed source steps landed; 8 unfinished.**
+✓ Landed · → In progress (1) · — Other open (7).
 
-[![OIDC activation: steps 01–18 landed, 19 completion and historical reconciliation NEXT/open, and 20–26 open. Private replay/custody has all eight source components landed, including dedicated grant/reserve/SQL delivery and wiring. Independent cold pending admission and protected one-use SQL are connected; no token release, completion or public activation is claimed. Eight diagnostic components remain inside step 15, not eight extra tasks. Source-only; parent progress 34/46 and production acceptance 0/6.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–18 landed, 19 completion and historical reconciliation in progress, and 20–26 open. Step 19 has partial original historical replay; next within 19 are independently admitted historical cold custody and protected completion signing, durable delivery and reconciliation. Generic activation completion still rejects. Private replay/custody remains 8/8 source components inside step 15, not extra tasks. No token release or public activation is claimed. Source-only; parent progress 34/46 and production acceptance 0/6.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
@@ -51,10 +51,12 @@ Counts are not effort percentages or an ETA.
 
 [The SQL source batch](https://github.com/example/private-deployment)
 closes **private replay/custody (8/8 components)**, **independent pending admission**
-and **one-use protected SQL**. It preserves original lifetimes, encrypted private
-originals and irreversible attempt claims. **NEXT: completion and historical
-reconciliation.** Protected token release and the three public-action plus three
-portal tasks are also open; unsigned SQL observation is not completed activation.
+and **one-use protected SQL**. **Step 19 remains in progress:** historical original
+replay is [source-landed](https://github.com/example/private-deployment).
+**Next within 19:** historical cold custody, protected completion
+signing and durable delivery/reconciliation. Generic activation completion still
+rejects until that path exists. Token release and public/portal activation remain
+open; unsigned SQL observation is not completed activation.
 
 Full verification follows source freeze. Immutable dependencies and independently
 operated signing, Nitro/KMS and witness services remain prerequisites; the

@@ -27,21 +27,21 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 **15/16 token-release units landed; the final unit is in progress.**
 The bar below expands units 15 and 16 into their **11 existing substeps**:
-**6 landed · 1 in progress · 4 todo**. Each segment has a name and status.
+**7 landed · 0 active · 4 todo**. Each segment has a name and status.
 
-[![Release and handoff substeps: 15.1 release authorization, 15.2 committed-original verification, 15.3 completion-to-release proof, 15.4 durable outcome, 15.5 guarded token opening and 15.6 unchanged-outcome recovery are source-landed. 16.1 root bootstrap and key delivery is in progress, uncommitted. Next is 16.2 isolated cold service; 16.3 bounded private transport, 16.4 independent response verifier and 16.5 authorized private handoff remain todo. Six of eleven landed; no runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
+[![Release and handoff substeps: 15.1 release authorization, 15.2 committed-original verification, 15.3 completion-to-release proof, 15.4 durable outcome, 15.5 guarded token opening, 15.6 unchanged-outcome recovery and 16.1 root bootstrap and key delivery are source-landed. Next is 16.2 isolated cold service; 16.3 bounded private transport, 16.4 independent response verifier and 16.5 authorized private handoff remain todo. Seven of eleven landed, zero active and four todo; no runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
 
 | Status | Substep | What it delivers |
 | --- | --- | --- |
-| In progress | 16.1 · Root bootstrap and key delivery | Authenticated configuration, dedicated delivery key and isolated startup |
+| Landed | 16.1 · Root bootstrap and key delivery | Authenticated configuration, dedicated delivery key and isolated startup — [e6fa55c](https://github.com/example/private-deployment) |
 | Next / todo | 16.2 · Isolated cold service | Packaged, finite release worker with resource cleanup |
 | Todo | 16.3 · Bounded private transport | Peer-checked requests and responses under the original deadline |
 | Todo | 16.4 · Independent response verifier | Receiving-side checks of the exact response and expected authority |
 | Todo | 16.5 · Authorized private handoff | Connect the authorized caller and handle uncertain delivery |
 
-**Latest landed:** [15.6 · unchanged-outcome recovery (`e49e14e`)](https://github.com/example/private-deployment).
-16.1 has source work underway but no completion credit. A private token return
-is not network delivery or a confirmed user session.
+**Latest landed:** [16.1 · root bootstrap and key delivery (`e6fa55c`)](https://github.com/example/private-deployment).
+Cold construction is connected in source; the worker, transport and handoff are
+still todo. A private token return is not network delivery or a confirmed session.
 
 Each substep turns green only when its implementation is committed and linked
 in the [completion-criteria ledger](docs/production-status.md#exact-release-and-handoff-detail).
@@ -74,7 +74,7 @@ partial code. Landed does not mean tested, deployed, or production-ready.
 - [All 46 project checkpoints and their evidence](docs/production-status.md#next-source-milestones)
 - [Session activation: 19/26 steps landed](docs/production-status.md#active-workflow-granular-source-steps)
 - [Token release: 15/16 units landed](docs/production-status.md#token-release-implementation-detail)
-- [Release and handoff: 6/11 substeps landed](docs/production-status.md#exact-release-and-handoff-detail)
+- [Release and handoff: 7/11 substeps landed](docs/production-status.md#exact-release-and-handoff-detail)
 - [Completion/recovery: 6/6](docs/production-status.md#consume-completion-and-recovery-detail), [reservation/SQL: 6/6](docs/production-status.md#consume-reservation-and-sql-detail), [consume authorization: 12/12](docs/production-status.md#consume-authorization-substeps), [grant issuance: 5/5](docs/production-status.md#consume-grant-issuance-detail)
 
 </details>

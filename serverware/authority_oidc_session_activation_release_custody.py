@@ -1,12 +1,13 @@
-"""Process-bound delivery-key custody with NO plaintext release entrypoint.
+"""Process-bound delivery-key custody with original-only private token opening.
 
 Original root scope is reauthenticated before every check, original-intent
 admission, signed committed-proof admission and exact AEAD metadata inspection.
 Fresh intent alone proves caller authority and old-token possession, not
-committed consumption. The separate proof join still grants no token egress. This
-owner can retain a token-free exact outcome through separately root-authorized
-storage. It still has no token-release method, SQL, transport or public HTTP
-result, and no successful admission result can be supplied as release proof.
+committed consumption. The separate proof join alone grants no token egress.
+Private opening additionally binds the exact ciphertext and durably retains a
+token-free outcome through separately root-authorized storage, with genuine
+readback before and after opening. No successful result is accepted as proof;
+there is no SQL, recovery authorization, transport or public HTTP result here.
 """
 from __future__ import annotations
 
@@ -357,7 +358,8 @@ class OidcSessionActivationReleaseCustody:
             expected_producer_id=expected_producer_id, expected_producer_identity=expected_producer_identity,
             expected_caller_id=expected_caller_id, expected_consume_binding=expected_consume_binding,
             expected_state_receipt_digest=expected_state_receipt_digest, old_token_bytes=old_token_bytes,
-            outcome_store=None, live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+            outcome_store=None, envelope_bytes=None, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work)
 
     def retain_outcome_on_work(self, *, proof_bytes, proof_enrollment_bytes,
             intent_bytes, intent_enrollment_bytes, expected_producer_id,
@@ -376,19 +378,45 @@ class OidcSessionActivationReleaseCustody:
             expected_producer_id=expected_producer_id, expected_producer_identity=expected_producer_identity,
             expected_caller_id=expected_caller_id, expected_consume_binding=expected_consume_binding,
             expected_state_receipt_digest=expected_state_receipt_digest, old_token_bytes=old_token_bytes,
-            outcome_store=outcome_store, live_window=live_window,
+            outcome_store=outcome_store, envelope_bytes=None, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work)
+
+    def open_committed_on_work(self, *, proof_bytes, proof_enrollment_bytes,
+            intent_bytes, intent_enrollment_bytes, expected_producer_id,
+            expected_producer_identity, expected_caller_id, expected_consume_binding,
+            expected_state_receipt_digest, old_token_bytes, envelope_bytes, outcome_store,
+            live_window, transport_deadline_ns, work):
+        """Return the exact private token after original admission and readback.
+
+        This is not a transport acknowledgment or recovery permission. The
+        same call authenticates every original; no retained digest, inspected
+        metadata or successful proof object can authorize a later opening.
+        """
+        if type(envelope_bytes) is not bytes:
+            _fail("committed release opening requires original ciphertext bytes")
+        if type(outcome_store) is not outcome_storage.ReleaseOutcomeStore:
+            _fail("committed release opening requires its actual storage owner")
+        return self._committed_on_work(proof_bytes=proof_bytes, proof_enrollment_bytes=proof_enrollment_bytes,
+            intent_bytes=intent_bytes, intent_enrollment_bytes=intent_enrollment_bytes,
+            expected_producer_id=expected_producer_id, expected_producer_identity=expected_producer_identity,
+            expected_caller_id=expected_caller_id, expected_consume_binding=expected_consume_binding,
+            expected_state_receipt_digest=expected_state_receipt_digest, old_token_bytes=old_token_bytes,
+            outcome_store=outcome_store, envelope_bytes=envelope_bytes, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work)
 
     def _committed_on_work(self, *, proof_bytes, proof_enrollment_bytes,
             intent_bytes, intent_enrollment_bytes, expected_producer_id,
             expected_producer_identity, expected_caller_id, expected_consume_binding,
-            expected_state_receipt_digest, old_token_bytes, outcome_store,
+            expected_state_receipt_digest, old_token_bytes, outcome_store, envelope_bytes,
             live_window, transport_deadline_ns, work):
-        """One original-consuming locked composition, with optional retention."""
+        """One locked original-consuming composition through private return."""
         ledger = evidence.capture._SharedLedger(work)
         store = outcome_store
         if store is not None and type(store) is not outcome_storage.ReleaseOutcomeStore:
             _fail("release outcome requires its exact storage owner")
+        envelope = None if envelope_bytes is None else delivery._envelope(envelope_bytes, work)
+        if envelope is not None and store is None:
+            _fail("private token opening requires durable outcome storage")
         proof_raw = bootstrap.authorization._original(proof_bytes,
             release_proof.MAX_BYTES, "release committed proof original")
         proof_enrolled = bootstrap.authorization._original(proof_enrollment_bytes,
@@ -415,6 +443,9 @@ class OidcSessionActivationReleaseCustody:
         total = sum(map(len, (proof_raw, proof_enrolled, intent_raw, intent_enrolled, old_token)))
         maximum = (release_proof.MAX_BYTES + proof_enrollment.MAX_BYTES
             + release_intent.MAX_BYTES + intent_enrollment.MAX_BYTES + delivery.TOKEN_BYTES)
+        if envelope is not None:
+            total += len(envelope)
+            maximum += delivery.ENVELOPE_BYTES
         if total > maximum:
             _fail("release committed originals exceed their aggregate bound")
         work.charge(input_bytes=total)
@@ -482,6 +513,30 @@ class OidcSessionActivationReleaseCustody:
             joined_current()
             if store is None:
                 return None
+            opening = None
+            if envelope is not None:
+                work.charge(hashes=1, input_bytes=len(envelope))
+                digest = evidence.production._callback(work,
+                    lambda: "sha256:" + hashlib.sha256(envelope).hexdigest())
+                joined_current()
+                registration._same(digest, material.delivery_envelope_digest, work,
+                    "committed release exact root/proof ciphertext original")
+                # Keep the actual live delivery guard, including preparation's
+                # observations. The ordinary opening wrapper would hide it.
+                owned, aad, delivery_current = delivery._prepare(configured.delivery_key,
+                    material.delivery_scope, final_window, min(bound, final_window[4]), work)
+
+                def opening_current():
+                    joined_current()
+                    now = delivery_current()
+                    if now < self._last_epoch:
+                        _fail("release custody clock reversed across private delivery opening")
+                    object.__setattr__(self, "_last_epoch", now)
+                    joined_current()
+                    return self._last_epoch
+
+                opening = opening_current
+                opening()
             store_type = outcome_storage.ReleaseOutcomeStore
             store_configuration = store_type._snapshot_configuration(store)
             joined_current()
@@ -513,7 +568,25 @@ class OidcSessionActivationReleaseCustody:
                 _fail("release outcome store changed during retention")
             registration._same(observed, expected_outcome, work, "durable exact release outcome identity")
             joined_current()
-            return observed
+            if opening is None:
+                return observed
+            opening()
+            token = delivery._open_captured(envelope, configured.delivery_key,
+                owned, aad, work, opening)
+            opening()
+            # Hold plaintext locally until the same actual owner reauthenticates
+            # storage and performs a second normal-close read of identical bytes.
+            # Neither the first digest nor a cached journal snapshot is enough.
+            repeated = store_type.retain_on_work(store, record_bytes=record,
+                root_public_key=configured.root_public_key, expected_binding=binding,
+                live_window=final_window, transport_deadline_ns=min(bound, final_window[4]), work=work)
+            opening()
+            if store_type._snapshot_configuration(store) is not store_configuration:
+                _fail("release outcome store changed across private token opening")
+            registration._same(repeated, expected_outcome, work,
+                "durable exact release outcome identity after opening")
+            opening()
+            return token
         except BaseException:
             if outcome_started:
                 # Publication may already be durable. Never delete or retry;

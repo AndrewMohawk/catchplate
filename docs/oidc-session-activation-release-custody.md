@@ -1,11 +1,12 @@
-# Delivery-key custody without token egress
+# Delivery-key custody and guarded private token opening
 
-This is **partial step 20 source**, unbuilt, unexecuted and unprovisioned. It adds
-root-original-admitted delivery-key custody, fresh original release-intent
-admission, independently signed committed-consumption proof admission and exact
-authenticated ciphertext metadata inspection. A separately root-authorized
-store now supports first-exact token-free outcome retention. It does **not**
-release a token, execute SQL or complete the browser flow.
+This is **partial step 20 source**, unbuilt, unexecuted and unprovisioned. The
+`.175` guarded-opening addition is authored but not yet credited as landed.
+Root-original-admitted delivery-key custody joins fresh release intent,
+independently signed committed-consumption proof and exact ciphertext scope.
+A separately root-authorized store retains the exact token-free outcome before
+opening and reads it back again before a private token return. This is not
+network delivery, recovery permission, SQL execution or a completed browser flow.
 
 ## Distinct root scope
 
@@ -70,7 +71,7 @@ authority input.
 key, independently expected receiver identity, an exact 32-byte delivery key and
 the caller's current window/work/deadline. It binds exact class/PID/UID/GID,
 empty supplemental groups, fixed mode, source revision and held configuration.
-A nonblocking owner lock excludes overlapping checks and inspection.
+A nonblocking owner lock excludes overlapping checks, inspection and opening.
 
 - `check_on_work(*, live_window, transport_deadline_ns, work)` reauthenticates the
   original bootstrap and actual key binding; it returns no success carrier.
@@ -148,25 +149,49 @@ bytes. It never deletes, retries, regenerates or reconsumes. Cold checkpoint
 admission is not hostile-host antirollback or authorization for plaintext
 recovery; independent witness and explicit recovery work remain separate.
 
-Every check, inspection and original admission reauthenticates root scope, identity and key
-under the same supplied work. Narrowing preserves original epoch/monotonic
+`open_committed_on_work` accepts the same original proof/intent and independent
+pins as `retain_outcome_on_work`, plus the exact `envelope_bytes`. It requires
+the actual outcome store and performs original admission itself under the same
+custody lock; neither a previous successful admission nor a retained digest is
+an input proof. The exact root-pinned 100-byte envelope is authenticated under
+the held delivery key and root-owned scope only after first-exact outcome
+retention succeeds. Plaintext remains internal while the second genuine store
+call rereads and compares the same immutable record after normal close.
+
+Both retention calls use identical record bytes, independently derived binding
+and actual root key. They retain the store configuration identity, its exact
+constructor work object and original three-sample clock bracket; all window
+ceilings and the inherited deadline can only narrow. Custody, intent, proof,
+delivery and storage guards survive opening and the final readback. There is no
+second historical replay or new consume SQL execution.
+
+The result is exactly the **raw 64-byte token**, not a tuple, outcome digest or
+reusable permission object. A failure after the first store invocation closes
+both owners, withholds the return and preserves any published record. The
+method never replaces that record, regenerates a token, retries or opens a new
+allowance. A successful private return is not a network-delivery receipt,
+single-egress acknowledgment or authorization for a later recovery call.
+
+Every check, inspection, original admission and opening reauthenticates root
+scope, identity and key under the same supplied work. Narrowing preserves original epoch/monotonic
 opening samples and caps at the fresh release interval and inherited deadline.
 Sticky guards surround callbacks and final return. Old planner expiry is never
 a current clock sample, and no new work/window is opened.
 
-## Deliberately absent release path
+## Remaining release and handoff boundaries
 
-There is **no open, release or consume method**. Internal AEAD authentication
-cannot replace fresh original release intent and genuine committed one-use
-consumption through the separate protected operation. A pure kernel transition,
-`consumed_at` scalar, activation completion ACK, metadata result or caller-posted
+Guarded private opening does not replace fresh original release intent or
+genuine committed one-use consumption through the separate protected operation.
+A pure kernel transition, `consumed_at` scalar, activation completion ACK,
+metadata result or caller-posted
 proof object is not that evidence. The legacy environment-secret decrypt/direct
 database recovery helper is not invoked.
 
-Fresh intent and signed committed facts now have a same-call original-consuming
-join and first-exact durable retention, but future plaintext egress must perform
-that join and the durable binding inside the actual release operation before
-opening. Neither the standalone admission nor retained digest authorizes a
-future call. Authorized recovery, guarded plaintext egress, cold key/FD service, public
-permission, token response and current-session confirmation remain open.
+Fresh intent, signed committed facts, first-exact durable retention and guarded
+opening now compose inside the actual private operation. Neither standalone
+admission nor a retained digest authorizes a future call. Explicit
+uncertain-outcome recovery, cold key/FD service, bounded private response and
+authorized caller handoff remain open, as do later public permission, portal
+and current-session confirmation. No independently measured custody, off-host
+rollback protection or production acceptance is established.
 No test, parser, interpreter, build, provisioning or runtime verification was run.

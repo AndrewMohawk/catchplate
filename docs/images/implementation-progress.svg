@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1136" viewBox="0 0 1000 1136" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1406" viewBox="0 0 1000 1406" role="img" aria-labelledby="title description">
   <title id="title">Source implementation: 34 of 46 named checkpoints landed; 12 open, including F08 in progress with 3 of 6 child steps landed.</title>
-  <desc id="description">Six workstream cards list every parent checkpoint by name and stable ID. A check means landed source, an arrow means in progress, and a dash means open. Each bar has one segment per listed checkpoint, in list order. Evidence handoff: 10 of 10 landed. Historical recovery: 4 of 5 landed. Permissions and grants: 10 of 10 landed. Finalization and sessions: 7 of 8 landed. Workloads and native: 3 of 6 landed. Providers and operations: 0 of 7 landed. F08 OIDC session activation is in progress and remains open: retained finalization admission, original assertion/CAS derivation and existing login hardening are landed; protected activation/token delivery, public integration and final portal workflow remain open. All eight F07 completion and recovery substeps are landed within that parent. Child steps are not additional parent checkpoints. These are tracked source-integration counts, not whole-product or effort percentages. Source remains unbuilt, unexecuted and unprovisioned. Independent production acceptance remains 0 of 6 verified gates.</desc>
-  <rect x="1" y="1" width="998" height="1134" rx="16" fill="#0f172a" stroke="#475569"/>
+  <desc id="description">Six workstream cards list every parent checkpoint by name and stable ID. A check means landed source, an arrow means in progress, and a dash means open. Each bar has one segment per listed checkpoint, in list order. Evidence handoff: 10 of 10 landed. Historical recovery: 4 of 5 landed. Permissions and grants: 10 of 10 landed. Finalization and sessions: 7 of 8 landed. Workloads and native: 3 of 6 landed. Providers and operations: 0 of 7 landed. An expanded F08 bar names all six child steps: F08.1 retained finalization admission, F08.2 original assertion/CAS derivation and F08.3 existing login hardening are landed; F08.4 protected activation/token delivery is in progress; F08.5 public activation/recovery and F08.6 integrated portal flow remain open. F08 remains unchecked. All eight F07 completion and recovery substeps are landed within that parent. Child steps are not additional parent checkpoints. These are tracked source-integration counts, not whole-product or effort percentages. Source remains unbuilt, unexecuted and unprovisioned. Independent production acceptance remains 0 of 6 verified gates.</desc>
+  <rect x="1" y="1" width="998" height="1404" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="40" fill="#f8fafc" font-size="26" font-weight="700">Implementation, checkpoint by checkpoint</text>
     <text x="24" y="72" fill="#6ee7b7" font-size="21" font-weight="700">34 / 46 landed</text>
@@ -120,7 +120,7 @@
       <text x="20" y="233" fill="#fde68a" font-size="14">→ F08 · OIDC session activation</text>
       <text x="438" y="233" text-anchor="end" fill="#fde68a" font-size="12" font-weight="700">IN PROGRESS</text>
       <text x="20" y="258" fill="#94a3b8" font-size="12">F07: 8/8 child steps landed · F08: 3/6 landed, 3 open.</text>
-      <text x="20" y="275" fill="#94a3b8" font-size="12">Next: protected activation. Child steps are not extra items.</text>
+      <text x="20" y="275" fill="#94a3b8" font-size="12">Protected activation in progress; six-step bar below.</text>
     </g>
 
     <g transform="translate(24 745)" aria-labelledby="n-title">
@@ -175,8 +175,40 @@
       <text x="20" y="265" fill="#94a3b8" font-size="13">provider and operator components are not counted twice.</text>
     </g>
 
-    <text x="24" y="1061" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>
-    <text x="24" y="1086" fill="#cbd5e1" font-size="14">Independent production acceptance: 0 / 6 verified gates. Landed source is not a passing gate.</text>
-    <text x="24" y="1111" fill="#94a3b8" font-size="13">Names are shortened here; the linked tracker retains exact scope, commit evidence and all F07 child names.</text>
+    <g transform="translate(24 1045)" aria-labelledby="f08-title">
+      <rect width="952" height="262" rx="12" fill="#172033" stroke="#fbbf24"/>
+      <text id="f08-title" x="20" y="32" fill="#f8fafc" font-size="21" font-weight="700">Current focus · F08 OIDC session activation</text>
+      <text x="932" y="32" text-anchor="end" fill="#6ee7b7" font-size="16" font-weight="700">3 / 6 steps landed</text>
+      <g>
+        <rect x="20" y="50" width="142" height="30" rx="5" fill="#34d399"><title>F08.1 landed: retained finalization admission</title></rect>
+        <rect x="174" y="50" width="142" height="30" rx="5" fill="#34d399"><title>F08.2 landed: original assertion and intended row changes</title></rect>
+        <rect x="328" y="50" width="142" height="30" rx="5" fill="#34d399"><title>F08.3 landed: existing-cookie login hardening</title></rect>
+        <rect x="482" y="50" width="142" height="30" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4 in progress and still open: protected activation and token delivery</title></rect>
+        <rect x="636" y="50" width="142" height="30" rx="5" fill="#334155" stroke="#94a3b8"><title>F08.5 open: public activation and recovery</title></rect>
+        <rect x="790" y="50" width="142" height="30" rx="5" fill="#334155" stroke="#94a3b8"><title>F08.6 open: integrated post-finalization portal flow</title></rect>
+      </g>
+      <g text-anchor="middle" font-size="14" font-weight="700">
+        <text x="91" y="70" fill="#0f172a">✓ F08.1</text>
+        <text x="245" y="70" fill="#0f172a">✓ F08.2</text>
+        <text x="399" y="70" fill="#0f172a">✓ F08.3</text>
+        <text x="553" y="70" fill="#fde68a">→ F08.4</text>
+        <text x="707" y="70" fill="#e2e8f0">— F08.5</text>
+        <text x="861" y="70" fill="#e2e8f0">— F08.6</text>
+      </g>
+      <g font-size="15">
+        <text x="20" y="112" fill="#d1fae5">✓ F08.1 · Retained finalization admission</text>
+        <text x="20" y="141" fill="#d1fae5">✓ F08.2 · Original assertion &amp; row-change intent</text>
+        <text x="20" y="170" fill="#d1fae5">✓ F08.3 · Existing-cookie login hardening</text>
+        <text x="482" y="112" fill="#fde68a">→ F08.4 · Protected activation &amp; token delivery</text>
+        <text x="482" y="141" fill="#e2e8f0">— F08.5 · Public activation &amp; recovery</text>
+        <text x="482" y="170" fill="#e2e8f0">— F08.6 · Integrated portal &amp; active-login check</text>
+      </g>
+      <text x="20" y="209" fill="#cbd5e1" font-size="14">3 landed · 1 in progress · 2 open. The parent stays open until all six source steps land.</text>
+      <text x="20" y="236" fill="#94a3b8" font-size="13">These steps live inside F08; they are not extra checkpoints or equal units of work.</text>
+    </g>
+
+    <text x="24" y="1337" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>
+    <text x="24" y="1362" fill="#cbd5e1" font-size="14">Independent production acceptance: 0 / 6 verified gates. Landed source is not a passing gate.</text>
+    <text x="24" y="1387" fill="#94a3b8" font-size="13">The linked tracker retains full checkpoint scope, commit evidence and all remaining work.</text>
   </g>
 </svg>

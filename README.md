@@ -1,5 +1,3 @@
-> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
-
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -18,7 +16,7 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Named source checkpoints: 34 of 46 landed, 12 open including F08 in progress. Each workstream has a segmented bar and a named checklist showing completed and remaining work. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 7/8; workloads and native 3/6; providers and operations 0/7. F08 OIDC activation has 3 of 6 child steps landed; protected execution, public integration and final portal workflow remain open. Child steps are not additional parent milestones. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Named source checkpoints: 34 of 46 landed, 12 open including F08 in progress. Each workstream has a segmented bar and a named checklist. The detailed F08 bar shows six named steps: retained finalization admission, assertion verification and existing login hardening landed; protected activation execution in progress; public activation/recovery and integrated portal flow open. F08 is 3 of 6 child steps landed, not three extra parent milestones. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 **34 of 46 tracked source checkpoints landed · 12 open, including F08 in progress.**
 Each segment has a named entry in the graphic: ✓ landed, → in progress, — open.
@@ -35,12 +33,23 @@ amounts of work, or an ETA. Current source is unbuilt and unexecuted.
 | Workloads and native · 3/6 | TLS-bound attestation, identity authoring, signed-handoff client | Provision service identities, finish native enrollment and enclave integration |
 | Providers and operations · 0/7 | Lower-level adapters and tooling exist; these integration closures remain open | OAuth ownership/custody, revocation, protected side effects, publication recovery, RBAC rollback protection, telemetry |
 
-**In progress — F08: OIDC activation, 3/6 substeps landed.** Retained completion
-admission, original assertion/CAS derivation and existing login hardening are in
-source ([8d1a624](https://github.com/example/private-deployment)).
-**Next: protected activation and token delivery**, then public integration and
-the final portal flow. The [six-step detail](docs/production-status.md#f08-detail-oidc-session-activation)
-shows each part; these are inside F08, not extra milestones in the 46-item total.
+**Current work — F08: OIDC activation, 3/6 steps landed.** The detailed bar above
+tracks each step, so partial progress stays visible before the parent closes:
+
+| Step | Status | What it delivers |
+| --- | --- | --- |
+| F08.1 | ✓ Landed | Check retained, acknowledged credential finalization |
+| F08.2 | ✓ Landed | Verify the original activation assertion and derive intended row changes |
+| F08.3 | ✓ Landed | Bind existing login to its cookie and show uncertain outcomes honestly |
+| F08.4 | → In progress | Connect protected activation, token custody and durable delivery |
+| F08.5 | — Open | Add separately authorized activation and recovery actions |
+| F08.6 | — Open | Connect the post-finalization portal and confirm active login |
+
+The [step-by-step evidence and remaining work](docs/production-status.md#f08-detail-oidc-session-activation)
+distinguish source prerequisites from the finished flow. These six steps belong
+to F08; they do not add to the 46 parent checkpoints.
+Within F08.4, proof checks, encrypted-original helpers and row-effect derivation
+have landed; protected planning, custody and execution remain open.
 
 **Production acceptance: 0/6 verified.** Full verification follows source freeze.
 Immutable dependencies and independently operated signing, Nitro/KMS and witness
@@ -50,7 +59,7 @@ services remain prerequisites; the services are not provisioned.
 evidence, a [breakdown of all 12 open milestones](docs/production-status.md#remaining-work-breakdown)
 and the separate production release gates.
 
-<!-- Update named checkpoints, child checklists, both implementation image descriptions, counts, summary table and SVG together at each milestone. Every segment must have a visible named status entry. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update named checkpoints, child checklists, both implementation image descriptions, counts, summary tables and SVG together at each milestone. Every segment, including the current-focus child bar, must have a visible named status entry. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

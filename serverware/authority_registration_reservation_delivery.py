@@ -1,0 +1,345 @@
+"""Durable original registration reserve/snapshot delivery, never SQL authority.
+
+This owner takes a separate actual journal and an independently current exact
+local checkpoint. It authenticates original computation controls and their
+snapshot, and stores them before any reserve exchange. The grant-record ID is
+only a local lookup association: neither this storage nor a computation signature
+replaces genuine grant/plan replay, current state admission or caller permission.
+
+One unresolved request blocks new requests. Explicit delivery sends only the
+retained original, verifies the exact state acknowledgment, then durably stores
+it before returning. Network or verification uncertainty retains pending state;
+local publication uncertainty poisons the owner. There is no background retry,
+replacement signature, pending clear, expiry reset, lookup-peer widening or SQL.
+
+After expiry an explicit unchanged redelivery can retrieve a previously accepted
+historical receipt, never authorize a previously unaccepted expired request.
+Even a durable acknowledgment is not a fresh current-head checkpoint or execution
+permission. Native I/O needs an external watchdog; a late failure can follow
+durable publication. Original lifetimes are never extended by a retrieval window.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import os
+import threading
+import time
+
+from serverware import authority_current_root_authorization as authorization
+from serverware import authority_current_root_journal as storage
+from serverware import authority_current_root_transport as transport
+from serverware import authority_registration_reservation_records as records
+from serverware import authority_webauthn_evidence as evidence
+from serverware import authority_webauthn_evidence_plan_clock as clock
+from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+
+class RegistrationReservationDeliveryError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class RegistrationReservationObservation:
+    """Unsigned local state, not state-service currentness or SQL permission."""
+
+    sequence: int
+    head_digest: str
+    pending_request_digest: str | None
+    acknowledged_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class RegistrationReservationOriginals:
+    """Original recovery data only; downstream consumers must authenticate it."""
+
+    execution_record_digest: str
+    request_bytes: bytes
+    snapshot_bytes: bytes
+    receipt_bytes: bytes | None
+
+
+def _cold_work():
+    return _ValidationWork(QueryReadValidationLimits())
+
+
+def _live_guard(live_window, inherited, work):
+    window = clock._validate(live_window)
+    if inherited is not None:
+        authorization.shape._integer(inherited, minimum=1)
+    bound = window[4] if inherited is None else min(window[4], inherited)
+    last_epoch, last_monotonic = window[0], window[2]
+
+    def live():
+        nonlocal last_epoch, last_monotonic
+        now = clock._check_on_work(window, work=work)
+        monotonic = evidence.production._callback(work, time.monotonic_ns)
+        authorization.shape._integer(monotonic, minimum=1)
+        if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+            raise RegistrationReservationDeliveryError("reservation delivery window expired or clock reversed")
+        last_epoch, last_monotonic = now, monotonic
+        return now
+
+    return live, bound
+
+
+class RegistrationReservationDelivery:
+    """Fixed evidence-admission reserve delivery with durable request/ack pairs.
+
+    Journal ownership transfers at construction, including failure cleanup. Its
+    preprovisioned directory must be separate from state/completion/SQL-attempt
+    journals. At sequence zero the independent local head is the enrollment
+    digest; later heads are framed reservation-record identities. Recovery of a
+    valid prefix does not establish that prefix's currentness.
+    """
+
+    __slots__ = ("_journal", "_pid", "_closed", "_lock", "_sequence", "_head_digest",
+        "_enrollment_bytes", "_root_public_key", "_enrollment_digest", "_age", "_skew",
+        "_maximum_records", "_pending", "_history", "_operations", "_capabilities",
+        "_predecessor_heads", "_last_reserved_sequence", "_last_fence", "_acknowledged_count")
+
+    def __init__(self, *, journal, enrollment_bytes, root_public_key,
+            expected_local_sequence, expected_local_head_digest):
+        if type(journal) is not storage.CurrentRootJournal:
+            raise RegistrationReservationDeliveryError("reservation delivery requires its actual separate journal")
+        self._journal = journal
+        self._pid, self._closed = os.getpid(), False
+        self._lock = threading.RLock()
+        self._sequence = self._acknowledged_count = self._last_fence = 0
+        self._last_reserved_sequence = -1
+        self._pending = None
+        self._history, self._operations, self._capabilities, self._predecessor_heads = {}, set(), set(), set()
+        try:
+            original = authorization._original(enrollment_bytes,
+                authorization.MAX_ENROLLMENT_BYTES, "reservation delivery enrollment")
+            held_root = root_public_key
+            authorization._public(held_root)
+            authorization.shape._integer(expected_local_sequence, storage.MAX_RECORDS)
+            authorization.shape._digest(expected_local_head_digest)
+            expected = expected_local_sequence, expected_local_head_digest
+            material = authorization._admit_enrollment_on_work(enrollment_bytes=original,
+                root_public_key=held_root, work=_cold_work())
+            self._enrollment_bytes, self._root_public_key = original, held_root
+            self._enrollment_digest = self._head_digest = material.enrollment_digest
+            self._age, self._skew = material.payload["maxControlAgeNs"], material.payload["maxClockSkewNs"]
+            self._maximum_records = journal.maximum_records
+            if self._maximum_records != material.payload["maxRecords"]:
+                raise RegistrationReservationDeliveryError("reservation journal capacity differs from enrollment")
+            storage.CurrentRootJournal.recover(journal, self._recover_record)
+            if (self._sequence, self._head_digest) != expected:
+                raise RegistrationReservationDeliveryError("reservation history differs from independently current checkpoint")
+            self._require_ready()
+        except BaseException:
+            self._poison_and_close()
+            raise
+
+    def _require_process(self):
+        if type(self) is not RegistrationReservationDelivery or os.getpid() != self._pid:
+            raise RegistrationReservationDeliveryError("reservation delivery requires its actual process-bound owner")
+        if self._closed:
+            raise RegistrationReservationDeliveryError("reservation delivery owner is closed")
+
+    def _require_ready(self):
+        self._require_process()
+        try:
+            if self._journal.count != self._sequence:
+                raise RegistrationReservationDeliveryError("reservation journal changed outside its owner")
+        except BaseException:
+            self._poison_and_close()
+            raise
+
+    def _poison_and_close(self):
+        self._closed = True
+        try:
+            storage.CurrentRootJournal.poison(self._journal)
+        except BaseException:
+            pass
+        try:
+            storage.CurrentRootJournal.close(self._journal)
+        except BaseException:
+            pass
+
+    def _check_record(self, record, work):
+        previous = None if self._sequence == 0 else self._head_digest
+        if (record.enrollment_digest != self._enrollment_digest
+                or record.sequence != self._sequence + 1 or record.previous_record_digest != previous):
+            raise RegistrationReservationDeliveryError("reservation record differs from its exact local chain")
+        if record.kind == "request":
+            if self._pending is not None or self._sequence + 2 > self._maximum_records:
+                raise RegistrationReservationDeliveryError("reservation pending or acknowledgment capacity unavailable")
+            if (record.request_digest in self._history
+                    or record.request_payload["operationId"] in self._operations
+                    or record.request_payload["capabilityDigest"] in self._capabilities
+                    or record.predecessor_head_digest in self._predecessor_heads
+                    or record.predecessor_sequence <= self._last_reserved_sequence
+                    or record.fence <= self._last_fence):
+                raise RegistrationReservationDeliveryError("reservation repeats consumed identity or state ancestry")
+        elif record.kind == "ack":
+            pending = self._pending
+            if pending is None:
+                raise RegistrationReservationDeliveryError("reservation acknowledgment has no retained request")
+            work.charge(input_bytes=len(record.request_bytes) + len(pending.request_bytes)
+                + len(record.snapshot_bytes) + len(pending.snapshot_bytes))
+            if (record.request_bytes != pending.request_bytes or record.snapshot_bytes != pending.snapshot_bytes
+                    or record.execution_record_digest != pending.execution_record_digest
+                    or record.request_digest != pending.request_digest
+                    or record.predecessor_sequence != pending.predecessor_sequence
+                    or record.predecessor_head_digest != pending.predecessor_head_digest
+                    or record.fence != pending.fence):
+                raise RegistrationReservationDeliveryError("reservation acknowledgment changes retained scope")
+        else:
+            raise RegistrationReservationDeliveryError("reservation record kind is not fixed")
+
+    def _install_record(self, record):
+        # Only same-call genuine codec output passing _check_record reaches here.
+        self._history[record.request_digest] = record
+        if record.kind == "request":
+            self._pending = record
+            self._operations.add(record.request_payload["operationId"])
+            self._capabilities.add(record.request_payload["capabilityDigest"])
+            self._predecessor_heads.add(record.predecessor_head_digest)
+            self._last_fence = record.fence
+        else:
+            self._pending = None
+            self._acknowledged_count += 1
+            self._last_reserved_sequence = record.receipt_payload["sequence"]
+        self._sequence, self._head_digest = record.sequence, record.record_digest
+
+    def _recover_record(self, sequence, original):
+        work = _cold_work()
+        record = records._decode_on_work(original, enrollment_bytes=self._enrollment_bytes,
+            root_public_key=self._root_public_key, work=work)
+        if record.sequence != sequence:
+            raise RegistrationReservationDeliveryError("reservation filename and record sequence differ")
+        self._check_record(record, work)
+        self._install_record(record)
+
+    def _append(self, original, record, work):
+        self._check_record(record, work)
+        work.charge(hashes=1, input_bytes=len(original))
+        raw_digest = "sha256:" + hashlib.sha256(original).hexdigest()
+        try:
+            metadata = evidence.production._callback(work,
+                lambda: storage.CurrentRootJournal.append(self._journal, original))
+            if (type(metadata) is not storage.CurrentRootRecord
+                    or metadata.sequence != record.sequence or metadata.digest != raw_digest
+                    or metadata.byte_count != len(original)):
+                raise RegistrationReservationDeliveryError("reservation publication differs from its original")
+            self._install_record(record)
+            self._require_ready()
+        except BaseException:
+            self._poison_and_close()
+            raise
+
+    def enqueue(self, request_bytes, *, snapshot_bytes, execution_record_digest,
+            expected_predecessor_sequence, expected_predecessor_head_digest, expected_fence,
+            live_window, work, transport_deadline_ns=None):
+        """Retain a fresh signed reserve plus exact snapshot before any send.
+
+        The predecessor/fence and local grant locator must come from the actual
+        coordinator, not an incoming request's purported authority. Re-enqueue
+        of identical retained originals/scope is idempotent and never renews it.
+        """
+        evidence.capture._SharedLedger(work)
+        original = authorization._original(request_bytes, records.MAX_REQUEST_BYTES, "reservation request")
+        snapshot = authorization._original(snapshot_bytes, records.MAX_SNAPSHOT_BYTES, "reservation snapshot")
+        authorization.shape._digest(execution_record_digest)
+        scope = records._predecessor_scope(expected_predecessor_sequence,
+            expected_predecessor_head_digest, expected_fence)
+        locator = execution_record_digest
+        live, _bound = _live_guard(live_window, transport_deadline_ns, work)
+        self._require_process()
+        with self._lock:
+            self._require_ready()
+            live()
+            identity = authorization.plan._frame(authorization.REQUEST_IDENTITY_DOMAIN, (original,), work)
+            prior = self._history.get(identity)
+            if prior is not None:
+                work.charge(input_bytes=len(original) + len(prior.request_bytes)
+                    + len(snapshot) + len(prior.snapshot_bytes))
+                if (original != prior.request_bytes or snapshot != prior.snapshot_bytes
+                        or locator != prior.execution_record_digest
+                        or scope != (prior.predecessor_sequence, prior.predecessor_head_digest, prior.fence)):
+                    raise RegistrationReservationDeliveryError("reservation identity has different original scope")
+                live()
+                return identity
+            if self._pending is not None or self._sequence + 2 > self._maximum_records:
+                raise RegistrationReservationDeliveryError("reservation pending or acknowledgment capacity unavailable")
+            encoded, record = records._prepare_request_on_work(sequence=self._sequence + 1,
+                previous_record_digest=None if self._sequence == 0 else self._head_digest,
+                expected_predecessor_sequence=scope[0], expected_predecessor_head_digest=scope[1],
+                expected_fence=scope[2], execution_record_digest=locator,
+                request_bytes=original, snapshot_bytes=snapshot, enrollment_bytes=self._enrollment_bytes,
+                root_public_key=self._root_public_key, work=work)
+            authorization.plan._same(record.request_digest, identity, work, "reservation original identity changed")
+            evidence._fresh(record.request_payload, live(), self._age, self._skew)
+            self._append(encoded, record, work)
+            evidence._fresh(record.request_payload, live(), self._age, self._skew)
+            return identity
+
+    def deliver(self, request_digest, *, client, live_window, work, transport_deadline_ns=None):
+        """Explicitly send one retained reserve and persist its genuine ack.
+
+        Failures never clear pending state. A later explicit same-original call
+        may recover acceptance; there is no automatic retry or SQL invocation.
+        Already durable receipts are returned unchanged, not refreshed.
+        """
+        evidence.capture._SharedLedger(work)
+        authorization.shape._digest(request_digest)
+        identity = request_digest
+        configured = transport.CurrentRootDecisionClient._snapshot_configuration(client)
+        live, bound = _live_guard(live_window, transport_deadline_ns, work)
+        self._require_process()
+        with self._lock:
+            self._require_ready()
+            live()
+            retained = self._history.get(identity)
+            if retained is None:
+                raise RegistrationReservationDeliveryError("reservation original is not durably retained")
+            if retained.kind == "ack":
+                live()
+                return retained.receipt_bytes
+            if retained is not self._pending:
+                raise RegistrationReservationDeliveryError("reservation original is not the local pending request")
+            receipt = evidence.production._callback(work, lambda: transport._exchange_on_configuration(
+                configured, action="reserve", request_bytes=retained.request_bytes, deadline_ns=bound))
+            live()
+            encoded, record = records._prepare_ack_on_work(sequence=self._sequence + 1,
+                previous_record_digest=self._head_digest,
+                expected_predecessor_sequence=retained.predecessor_sequence,
+                expected_predecessor_head_digest=retained.predecessor_head_digest,
+                expected_fence=retained.fence, execution_record_digest=retained.execution_record_digest,
+                request_bytes=retained.request_bytes, snapshot_bytes=retained.snapshot_bytes,
+                receipt_bytes=receipt, enrollment_bytes=self._enrollment_bytes,
+                root_public_key=self._root_public_key, work=work)
+            live()
+            self._append(encoded, record, work)
+            live()
+            return record.receipt_bytes
+
+    def originals(self, request_digest):
+        """Read held originals, even after expiry, without claiming currentness."""
+        authorization.shape._digest(request_digest)
+        self._require_process()
+        with self._lock:
+            self._require_ready()
+            retained = self._history.get(request_digest)
+            if retained is None:
+                raise RegistrationReservationDeliveryError("reservation original is not durably retained")
+            return RegistrationReservationOriginals(retained.execution_record_digest,
+                retained.request_bytes, retained.snapshot_bytes, retained.receipt_bytes)
+
+    def inspect(self):
+        self._require_process()
+        with self._lock:
+            self._require_ready()
+            return RegistrationReservationObservation(self._sequence, self._head_digest,
+                None if self._pending is None else self._pending.request_digest, self._acknowledged_count)
+
+    def close(self):
+        if os.getpid() != self._pid:
+            raise RegistrationReservationDeliveryError("forked process cannot close reservation delivery")
+        with self._lock:
+            if not self._closed:
+                self._closed = True
+                storage.CurrentRootJournal.close(self._journal)

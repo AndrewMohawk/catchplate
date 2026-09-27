@@ -246,6 +246,11 @@ packet, mark an attempt, execute SQL or finalize a credential. The local
 retention journal is not a one-use execution ledger. Those remain separate
 [successor execution](authority-successor-execution.md) requirements.
 
+A separate [reservation producer and durable delivery owner](registration-execution-reservation.md)
+now provide the source path from authenticated grant originals to an original
+state acknowledgment. They are not wired into these preparation handlers and
+do not supply the missing cold coordinator or SQL/finalization authority.
+
 The new endpoints provide API-only grant preparation, not the later public
 execution action or a complete operator UI workflow. Reservation/current-root
 admission, protected execution and finalization orchestration remain open.

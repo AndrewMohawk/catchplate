@@ -9,6 +9,11 @@ actual owners, catalog checks, durable pre-database attempts and fixed SQL
 source installation. Neither path supplies public finalization, a provisioned
 listener or a production deployment.
 
+Registration evidence grants have a separate
+[reserve producer and durable reservation-delivery owner](registration-execution-reservation.md).
+It uses the existing reserve transport without changing this completion owner
+or widening the lookup peer; SQL execution and cold provisioning remain separate.
+
 ## Fixed decision exchange
 
 [`CurrentRootDecisionClient`](../serverware/authority_current_root_transport.py)

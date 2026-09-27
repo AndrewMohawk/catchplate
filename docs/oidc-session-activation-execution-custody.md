@@ -116,7 +116,7 @@ suffix. Full replay separately preserves assertion, session, delivery,
 state-observation and signed-plan expiry. Expired originals cannot be made live
 by a fresh invocation, another bootstrap verification or a later callback.
 
-## Connected source, unfinished delivery
+## Connected source, unfinished completion
 
 The generic activation dispatch requires this exact owner plus a real live
 window and inherited deadline. It invokes the actual class method; a posted
@@ -140,10 +140,12 @@ genuine caller/grant/private replay and durable first-exact request/ACK storage.
 Its state-v5 peer can reserve only this signed operation. An authenticated ACK
 does not become its own independently current pending head.
 
-Dedicated **SQL** receiving delivery/service composition and the actual cold
-invocation of independent pending admission remain open. So do the public
-caller's separate purpose/key lifecycle and present permission,
-completion/history, public recovery and protected token release. Neither
-generic dispatch nor the connected grant/reserve roles complete a one-use
-activation flow or establish session currentness. Those remaining steps need
-their own authority and production acceptance.
+The **SQL** receiver now connects [seven-FD delivery](oidc-session-activation-execution-sql-delivery.md),
+genuine independent pending admission and the actual issuer/IDs-only executor
+through its [dedicated service](oidc-session-activation-execution-sql-service.md).
+Its attempt journal is separate and irreversible; no signed ACK supplies its
+own independent pending authority. The unsigned commit observation does not
+close completion/history, public recovery or protected token release. The
+public caller's separate purpose/key lifecycle and present permission remain
+open too. These source connections do not establish session currentness or
+production acceptance.

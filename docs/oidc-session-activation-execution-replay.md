@@ -66,11 +66,12 @@ and actual service to [genuine caller authorization and grant production](oidc-s
 This is unbuilt/unexecuted source, not a production grant-delivery result.
 The dedicated [reserve receiver](oidc-session-activation-execution-reserver-delivery.md)
 now connects genuine caller/grant replay and durable exact reserve/ACK storage.
-Dedicated **SQL** receiving delivery/service composition, independently current
-pending consumption, the public caller's purpose/key lifecycle and present
-permission, and end-to-end one-use protected execution remain open. Connected
-grant/reserve roles do not close the
-full grant/reserve/pending/packet/SQL workflow or its production acceptance.
+The dedicated [SQL receiver](oidc-session-activation-execution-sql-service.md)
+now connects independent pending admission, actual issuer and IDs-only executor
+with its separately checkpointed irreversible attempt journal. No pending head
+is learned from the ACK being verified, and no uncertain attempt is retried.
+These source joins do not establish present public caller permission, the
+caller's purpose/key lifecycle or production acceptance.
 Completion entrypoints explicitly reject activation: recovery needs genuine
 historical admission, not this API relabelled as recovery. Completion/history,
 public recovery and protected token release remain separate work.

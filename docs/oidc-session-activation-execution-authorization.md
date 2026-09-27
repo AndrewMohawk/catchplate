@@ -83,12 +83,12 @@ and an actual service invoking this genuine authorization/grant composition.
 Its units are packaged source inputs, not a built, installed or executed service.
 The dedicated [reserve receiver](oidc-session-activation-execution-reserver-delivery.md)
 now connects genuine caller/grant replay and durable exact reserve/ACK storage.
-Dedicated **SQL** receiving delivery/service composition and its independently
-current pending admission remain open.
+The dedicated [SQL receiver](oidc-session-activation-execution-sql-service.md)
+now joins independent pending admission to the actual one-use issuer/executor.
 The public caller still needs a separate purpose/key lifecycle and fresh actor
 permission; old registration/control-plane evidence keys cannot silently gain
 this purpose. No AES keys are given to a signing-only caller. Genuine
-pending-state consumption, one-use protected SQL, completion/history, public recovery and
-protected token release remain separate. This is not a complete activation or
+completion/history, public recovery and protected token release remain
+separate. This is not a complete activation or
 session-currentness result. No tests, imports, builds or runtime verification
 were run.

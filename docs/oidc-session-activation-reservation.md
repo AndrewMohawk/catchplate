@@ -57,11 +57,15 @@ authority, before-vector and nonrenewed interval through return. It returns
 unchanged raw3, not mutations or a token a downstream issuer may trust instead
 of its own actual replay.
 
-This receiving API is source implemented but is **not connected to an actual
-cold SQL-issuer consumer in this batch**. The reserver cannot provide the
-future independently current pending scope. That connection, protected SQL,
-completion/reconciliation and protected token delivery remain separate work;
-the reservation/pending parent checkpoint remains partial.
+The [dedicated cold SQL service](oidc-session-activation-execution-sql-service.md)
+now invokes this genuine admission with independently root-held predecessor
+and current-pending pins. The reserver and its ACK do not supply that pending
+authority. A private same-call suffix derives issuer arguments, the exact
+replay marker and original live guard; no entrypoint accepts that suffix as
+proof. The existing raw3 API still returns unchanged originals. The actual
+[SQL bridge](oidc-session-activation-sql.md) connects issuer and IDs-only
+executor with an irreversible attempt claim. Completion/reconciliation and
+protected token delivery remain separate; an unsigned commit is not completion.
 
 ## Durable service boundary
 

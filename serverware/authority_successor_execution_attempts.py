@@ -13,7 +13,8 @@ are never removed, reset, expired or retried. A late failure may already have
 burned the attempt; an ambiguous publication poisons and closes this owner.
 
 Claim spends only the caller's original validation work and unchanged live
-window. Cold recovery has one fixed work allowance per source-bounded record.
+window. Legacy cold recovery has one fixed work allowance per source-bounded
+record; an explicitly supplied cold allowance stays cumulative through recovery.
 Physical journal calls are not interrupted by a hard watchdog. Returned local
 inspection data, and a claim returning None, are not authorization/proof tokens.
 """
@@ -117,7 +118,8 @@ class SuccessorExecutionAttempts:
         "_structure_manifest_digest", "_maximum_records", "_pending_digests", "_packet_digests")
 
     def __init__(self, *, journal, expected_structure_manifest_digest,
-            expected_local_sequence, expected_local_head_digest):
+            expected_local_sequence, expected_local_head_digest,
+            live_window=None, work=None, transport_deadline_ns=None):
         if type(journal) is not storage.CurrentRootJournal:
             raise SuccessorExecutionAttemptsError("attempt owner requires its actual separate journal")
         self._journal = journal
@@ -134,11 +136,47 @@ class SuccessorExecutionAttempts:
             self._maximum_records = storage.CurrentRootJournal.maximum_records.fget(journal)
             if expected_local_sequence > self._maximum_records:
                 raise SuccessorExecutionAttemptsError("attempt checkpoint exceeds the provisioned record limit")
-            self._head_digest = _genesis_on_work(self._structure_manifest_digest, _cold_work())
-            storage.CurrentRootJournal.recover(journal, self._recover_record)
+            inherited = (live_window, work, transport_deadline_ns)
+            live = None
+            if any(value is not None for value in inherited):
+                if any(value is None for value in inherited):
+                    raise SuccessorExecutionAttemptsError("attempt cold allowance must be supplied completely")
+                codec.capture._SharedLedger(work)
+                window = clock._validate(live_window)
+                codec.shape._integer(transport_deadline_ns, minimum=1)
+                bound = min(window[4], transport_deadline_ns)
+                last_epoch, last_monotonic = window[0], window[2]
+
+                def live():
+                    nonlocal last_epoch, last_monotonic
+                    self._require_process()
+                    now = clock._check_on_work(window, work=work)
+                    monotonic = evidence.production._callback(work, time.monotonic_ns)
+                    codec.shape._integer(monotonic, minimum=1)
+                    if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+                        raise SuccessorExecutionAttemptsError("attempt cold original interval expired or reversed")
+                    last_epoch, last_monotonic = now, monotonic
+
+                live()
+            self._head_digest = _genesis_on_work(self._structure_manifest_digest,
+                _cold_work() if live is None else work)
+            if live is None:
+                storage.CurrentRootJournal.recover(journal, self._recover_record)
+            else:
+                def recover_record(sequence, original):
+                    live()
+                    self._recover_record_on_work(sequence, original, work)
+                    live()
+
+                live()
+                evidence.production._callback(work,
+                    lambda: storage.CurrentRootJournal.recover(journal, recover_record))
+                live()
             if (self._sequence, self._head_digest) != expected:
                 raise SuccessorExecutionAttemptsError("attempt journal differs from independently current checkpoint")
             self._require_ready()
+            if live is not None:
+                live()
         except BaseException:
             self._poison_and_close()
             raise
@@ -188,7 +226,9 @@ class SuccessorExecutionAttempts:
         self._sequence, self._head_digest = document["sequence"], identity
 
     def _recover_record(self, sequence, original):
-        work = _cold_work()
+        self._recover_record_on_work(sequence, original, _cold_work())
+
+    def _recover_record_on_work(self, sequence, original, work):
         document = _decode_on_work(original, work)
         if document["sequence"] != sequence:
             raise SuccessorExecutionAttemptsError("attempt filename and original sequence differ")

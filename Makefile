@@ -1073,6 +1073,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_execution_reserver_entrypoint.py \
 	serverware/oidc_session_activation_execution_reserver_launcher.py \
 	serverware/oidc_session_activation_execution_reserver_runner.py \
+	serverware/authority_oidc_session_activation_sql.py \
+	serverware/authority_oidc_session_activation_sql_transport.py \
+	serverware/oidc_session_activation_execution_sql_bootstrap.py \
+	serverware/oidc_session_activation_execution_sql_startup.py \
+	serverware/oidc_session_activation_execution_sql_entrypoint.py \
+	serverware/oidc_session_activation_execution_sql_launcher.py \
+	serverware/oidc_session_activation_execution_sql_runner.py \
 	serverware/authority_successor_execution_window.py \
 	serverware/authority_oidc_session_activation_execution_store.py \
 	serverware/authority_oidc_session_activation_execution_export.py \
@@ -3015,6 +3022,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_execution_reserver_entrypoint.py \
 				serverware/oidc_session_activation_execution_reserver_launcher.py \
 				serverware/oidc_session_activation_execution_reserver_runner.py \
+				serverware/authority_oidc_session_activation_sql.py \
+				serverware/authority_oidc_session_activation_sql_transport.py \
+				serverware/oidc_session_activation_execution_sql_bootstrap.py \
+				serverware/oidc_session_activation_execution_sql_startup.py \
+				serverware/oidc_session_activation_execution_sql_entrypoint.py \
+				serverware/oidc_session_activation_execution_sql_launcher.py \
+				serverware/oidc_session_activation_execution_sql_runner.py \
 				serverware/authority_successor_execution_window.py \
 				serverware/authority_oidc_session_activation_execution_store.py \
 				serverware/authority_oidc_session_activation_execution_export.py \

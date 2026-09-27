@@ -106,9 +106,10 @@ flags must be false. Neither the root-asserted vector nor this receiving-purpose
 signature grants action-time currentness, permission, one-use consumption or
 SQL authority. This profile provides no historical fallback for expired plans.
 Generic frame/replay integration is source-connected, as are the dedicated
-[grant](oidc-session-activation-execution-authorizer-delivery.md) and
-[reserve](oidc-session-activation-execution-reserver-delivery.md) cold receiving
-roles. Independent pending consumption and dedicated SQL receiver delivery,
-one-use execution, historical recovery, public permission and protected token
-delivery remain separate implementation and acceptance work. No service, key
-or runtime was provisioned or verified by these source changes.
+[grant](oidc-session-activation-execution-authorizer-delivery.md),
+[reserve](oidc-session-activation-execution-reserver-delivery.md) and
+[SQL](oidc-session-activation-execution-sql-delivery.md) cold receiving roles.
+The actual SQL service joins independent pending pins to genuine admission and
+one-use issuer/executor owners. Historical completion, public permission and
+protected token delivery remain separate implementation and acceptance work.
+No service, key or runtime was provisioned or verified by these source changes.

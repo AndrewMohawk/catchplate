@@ -71,9 +71,11 @@ expiry or delivery expiry is renewed. Plaintext tokens and the custody key are
 not encoded in either commitment. The actual encrypted delivery remains in its
 derived mutation.
 
-Independent policy/key/subject/root/currentness admission, signed-plan
-integration and protected one-use SQL plus durable token delivery remain
-separate obligations. Planned frozen verification includes omitted/extra
+The [signed planner](oidc-session-activation-plan.md) now consumes this genuine
+replay, and [cold configuration](oidc-session-activation-planner-delivery.md)
+supplies authenticated launch policy/key/snapshot pins. Independent currentness,
+present subject permission, protected one-use SQL and committed token delivery
+remain separate obligations. Planned frozen verification includes omitted/extra
 profiles, tampered frontiers/primary proofs, independent-head mismatches,
 unchanged read-only heads, exact after-root/effect commitments, expiry during
 folding/signing and shared-work exhaustion. No build, test or runtime validation

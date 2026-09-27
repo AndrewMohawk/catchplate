@@ -1048,6 +1048,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_writes.py \
 	serverware/authority_oidc_session_activation_journal.py \
 	serverware/authority_oidc_session_activation_plan_owner.py \
+	serverware/authority_oidc_session_activation_cold_planning.py \
+	serverware/authority_oidc_session_activation_planner_transport.py \
+	serverware/authority_oidc_session_activation_planner_service.py \
+	serverware/oidc_session_activation_planner_bootstrap.py \
+	serverware/oidc_session_activation_planner_entrypoint.py \
+	serverware/oidc_session_activation_planner_launcher.py \
+	serverware/oidc_session_activation_planner_runner.py \
 	serverware/authority_transition_oidc_session_activation.py \
 	serverware/oidc_session_activation_delivery.py \
 	serverware/authority_transition_webauthn.py \
@@ -2955,6 +2962,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_writes.py \
 				serverware/authority_oidc_session_activation_journal.py \
 				serverware/authority_oidc_session_activation_plan_owner.py \
+				serverware/authority_oidc_session_activation_cold_planning.py \
+				serverware/authority_oidc_session_activation_planner_transport.py \
+				serverware/authority_oidc_session_activation_planner_service.py \
+				serverware/oidc_session_activation_planner_bootstrap.py \
+				serverware/oidc_session_activation_planner_entrypoint.py \
+				serverware/oidc_session_activation_planner_launcher.py \
+				serverware/oidc_session_activation_planner_runner.py \
 				serverware/authority_transition_oidc_session_activation.py \
 				serverware/oidc_session_activation_delivery.py \
 				serverware/authority_transition_webauthn.py \

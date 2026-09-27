@@ -125,10 +125,12 @@ Its `prepare` returns token-free originals and local locators;
 and thirteen-head expectations inside the original live interval. Neither is
 SQL execution or expired-history recovery.
 
-Independent cold configuration/key custody, root/currentness and index-population
-admission, immutable source/database provisioning, reservation/protected
-execution and the final public/portal activation sequence remain separate
-work. The owner does not infer them from database success. Driver allocation, ordinary
+The [cold service](oidc-session-activation-planner-delivery.md) now supplies
+root-original configuration/key admission and a complete-vector launch snapshot.
+Fresh latest-root/currentness and index-population admission, immutable
+source/database provisioning, reservation/protected execution and the final
+public/portal activation sequence remain separate work. The owner does not infer
+them from database success. Driver allocation, ordinary
 primary-proof SQL and metadata admission keep their existing separate bounds;
 this is not whole-process work accounting or a preemptive watchdog. A hostile
 host/driver is not excluded by local handle/status checks or sampled clocks.

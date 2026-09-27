@@ -172,6 +172,9 @@ request/scope/roots/thirteen heads, and genuinely replays the retained originals
 It remains live-only, not expired-history or lost-locator recovery. These
 configured APIs do not themselves admit cold keys or establish current roots,
 and callers cannot publicly supply this private key/policy interface.
+The separate [cold service](oidc-session-activation-planner-delivery.md) now
+authenticates root originals before this composition, including its complete
+planning snapshot; fresh off-host latest-head authority remains separate.
 
 ## Remaining implementation boundary
 

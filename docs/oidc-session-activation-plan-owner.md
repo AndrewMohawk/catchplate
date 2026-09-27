@@ -71,10 +71,13 @@ no token, signs nothing and performs no SQL.
 This is **live-only** retained verification. The caller's current processing
 window cannot renew the original plan, assertion, challenge, session or delivery
 interval; an expired original remains rejected. A historical admission and
-delivery/reconciliation protocol, a genuinely cold-admitted service, present
-permission, retained-finalization admission, currentness and protected one-use
-execution remain separate integration. No public activation route is enabled by
-this owner. Source-only; builds/tests/runtime verification remain deferred.
+delivery/reconciliation protocol, present permission, retained-finalization
+admission, fresh latest-state admission and protected one-use execution remain
+separate integration. The [cold service](oidc-session-activation-planner-delivery.md)
+now composes genuine root-bootstrap admission and a root-pinned complete-vector
+snapshot around this owner; it does not turn that launch snapshot into an
+off-host currentness check. No public activation route is enabled by this owner.
+Source-only; builds/tests/runtime verification remain deferred.
 
 Frozen verification should cover genuine acquisition/sign/append/readback,
 wrong keys/configuration/PID, concurrent calls, altered stored or independent

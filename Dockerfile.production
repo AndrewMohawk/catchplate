@@ -122,6 +122,7 @@ COPY --from=verified-production-source /source/serverware/registration_execution
 COPY --from=verified-production-source /source/serverware/registration_finalization_sql_launcher.py /runtime/authority-bootstrap/registration_finalization_sql_launcher.py
 COPY --from=verified-production-source /source/serverware/registration_execution_completion_launcher.py /runtime/authority-bootstrap/registration_execution_completion_launcher.py
 COPY --from=verified-production-source /source/serverware/registration_finalization_completion_launcher.py /runtime/authority-bootstrap/registration_finalization_completion_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_planner_launcher.py
 COPY --from=verified-production-source /source/serverware /runtime/app/serverware
 COPY --from=verified-production-source /source/scripts /runtime/app/scripts
 COPY --from=verified-production-source /source/schemas /runtime/app/schemas
@@ -174,6 +175,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/registration_finalization_sql_launcher.py \
         /runtime/authority-bootstrap/registration_execution_completion_launcher.py \
         /runtime/authority-bootstrap/registration_finalization_completion_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_planner_launcher.py \
     && chmod 0755 /runtime/custody-trust \
     && chmod 0750 /runtime/gate-materials \
     && find /runtime/app/ops/policy-custody /runtime/app/ops/systemd -type d -exec chmod 0555 {} + \

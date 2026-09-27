@@ -583,6 +583,44 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while loading finalization reservation")
         return record
 
+    def claim_registration_finalization_sql_attempt(self, finalization_digest):
+        """Durably burn one finalization dispatch; never clear or retry the claim."""
+        local = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        journal.CustodyJournal.claim_registration_finalization_sql_attempt(binding.journal, local)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed after finalization SQL claim")
+
+    def append_registration_finalization_sql_outcome(self, finalization_digest, originals):
+        """Retain first unsigned raw4 without a renewed clock or success assertion."""
+        local = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_finalization_sql_outcome(
+            binding.journal, local, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining finalization SQL outcome")
+        return journal._digest(digest)
+
+    def load_registration_finalization_outcomes(self, finalization_digest):
+        """Reread complete original linkage; absence never establishes nonexecution."""
+        from serverware import control_plane_registration_finalization_outcome_records as outcomes
+
+        local = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.load_registration_finalization_outcomes(binding.journal, local)
+        if (type(result) is not outcomes.FinalizationOutcomes or result.finalization_digest != local):
+            raise CustodyClientError("finalization SQL outcomes differ from their local preparation")
+        for kind, record in zip(outcomes.KINDS, (result.sql_attempt, result.sql_outcome)):
+            if record is not None:
+                if (type(record) is not outcomes.FinalizationOutcomeRecord
+                        or record.finalization_digest != local or record.kind != kind
+                        or record.source_revision != result.source_revision):
+                    raise CustodyClientError("finalization SQL outcome record scope differs")
+                journal._digest(record.digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while loading finalization SQL outcomes")
+        return result
+
     def append_registration_reservation(self, local_digest, originals):
         """Retain bounded raw3; independent reserve authentication remains required."""
         binding = _snapshot(self)

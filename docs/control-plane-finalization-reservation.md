@@ -72,9 +72,10 @@ pins do not close the external currentness/one-use production gate.
 The [private SQL caller](control-plane-finalization-sql.md) and [cold worker](registration-finalization-sql-service.md)
 now connect those independently admitted pins to genuine original verification
 and protected SQL composition in source. The configured property itself is
-still not a request or proof of execution. Separate public execution permission,
-retained outcomes, completion/recovery and external action-time authority remain
-open; the reservation path does not automatically invoke the SQL path.
+still not a request or proof of execution. A separate [public SQL action](public-registration-finalization-sql.md)
+now requires its own present permission and retained ownership/claim/outcome
+path. Completion/recovery and external action-time authority remain open; the
+reservation path does not automatically invoke the SQL path.
 
 ## One original-bound exchange
 

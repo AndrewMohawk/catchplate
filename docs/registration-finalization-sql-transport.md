@@ -3,8 +3,9 @@
 The source [transport](../serverware/authority_registration_finalization_sql_transport.py)
 defines one dedicated raw13/raw4 exchange for the [cold finalization SQL
 worker](registration-finalization-sql-service.md). It is unbuilt and unexecuted.
-It does not install that worker, enable a public execution route or grant SQL
-permission.
+Framing alone neither installs that worker nor grants SQL permission. The
+separate [public execute action](public-registration-finalization-sql.md) now
+uses the genuine retained caller and its fresh-purpose admission.
 
 The fixed endpoint is `/run/serverware/registration-finalization/sql.sock`, with
 root socket-activation listener UID/GID `0:0`, a bounded 1–30 second duration,
@@ -41,7 +42,14 @@ The codec adds no work allowance, parser, key, fallback endpoint or reconnection
 
 The [cold caller profile](control-plane-registration-finalization-custody.md)
 independently pins the endpoint and pending state. The [private caller](control-plane-finalization-sql.md)
-and dedicated cold worker now connect the exchange in source. The configuration
-property itself performs no request. Actual provisioning, public-purpose
-dispatch, retained outcomes, separate completion and action-time external
-authority remain required work.
+and dedicated cold worker now connect the exchange in source. The caller
+requires the finalization grant locator and exact retained raw13, genuinely
+admits pending scope, then durably claims local dispatch before sending.
+Bounded returned raw4 is durably retained before semantic/lifetime acceptance;
+storage is opaque, and uncertainty, mismatch or expiry never clears the claim.
+Only an accepted unsigned `observed-commit` reaches the public success projection.
+
+The configuration property itself performs no request. Actual provisioning,
+separately signed finalization completion/recovery, OIDC activation and
+independent action-time authority remain open. No public response treats a
+reserve acknowledgment or this transport's marker as a current-head witness.

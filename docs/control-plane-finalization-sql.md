@@ -2,11 +2,13 @@
 
 This source-only caller connects the independently root-admitted finalization
 pending scope to the [dedicated cold SQL worker](registration-finalization-sql-service.md).
-It is unbuilt, unexecuted and unprovisioned. It adds no public execute endpoint,
-local attempt/outcome association, signed completion or OIDC activation.
+It is unbuilt, unexecuted and unprovisioned. The separately authorized
+[public execute action](public-registration-finalization-sql.md) and seventh
+portal control now use the retained facade; neither supplies signed completion
+or OIDC activation.
 
 The actual enrollment owner exposes
-`_request_registration_finalization_sql(*, originals, live_window,
+`_request_registration_finalization_sql(*, local_digest, originals, live_window,
 transport_deadline_ns, work)` under its existing PID and owner lock.
 Only the explicit nested-v3 profile supplies the fixed SQL endpoint and
 independently signed current pending sequence/head/fence. V1/v2 do not acquire
@@ -14,9 +16,12 @@ SQL dispatch. The configured key/custody/lifetime remains held throughout.
 
 Before this private method, the actual application must separately admit the
 present finalization-execution purpose and retained subject ownership. The
-existing reservation permission does not authorize SQL. The future retained
-facade must also own its irreversible dispatch claim and durable result handling;
-this method is not an alternate public bypass for those gates.
+existing reservation permission does not authorize SQL. The
+[retained facade](../serverware/control_plane_registration_finalization_handoff.py)
+repeats actual finalization/signer/evidence-completion replay and user/session
+ownership under the cold owner lock. The private method also requires the
+actual finalization grant `local_digest` and rejoins raw13 to that complete
+retained association; it is not an alternate public bypass.
 
 ## One original-bound request
 
@@ -26,6 +31,14 @@ acknowledgment raw3. Genuine [original admission](registration-finalization-sql-
 checks caller, plan, grant, full vectors, snapshot and state receipt against the
 independent pending pins before one [transport exchange](registration-finalization-sql-transport.md).
 No received head supplies the expected current head.
+
+After genuine pending admission, the caller atomically publishes its durable
+[local dispatch claim](control-plane-custody-journal.md#finalization-sql-attempt-and-outcome)
+before transport can send. It durably retains a bounded returned unsigned raw4
+before semantic or invocation-lifetime acceptance. This ordering preserves
+uncertainty and mismatching or late outcomes as opaque originals, not verified
+success. A failed send, missing response or failed acceptance never clears the
+claim; the remote executor's protected attempt is a separate one-use boundary.
 
 One caller work/window covers admission, transport and return. The endpoint cap
 starts at that original window's monotonic opening, not after replay. Original
@@ -50,7 +63,10 @@ No caller-supplied marker or successful verification object enters that
 expectation. A matching marker remains an unsigned local commit observation;
 the independently owned signed completion path is still required.
 
-The method returns unchanged raw4 only after its final original-lifetime checks.
+The private method returns unchanged raw4 only after its final original-lifetime
+checks. The facade returns `(local grant ID, raw4)` only for `observed-commit`;
+uncertainty is an error, not HTTP success. Public projection exposes no raw
+marker or custody IDs and keeps completion/session/currentness flags false.
 It does not clear an attempt, reset a journal, reconnect, retry SQL, activate a
 session or infer rollback from failure. A timeout or late failure can follow
 remote issuance, a durable one-use attempt or a committed credential mutation.
@@ -58,3 +74,5 @@ remote issuance, a durable one-use attempt or a committed credential mutation.
 Static root-signed scope and protected local storage do not establish live
 off-host currentness or resist hostile-root rollback. Independent provisioning,
 action-time authority and the full production verification gates remain open.
+Finalization completion/recovery and its independently authorized session
+activation remain separate work; the evidence-recovery action is not their substitute.

@@ -15,6 +15,7 @@ after both original records are durable; it supplies no verification or authorit
 Separate registration outcomes retain opaque originals under that association.
 Finalization reservation raw3 has its own immutable slot under the complete
 finalization/evidence/signer chain; storage supplies no outcome authentication.
+Separate finalization SQL claim/outcome records require that retained reservation.
 A SQL-CLAIMED record burns only one local dispatch, never remote SQL permission.
 
 The private directory open-file description owns the singleton flock. The
@@ -38,6 +39,7 @@ from serverware import control_plane_registration_associations as associations
 from serverware import control_plane_registration_finalization_records as finalization_records
 from serverware import control_plane_registration_finalization_associations as finalization_associations
 from serverware import control_plane_registration_finalization_reservation_records as finalization_reservations
+from serverware import control_plane_registration_finalization_outcome_records as finalization_outcomes
 from serverware import control_plane_registration_outcome_records as outcome_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
@@ -51,7 +53,9 @@ _HEX = frozenset("0123456789abcdef")
 _READ_CHUNK = 1024 * 1024
 _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES,
     signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES,
-    finalization_reservations.MAX_RECORD_BYTES)
+    finalization_reservations.MAX_RECORD_BYTES, finalization_outcomes.MAX_RECORD_BYTES)
+_FINALIZATION_OUTCOME_FILES = {
+    "finalization-" + kind: kind for kind in finalization_outcomes.KINDS}
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
     finalization_records.FAMILY})
 
@@ -149,10 +153,10 @@ class CustodyJournal:
     association without consuming another record's reserved marker capacity.
     Finalization grants link only to an already complete evidence/signer pair;
     their separate association is published last. Each may retain one opaque
-    reservation raw3 under that complete association. At most seven times
-    maximum_records published files are admitted, including associations and
+    reservation raw3, one SQL claim and one SQL outcome under that association.
+    At most seven times maximum_records published files are admitted, including associations and
     fixed registration outcomes: legacy records use at most three, evidence
-    grants seven, signer records one and finalization grants three each.
+    grants seven, signer records one and finalization grants five each.
     Old records are never rewritten or removed; legacy marker byte
     reservations remain intact.
     """
@@ -177,6 +181,7 @@ class CustodyJournal:
         self._associations = {}
         self._finalization_associations = {}
         self._finalization_reservations = {}
+        self._finalization_outcomes = {}
         self._registration_outcomes = {}
         self._file_identities = {}
         self._used_bytes = 0
@@ -273,6 +278,7 @@ class CustodyJournal:
         associated = {}
         finalization_associated = {}
         finalization_reserved = {}
+        finalization_sql = {}
         registration_outcomes = {}
         uncertain_completions = set()
         count = 0
@@ -294,6 +300,10 @@ class CustodyJournal:
                     kind = "finalization-associated"
                 elif name.startswith("finalization-reserved-"):
                     kind = "finalization-reserved"
+                elif name.startswith("finalization-sql-claimed-"):
+                    kind = "finalization-sql-claimed"
+                elif name.startswith("finalization-sql-outcome-"):
+                    kind = "finalization-sql-outcome"
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -311,6 +321,8 @@ class CustodyJournal:
                     associations.MAX_ASSOCIATION_BYTES if kind == "associated" else
                     finalization_associations.MAX_ASSOCIATION_BYTES if kind == "finalization-associated" else
                     finalization_reservations.MAX_RECORD_BYTES if kind == "finalization-reserved" else
+                    finalization_outcomes.MAX_CLAIM_BYTES if kind == "finalization-sql-claimed" else
+                    finalization_outcomes.MAX_RECORD_BYTES if kind == "finalization-sql-outcome" else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -349,6 +361,14 @@ class CustodyJournal:
                     if reservation.finalization_digest != digest or digest in finalization_reserved:
                         raise CustodyJournalError("finalization reservation differs from its fixed filename")
                     finalization_reserved[digest] = (reservation.source_revision, reservation.digest)
+                elif kind in _FINALIZATION_OUTCOME_FILES:
+                    outcome = finalization_outcomes.decode(encoded)
+                    outcome_kind = _FINALIZATION_OUTCOME_FILES[kind]
+                    by_kind = finalization_sql.setdefault(digest, {})
+                    if (outcome.finalization_digest != digest or outcome.kind != outcome_kind
+                            or outcome_kind in by_kind):
+                        raise CustodyJournalError("finalization SQL outcome differs from its fixed filename")
+                    by_kind[outcome_kind] = (outcome.source_revision, outcome.digest)
                 else:
                     outcome = outcome_records.decode(encoded)
                     by_kind = registration_outcomes.setdefault(digest, {})
@@ -382,6 +402,9 @@ class CustodyJournal:
         for digest, metadata in finalization_reserved.items():
             self._finalization_reservation_scope(digest, metadata)
         self._finalization_reservations = finalization_reserved
+        for digest, by_kind in finalization_sql.items():
+            self._finalization_outcome_scope(digest, by_kind)
+        self._finalization_outcomes = finalization_sql
         for digest, by_kind in registration_outcomes.items():
             self._registration_outcome_scope(digest, by_kind)
             if "completion-reconciled" in by_kind and digest not in uncertain_completions:
@@ -491,6 +514,46 @@ class CustodyJournal:
                 or (reservation.source_revision, reservation.digest) != metadata):
             raise CustodyJournalError("finalization reservation changed after admitted recovery")
         return reservation
+
+    def _finalization_outcome_scope(self, digest, by_kind):
+        association = self._finalization_associations.get(digest)
+        if association is None:
+            raise CustodyJournalError("finalization SQL outcome lacks its complete original association")
+        _finalization_association_scope(association, self._entries, self._associations)
+        if any(kind not in finalization_outcomes.KINDS or value[0] != association.source_revision
+                for kind, value in by_kind.items()):
+            raise CustodyJournalError("finalization SQL outcome crosses its source or fixed profile")
+        if by_kind:
+            reservation = self._finalization_reservations.get(digest)
+            if reservation is None:
+                raise CustodyJournalError("finalization SQL outcome lacks retained reservation originals")
+            self._finalization_reservation_scope(digest, reservation)
+        if "sql-outcome" in by_kind and "sql-claimed" not in by_kind:
+            raise CustodyJournalError("finalization SQL outcome lacks its irreversible local claim")
+
+    def _read_finalization_outcomes(self, digest):
+        # Even absence rereads both associations and all three prepared records.
+        # An existing reservation is also reread, never replaced by index data.
+        self._read_finalization_reservation(digest)
+        association = self._finalization_associations[digest]
+        by_kind = self._finalization_outcomes.get(digest, {})
+        self._finalization_outcome_scope(digest, by_kind)
+        loaded = {}
+        for kind in finalization_outcomes.KINDS:
+            if kind not in by_kind:
+                continue
+            name = _name("finalization-" + kind, digest)
+            maximum = (finalization_outcomes.MAX_CLAIM_BYTES if kind == "sql-claimed"
+                else finalization_outcomes.MAX_RECORD_BYTES)
+            encoded, identity = self._read_file(name, maximum_bytes=maximum)
+            outcome = finalization_outcomes.decode(encoded)
+            if (identity != self._file_identities[name]
+                    or (outcome.source_revision, outcome.digest) != by_kind[kind]
+                    or outcome.kind != kind or outcome.finalization_digest != digest):
+                raise CustodyJournalError("finalization SQL outcome changed after admitted recovery")
+            loaded[kind] = outcome
+        return finalization_outcomes.FinalizationOutcomes(association.source_revision, digest,
+            loaded.get("sql-claimed"), loaded.get("sql-outcome"))
 
     def _read_registration_outcomes(self, digest):
         association, _ = self._read_association(digest)
@@ -798,6 +861,85 @@ class CustodyJournal:
                 raise CustodyJournalError("finalization reservation requires a complete local preparation")
             try:
                 result = self._read_finalization_reservation(digest)
+                self._require_ready()
+                return result
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def _append_finalization_outcome(self, finalization_digest, kind, originals):
+        digest = _digest(finalization_digest)
+        held = finalization_outcomes._originals(finalization_outcomes._profile(kind), originals)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._finalization_associations:
+                raise CustodyJournalError("finalization SQL outcome requires a complete local preparation")
+            by_kind = self._finalization_outcomes.get(digest, {})
+            if kind == "sql-claimed" and kind in by_kind:
+                raise CustodyJournalError("finalization SQL dispatch was already claimed; repeat is forbidden")
+            try:
+                current = self._read_finalization_outcomes(digest)
+                self._require_ready()
+            except BaseException:
+                self._io.poison()
+                raise
+            if digest not in self._finalization_reservations:
+                raise CustodyJournalError("finalization SQL dispatch requires retained reservation originals")
+            if kind == "sql-outcome" and current.sql_attempt is None:
+                raise CustodyJournalError("finalization SQL outcome requires an irreversible local claim")
+            record, encoded = finalization_outcomes.encode(kind, digest, held,
+                source_revision=current.source_revision)
+            if kind in by_kind:
+                existing = current.sql_outcome
+                if (existing.originals != record.originals or existing.digest != record.digest):
+                    self._io.poison()
+                    raise CustodyJournalError("finalization SQL outcome cannot replace its first exact originals")
+                self._require_ready()
+                return existing.digest
+            if (len(self._file_identities) >= 7 * self._maximum_records
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal finalization SQL outcome capacity is exhausted")
+            try:
+                self._require_ready()
+                self._publish("finalization-" + kind, digest, encoded)
+                self._used_bytes += len(encoded)
+                self._finalization_outcomes.setdefault(digest, {})[kind] = (
+                    record.source_revision, record.digest)
+                self._finalization_outcome_scope(digest, self._finalization_outcomes[digest])
+                self._require_ready()
+                return record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def claim_registration_finalization_sql_attempt(self, finalization_digest):
+        """Fsync a nonrepeatable local claim after the exact retained reservation.
+
+        The caller owns permission and original admission before any send.
+        Neither missing responses nor publication uncertainty clear this claim.
+        """
+        self._append_finalization_outcome(finalization_digest, "sql-claimed", ())
+
+    def append_registration_finalization_sql_outcome(self, finalization_digest, originals):
+        """Retain first bounded unsigned raw4, even if late or semantically rejected.
+
+        Storage has no invocation clock or successful-admission prerequisite.
+        Owner/PID, complete original linkage, claim and journal guards still
+        apply. An exact repeat is idempotent; a conflict cannot replace it.
+        """
+        return self._append_finalization_outcome(finalization_digest, "sql-outcome", originals)
+
+    def load_registration_finalization_outcomes(self, finalization_digest):
+        """Return ordinary local history, never remote success or retry permission."""
+        digest = _digest(finalization_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._finalization_associations:
+                raise CustodyJournalError("finalization SQL outcomes require a complete local preparation")
+            try:
+                result = self._read_finalization_outcomes(digest)
                 self._require_ready()
                 return result
             except BaseException:

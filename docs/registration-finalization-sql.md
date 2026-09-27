@@ -1,11 +1,13 @@
 # Private finalization SQL composition
 
 This source-only slice connects genuine `webauthn.registration.finalize`
-originals to the actual protected successor issuer and executor. It is partial
-F06 implementation, **not** a public execute action, deployed credential-finalization
-workflow or OIDC activation. A separate [cold SQL worker](registration-finalization-sql-service.md)
-and [private caller](control-plane-finalization-sql.md) now connect this composition
-in source. The source is unbuilt and unexecuted; production acceptance remains
+originals to the actual protected successor issuer and executor. A separate
+[cold SQL worker](registration-finalization-sql-service.md),
+[retained caller](control-plane-finalization-sql.md) and distinct
+[public execute action](public-registration-finalization-sql.md) now connect
+this composition in source, including the seventh explicit portal control.
+This is not a deployed enrollment workflow or OIDC activation. The source is
+unbuilt and unexecuted; production acceptance remains
 **0/6 verified**.
 
 ## Inputs and independent authority
@@ -84,11 +86,16 @@ retry permission. Cancellation propagates. No raw input, key, DSN or driver
 exception text is included in those outcome errors.
 
 The [reservation flow](control-plane-finalization-reservation.md) remains a
-separate operation. This slice adds no caller-facing execution endpoint or
-control-plane outcome association. The dedicated worker and private caller
-use the [raw13/raw4 transport](registration-finalization-sql-transport.md).
-Independently admitted action-time pending scope, protected service/database/journal
-provisioning, separate signed completion/recovery and the complete portal
-workflow still require integration. OIDC session activation remains its own
-authenticated transition after actual credential finalization. No services,
+separate operation. The new public action requires its own present permission
+and genuine retained subject replay. Its caller rejoins the exact retained
+raw13, admits independent pending scope, claims local dispatch before one
+[raw13/raw4 exchange](registration-finalization-sql-transport.md), and durably
+retains bounded unsigned raw4 before semantic/lifetime acceptance. Only a
+fully accepted `observed-commit` reaches public HTTP 202; uncertainty, mismatch
+and late failures never release either attempt or permit automatic retry.
+
+Independent action-time authority, protected service/database/journal
+provisioning and separately signed finalization completion/recovery remain
+open. OIDC session activation remains its own authenticated transition;
+neither the SQL observation nor the portal action activates it. No services,
 keys, SQL privileges or journal checkpoints were provisioned by this work.

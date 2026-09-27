@@ -5,7 +5,7 @@ The **Registration actions** workspace's first five actions operate on a real ev
 one already inspected in the admin-only custody inventory. Inspection supplies
 local metadata only—not ownership, complete association, currentness or action
 permission. The panel neither invents IDs nor loads raw registration originals.
-The sixth action uses its separately labeled finalization-grant input: paste
+The sixth and seventh actions use the separately labeled finalization-grant input: paste
 that real locator, or use the ID filled by a successful fifth action. Neither
 the evidence input nor the older preparation-only finalization ID is replaced.
 
@@ -19,6 +19,7 @@ Each button selects one real endpoint and requires an explicit click:
 | Prepare finalization | Prepare and retain the separate `webauthn.registration.finalize` request; no finalization execution. |
 | Prepare finalization grant | Dedicated authorization before a new plan, complete before vector and retained grant; no reservation or finalization SQL. |
 | Reserve finalization | Explicit fresh-authorized reservation of the separate finalization grant and retention of verified returned raw3; no finalization SQL or current-head authority. |
+| Execute finalization | Separate fresh-authorized protected SQL handoff using that finalization grant; its unsigned commit observation is not signed completion, currentness or session activation. |
 
 The first three use the existing
 [public handoff](public-registration-handoff.md) and
@@ -57,6 +58,19 @@ contract is `serverware.webAuthnRegistrationFinalizationReservation/v1`, status
 [opaque local retention](control-plane-custody-journal.md#retained-finalization-reservation).
 The browser does not independently verify the originals or infer a current
 pending head from their acknowledgment.
+
+**Execute finalization** uses `/api/webauthn/register/execute-finalization` or
+its `/api/auth/session/webauthn/register/execute-finalization` counterpart,
+purpose `execute-registration-finalization`, and action
+`webauthn.registration.finalization.execute`. It uses only the finalization-grant
+input, never the evidence or older preparation-only locator. Its closed
+nine-field success contract is `serverware.webAuthnRegistrationFinalizationExecution/v1`,
+status `observed-commit`, the submitted `localDigest`, and
+`observationAuthenticated`, `registrationCompleted`, `sessionActivated`,
+`currentnessEstablished` and `automaticRetryAllowed` all false. It exposes no
+custody IDs or marker. The browser reports the server's unsigned observation,
+not independently verified completion; filling a locator or recording a
+reservation never dispatches this action automatically.
 
 ## Fresh authorization, no action chaining
 
@@ -98,22 +112,27 @@ on the server's actual original verification, not an independent browser proof.
 grant locator as **not reserved or executed**, never as completed credentials
 or a session-activation receipt. The separate `reservation-recorded` result
 means the returned reservation originals were retained, not finalization SQL,
-credential completion or independent currentness. Every path keeps registration not finalized,
-currentness unestablished, and automatic retry disallowed. No completion result
+credential completion or independent currentness. The seventh action can
+request actual finalization SQL, but its `observed-commit` does not establish
+signed completion or full enrollment. Every path keeps completed registration
+and currentness unestablished, and automatic retry disallowed. No completion result
 activates a pending session.
 
 Unavailable, lost or unrecognized responses display remote state as unknown;
 the request may have taken effect. Do not repeat SQL. Historical recovery is a
 separate explicit action requiring fresh server authorization, not a retry
-policy. Reloading the page cannot clear the server's attempt history.
+policy. The existing Recover completion control is for evidence admission,
+not finalization SQL reconciliation. Reloading the page cannot clear the
+server's attempt history.
 
 This UI is source-only and has not been browser-verified or deployed. Cold
-provisioning, independent currentness/release acceptance and actual credential
-finalization execution remain separate. Planned frozen browser verification
+provisioning, independent currentness/release acceptance, signed finalization
+completion and separate session activation remain outstanding. Planned frozen browser verification
 covers both caller paths, cookie CSRF with an entered token, action-bound fresh
 assertions/approvals, bootstrap clearing across refresh, stale async results,
 exact status/uncertainty handling, and absence of automatic dispatch or retries.
-The sixth-action checks also cover independent evidence/finalization locators,
-pasted locators after refresh, exact reservation response shape and per-locator/action latches.
+The sixth- and seventh-action checks also cover independent evidence/finalization
+locators, pasted locators after refresh, exact reservation and unsigned execution
+response shapes, uncertain outcomes and per-locator/action latches.
 
 Source: [portal fragment](../serverware/portal_registration_handoff.py).

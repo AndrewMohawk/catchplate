@@ -154,9 +154,11 @@ requires the independently provisioned reserver and state v2 peer admission.
 Nested v3 now supplies explicit SQL/current-pending configuration to the private
 SQL request method and dedicated cold worker. They authenticate original pending
 scope before actual protected issuance/execution; the caller joins every returned
-marker field to the verified original plan. Public finalization execution,
-retained outcomes, signed completion/recovery and separate OIDC session activation
-remain outstanding. A configured property alone is not a completed workflow.
+marker field to the verified original plan. A separate [public finalization
+execution action](public-registration-finalization-sql.md) now repeats retained
+ownership and joins durable local dispatch/outcome handling. Signed
+completion/recovery and separate OIDC session activation remain outstanding.
+A configured property alone is not a completed workflow.
 Trusted-host-local descriptor continuity is not independent enclave evidence.
 
 This implementation has not been built or executed. Deferred frozen validation

@@ -251,19 +251,20 @@ class _EnrollmentOwner:
             return finalization._reserve_on_owner(self, originals=originals,
                 live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
-    def _request_registration_finalization_sql(self, *, originals, live_window,
+    def _request_registration_finalization_sql(self, *, local_digest, originals, live_window,
             transport_deadline_ns, work):
         """One explicit private SQL exchange; separate present permission is required.
 
         Nested v3 supplies independently root-admitted pending pins and endpoint.
-        This does not retain outcomes, authenticate signed completion or activate
-        sessions. An error may follow an irreversible remote attempt or commit.
+        The actual retained association owns a durable no-retry dispatch claim
+        and opaque outcome record. This does not authenticate signed completion
+        or activate sessions. Failure may follow a remote attempt or commit.
         """
         from serverware import control_plane_registration_finalization_sql as sql
 
         _require_pid()
         with _LOCK:
-            return sql._request_on_owner(self, originals=originals,
+            return sql._request_on_owner(self, local_digest=local_digest, originals=originals,
                 live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
     @property

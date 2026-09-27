@@ -33,8 +33,8 @@ the pinned ownership. Source ceilings remain 8 GiB and 4096 prepared records;
 the bounded recovery scan allows at most `7 * maximum_records` physical files.
 The ceiling remains sufficient without expansion: each legacy record has at
 most three files, evidence grant seven, signer record one, and finalization
-grant three including its association and reservation slot. Shared references
-do not duplicate those files.
+grant five including its association, reservation, SQL claim and outcome slots.
+Shared references do not duplicate those files.
 Each legacy prepared record reserves its fixed 40-byte
 attempt marker and the maximum 370-byte observation frame while those markers
 are missing. Existing prepared/attempted journals recover without rewriting
@@ -268,6 +268,56 @@ still shows the separate prepared records, not a new readiness badge. The
 sixth [portal action](portal-registration-handoff.md) is explicit and separately
 authorized; it does not chain from grant preparation. This path remains
 source-only and unexecuted.
+
+## Finalization SQL attempt and outcome
+
+The journal and cold custody client expose separate fixed-purpose methods:
+
+- `claim_registration_finalization_sql_attempt(finalization_digest)` returns
+  `None` only after publishing the irreversible local claim. It requires the
+  complete finalization/evidence/signer association and an existing original
+  reservation, all reread under the actual journal lock. Every duplicate claim
+  rejects, including after restart, uncertainty or a missing response.
+- `append_registration_finalization_sql_outcome(finalization_digest, originals)`
+  stores the first exact bounded unsigned SQL raw4 and returns its local content
+  digest. It requires the claim. An exact repeat is idempotent; conflicting
+  originals fail and poison the owner, never replace the first observation.
+- `load_registration_finalization_outcomes(finalization_digest)` returns the
+  ordinary frozen `FinalizationOutcomes(source_revision, finalization_digest,
+  sql_attempt, sql_outcome)`. Each present record contains `source_revision`,
+  `finalization_digest`, fixed `kind`, exact immutable `originals` and local
+  `digest`. Even an empty result requires rereading the complete original chain;
+  any present claim/outcome also requires the original reservation.
+
+The [separate codec](../serverware/control_plane_registration_finalization_outcome_records.py)
+uses `SWCPX001`, kind index `0` for `sql-claimed` (empty raw0) and `1` for
+`sql-outcome` (raw4). Content identities use distinct
+`serverware.controlPlaneRegistrationFinalizationSqlClaimRecord/v1` and
+`serverware.controlPlaneRegistrationFinalizationSqlOutcomeRecord/v1` domains.
+The frame retains the original source token and finalization-grant raw32 digest,
+then fixed-count u64 lengths and exact bodies/EOF. It accepts only the actual
+finalization SQL transport carrier: `observed-commit` with two locators and an
+unsigned marker, or `uncertain` with both locators present or both absent and no
+marker. Claim frames are at most 299 bytes; outcome frames are at most 4584
+bytes (4253 body bytes plus a 331-byte header). All lengths precede body slicing.
+The older evidence outcome schema, magic, kind indices and domains are unchanged.
+
+Publication uses `finalization-sql-claimed-<finalization grant digest hex>` and
+`finalization-sql-outcome-<finalization grant digest hex>`. Existing no-replace,
+file/directory-fsync, identity/readback, owner/PID, quota and singleton-lock
+protections apply. Recovery rejects missing prerequisites, changed originals,
+wrong family/source and conflicting linkage. The unchanged `7 * maximum_records`
+scan ceiling includes these slots; finalization records now use at most five
+physical files. No legacy attempt/observation reservation is consumed or cleared.
+
+These methods do not admit signatures, invoke SQL, authenticate the unsigned
+marker or establish currentness. They impose no invocation clock, so a bounded
+late, uncertain or semantically rejected response can be preserved under the
+same real owner/journal protections before later semantic admission. A missing
+outcome, retention error or late failure never establishes no remote effect or
+authorizes another send. No claim is cleared; no completion, credential success,
+OIDC activation or automatic recovery follows. This remains source-only,
+unbuilt and unexecuted.
 
 ## Bounded registration completion reconciliation
 

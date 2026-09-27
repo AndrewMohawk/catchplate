@@ -2,8 +2,10 @@
 
 Present execution permission and retained subject ownership must be separately
 admitted before this method; provisioning, grant preparation and reservation
-are not that permission. This method creates neither a public route nor a
-local attempt/outcome record. Its future retained facade must own those gates.
+are not that permission. The retained facade repeats genuine subject ownership
+before entering this method. A supplied local locator must match actual retained
+raw13; it is not an authority token. The method owns the irreversible local
+dispatch claim and opaque outcome append through the actual custody client.
 
 The actual cold owner supplies root-admitted v3 endpoint/current-pending scope.
 Genuine raw10/raw3 admission precedes a single transport. An observed marker
@@ -20,10 +22,35 @@ from serverware import control_plane_registration_finalization_execution as call
 
 
 startup, evidence = caller.startup, caller.evidence
+custody_client, journal = caller.custody_client, caller.custody_client.journal
 
 
-def _request_on_owner(owner, *, originals, live_window, transport_deadline_ns, work):
-    """Return bounded joined raw4 after one dispatch; never retain or retry it."""
+def _retained_originals(owner, local_digest, *, work):
+    """Read the actual complete local chain and raw13, not successful authority."""
+    from serverware import control_plane_registration_finalization_records as records
+    from serverware import control_plane_registration_finalization_reservation_records as reservations
+
+    digest = journal._digest(local_digest)
+    callback = evidence.production._callback
+    custody = owner._custody
+    association = callback(work,
+        lambda: custody_client.ControlPlaneCustodyClient.load_registration_finalization_preparation(
+            custody, digest))
+    reserved = callback(work,
+        lambda: custody_client.ControlPlaneCustodyClient.load_registration_finalization_reservation(
+            custody, digest))
+    record = association[0]
+    if (record.digest != digest or (record.family, record.selector) != (records.FAMILY, records.OPERATION)
+            or record.source_revision != evidence.authority.SOURCE_REVISION
+            or type(reserved) is not reservations.FinalizationReservationRecord
+            or reserved.finalization_digest != digest or reserved.source_revision != record.source_revision):
+        raise startup.EnrollmentStartupError("finalization SQL requires its actual retained grant and reservation")
+    return transport._originals(record.originals + reserved.originals, response=False)
+
+
+def _request_on_owner(owner, *, local_digest, originals, live_window, transport_deadline_ns, work):
+    """Claim once, retain returned raw4, then admit its observation; never retry."""
+    digest = journal._digest(local_digest)
     held = transport._originals(originals, response=False)
     caller.shape._integer(transport_deadline_ns, minimum=1)
     common, _key, window, bound, owner_live = caller._scope(owner,
@@ -39,6 +66,11 @@ def _request_on_owner(owner, *, originals, live_window, transport_deadline_ns, w
     bound = min(bound, window[1] + int(endpoint[1] * 1_000_000_000))
     owner_live()
     transport._check_deadline(bound)
+    retained = _retained_originals(owner, digest, work=work)
+    work.charge(input_bytes=sum(len(raw) for raw in (*held, *retained)))
+    if held != retained:
+        raise startup.EnrollmentStartupError("finalization SQL originals differ from the claimed local association")
+    custody = owner._custody
     admitted = admission._admit_on_configuration(**common, originals=held[:10],
         reservation_originals=held[10:], expected_pending_sequence=sequence,
         expected_pending_head_digest=head, expected_fence=fence,
@@ -52,9 +84,22 @@ def _request_on_owner(owner, *, originals, live_window, transport_deadline_ns, w
         owner_live()
 
     current()
+    # The journal rechecks the complete original/reservation association and
+    # atomically publishes its fsynced no-replacement claim. Any later failure
+    # leaves it spent, even before the transport sends its first byte.
+    evidence.production._callback(work,
+        lambda: custody_client.ControlPlaneCustodyClient.claim_registration_finalization_sql_attempt(
+            custody, digest))
+    current()
     returned = evidence.production._callback(work,
         lambda: transport._socket_request(endpoint, originals=held, deadline_ns=bound))
     returned = transport._originals(returned, response=True)
+    # Preserve a bounded opaque response BEFORE semantic and invocation-time
+    # acceptance, including uncertainty or a later mismatching marker. Storage
+    # verifies its own live owner/journal, not a refreshed execution window.
+    evidence.production._callback(work,
+        lambda: custody_client.ControlPlaneCustodyClient.append_registration_finalization_sql_outcome(
+            custody, digest, returned))
     current()
     enrollment_originals = tuple(common[name] for name in (
         "authorization_enrollment_bytes", "grant_enrollment_bytes", "current_root_enrollment_bytes"))

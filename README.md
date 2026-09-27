@@ -18,38 +18,39 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Tracked source implementation: 33 of 46 checkpoints landed, 13 open including F07 in progress. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 6/8; workloads and native 3/6; providers and operations 0/7. F07 detail: 6 of 8 substeps landed, 2 open; public permissions are next. Child counts are not added to the overall total. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Named source checkpoints: 34 of 46 landed, 12 open. Each workstream has a segmented bar and a named checklist showing completed and remaining work. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 7/8; workloads and native 3/6; providers and operations 0/7. F07 completion/recovery is landed, including all eight child steps; separate OIDC session activation F08 is next and remains open. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
-**33 of 46 tracked source checkpoints landed · 13 open.** Each tile maps to a
-[named checklist item](docs/production-status.md#next-source-milestones): ✓ landed,
-→ in progress, — open. Counts describe implementation checkpoints, not percentage of
-code, equal amounts of work, or an ETA. Current source is unbuilt and unexecuted.
+**34 of 46 tracked source checkpoints landed · 12 open.** Each segment has a
+named entry in the graphic: ✓ landed, — open, **NEXT** next planned work.
+The [full checklist](docs/production-status.md#next-source-milestones) links the
+commits and breaks down remaining tasks. Counts are not code percentages, equal
+amounts of work, or an ETA. Current source is unbuilt and unexecuted.
 
 | Workstream | Landed source | Still to do |
 | --- | --- | --- |
 | Evidence handoff · 10/10 | Reserve, protected SQL, signed completion, retained originals | Current-release verification remains separate |
 | Historical recovery · 4/5 | Original-signature replay and recovery within the configured cohort | Resolve historical authority across source/configuration/key changes |
-| Permissions and grants · 10/10 | Separate permissions, grant issuance, retention and portal actions | Finalization completion controls are tracked below |
-| Finalization and sessions · 6/8 | Finalization reservation and one-use SQL execution | Complete/recover finalization; separately activate OIDC sessions |
+| Permissions and grants · 10/10 | Separate permissions, grant issuance, retention and portal actions | Current-release verification remains separate |
+| Finalization and sessions · 7/8 | Reservation, one-use SQL, signed completion/recovery and explicit portal actions | Separately activate OIDC sessions |
 | Workloads and native · 3/6 | TLS-bound attestation, identity authoring, signed-handoff client | Provision service identities, finish native enrollment and enclave integration |
 | Providers and operations · 0/7 | Lower-level adapters and tooling exist; these integration closures remain open | OAuth ownership/custody, revocation, protected side effects, publication recovery, RBAC rollback protection, telemetry |
 
-**Current focus — F07: 6/8 substeps landed.** Caller configuration, historical
-ownership and durable completion/recovery now connect the existing service
-([24d146e](https://github.com/example/private-deployment)).
-Next: separate public permissions, including post-SQL pending-session handling;
-then portal controls. The [eight-step checklist](docs/production-status.md#f07-detail-finalization-completion-and-recovery)
-shows each part; these are inside F07, not extra milestones in the 46-item total.
+**Just landed — F07: completion/recovery, 8/8 substeps.** Separate permissions,
+pending-session key proof and portal controls join the retained completion flow
+([3a70f84](https://github.com/example/private-deployment)).
+**Next — F08: OIDC session activation**, a separate step that is still open.
+The [F07 detail](docs/production-status.md#f07-detail-finalization-completion-and-recovery)
+records its eight completed parts without double-counting them in the 46-item total.
 
 **Production acceptance: 0/6 verified.** Full verification follows source freeze.
 Immutable dependencies and independently operated signing, Nitro/KMS and witness
 services remain prerequisites; the services are not provisioned.
 
-[Open the full tracker →](docs/production-status.md) for every tile, committed
-evidence, a [breakdown of the other open milestones](docs/production-status.md#remaining-work-breakdown)
+[Open the full tracker →](docs/production-status.md) for every checkpoint, committed
+evidence, a [breakdown of all 12 open milestones](docs/production-status.md#remaining-work-breakdown)
 and the separate production release gates.
 
-<!-- Update named checkpoints, F07 child checklist, both implementation image descriptions, counts, summary table and SVG together at each milestone. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update named checkpoints, child checklists, both implementation image descriptions, counts, summary table and SVG together at each milestone. Every segment must have a visible named status entry. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

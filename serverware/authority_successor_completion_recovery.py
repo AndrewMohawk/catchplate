@@ -87,7 +87,7 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
         root_public_key, completion_private_key, expected_authorization_digest,
         expected_database_id, expected_generation_digest, expected_pending_sequence,
         expected_pending_head_digest, expected_fence, deadline_epoch_ns, work,
-        transport_deadline_ns=None):
+        transport_deadline_ns=None, live_window=None):
     """Recover one independently scoped completion without any execution retry.
 
     A caller may repeat this operation after uncertainty. It can redeliver only
@@ -119,6 +119,18 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
         expected_authorization_digest, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
         deadline_epoch_ns, transport_deadline_ns)
+    original_window = None if live_window is None else clock._validate(live_window)
+    if original_window is not None:
+        # A cold caller can supply the window it opened before peer/framing
+        # intake. Preserve those original samples and limits, narrowing only.
+        # The older API still opens its one window below when none is supplied.
+        if (original_window[5] > authorization.authority.VERIFIER_RESPONSE_MAX_AGE_NS
+                or original_window[6] > authorization.authority.VERIFIER_MAX_CLOCK_SKEW_NS):
+            raise SuccessorCompletionRecoveryError("completion recovery window exceeds its source limits")
+        expires = min(original_window[3], deadline)
+        original_window = clock._validate((*original_window[:3], expires,
+            min(original_window[4], original_window[1] + expires - original_window[0]),
+            original_window[5], original_window[6]))
     # Detach independent mutable history before any clock, key or DB callback.
     expected = pending.replay._expectations(held_operation, expectations, planner_key, operation_key, work)
     for index in (6, 7):
@@ -127,9 +139,11 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
     # Equal pins constrain both real observations, but cannot establish that
     # distinct role/TLS connections reach the same independently admitted DB.
     with delivery_store.CurrentRootCompletionDelivery._recovery_scope(delivery):
-        window = clock._open_on_work(deadline_epoch_ns=deadline,
-            maximum_lifetime_ns=authorization.authority.VERIFIER_RESPONSE_MAX_AGE_NS,
-            maximum_clock_skew_ns=authorization.authority.VERIFIER_MAX_CLOCK_SKEW_NS, work=work)
+        window = original_window
+        if window is None:
+            window = clock._open_on_work(deadline_epoch_ns=deadline,
+                maximum_lifetime_ns=authorization.authority.VERIFIER_RESPONSE_MAX_AGE_NS,
+                maximum_clock_skew_ns=authorization.authority.VERIFIER_MAX_CLOCK_SKEW_NS, work=work)
         bound = window[4] if inherited is None else min(window[4], inherited)
         last_epoch, last_monotonic = window[0], window[2]
 

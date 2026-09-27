@@ -1,0 +1,22 @@
+# Uninstalled deployment input. Independently admitted accounts, release and
+# signed launch required. Recreating this socket invalidates its pinned identity.
+[Unit]
+Description=Serverware dedicated finalization completion recovery ingress
+Before=serverware-registration-finalization-completion.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/serverware/registration-finalization/completion.sock
+FileDescriptorName=serverware-registration-finalization-completion
+SocketUser=65508
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=serverware-registration-finalization-completion.service
+
+[Install]
+WantedBy=sockets.target

@@ -343,7 +343,12 @@ def initialize_from_environment():
             decision = decisions.CurrentRootDecisionOwner(journal=journal, enrollment_bytes=enrollment,
                 root_public_key=root_key, state_private_key=private_key,
                 expected_sequence=sequence, expected_head_digest=head)
-            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V2:
+            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V3:
+                # V3 independently opts into the fixed finalization completion
+                # peer and signed-operation restriction; v1/v2 do not widen.
+                serving = service.CurrentRootDecisionService._with_finalization_completion(
+                    owner=decision, timeout_seconds=timeout)
+            elif launch["schema"] == bootstrap.LAUNCH_SCHEMA_V2:
                 # Only genuine root v2 admission selects this source-fixed
                 # peer/operation profile. v1 retains its exact older behavior.
                 serving = service.CurrentRootDecisionService._with_finalization_reserver(

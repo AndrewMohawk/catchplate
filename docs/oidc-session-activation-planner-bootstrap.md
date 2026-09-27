@@ -20,11 +20,12 @@ verification token.
 
 The exact three-field envelope is `schema`, `payload`, `signatureBase64Url`.
 Its schema and root-signature domain are
-`serverware.signedOidcSessionActivationPlannerBootstrap/v2`; the closed payload
-uses `serverware.oidcSessionActivationPlannerBootstrap/v2`. The original is at
+`serverware.signedOidcSessionActivationPlannerBootstrap/v3`; the closed payload
+uses `serverware.oidcSessionActivationPlannerBootstrap/v3`. The original is at
 most 4 MiB. Admission verifies the actual Ed25519 root signature and canonical
-original bytes before selecting private resources. V2 is mandatory: v1 lacks
-the required state pins and is not accepted as a fallback.
+original bytes before selecting private resources. V3 is mandatory: v1 lacks
+the required state pins, and v2 lacks the bundle-key and execution-store scope.
+Neither older profile is accepted as a fallback or enables the new custody.
 
 The closed payload binds:
 
@@ -43,7 +44,8 @@ The closed payload binds:
 - Plan age/skew and delivery TTL (5–60 seconds), exact database endpoint and
   verifier read-role TLS identity, source/configuration query-manifest pin and
   three fixed TLS-file byte counts/digests.
-- Plain SHA-256 pins for two distinct exact-32-byte delivery/journal keys,
+- Plain SHA-256 `deliveryKeyDigest`, `journalKeyDigest` and `bundleKeyDigest`
+  pins for three pairwise-distinct exact-32-byte delivery/journal/bundle keys,
   never their values; complete-root-vector original; launch interval/resources.
 - A `databaseId`, the original `stateEnrollment`, and fixed `stateEndpoint`.
 
@@ -83,9 +85,10 @@ manifest parameter, so this bootstrap does not claim an extra catalog-pin gate.
 
 ## Fixed cold resources
 
-`serverware.oidcSessionActivationPlannerLaunch/v2` fixes process mode
+`serverware.oidcSessionActivationPlannerLaunch/v3` fixes process mode
 `oidc-session-activation-planner`, service UID/GID 65507 and request-peer UID/GID
-65532. The inherited descriptor inventory is exactly:
+65532. The inherited descriptor inventory is exactly nine; the original seven
+numbers and purposes remain unchanged:
 
 | Descriptor | Purpose |
 | --- | --- |
@@ -96,6 +99,8 @@ manifest parameter, so this bootstrap does not claim an extra catalog-pin gate.
 | 202 | Raw delivery key |
 | 203 | Separate raw journal key |
 | 204 | Journal directory |
+| 205 | Separate raw execution-bundle key |
+| 206 | Execution-bundle store directory |
 
 The listener is `/run/serverware/oidc-session-activation/planner.sock`; the
 journal is `/var/lib/serverware/oidc-session-activation-planner`. Signed launch
@@ -104,6 +109,20 @@ fields include exact listener socket/path device/inode, journal device/inode,
 timeout (integer 1–30 seconds). Actual ownership, modes, descriptor sealing,
 key pairs and unchanged filesystem identities belong to the delivery/service
 checks; this document does not provision them.
+
+V3 additionally requires `bundleKeyFd` = 205, `executionStoreDirectoryFd` = 206
+and `executionStoreDirectoryPath` =
+`/var/lib/serverware/oidc-session-activation-execution-bundles`. The signed
+`executionStoreDirectoryDevice` is an unsigned 64-bit integer and
+`executionStoreDirectoryInode` is a positive unsigned 64-bit integer, matching
+the existing journal/store binding grammar. Their pair must differ from the
+journal's device/inode pair; a different pathname alone is insufficient.
+`executionStoreMaximumRecords` is 1–1024 and `executionStoreQuotaBytes` is
+1 byte–8 GiB. These independently signed limits need not equal the journal's.
+The directory remains subject to the same service UID/GID 65507; actual
+descriptor ownership, protected-path identity and mode checks belong to cold
+delivery and the real [execution store](oidc-session-activation-execution-store.md).
+No directory is created and no bundle key is provisioned by this bootstrap.
 
 `tlsFiles` is exactly `ca`, `clientCertificate`, `clientKey`, each with
 `{byteCount, bytesDigest}`. Their fixed directory is
@@ -127,7 +146,10 @@ new work budget, fresh opening allowance or launch renewal. Material retains
 the actual bootstrap/vector/state-enrollment originals, actual enrollment
 identity, fixed state endpoint, original opening/interval, owned
 configuration/policy, key pins and fixed resource scope. It cannot be posted
-back as authority.
+back as authority. The material appends required `bundle_key_digest` without
+changing any existing field name or verifier/producer signature. The original
+root-signature, configuration/generation/runtime, planner-purpose, policy,
+state-enrollment and complete-vector checks still precede resource admission.
 
 `trustMode` is `trusted-host-local`; `hardwareBacked`, `nativeStageZero`,
 `hsmBackedKeys`, `teeVerified` and `externalWitnessVerified` must all be false.

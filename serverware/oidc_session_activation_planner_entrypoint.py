@@ -1,8 +1,8 @@
 """Fixed cold delivery for activation planning, not provisioning or execution.
 
-Actual root-signed bootstrap admission precedes key, TLS and journal access.
-Seven exact descriptors survive the permanent identity drop. The dedicated
-planner signing key and separate delivery/journal encryption keys are sealed
+Actual root-signed bootstrap admission precedes key, TLS, journal and store access.
+Nine exact descriptors survive the permanent identity drop. The dedicated
+planner signing key and separate delivery/journal/bundle encryption keys are sealed
 originals; libpq uses only independently pinned fixed TLS paths. No password,
 new key, directory, listener or deployment authority is synthesized. Protected
 host custody is not hardware measurement or independent anti-rollback proof.
@@ -23,9 +23,11 @@ from serverware import registration_execution_authorizer_entrypoint as sealed_or
 ROOT_PATH = "/run/serverware/oidc-session-activation-planner-trust/root-public-key.pem"
 BOOTSTRAP_PATH = "/run/serverware/oidc-session-activation-planner-trust/bootstrap.json"
 JOURNAL_PATH = "/var/lib/serverware/oidc-session-activation-planner"
+EXECUTION_STORE_PATH = "/var/lib/serverware/oidc-session-activation-execution-bundles"
 KEY_PATH = "/run/secrets/serverware-oidc-session-activation-planner-key"
 DELIVERY_KEY_PATH = "/run/secrets/serverware-oidc-session-activation-delivery-key"
 JOURNAL_KEY_PATH = "/run/secrets/serverware-oidc-session-activation-journal-key"
+BUNDLE_KEY_PATH = "/run/secrets/serverware-oidc-session-activation-bundle-key"
 LISTENER_PATH = "/run/serverware/oidc-session-activation/planner.sock"
 LISTENER_NAME = "serverware-oidc-session-activation-planner"
 PROCESS_MODE = "oidc-session-activation-planner"
@@ -33,8 +35,9 @@ SERVICE_UID = SERVICE_GID = 65507
 PEER_UID = PEER_GID = 65532
 ROOT_FD, BOOTSTRAP_FD, LISTENER_FD = 198, 199, 200
 KEY_FD, DELIVERY_KEY_FD, JOURNAL_KEY_FD, JOURNAL_FD = 201, 202, 203, 204
+BUNDLE_KEY_FD, EXECUTION_STORE_FD = 205, 206
 INHERITED_DESCRIPTORS = (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD,
-    DELIVERY_KEY_FD, JOURNAL_KEY_FD, JOURNAL_FD)
+    DELIVERY_KEY_FD, JOURNAL_KEY_FD, JOURNAL_FD, BUNDLE_KEY_FD, EXECUTION_STORE_FD)
 PREFIX = "SERVERWARE_OIDC_SESSION_ACTIVATION_PLANNER_"
 ROOT_ENV = PREFIX + "ROOT_PUBLIC_KEY_FD"
 BOOTSTRAP_ENV = PREFIX + "BOOTSTRAP_FD"
@@ -44,7 +47,8 @@ MAX_ROOT_BYTES, MAX_BOOTSTRAP_BYTES = 16 * 1024, 4 * 1024 * 1024
 MAX_KEY_BYTES, MAX_RAW_KEY_BYTES = 4096, 32
 _KEY_FILES = ((KEY_PATH, KEY_FD, MAX_KEY_BYTES),
     (DELIVERY_KEY_PATH, DELIVERY_KEY_FD, MAX_RAW_KEY_BYTES),
-    (JOURNAL_KEY_PATH, JOURNAL_KEY_FD, MAX_RAW_KEY_BYTES))
+    (JOURNAL_KEY_PATH, JOURNAL_KEY_FD, MAX_RAW_KEY_BYTES),
+    (BUNDLE_KEY_PATH, BUNDLE_KEY_FD, MAX_RAW_KEY_BYTES))
 _TLS_FILES = (
     ("ca", "/run/serverware/oidc-session-activation-planner-tls/ca.pem", 64 * 1024, False),
     ("clientCertificate", "/run/serverware/oidc-session-activation-planner-tls/client.crt", 64 * 1024, False),
@@ -59,8 +63,8 @@ _read_original = sealed_originals._read_original
 
 
 def _parent(path):
-    allowed = (ROOT_PATH, BOOTSTRAP_PATH, JOURNAL_PATH, LISTENER_PATH, KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH,
-        *(item[1] for item in _TLS_FILES))
+    allowed = (ROOT_PATH, BOOTSTRAP_PATH, JOURNAL_PATH, EXECUTION_STORE_PATH, LISTENER_PATH,
+        KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH, BUNDLE_KEY_PATH, *(item[1] for item in _TLS_FILES))
     if path not in allowed:
         raise RuntimeError("activation planner delivery path is not source fixed")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
@@ -82,8 +86,8 @@ def _parent(path):
 
 
 def _open_material(path, maximum, *, private=False):
-    if (path not in (ROOT_PATH, BOOTSTRAP_PATH, KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH)
-            or private != (path in (KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH))):
+    if (path not in (ROOT_PATH, BOOTSTRAP_PATH, KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH, BUNDLE_KEY_PATH)
+            or private != (path in (KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH, BUNDLE_KEY_PATH))):
         raise RuntimeError("activation planner original path is not source fixed")
     parent = _parent(path)
     source = None
@@ -95,7 +99,8 @@ def _open_material(path, maximum, *, private=False):
                 or before.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
                 or not 2 <= before.st_size <= maximum
                 or private and stat.S_IMODE(before.st_mode) != 0o400
-                or path in (DELIVERY_KEY_PATH, JOURNAL_KEY_PATH) and before.st_size != MAX_RAW_KEY_BYTES):
+                or path in (DELIVERY_KEY_PATH, JOURNAL_KEY_PATH, BUNDLE_KEY_PATH)
+                    and before.st_size != MAX_RAW_KEY_BYTES):
             raise RuntimeError("activation planner original is not protected bounded material")
         original = delivery._read_exact_source(source, before.st_size)
         if delivery._material_identity(before) != delivery._material_identity(os.fstat(source)):
@@ -123,23 +128,26 @@ def _keys_on_work(material, work):
 
     evidence.capture._SharedLedger(work)
     public, spki = material.planner_public_key, material.planner_spki_digest
-    expected_delivery, expected_journal = material.delivery_key_digest, material.journal_key_digest
+    expected_delivery, expected_journal, expected_bundle = (
+        material.delivery_key_digest, material.journal_key_digest, material.bundle_key_digest)
     # Reserve the complete fixed read inventory before reading any key. There
     # is no caller-selected path or size and no second work allowance.
-    work.charge(input_bytes=MAX_KEY_BYTES + 2 * MAX_RAW_KEY_BYTES)
+    work.charge(input_bytes=MAX_KEY_BYTES + 3 * MAX_RAW_KEY_BYTES)
     originals = []
     for _path, descriptor, maximum in _KEY_FILES:
         raw, _identity = evidence.production._callback(work,
             lambda descriptor=descriptor, maximum=maximum:
                 _read_original(descriptor, maximum, private=True))
         originals.append(raw)
-    signing_bytes, delivery_key, journal_key = originals
-    if len(delivery_key) != MAX_RAW_KEY_BYTES or len(journal_key) != MAX_RAW_KEY_BYTES:
+    signing_bytes, delivery_key, journal_key, bundle_key = originals
+    if any(type(key) is not bytes or len(key) != MAX_RAW_KEY_BYTES
+            for key in (delivery_key, journal_key, bundle_key)):
         raise RuntimeError("activation planner encryption keys must be exact raw32 originals")
-    work.charge(input_bytes=2 * (len(delivery_key) + len(journal_key)))
-    if delivery_key == journal_key:
-        raise RuntimeError("activation planner delivery and journal keys must differ")
-    for raw, expected in ((delivery_key, expected_delivery), (journal_key, expected_journal)):
+    work.charge(input_bytes=3 * (len(delivery_key) + len(journal_key) + len(bundle_key)))
+    if delivery_key == journal_key or delivery_key == bundle_key or journal_key == bundle_key:
+        raise RuntimeError("activation planner delivery, journal and bundle keys must differ")
+    for raw, expected in ((delivery_key, expected_delivery), (journal_key, expected_journal),
+            (bundle_key, expected_bundle)):
         work.charge(hashes=1)
         digest = evidence.production._callback(work, lambda raw=raw: "sha256:" + hashlib.sha256(raw).hexdigest())
         if digest != expected:
@@ -153,7 +161,7 @@ def _keys_on_work(material, work):
     for _path, descriptor, maximum in _KEY_FILES:
         evidence.production._callback(work,
             lambda descriptor=descriptor, maximum=maximum: _sealed_identity(descriptor, maximum, private=True))
-    return private, delivery_key, journal_key
+    return private, delivery_key, journal_key, bundle_key
 
 
 def _listener(descriptor):
@@ -179,31 +187,43 @@ def _listener(descriptor):
         os.close(parent)
 
 
-def _journal(descriptor):
+def _directory(descriptor, fixed_path):
+    if fixed_path not in (JOURNAL_PATH, EXECUTION_STORE_PATH):
+        raise RuntimeError("activation planner directory path is not source fixed")
     value = os.fstat(descriptor)
-    if (not stat.S_ISDIR(value.st_mode)
+    if (not stat.S_ISDIR(value.st_mode) or value.st_nlink < 1
             or (value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)) != (SERVICE_UID, SERVICE_GID, 0o700)):
-        raise RuntimeError("activation planner journal ownership or mode differs")
-    parent = _parent(JOURNAL_PATH)
+        raise RuntimeError("activation planner private directory ownership or mode differs")
+    parent = _parent(fixed_path)
     try:
-        path = os.stat(os.path.basename(JOURNAL_PATH), dir_fd=parent, follow_symlinks=False)
+        path = os.stat(os.path.basename(fixed_path), dir_fd=parent, follow_symlinks=False)
         if (not stat.S_ISDIR(path.st_mode)
                 or (path.st_dev, path.st_ino, path.st_uid, path.st_gid, stat.S_IMODE(path.st_mode))
                     != (value.st_dev, value.st_ino, SERVICE_UID, SERVICE_GID, 0o700)):
-            raise RuntimeError("activation planner journal pathname differs from its descriptor")
+            raise RuntimeError("activation planner private directory pathname differs from its descriptor")
         return value.st_dev, value.st_ino
     finally:
         os.close(parent)
 
 
-def _journal_directory(device, inode):
-    parent = _parent(JOURNAL_PATH)
+def _journal(descriptor):
+    return _directory(descriptor, JOURNAL_PATH)
+
+
+def _execution_store(descriptor):
+    return _directory(descriptor, EXECUTION_STORE_PATH)
+
+
+def _open_directory(fixed_path, device, inode):
+    if fixed_path not in (JOURNAL_PATH, EXECUTION_STORE_PATH):
+        raise RuntimeError("activation planner directory open is not source fixed")
+    parent = _parent(fixed_path)
     descriptor = None
     try:
-        descriptor = os.open(os.path.basename(JOURNAL_PATH), os.O_RDONLY | os.O_DIRECTORY
+        descriptor = os.open(os.path.basename(fixed_path), os.O_RDONLY | os.O_DIRECTORY
             | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=parent)
-        if _journal(descriptor) != (device, inode):
-            raise RuntimeError("activation planner journal differs from its signed identity")
+        if _directory(descriptor, fixed_path) != (device, inode):
+            raise RuntimeError("activation planner private directory differs from its signed identity")
         return descriptor
     except BaseException:
         if descriptor is not None:
@@ -211,6 +231,14 @@ def _journal_directory(device, inode):
         raise
     finally:
         os.close(parent)
+
+
+def _journal_directory(device, inode):
+    return _open_directory(JOURNAL_PATH, device, inode)
+
+
+def _execution_store_directory(device, inode):
+    return _open_directory(EXECUTION_STORE_PATH, device, inode)
 
 
 def _tls_identity(tls_files):
@@ -355,6 +383,12 @@ def main():
         listener_pins = tuple(launch[name] for name in ("listenerSocketDevice", "listenerSocketInode",
             "listenerPathDevice", "listenerPathInode"))
         journal_pins = launch["journalDirectoryDevice"], launch["journalDirectoryInode"]
+        store_pins = launch["executionStoreDirectoryDevice"], launch["executionStoreDirectoryInode"]
+        if (journal_pins == store_pins or launch["journalDirectoryPath"] != JOURNAL_PATH
+                or launch["executionStoreDirectoryPath"] != EXECUTION_STORE_PATH
+                or launch["bundleKeyFd"] != BUNDLE_KEY_FD
+                or launch["executionStoreDirectoryFd"] != EXECUTION_STORE_FD):
+            raise RuntimeError("activation planner store or key scope differs from fixed distinct custody")
         if _listener(3) != listener_pins:
             raise RuntimeError("activation planner listener differs from its original root assertion")
         for descriptor, identity in retained.items():
@@ -372,17 +406,20 @@ def main():
         _keys_on_work(material, work)
         bootstrap._fresh(material.attestation_interval, work, opening=material.opening_sample)
         tls_identity = _tls_identity(material.tls_files)
-        source = _journal_directory(*journal_pins)
-        owned.add(source)
-        _retain(source, JOURNAL_FD, reservations, owned)
-        retained[JOURNAL_FD] = delivery._material_identity(os.fstat(JOURNAL_FD))
-        owned.remove(source)
-        os.close(source)
+        for opener, target, pins in ((_journal_directory, JOURNAL_FD, journal_pins),
+                (_execution_store_directory, EXECUTION_STORE_FD, store_pins)):
+            source = opener(*pins)
+            owned.add(source)
+            _retain(source, target, reservations, owned)
+            retained[target] = delivery._material_identity(os.fstat(target))
+            owned.remove(source)
+            os.close(source)
         _retain(3, LISTENER_FD, reservations, owned)
         retained[LISTENER_FD] = delivery._material_identity(os.fstat(LISTENER_FD))
         owned.remove(3)
         os.close(3)
-        if reservations or _listener(LISTENER_FD) != listener_pins or _journal(JOURNAL_FD) != journal_pins:
+        if (reservations or _listener(LISTENER_FD) != listener_pins
+                or _journal(JOURNAL_FD) != journal_pins or _execution_store(EXECUTION_STORE_FD) != store_pins):
             raise RuntimeError("activation planner delivery inventory or bound path changed")
         for descriptor, maximum in ((ROOT_FD, MAX_ROOT_BYTES), (BOOTSTRAP_FD, MAX_BOOTSTRAP_BYTES)):
             _read_original(descriptor, maximum)
@@ -405,6 +442,8 @@ def main():
             if delivery._material_identity(os.fstat(descriptor)) != identity:
                 owned.discard(descriptor)
                 raise RuntimeError("activation planner descriptor changed before exec")
+        if _journal(JOURNAL_FD) != journal_pins or _execution_store(EXECUTION_STORE_FD) != store_pins:
+            raise RuntimeError("activation planner private directory binding changed before exec")
         _tls_unchanged(tls_identity)
         bootstrap._fresh(material.attestation_interval, work, opening=material.opening_sample)
         _require_inventory(INHERITED_DESCRIPTORS)

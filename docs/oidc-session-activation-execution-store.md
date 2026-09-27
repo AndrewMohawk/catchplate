@@ -79,7 +79,11 @@ only its independent descriptor and claims neither deletion nor key erasure.
 These trusted-host-local checks are not malicious-root protection, an off-host
 anti-rollback anchor or independently current state.
 
-The [plan owner](oidc-session-activation-plan-owner.md) and genuine receiving
-replay remain responsible for original signatures, live authority and exact
-independent configuration. Durable storage alone does not supply execution
-authorization, reservation, one-use dispatch, completion or token release.
+The [private exporter](oidc-session-activation-execution-export.md) now joins
+this actual owner to the [plan owner](oidc-session-activation-plan-owner.md),
+genuinely verifies live retained originals, reads before sealing, and compares
+retained plaintext to those exact originals before returning ciphertext. The
+[cold planner service](oidc-session-activation-planner-service.md) constructs
+both stores under independently authenticated bootstrap-v3 pins. Storage
+alone still does not supply signatures, live authority, historical recovery,
+execution authorization, reservation, one-use dispatch, completion or token release.

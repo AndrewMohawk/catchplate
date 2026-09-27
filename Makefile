@@ -1053,6 +1053,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_execution_bundle.py \
 	serverware/authority_oidc_session_activation_execution_replay.py \
 	serverware/authority_oidc_session_activation_execution_store.py \
+	serverware/authority_oidc_session_activation_execution_export.py \
 	serverware/authority_oidc_session_activation_cold_planning.py \
 	serverware/authority_oidc_session_activation_planner_transport.py \
 	serverware/authority_oidc_session_activation_planner_service.py \
@@ -2972,6 +2973,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_execution_bundle.py \
 				serverware/authority_oidc_session_activation_execution_replay.py \
 				serverware/authority_oidc_session_activation_execution_store.py \
+				serverware/authority_oidc_session_activation_execution_export.py \
 				serverware/authority_oidc_session_activation_cold_planning.py \
 				serverware/authority_oidc_session_activation_planner_transport.py \
 				serverware/authority_oidc_session_activation_planner_service.py \

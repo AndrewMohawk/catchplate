@@ -1,7 +1,7 @@
 """Closed private activation-planning exchange, not plan or caller admission.
 
 Raw8 carries only a fixed operation, assertion/pending-token originals and five
-subject IDs. Raw6 carries token-free prepared originals/locators or uncertainty.
+subject IDs. Raw7 carries prepared originals/locators plus ciphertext or uncertainty.
 Lengths precede bodies, exact EOF is required, and the inherited deadline is
 never renewed. No parser, work allowance, retry or arbitrary endpoint exists.
 """
@@ -14,20 +14,26 @@ from serverware import authority_transport
 from serverware import authority_revocation_writer_transport as io
 from serverware import authority_oidc_session_activation as assertion
 from serverware import authority_oidc_session_activation_plan_contract as plan
+from serverware import authority_oidc_session_activation_execution_bundle as bundle
 
 
 OPERATION = b"oidc.session.activate"
-REQUEST_MAGIC = b"SWOAPQ01"
-RESPONSE_MAGIC = b"SWOAPR01"
+REQUEST_MAGIC = b"SWOAPQ02"
+RESPONSE_MAGIC = b"SWOAPR02"
 LISTENER_PATH = "/run/serverware/oidc-session-activation/planner.sock"
 EXPECTED_PEER_UID = EXPECTED_PEER_GID = 0
 REQUEST_LIMITS = (len(OPERATION), assertion.MAX_ASSERTION_BYTES, 64,
     4 * 1024, 4 * 128, 1366, 4 * 1024, 4 * 1024)
 RESPONSE_LIMITS = (len(b"uncertain"), authority.MAX_REQUEST_BYTES,
-    assertion.MAX_CONTEXT_BYTES, plan.MAX_BYTES, 71, 71)
+    assertion.MAX_CONTEXT_BYTES, plan.MAX_BYTES, 71, 71, bundle.MAX_BYTES)
 MAX_REQUEST_BYTES = sum(REQUEST_LIMITS)
-MAX_RESPONSE_BYTES = sum(RESPONSE_LIMITS)
 MAX_BYTES = authority.MAX_RESULT_BYTES
+REQUEST_HEADER_BYTES = len(REQUEST_MAGIC) + 8 * len(REQUEST_LIMITS)
+RESPONSE_HEADER_BYTES = len(RESPONSE_MAGIC) + 8 * len(RESPONSE_LIMITS)
+# Reserve even the largest valid request and both headers before accepting a
+# response body. Adding ciphertext must not enlarge the aggregate 64 MiB cap.
+MAX_RESPONSE_BYTES = min(sum(RESPONSE_LIMITS),
+    MAX_BYTES - MAX_REQUEST_BYTES - REQUEST_HEADER_BYTES - RESPONSE_HEADER_BYTES)
 AuthorityTransportError = authority_transport.AuthorityTransportError
 _check_deadline, _recv_prefix = io._check_deadline, io._recv_prefix
 _URLSAFE = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
@@ -64,15 +70,16 @@ def _request_lengths(lengths):
 
 
 def _response_lengths(lengths):
-    if (type(lengths) is not tuple or len(lengths) != 6
+    if (type(lengths) is not tuple or len(lengths) != 7
             or any(type(size) is not int or not 0 <= size <= maximum
                 for size, maximum in zip(lengths, RESPONSE_LIMITS))
             or sum(lengths) > MAX_RESPONSE_BYTES):
         raise AuthorityTransportError("activation planner response exceeds its length inventory")
-    state, request, scope, envelope, plan_id, journal_id = lengths
+    state, request, scope, envelope, plan_id, journal_id, encrypted = lengths
     if not ((state == len(b"prepared") and request >= 2 and scope >= 2 and envelope >= 2
-            and plan_id == journal_id == 71)
-            or (state == len(b"uncertain") and request == scope == envelope == plan_id == journal_id == 0)):
+            and plan_id == journal_id == 71 and encrypted >= bundle.OVERHEAD_BYTES + 2)
+            or (state == len(b"uncertain")
+                and request == scope == envelope == plan_id == journal_id == encrypted == 0)):
         raise AuthorityTransportError("activation planner response branch differs")
 
 
@@ -94,7 +101,7 @@ def _credential(raw):
 def _originals(values, *, response):
     if type(response) is not bool:
         raise AuthorityTransportError("activation planner frame direction is invalid")
-    count = 6 if response else 8
+    count = 7 if response else 8
     if type(values) is not tuple or len(values) != count or any(type(raw) is not bytes for raw in values):
         raise AuthorityTransportError("activation planner requires its exact immutable original inventory")
     lengths = tuple(len(raw) for raw in values)
@@ -103,6 +110,11 @@ def _originals(values, *, response):
         if not ((values[0] == b"prepared" and _digest(values[4]) and _digest(values[5]))
                 or (values[0] == b"uncertain" and all(raw == b"" for raw in values[1:]))):
             raise AuthorityTransportError("activation planner response values differ")
+        if values[0] == b"prepared":
+            try:
+                bundle._bounded_frame(values[6])
+            except bundle.ActivationExecutionBundleError as exc:
+                raise AuthorityTransportError("activation planner encrypted-original frame differs") from exc
     else:
         _request_lengths(lengths)
         if (values[0] != OPERATION or any(item not in _URLSAFE for item in values[2])
@@ -114,7 +126,7 @@ def _originals(values, *, response):
 def _recv_bodies(connection, *, response, deadline_ns):
     if type(response) is not bool:
         raise AuthorityTransportError("activation planner frame direction is invalid")
-    count = 6 if response else 8
+    count = 7 if response else 8
     header = io._recv_exact_until(connection, count * 8, deadline_ns=deadline_ns)
     lengths = tuple(int.from_bytes(header[offset:offset + 8], "big")
         for offset in range(0, len(header), 8))
@@ -147,7 +159,7 @@ def _send_response(connection, originals, *, deadline_ns):
 
 
 def _socket_request(endpoint, *, originals, deadline_ns):
-    """Return unverified token-free raw6 after one fixed-peer exchange."""
+    """Return unverified ciphertext-bearing raw7 after one fixed-peer exchange."""
     if type(deadline_ns) is not int or deadline_ns <= 0:
         raise AuthorityTransportError("activation planner requires the original absolute deadline")
     path, timeout, uid, gid = _endpoint(endpoint)
@@ -166,7 +178,8 @@ def _socket_request(endpoint, *, originals, deadline_ns):
         if _recv_prefix(connection, deadline_ns=bound) != RESPONSE_MAGIC:
             raise AuthorityTransportError("activation planner response magic differs")
         received = _recv_bodies(connection, response=True, deadline_ns=bound)
-        if sum(len(raw) for raw in (*held, *received)) > MAX_BYTES:
+        if (sum(len(raw) for raw in (*held, *received))
+                + REQUEST_HEADER_BYTES + RESPONSE_HEADER_BYTES > MAX_BYTES):
             raise AuthorityTransportError("activation planner exchange exceeds its aggregate source bound")
     except BaseException:
         try:

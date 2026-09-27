@@ -42,9 +42,12 @@ OPERATION = "oidc.session.activate"
 SERVICE_UID = SERVICE_GID = 65507
 PEER_UID = PEER_GID = 65532
 ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, DELIVERY_KEY_FD, JOURNAL_KEY_FD, JOURNAL_FD = range(198, 205)
-INHERITED_DESCRIPTORS = (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, DELIVERY_KEY_FD, JOURNAL_KEY_FD, JOURNAL_FD)
+BUNDLE_KEY_FD, EXECUTION_STORE_FD = 205, 206
+INHERITED_DESCRIPTORS = (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, DELIVERY_KEY_FD, JOURNAL_KEY_FD,
+    JOURNAL_FD, BUNDLE_KEY_FD, EXECUTION_STORE_FD)
 LISTENER_PATH = "/run/serverware/oidc-session-activation/planner.sock"
 JOURNAL_PATH = "/var/lib/serverware/oidc-session-activation-planner"
+EXECUTION_STORE_PATH = "/var/lib/serverware/oidc-session-activation-execution-bundles"
 TLS_PATHS = {
     "ca": "/run/serverware/oidc-session-activation-planner-tls/ca.pem",
     "clientCertificate": "/run/serverware/oidc-session-activation-planner-tls/client.crt",
@@ -55,9 +58,9 @@ MIN_TLS_BYTES = 2
 KEY_BYTES = 32
 MAX_BYTES = 4 * 1024 * 1024
 MAX_RECEIPT_AGE_NS = 300 * 1_000_000_000
-SCHEMA = "serverware.signedOidcSessionActivationPlannerBootstrap/v2"
-PAYLOAD_SCHEMA = "serverware.oidcSessionActivationPlannerBootstrap/v2"
-LAUNCH_SCHEMA = "serverware.oidcSessionActivationPlannerLaunch/v2"
+SCHEMA = "serverware.signedOidcSessionActivationPlannerBootstrap/v3"
+PAYLOAD_SCHEMA = "serverware.oidcSessionActivationPlannerBootstrap/v3"
+LAUNCH_SCHEMA = "serverware.oidcSessionActivationPlannerLaunch/v3"
 _FALSE_FIELDS = ("hardwareBacked", "nativeStageZero", "hsmBackedKeys", "teeVerified", "externalWitnessVerified")
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _PLANNER_FIELDS = frozenset({"publicKeyBase64Url", "spkiDigest", "identity"})
@@ -71,14 +74,16 @@ _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "role", "operation", "c
     "configurationDigest", "generation", "runtimeRoleIdentities", "runtimeClosureDigest", "planner",
     "rpId", "origin", "authenticationPolicy", "trustPolicy", "maximumPlanAgeNs", "maximumClockSkewNs",
     "deliveryTtlSeconds", "databaseEndpoint", "readRole", "queryManifestDigest", "tlsFiles",
-    "deliveryKeyDigest", "journalKeyDigest", "completeRootVector", "databaseId", "stateEnrollment",
+    "deliveryKeyDigest", "journalKeyDigest", "bundleKeyDigest", "completeRootVector", "databaseId", "stateEnrollment",
     "stateEndpoint", "issuedAtEpochNs", "expiresAtEpochNs",
     "trustMode", "launch", *_FALSE_FIELDS})
 _LAUNCH_FIELDS = frozenset({"schema", "processMode", "serviceUid", "serviceGid", "peerUid", "peerGid",
     "rootPublicKeyFd", "bootstrapFd", "listenerFd", "signingKeyFd", "deliveryKeyFd", "journalKeyFd",
     "journalDirectoryFd", "inheritedFileDescriptors", "listenerPath", "requestTimeoutSeconds",
     "journalDirectoryPath", "journalDirectoryDevice", "journalDirectoryInode", "journalMaximumRecords",
-    "journalQuotaBytes", "listenerSocketDevice", "listenerSocketInode", "listenerPathDevice", "listenerPathInode"})
+    "journalQuotaBytes", "listenerSocketDevice", "listenerSocketInode", "listenerPathDevice", "listenerPathInode",
+    "bundleKeyFd", "executionStoreDirectoryFd", "executionStoreDirectoryPath", "executionStoreDirectoryDevice",
+    "executionStoreDirectoryInode", "executionStoreMaximumRecords", "executionStoreQuotaBytes"})
 _ROLE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}\Z", re.ASCII)
 
 
@@ -118,6 +123,7 @@ class _PlannerMaterial:
     state_enrollment_bytes: bytes
     state_enrollment_digest: str
     state_endpoint: tuple
+    bundle_key_digest: str
 
 
 def _fail(message):
@@ -142,13 +148,15 @@ def _state_endpoint(value):
 def _launch_shape(value, work):
     shape._object(value, _LAUNCH_FIELDS, "activation planner launch")
     for field, expected in (("schema", LAUNCH_SCHEMA), ("processMode", PROCESS_MODE),
-            ("listenerPath", LISTENER_PATH), ("journalDirectoryPath", JOURNAL_PATH)):
+            ("listenerPath", LISTENER_PATH), ("journalDirectoryPath", JOURNAL_PATH),
+            ("executionStoreDirectoryPath", EXECUTION_STORE_PATH)):
         shape._literal(value[field], expected)
     for field, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID),
             ("peerUid", PEER_UID), ("peerGid", PEER_GID), ("rootPublicKeyFd", ROOT_FD),
             ("bootstrapFd", BOOTSTRAP_FD), ("listenerFd", LISTENER_FD), ("signingKeyFd", KEY_FD),
             ("deliveryKeyFd", DELIVERY_KEY_FD), ("journalKeyFd", JOURNAL_KEY_FD),
-            ("journalDirectoryFd", JOURNAL_FD)):
+            ("journalDirectoryFd", JOURNAL_FD), ("bundleKeyFd", BUNDLE_KEY_FD),
+            ("executionStoreDirectoryFd", EXECUTION_STORE_FD)):
         shape._integer(value[field], 2**32 - 2, minimum=1)
         if value[field] != expected:
             _fail("activation planner fixed resource scalar differs")
@@ -158,12 +166,17 @@ def _launch_shape(value, work):
         shape._integer(descriptor, 1023, minimum=3)
     plan._same(descriptors, list(INHERITED_DESCRIPTORS), work, "activation descriptor inventory differs")
     shape._integer(value["requestTimeoutSeconds"], 30, minimum=1)
-    for field in ("journalDirectoryDevice", "listenerSocketDevice", "listenerPathDevice"):
+    for field in ("journalDirectoryDevice", "executionStoreDirectoryDevice", "listenerSocketDevice", "listenerPathDevice"):
         shape._integer(value[field], 2**64 - 1)
-    for field in ("journalDirectoryInode", "listenerSocketInode", "listenerPathInode"):
+    for field in ("journalDirectoryInode", "executionStoreDirectoryInode", "listenerSocketInode", "listenerPathInode"):
         shape._integer(value[field], 2**64 - 1, minimum=1)
     shape._integer(value["journalMaximumRecords"], journal.MAX_RECORDS, minimum=1)
     shape._integer(value["journalQuotaBytes"], journal.MAX_QUOTA_BYTES, minimum=1)
+    shape._integer(value["executionStoreMaximumRecords"], journal.MAX_RECORDS, minimum=1)
+    shape._integer(value["executionStoreQuotaBytes"], journal.MAX_QUOTA_BYTES, minimum=1)
+    if ((value["executionStoreDirectoryDevice"], value["executionStoreDirectoryInode"])
+            == (value["journalDirectoryDevice"], value["journalDirectoryInode"])):
+        _fail("activation execution store reuses the private original journal directory")
 
 
 def _payload_shape(value, work):
@@ -171,10 +184,11 @@ def _payload_shape(value, work):
     for field, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("role", ROLE), ("operation", OPERATION), ("trustMode", "trusted-host-local")):
         shape._literal(value[field], expected)
-    for field in ("configurationDigest", "runtimeClosureDigest", "queryManifestDigest", "deliveryKeyDigest", "journalKeyDigest"):
+    for field in ("configurationDigest", "runtimeClosureDigest", "queryManifestDigest",
+            "deliveryKeyDigest", "journalKeyDigest", "bundleKeyDigest"):
         shape._digest(value[field])
-    if value["deliveryKeyDigest"] == value["journalKeyDigest"]:
-        _fail("activation delivery and journal key pins are not independent")
+    if len({value["deliveryKeyDigest"], value["journalKeyDigest"], value["bundleKeyDigest"]}) != 3:
+        _fail("activation delivery, journal and bundle key pins are not independent")
     authorization._token(value["databaseId"])
     shape._object(value["generation"], frozenset(configuration._GENERATION_FIELDS), "activation generation")
     if type(value["configurationPayload"]) is not dict or type(value["runtimeRoleIdentities"]) is not dict:
@@ -429,7 +443,8 @@ def _material(payload, root, opening, original, work, current):
         payload["maximumPlanAgeNs"], payload["maximumClockSkewNs"], payload["deliveryTtlSeconds"], reader,
         payload["deliveryKeyDigest"], payload["journalKeyDigest"], raw, identity, payload["tlsFiles"],
         (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening, payload["launch"], original,
-        state_original, state_digest, _state_endpoint(payload["stateEndpoint"]))
+        state_original, state_digest, _state_endpoint(payload["stateEndpoint"]),
+        bundle_key_digest=payload["bundleKeyDigest"])
 
 
 def _launch_guard(interval, opening, inherited, work):

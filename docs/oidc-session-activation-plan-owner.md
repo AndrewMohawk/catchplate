@@ -123,7 +123,11 @@ Fresh encryption can produce a different ciphertext on repeated candidate
 preparation, even for identical originals. There is no first-exact bundle
 publication, durable bundle identity, acknowledgment, retry policy or discovery
 in this method. **Actual immutable first-exact publication and separately
-admitted recovery remain required before any transport serves a bundle.**
+admitted recovery remain required before any transport serves a bundle.** The
+separate [first-exact exporter](oidc-session-activation-execution-export.md)
+and [private planner service](oidc-session-activation-planner-service.md) now
+provide that live-only storage/export composition; this candidate method
+itself remains nondurable and is not a retry or historical-recovery endpoint.
 Candidate bytes are not one-use execution authority, a committed delivery or a
 session-activation result.
 
@@ -135,7 +139,7 @@ interval; an expired original remains rejected. A historical admission and
 delivery/reconciliation protocol, present permission, retained-finalization
 admission and protected one-use execution remain separate integration. The
 [cold service](oidc-session-activation-planner-delivery.md) now composes genuine
-v2 root-bootstrap admission, fixed independent state enrollment and a fresh
+v3 root-bootstrap admission, fixed independent state enrollment and a fresh
 nonce-bound head observation. The v2 journal retains all four state originals;
 receiving replay compares stored enrollment/vector bytes to the independently
 configured originals before repeating observation signatures and complete-root

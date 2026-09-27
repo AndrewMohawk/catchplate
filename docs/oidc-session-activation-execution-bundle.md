@@ -78,8 +78,13 @@ checks key separation and then calls this codec. This codec itself neither reads
 storage nor changes the journal's 0700 directory, 0400 immutable records,
 no-replacement publication, quotas or local retention. Encryption does not prove
 the claimed journal locator exists or make an exported copy durable. Repeated
-candidate preparation can produce different ciphertext: a separate first-exact
-durable publication/recovery path is required before exposing an export service.
+candidate preparation can produce different ciphertext. The separate
+[first-exact exporter](oidc-session-activation-execution-export.md) now reads
+the durable store before sealing, replays actual originals, and either returns
+the matching first ciphertext or publishes a first candidate. The
+[private planner service](oidc-session-activation-planner-service.md) connects
+that path under independently root-admitted v3 key/directory pins. This is
+not an automatic lost-response recovery endpoint or historical admission.
 
 The [private execution replay adapter](oidc-session-activation-execution-replay.md)
 authenticates the known plan before opening, joins independent originals and

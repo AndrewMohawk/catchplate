@@ -4,17 +4,21 @@ The complete vector is an authenticated launch snapshot. A fresh nonce-bound
 signed state observation must independently match it with no pending action;
 observed database roots must also match before a plan can be signed. No request
 selects roots, policy or keys, and no result carrier replaces original bootstrap,
-query or observation bytes. This is not atomic action-time admission or SQL.
+query or observation bytes. A separately root-pinned key/store retain first-exact
+encrypted export bytes. This is not atomic action-time admission or SQL.
 """
 from __future__ import annotations
 
 import hashlib
 import os
+from dataclasses import dataclass
 
 from serverware import authority_current_root_head as head
 from serverware import authority_current_root_transport as state_transport
 from serverware import authority_oidc_session_activation_plan_owner as owner_module
 from serverware import authority_oidc_session_activation_state as activation_state
+from serverware import authority_oidc_session_activation_execution_export as execution_export
+from serverware import authority_oidc_session_activation_execution_store as execution_storage
 
 
 plan, registration, evidence = owner_module.plan, owner_module.registration, owner_module.evidence
@@ -24,6 +28,15 @@ OPERATION = plan.contract.OPERATION
 
 class OidcSessionActivationColdPlanningError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class PreparedActivationExport:
+    """Original output bytes only, never admission or execution authority."""
+
+    plan: owner_module.PreparedActivationPlan
+    encrypted_originals_bytes: bytes
+    expires_at_epoch_ns: int
 
 
 def _fail(message):
@@ -50,6 +63,31 @@ def _key_digest(original, work):
     work.charge(hashes=1, input_bytes=len(original))
     return evidence.production._callback(work,
         lambda: "sha256:" + hashlib.sha256(original).hexdigest())
+
+
+def _store_snapshot(store, expected, work):
+    observed = evidence.production._callback(work,
+        lambda: execution_storage.ActivationExecutionBundleStore._snapshot_configuration(store))
+    if observed is not expected:
+        _fail("activation execution store changed during original admission")
+    return observed
+
+
+def _join_store(configured, owner_configuration, material, bundle_key, work):
+    launch = material.launch
+    registration._same((configured[0], configured[1], configured[3], configured[4], configured[5]),
+        (plan.contract.authority.SOURCE_REVISION, material.configuration_digest,
+            (launch["executionStoreDirectoryDevice"], launch["executionStoreDirectoryInode"],
+                launch["serviceUid"], launch["serviceGid"]),
+            launch["executionStoreMaximumRecords"], launch["executionStoreQuotaBytes"]),
+        work, "root-signed activation execution-store scope")
+    work.charge(input_bytes=6 * execution_storage.bundle.KEY_BYTES)
+    if (configured[2] != bundle_key or bundle_key == owner_configuration[10]
+            or bundle_key == owner_configuration[4][2]
+            or configured[3][:2] == owner_configuration[4][4][:2]):
+        _fail("activation execution store key or directory is not separately bound")
+    registration._same(_key_digest(bundle_key, work), material.bundle_key_digest,
+        work, "root-signed activation execution-bundle key")
 
 
 def _join_owner(configured, material, root_public_key, work):
@@ -91,7 +129,7 @@ def _join_owner(configured, material, root_public_key, work):
         evidence.keys._spki_on_work(root_public_key, work), work, "independent activation state root key")
 
 
-def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes,
+def _prepare_on_work(owner, *, execution_store, bundle_key, bootstrap_bytes, root_public_key, assertion_bytes,
         old_token_bytes, expected_user_id, expected_session_id, expected_credential_id,
         expected_credential_record_id, expected_challenge_id, live_window,
         transport_deadline_ns, work):
@@ -106,11 +144,15 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
     ledger = evidence.capture._SharedLedger(work)
     if (type(owner) is not owner_module.OidcSessionActivationPlanOwner
             or type(owner._configured) is not tuple or len(owner._configured) != 21
+            or type(execution_store) is not execution_storage.ActivationExecutionBundleStore
+            or type(execution_store._configuration) is not tuple or len(execution_store._configuration) != 6
+            or type(bundle_key) is not bytes or len(bundle_key) != execution_storage.bundle.KEY_BYTES
             or type(bootstrap_bytes) is not bytes or not 2 <= len(bootstrap_bytes) <= bootstrap.MAX_BYTES
             or type(assertion_bytes) is not bytes
             or not 2 <= len(assertion_bytes) <= assertion.MAX_ASSERTION_BYTES):
         _fail("activation cold preparation requires actual owners and bounded originals")
     configured = owner._configured
+    store_configuration, held_bundle_key = execution_store._configuration, bundle_key
     original_bootstrap, original_assertion = bootstrap_bytes, assertion_bytes
     old = assertion._token(old_token_bytes, work)
     window = clock._validate(live_window)
@@ -129,7 +171,9 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
         root_public_key=root_public_key, live_window=window,
         work=work, transport_deadline_ns=bound)
     _snapshot(owner, configured, work)
+    _store_snapshot(execution_store, store_configuration, work)
     _join_owner(configured, material, root_public_key, work)
+    _join_store(store_configuration, configured, material, held_bundle_key, work)
     issued, expires = material.attestation_interval
     opening = material.opening_sample
     if (window[5:] != (material.maximum_plan_age_ns, material.maximum_clock_skew_ns)
@@ -142,6 +186,7 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
     def current():
         nonlocal last_epoch, last_monotonic
         _snapshot(owner, configured, work)
+        _store_snapshot(execution_store, store_configuration, work)
         sample = bootstrap._fresh(material.attestation_interval, work, opening=opening)
         now = live()
         if (sample[1] < last_epoch or sample[0] < last_monotonic
@@ -149,6 +194,7 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
             _fail("activation original launch deadline expired or clock reversed")
         last_epoch, last_monotonic = now, sample[2]
         _snapshot(owner, configured, work)
+        _store_snapshot(execution_store, store_configuration, work)
         return now
 
     current()
@@ -198,4 +244,28 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
     if (payload["expiresAtEpochNs"] > observed["expiresAtEpochNs"]
             or current() >= min(payload["expiresAtEpochNs"], observed["expiresAtEpochNs"])):
         _fail("activation plan expired after original retention")
-    return result
+    # Decode the exact bytes produced above, not a supplied successful result.
+    # The exporter repeats original signature/proof/effect verification and
+    # independently joins the original scope and projected roots before use.
+    request = evidence.wire._decode_object(result.request_bytes, work=work,
+        maximum_bytes=plan.contract.authority.MAX_REQUEST_BYTES,
+        maximum_nodes=assertion.MAX_CONTEXT_NODES, maximum_depth=12)
+    canonical_request, canonical_scope = registration._wire(request, work), registration._wire(scope, work)
+    work.charge(input_bytes=len(canonical_request) + len(result.request_bytes)
+        + len(canonical_scope) + len(result.scope_bytes))
+    if canonical_request != result.request_bytes or canonical_scope != result.scope_bytes:
+        _fail("activation prepared request or independent scope differs from its original bytes")
+    registration._same(result.plan_digest,
+        evidence.plan._frame(plan.contract.IDENTITY_DOMAIN, (result.envelope_bytes,), work),
+        work, "activation original plan locator")
+    current()
+    encrypted = execution_export._export_on_work(owner, execution_store,
+        envelope_bytes=result.envelope_bytes, expected_request=request, expected_scope=scope,
+        business_before_roots=projected.business_before_roots,
+        authorization_before_roots=projected.authorization_before_roots,
+        expected_counted_heads=projected.expected_counted_heads,
+        expected_journal_digest=result.journal_digest, bundle_key=held_bundle_key,
+        live_window=window, transport_deadline_ns=bound, work=work)
+    if current() >= min(payload["expiresAtEpochNs"], observed["expiresAtEpochNs"]):
+        _fail("activation original authority expired after durable bundle export")
+    return PreparedActivationExport(result, encrypted, payload["expiresAtEpochNs"])

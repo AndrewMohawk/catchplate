@@ -1,6 +1,6 @@
 # Unrendered, uninstalled deployment input. Independent admission/provisioning
 # must supply accounts, exact release, root bootstrap, TLS identities, catalog,
-# separate signing/encryption keys, journal, planning snapshot and state-v4 owner.
+# separate signing/encryption keys, journal, execution-bundle store, planning snapshot and state-v4 owner.
 # Independently provision only the UID65507 state-socket ACL; no state group.
 # This service has no execution, action-time currentness or token-release authority.
 # Public TLS files: root-owned 0444; private TLS keys: root:65507 mode 0440.
@@ -10,21 +10,23 @@ Description=Serverware dedicated OIDC activation planner owner (trusted-host-loc
 BindsTo=serverware-oidc-session-activation-planner.socket
 Requires=serverware-current-root-state.socket
 After=local-fs.target serverware-oidc-session-activation-planner.socket serverware-current-root-state.socket
-RequiresMountsFor=@ACTIVATION_PLANNER_RELEASE_ROOT@ @ACTIVATION_PLANNER_TRUST_DIR@ @ACTIVATION_PLANNER_TLS_DIR@ @ACTIVATION_PLANNER_JOURNAL_DIR@
+RequiresMountsFor=@ACTIVATION_PLANNER_RELEASE_ROOT@ @ACTIVATION_PLANNER_TRUST_DIR@ @ACTIVATION_PLANNER_TLS_DIR@ @ACTIVATION_PLANNER_JOURNAL_DIR@ @ACTIVATION_PLANNER_EXECUTION_STORE_DIR@
 AssertPathIsDirectory=@ACTIVATION_PLANNER_RELEASE_ROOT@
 AssertPathIsDirectory=@ACTIVATION_PLANNER_TRUST_DIR@
 AssertPathIsDirectory=@ACTIVATION_PLANNER_TLS_DIR@
 AssertPathIsDirectory=@ACTIVATION_PLANNER_JOURNAL_DIR@
+AssertPathIsDirectory=@ACTIVATION_PLANNER_EXECUTION_STORE_DIR@
 AssertPathExists=@ACTIVATION_PLANNER_SIGNING_KEY@
 AssertPathExists=@ACTIVATION_PLANNER_DELIVERY_KEY@
 AssertPathExists=@ACTIVATION_PLANNER_JOURNAL_KEY@
+AssertPathExists=@ACTIVATION_PLANNER_BUNDLE_KEY@
 StartLimitIntervalSec=infinity
 StartLimitBurst=1
 
 [Service]
 Type=exec
 # Root delivery permanently drops to 65507:65507, with no supplementary groups.
-# Seven inherited FDs 198..204; dedicated signing and two distinct raw32 keys.
+# Nine inherited FDs 198..206; dedicated signing and three pairwise-distinct raw32 keys.
 # One accepted connection per cold launch, including rejection.
 # Type=exec is not cryptographic readiness proof.
 User=root
@@ -37,10 +39,12 @@ BindReadOnlyPaths=@ACTIVATION_PLANNER_TLS_DIR@:/run/serverware/oidc-session-acti
 BindReadOnlyPaths=@ACTIVATION_PLANNER_SIGNING_KEY@:/run/secrets/serverware-oidc-session-activation-planner-key
 BindReadOnlyPaths=@ACTIVATION_PLANNER_DELIVERY_KEY@:/run/secrets/serverware-oidc-session-activation-delivery-key
 BindReadOnlyPaths=@ACTIVATION_PLANNER_JOURNAL_KEY@:/run/secrets/serverware-oidc-session-activation-journal-key
+BindReadOnlyPaths=@ACTIVATION_PLANNER_BUNDLE_KEY@:/run/secrets/serverware-oidc-session-activation-bundle-key
 BindReadOnlyPaths=/run/serverware/oidc-session-activation:/run/serverware/oidc-session-activation
 BindReadOnlyPaths=/run/serverware/current-root:/run/serverware/current-root
 BindPaths=@ACTIVATION_PLANNER_JOURNAL_DIR@:/var/lib/serverware/oidc-session-activation-planner
-ReadWritePaths=/var/lib/serverware/oidc-session-activation-planner
+BindPaths=@ACTIVATION_PLANNER_EXECUTION_STORE_DIR@:/var/lib/serverware/oidc-session-activation-execution-bundles
+ReadWritePaths=/var/lib/serverware/oidc-session-activation-planner /var/lib/serverware/oidc-session-activation-execution-bundles
 Sockets=serverware-oidc-session-activation-planner.socket
 NonBlocking=yes
 Environment=LD_LIBRARY_PATH=/runtime/python/lib

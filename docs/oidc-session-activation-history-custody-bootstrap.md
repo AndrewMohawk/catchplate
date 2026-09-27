@@ -1,7 +1,8 @@
 # Historical activation custody bootstrap
 
-This source-only profile admits a fresh, independently root-authorized receiving
-purpose for historical activation completion. It does not extend the live
+These source-only profiles admit separate fresh, independently root-authorized
+receiving purposes for historical activation completion and request-bound
+delivery-consumption planning. Neither extends the live
 execution-custody consumer map, relabel a live SQL issuer or renew an expired
 planner launch. It is unbuilt and unexecuted; no key, account, descriptor,
 filesystem path or service is provisioned by this module.
@@ -53,7 +54,8 @@ deadline. They share cumulative work and never open another allowance.
 The frozen ordinary `_HistoryCustodyMaterial` contains `custody_bytes`,
 `planner`, `consumer_role`, `process_mode`, `service_uid`, `service_gid`,
 `receiver_identity`, `bundle_key_digest`, `delivery_key_digest`,
-`attestation_interval` and `opening_sample`. No verifier accepts this result as
+`attestation_interval`, `opening_sample` and `consume_request_bytes` (exactly
+`None` for v1). No verifier accepts this result as
 an incoming proof. A real process-bound owner must independently receive and
 compare its expected receiver identity, reauthenticate the originals, and join
 the actual nonserialized keys before any private opening or retained-outcome I/O.
@@ -82,6 +84,41 @@ Original plan/row/state lifetimes remain algebraic obligations of the
 Existing planner live verification and production retain their unchanged
 signatures and expiry gates.
 
+## Separate consume-planning v2
+
+The v1 helpers and default `OidcSessionActivationHistoryCustody` constructor
+remain completion-only at UID/GID `65503:65503`. They never auto-detect or accept
+the new profile. Explicit `_verify_consume_on_work` and
+`_produce_consume_on_work` use the same original-input signatures but select only:
+
+- `serverware.signedOidcSessionActivationHistoryCustody/v2` and
+  `serverware.oidcSessionActivationHistoryCustody/v2`;
+- operation `oidc.session.activation-delivery.consume`, consumer role
+  `consume-planning-history`, process `oidc-session-activation-delivery-planner`,
+  and UID/GID `65501:65501`;
+- one additional `consumeRequest` original descriptor, with canonical base64url,
+  byte count and SHA-256 digest. Its decoded original is bounded to 2 MiB and
+  shares the outer 8 MiB/cumulative work allowance.
+
+Admission verifies the current source's exact typed consume request, handler,
+manifest, request digest, operation ID, argument grammar and business intent.
+This is an expected request identity, not proof of present token possession,
+current rows, a consumption commit or release permission. The genuine nested
+planner remains historical **activation** evidence. The fresh consume purpose
+does not renew that planner or allow signing completion.
+
+The fixed `OidcSessionActivationHistoryCustody.for_consume_planning` factory
+requires an independently supplied `expected_consume_request` as well as the
+existing original bootstrap/root, expected receiver identity, separate bundle
+and delivery keys, and unchanged current window/deadline/work. It joins the
+independent request to the root-signed canonical original before key use and
+retains it immutably. The same owner class retains exact purpose-specific
+UID/GID, process mode, no supplementary groups, PID, lock and configuration-seal
+checks; it does not accept a subclass or a successful material carrier.
+
+See [consume-planning history custody](oidc-session-activation-delivery-history-custody.md)
+for the actual replay and caller-purpose joins.
+
 ## Scope and remaining boundary
 
 The outer root independently pins the exact configuration/generation/runtime
@@ -93,8 +130,8 @@ state. The complete vector is original evidence, not a latest-head guarantee.
 
 This bootstrap does not provide a cold FD/key loader, a completion signing
 service, a protected committed-marker reader, durable completion delivery or
-reconciliation. Generic activation completion remains rejected until the real
-separately admitted historical path is connected. Token release, public caller
+reconciliation. Generic activation completion APIs remain rejected; the dedicated
+completion path requires its separate v1 historical custody. Token release, public caller
 permission/recovery, portal integration and production verification remain
 separate. Neither a root-asserted host identity nor historical replay establishes
 TEE execution, off-host freshness or a one-use delivery result.

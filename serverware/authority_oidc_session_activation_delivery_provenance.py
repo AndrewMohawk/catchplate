@@ -148,7 +148,7 @@ def _verify_on_work(*, consume_request, current_delivery_row,
     live()
     # The diagnostic suffix shares the existing actual verifier algorithm and
     # performs its historical replay ONCE. It accepts only the original inputs.
-    actual = response._verify_delivery_on_work(**held, work=work)
+    actual = response._verify_delivery_on_work(expected_consume_request=current_request, **held, work=work)
     if type(actual) is not response._VerifiedDeliveryCompletion:
         _fail("delivery provenance requires the actual original completion verifier")
     live()

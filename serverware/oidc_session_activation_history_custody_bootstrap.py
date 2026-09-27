@@ -1,8 +1,8 @@
-"""Fresh root admission for historical activation completion custody only.
+"""Separate fresh root purposes for historical activation original custody.
 
 The original planner bootstrap is genuine historical evidence, not present
 receiving authority. A distinct root-signed outer purpose authorizes one fixed
-completion process for one fresh bounded interval. No live consumer is widened,
+completion or request-bound consume-planning process for a fresh bounded interval. No live consumer is widened,
 no expired launch is renewed, and no incoming successful material is accepted.
 This module performs no key delivery, filesystem, transport, signing of
 completion, SQL, token release or historical-cohort resolution.
@@ -28,6 +28,13 @@ OPERATION = "oidc.session.activate"
 CONSUMER_ROLE = "completion-history"
 ROLE = PROCESS_MODE = "oidc-session-activation-completion"
 SERVICE_UID = SERVICE_GID = 65503
+CONSUME_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v2"
+CONSUME_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v2"
+CONSUME_OPERATION = "oidc.session.activation-delivery.consume"
+CONSUME_CONSUMER_ROLE = "consume-planning-history"
+CONSUME_PROCESS_MODE = "oidc-session-activation-delivery-planner"
+CONSUME_SERVICE_UID = CONSUME_SERVICE_GID = 65501
+MAX_CONSUME_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_BYTES = 8 * 1024 * 1024
 MAX_NODES, MAX_DEPTH = 256, 4
 _FALSE_FIELDS = planner_bootstrap._FALSE_FIELDS
@@ -58,6 +65,7 @@ class _HistoryCustodyMaterial:
     delivery_key_digest: str
     attestation_interval: tuple
     opening_sample: tuple
+    consume_request_bytes: bytes | None
 
 
 def _fail(message):
@@ -94,13 +102,24 @@ def _fresh(interval, work, opening=None):
     return planner_bootstrap._fresh(interval, work, opening=opening)
 
 
-def _payload_shape(payload):
-    shape._object(payload, _PAYLOAD_FIELDS, "activation history custody payload")
-    for field, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
-            ("operation", OPERATION), ("consumerRole", CONSUMER_ROLE), ("processMode", PROCESS_MODE),
+def _profile(consume):
+    if type(consume) is not bool:
+        _fail("historical custody purpose selector is not source-fixed")
+    return ((CONSUME_SCHEMA, CONSUME_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+        CONSUME_CONSUMER_ROLE, CONSUME_PROCESS_MODE, CONSUME_SERVICE_UID, CONSUME_SERVICE_GID)
+        if consume else (SCHEMA, PAYLOAD_SCHEMA, OPERATION, CONSUMER_ROLE,
+            PROCESS_MODE, SERVICE_UID, SERVICE_GID))
+
+
+def _payload_shape(payload, *, consume=False):
+    _schema, payload_schema, operation, role, mode, uid, gid = _profile(consume)
+    fields = _PAYLOAD_FIELDS | {"consumeRequest"} if consume else _PAYLOAD_FIELDS
+    shape._object(payload, fields, "activation history custody payload")
+    for field, expected in (("schema", payload_schema), ("sourceRevision", authority.SOURCE_REVISION),
+            ("operation", operation), ("consumerRole", role), ("processMode", mode),
             ("trustMode", "trusted-host-local")):
         shape._literal(payload[field], expected)
-    for field, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID)):
+    for field, expected in (("serviceUid", uid), ("serviceGid", gid)):
         shape._integer(payload[field], 2**32 - 2, minimum=1)
         if payload[field] != expected:
             _fail("activation history custody process identity differs from its fixed purpose")
@@ -116,12 +135,58 @@ def _payload_shape(payload):
         planner_bootstrap.MAX_BYTES)
     shape._integer(record["byteCount"], planner_bootstrap.MAX_BYTES, minimum=2)
     shape._digest(record["bytesDigest"])
+    if consume:
+        record = payload["consumeRequest"]
+        shape._object(record, _ORIGINAL_FIELDS, "root-bound consume request original")
+        authorization.transport._transport_shape(record["base64Url"], record["byteCount"],
+            MAX_CONSUME_REQUEST_BYTES)
+        shape._integer(record["byteCount"], MAX_CONSUME_REQUEST_BYTES, minimum=2)
+        shape._digest(record["bytesDigest"])
     for field in ("issuedAtEpochNs", "expiresAtEpochNs"):
         shape._integer(payload[field], minimum=1)
     if not 0 < payload["expiresAtEpochNs"] - payload["issuedAtEpochNs"] <= planner_bootstrap.MAX_RECEIPT_AGE_NS:
         _fail("activation history custody outer lifetime exceeds its fixed bound")
     if any(payload[field] is not False for field in _FALSE_FIELDS):
         _fail("activation history custody claims unsupported hardware or witness assurance")
+
+
+def _consume_request_on_work(value, work):
+    """Capture and commit an ordinary typed original; not permission or effects."""
+    from serverware import authority_request_commitment as commitment
+    from serverware import authority_transition_oidc_session_activation_delivery as consumption
+
+    ledger = capture._SharedLedger(work)
+    owned = consumption.assertion._Capture(ledger,
+        maximum_bytes=MAX_CONSUME_REQUEST_BYTES).visit(value)
+    if type(owned) is not dict or owned.get("operation") != CONSUME_OPERATION:
+        _fail("historical consume purpose requires the actual typed consume request")
+    digest = commitment._typed_request_digest(owned, work=work)
+    plan._same(owned["requestDigest"], digest, work, "root-bound consume request digest differs")
+    operation_id = plan._frame("serverware.policyAuthorityOperation/v2",
+        (plan._ascii(CONSUME_OPERATION, work), plan._ascii(digest, work)), work)
+    plan._same(owned["operationId"], operation_id, work, "root-bound consume operation ID differs")
+    consumption._arguments(owned["arguments"], work)
+    return capability._wire(owned, ledger, MAX_CONSUME_REQUEST_BYTES,
+        consumption.assertion.MAX_CONTEXT_NODES)
+
+
+def _admit_consume_request(payload, work, current):
+    record = payload["consumeRequest"]
+    current()
+    original = authorization.transport._decode(record["base64Url"], record["byteCount"],
+        MAX_CONSUME_REQUEST_BYTES, work)
+    work.charge(hashes=1, input_bytes=len(original))
+    digest = production._callback(work, lambda: "sha256:" + hashlib.sha256(original).hexdigest())
+    current()
+    plan._same(digest, record["bytesDigest"], work, "root-bound consume original digest differs")
+    value = capability.wire._decode_object(original, work=work,
+        maximum_bytes=MAX_CONSUME_REQUEST_BYTES, maximum_nodes=100_000, maximum_depth=12)
+    canonical = _consume_request_on_work(value, work)
+    work.charge(input_bytes=len(original) + len(canonical))
+    if original != canonical:
+        _fail("root-bound consume request is not canonical original bytes")
+    current()
+    return original
 
 
 def _admit_planner(payload, root, window, deadline, work, current):
@@ -149,10 +214,12 @@ def _admit_planner(payload, root, window, deadline, work, current):
     return admitted
 
 
-def _verify_on_work(*, custody_bytes, root_public_key, work, live_window, transport_deadline_ns):
+def _verify_for_purpose(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns, consume):
     """Authenticate fresh outer purpose and genuine historical inner originals."""
     try:
         original, root = custody_bytes, root_public_key
+        schema, _payload_schema, _operation, role, mode, uid, gid = _profile(consume)
         if type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES:
             _fail("activation history custody is not a bounded immutable original")
         authorization._public(root)
@@ -163,26 +230,27 @@ def _verify_on_work(*, custody_bytes, root_public_key, work, live_window, transp
         inherited()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed activation history custody")
-        shape._literal(envelope["schema"], SCHEMA)
+        shape._literal(envelope["schema"], schema)
         shape._base64url(envelope["signatureBase64Url"], signature=True)
         if type(envelope["payload"]) is not dict:
             _fail("activation history custody payload is not an exact object")
         _canonical(original, envelope, work)
         unsigned = _wire(envelope["payload"], work)
         inherited()
-        capability._signature(root, envelope["signatureBase64Url"], SCHEMA, unsigned,
+        capability._signature(root, envelope["signatureBase64Url"], schema, unsigned,
             capture._SharedLedger(work))
         inherited()
         _canonical(original, envelope, work)
         payload = envelope["payload"]
-        _payload_shape(payload)
+        _payload_shape(payload, consume=consume)
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = planner_bootstrap._launch_guard(interval, opening, inherited, work)
         admitted = _admit_planner(payload, root, window, deadline, work, current)
-        material = _HistoryCustodyMaterial(original, admitted, CONSUMER_ROLE, PROCESS_MODE,
-            SERVICE_UID, SERVICE_GID, payload["receiverIdentity"], payload["bundleKeyDigest"],
-            payload["deliveryKeyDigest"], interval, opening)
+        request = _admit_consume_request(payload, work, current) if consume else None
+        material = _HistoryCustodyMaterial(original, admitted, role, mode,
+            uid, gid, payload["receiverIdentity"], payload["bundleKeyDigest"],
+            payload["deliveryKeyDigest"], interval, opening, request)
         _canonical(original, envelope, work)
         current()
         return material
@@ -192,11 +260,12 @@ def _verify_on_work(*, custody_bytes, root_public_key, work, live_window, transp
         raise OidcSessionActivationHistoryCustodyBootstrapError("activation history custody admission failed") from exc
 
 
-def _produce_on_work(*, payload, root_private_key, root_public_key, work,
-        live_window, transport_deadline_ns):
+def _produce_for_purpose(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns, consume):
     """Sign fresh independently established history scope, never invent its pins."""
     try:
         private, root = root_private_key, root_public_key
+        schema = _profile(consume)[0]
         authorization._private(private)
         authorization._public(root)
         owned = _capture(payload, work)
@@ -205,23 +274,25 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, work,
         deadline = min(window[4], transport_deadline_ns)
         inherited = planner_bootstrap._processing(window, deadline, work)
         inherited()
-        _payload_shape(owned)
+        _payload_shape(owned, consume=consume)
         interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = planner_bootstrap._launch_guard(interval, opening, inherited, work)
         _admit_planner(owned, root, window, deadline, work, current)
+        if consume:
+            _admit_consume_request(owned, work, current)
         unsigned = _wire(owned, work)
         current()
         planner_bootstrap.keys._pair_on_work(private, root, work)
         current()
-        envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+        envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
         envelope_size, envelope_nodes = work.measure(envelope)
         payload_size, payload_nodes = work.measure(owned)
         if envelope_size > MAX_BYTES or envelope_nodes > MAX_NODES:
             _fail("activation history custody output exceeds its outer bound")
         work.charge(input_bytes=envelope_size + 2 * payload_size + production._SIGNATURE_TRANSPORT_BYTES,
             json_nodes=envelope_nodes + payload_nodes)
-        message = plan._ascii(plan._frame(SCHEMA, (unsigned,), work), work)
+        message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
         current()
         signature = production._sign_and_verify(private, root, message, work)
         current()
@@ -239,3 +310,29 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, work,
         if isinstance(exc, OidcSessionActivationHistoryCustodyBootstrapError):
             raise
         raise OidcSessionActivationHistoryCustodyBootstrapError("activation history custody production failed") from exc
+
+
+def _verify_on_work(*, custody_bytes, root_public_key, work, live_window, transport_deadline_ns):
+    """Preserved completion-only v1 original admission."""
+    return _verify_for_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns, consume=False)
+
+
+def _verify_consume_on_work(*, custody_bytes, root_public_key, work, live_window, transport_deadline_ns):
+    """Fixed request-bound consume-planning v2 original admission only."""
+    return _verify_for_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns, consume=True)
+
+
+def _produce_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns):
+    return _produce_for_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, consume=False)
+
+
+def _produce_consume_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns):
+    return _produce_for_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, consume=True)

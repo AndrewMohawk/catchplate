@@ -111,9 +111,14 @@ def _capture_on_work(*, plan_originals, reserve_request_bytes, reserve_receipt_b
         "transport_deadline_ns": min(scope[5][4], scope[6])}, total
 
 
-def _start_on_work(held, work):
+def _start_on_work(held, work, *, expected_consume_request=None):
     """Fixed suffix over this call's owned inputs, never caller-supplied success."""
     owner = held["historical_custody"]
+    if expected_consume_request is None:
+        custody.OidcSessionActivationHistoryCustody.require_completion_on_work(owner, work=work)
+    else:
+        custody.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(owner,
+            expected_consume_request=expected_consume_request, work=work)
     custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
         root_public_key=held["root_public_key"], current_root_enrollment_bytes=held["enrollment_bytes"],
         work=work)
@@ -144,9 +149,21 @@ def _verify_originals_on_work(*, response_originals, plan_originals,
         operation_public_key, root_public_key, configuration_digest,
         expected_authorization_digest, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        historical_custody, live_window, transport_deadline_ns, work, include_delivery):
+        historical_custody, live_window, transport_deadline_ns, work, include_delivery,
+        expected_consume_request=None):
     """Authenticate returned originals against actual historical pending replay."""
     returned = transport._originals(response_originals, response=True)
+    if include_delivery:
+        consume = custody.history.assertion._Capture(evidence.capture._SharedLedger(work),
+            maximum_bytes=custody.bootstrap.MAX_CONSUME_REQUEST_BYTES).visit(expected_consume_request)
+        if type(consume) is not dict:
+            raise OidcSessionActivationCompletionResponseError(
+                "delivery provenance requires its independently supplied consume request")
+    else:
+        if expected_consume_request is not None:
+            raise OidcSessionActivationCompletionResponseError(
+                "completion receiving cannot accept a consume purpose")
+        consume = None
     held, total = _capture_on_work(plan_originals=plan_originals,
         reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
         snapshot_bytes=snapshot_bytes, enrollment_bytes=enrollment_bytes,
@@ -159,14 +176,15 @@ def _verify_originals_on_work(*, response_originals, plan_originals,
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         historical_custody=historical_custody, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work)
-    if total + sum(map(len, returned)) > MAX_ORIGINAL_BYTES:
+    consume_size = work.measure(consume)[0] if include_delivery else 0
+    if total + sum(map(len, returned)) + consume_size > MAX_ORIGINAL_BYTES:
         raise OidcSessionActivationCompletionResponseError(
             "activation completion returned originals exceed the aggregate bound")
     if returned[0] == b"uncertain":
         raise OidcSessionActivationCompletionUncertainError("activation completion is not established")
     work.charge(input_bytes=len(returned[1]))
     returned_identity = returned[1].decode("ascii")
-    current = _start_on_work(held, work)
+    current = _start_on_work(held, work, expected_consume_request=consume)
     admitted = None
 
     def live():
@@ -258,7 +276,7 @@ def _verify_on_work(*, response_originals, plan_originals,
         transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=False)
 
 
-def _verify_delivery_on_work(*, response_originals, plan_originals,
+def _verify_delivery_on_work(*, expected_consume_request, response_originals, plan_originals,
         reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes,
         enrollment_bytes, authorization_bytes, authorization_enrollment_bytes,
         grant_bytes, grant_enrollment_bytes, expectations, planner_public_key,
@@ -278,7 +296,8 @@ def _verify_delivery_on_work(*, response_originals, plan_originals,
         expected_generation_digest=expected_generation_digest, expected_pending_sequence=expected_pending_sequence,
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         historical_custody=historical_custody, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=True)
+        transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=True,
+        expected_consume_request=expected_consume_request)
 
 
 def _request_on_work(endpoint, *, packet_digest, plan_originals,

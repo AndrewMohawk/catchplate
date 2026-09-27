@@ -165,6 +165,19 @@ def _scope_tuple(scope):
     return tuple(scope[field] for field in sorted(SCOPE_FIELDS))
 
 
+def _storage_profile(owner):
+    """Two fixed source owners only; no caller-supplied codec or profile."""
+    if type(owner) is ActivationOriginalJournal:
+        return None
+    # Lazy source import avoids a codec/storage import cycle. No input chooses
+    # a module, callback, frame grammar, key purpose or filename prefix.
+    from serverware import authority_oidc_session_activation_delivery_journal as consume
+
+    if type(owner) is consume.DeliveryOriginalJournal:
+        return consume
+    _fail("private original journal has no fixed source storage profile")
+
+
 def _native(work, current, callback):
     current()
     work.charge(input_bytes=1)
@@ -196,6 +209,7 @@ class ActivationOriginalJournal:
     def __init__(self, *, directory_fd, expected_device, expected_inode, expected_uid, expected_gid,
             maximum_records, quota_bytes, configuration_digest, journal_key, delivery_key,
             live_window, work, transport_deadline_ns=None):
+        _storage_profile(self)
         for value, minimum, maximum in ((directory_fd, 0, 2**31 - 1),
                 (expected_device, 0, 2**64 - 1), (expected_inode, 1, 2**64 - 1),
                 (expected_uid, 1, 2**32 - 2), (expected_gid, 0, 2**32 - 2),
@@ -236,7 +250,7 @@ class ActivationOriginalJournal:
                     if observed != identity:
                         _fail("activation journal changed during original recovery")
                     scope, _original_bytes = self._unseal(raw, work, current)
-                    if name != _name(scope["planDigest"]):
+                    if name != self._record_name(scope["planDigest"]):
                         _fail("activation original differs from its plan locator")
                     self._entries[name] = (_scope_tuple(scope), self._digest(raw, work, current), observed)
                     self._used_bytes += len(raw)
@@ -270,6 +284,16 @@ class ActivationOriginalJournal:
                 self._io.poison()
             _fail("activation journal process differs from its provisioned owner")
 
+    def _record_name(self, plan_digest):
+        profile = _storage_profile(self)
+        return _name(plan_digest) if profile is None else profile.NAME_PREFIX + plan_digest[7:]
+
+    def _decode_retained(self, original, scope, work):
+        profile = _storage_profile(self)
+        if profile is None:
+            return _decode_original_on_work(original, scope=scope, work=work)
+        return profile._decode_original_on_work(original, scope=scope, work=work)
+
     def _snapshot_configuration(self):
         """Private held configuration only; no unmetered filesystem scan."""
         self._require_process()
@@ -300,6 +324,8 @@ class ActivationOriginalJournal:
     def _inventory(self, work, current):
         """Bound count and sizes before allocating or reading any record body."""
         names, total = {}, 0
+        profile = _storage_profile(self)
+        prefix = "activation-" if profile is None else profile.NAME_PREFIX
         current()
         work.charge(input_bytes=1)
         iterator = evidence.production._callback(work, lambda: os.scandir(self._directory_fd))
@@ -312,8 +338,8 @@ class ActivationOriginalJournal:
                 if len(names) >= self._configuration[5]:
                     _fail("activation journal exceeds its configured record count")
                 name = entry.name
-                if (type(name) is not str or len(name) != 75 or not name.startswith("activation-")
-                        or any(point not in _HEX for point in name[11:]) or name in names):
+                if (type(name) is not str or len(name) != len(prefix) + 64 or not name.startswith(prefix)
+                        or any(point not in _HEX for point in name[len(prefix):]) or name in names):
                     _fail("activation journal contains an unknown or temporary entry")
                 work.charge(input_bytes=len(name))
                 metadata = _native(work, current, lambda: os.stat(name,
@@ -373,13 +399,15 @@ class ActivationOriginalJournal:
         return _native(work, current, lambda: "sha256:" + hashlib.sha256(raw).hexdigest())
 
     def _unseal(self, raw, work, current):
-        if type(raw) is not bytes or not 50 <= len(raw) <= MAX_RECORD_BYTES or raw[:8] != MAGIC:
+        profile = _storage_profile(self)
+        magic, domain = (MAGIC, DOMAIN) if profile is None else (profile.MAGIC, profile.DOMAIN)
+        if type(raw) is not bytes or not 50 <= len(raw) <= MAX_RECORD_BYTES or raw[:8] != magic:
             _fail("activation journal original has an unknown encrypted frame")
         scope_size, original_size = int.from_bytes(raw[8:10], "big"), int.from_bytes(raw[10:18], "big")
         if (not 2 <= scope_size <= MAX_SCOPE_BYTES or not 2 <= original_size <= MAX_ORIGINAL_BYTES
                 or len(raw) != 30 + scope_size + original_size + 16):
             _fail("activation journal encrypted frame has a malformed length vector")
-        work.charge(input_bytes=len(raw) + original_size + len(DOMAIN))
+        work.charge(input_bytes=len(raw) + original_size + len(domain))
         scope_bytes, nonce, ciphertext = raw[30:30 + scope_size], raw[18:30], raw[30 + scope_size:]
         value = evidence.wire._decode_object(scope_bytes, work=work, maximum_bytes=MAX_SCOPE_BYTES,
             maximum_nodes=32, maximum_depth=2)
@@ -387,7 +415,7 @@ class ActivationOriginalJournal:
         if scope["configurationDigest"] != self._configuration[1]:
             _fail("activation journal original belongs to a different configuration")
         evidence.capability._canonical(scope_bytes, scope, evidence.capture._SharedLedger(work), MAX_SCOPE_BYTES, 32)
-        aad = DOMAIN + raw[:18] + scope_bytes
+        aad = domain + raw[:18] + scope_bytes
         try:
             original = _native(work, current, lambda: AESGCM(self._configuration[2]).decrypt(nonce, ciphertext, aad))
         except (InvalidTag, ValueError) as exc:
@@ -395,19 +423,21 @@ class ActivationOriginalJournal:
         if type(original) is not bytes or len(original) != original_size:
             _fail("activation journal plaintext length differs from its original frame")
         current()
-        _decode_original_on_work(original, scope=scope, work=work)
+        self._decode_retained(original, scope, work)
         current()
         return scope, original
 
     def _seal(self, scope, original, work, current):
+        profile = _storage_profile(self)
+        magic, domain = (MAGIC, DOMAIN) if profile is None else (profile.MAGIC, profile.DOMAIN)
         raw_scope = evidence.capability._wire(scope, evidence.capture._SharedLedger(work), MAX_SCOPE_BYTES, 32)
-        header = MAGIC + len(raw_scope).to_bytes(2, "big") + len(original).to_bytes(8, "big")
-        work.charge(input_bytes=2 * len(original) + len(raw_scope) * 2 + len(DOMAIN) + 64)
+        header = magic + len(raw_scope).to_bytes(2, "big") + len(original).to_bytes(8, "big")
+        work.charge(input_bytes=2 * len(original) + len(raw_scope) * 2 + len(domain) + 64)
         nonce = _native(work, current, lambda: os.urandom(12))
         if type(nonce) is not bytes or len(nonce) != 12:
             _fail("activation journal randomness has the wrong exact length")
         ciphertext = _native(work, current, lambda: AESGCM(self._configuration[2]).encrypt(
-            nonce, original, DOMAIN + header + raw_scope))
+            nonce, original, domain + header + raw_scope))
         if type(ciphertext) is not bytes or len(ciphertext) != len(original) + 16:
             _fail("activation journal ciphertext has the wrong exact length")
         raw = header + nonce + raw_scope + ciphertext
@@ -430,10 +460,10 @@ class ActivationOriginalJournal:
                 current()
                 if held["configurationDigest"] != self._configuration[1]:
                     _fail("activation journal append configuration differs")
-                _decode_original_on_work(original_bytes, scope=held, work=work)
+                self._decode_retained(original_bytes, held, work)
                 current()
                 self._continuity(work, current)
-                name = _name(held["planDigest"])
+                name = self._record_name(held["planDigest"])
                 if name in self._entries:
                     previous = self._entries[name]
                     raw, identity = self._read_file(name, work, current)
@@ -504,7 +534,7 @@ class ActivationOriginalJournal:
                 if held["configurationDigest"] != self._configuration[1]:
                     _fail("activation journal read configuration differs")
                 self._continuity(work, current)
-                name = _name(held["planDigest"])
+                name = self._record_name(held["planDigest"])
                 previous = self._entries.get(name)
                 if previous is None:
                     current()

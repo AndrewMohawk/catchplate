@@ -211,7 +211,7 @@ def _activation_delivery_plan(*, read_planner, planner_private_key, planner_publ
         authn_policy, trust_policy, maximum_plan_age_ns, maximum_clock_skew_ns,
         state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
         historical_custody, activation_expectations, activation_scope,
-        activation_planner_public_key, operation_public_key,
+        activation_planner_public_key, operation_public_key, journal,
         live_window, transport_deadline_ns, work):
     from serverware.authority_oidc_session_activation_delivery_plan_owner import OidcSessionActivationDeliveryPlanOwner
 
@@ -224,7 +224,7 @@ def _activation_delivery_plan(*, read_planner, planner_private_key, planner_publ
         state_root_public_key=state_root_public_key, complete_root_vector_bytes=complete_root_vector_bytes,
         historical_custody=historical_custody, activation_expectations=activation_expectations,
         activation_scope=activation_scope, activation_planner_public_key=activation_planner_public_key,
-        operation_public_key=operation_public_key, live_window=live_window,
+        operation_public_key=operation_public_key, journal=journal, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work)
 
 

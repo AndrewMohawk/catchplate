@@ -78,6 +78,7 @@ def _produce_from_custody_on_work(*, packet_bytes, expected_packet_digest,
     bound = min(window[4], inherited)
     # Every external mutable graph and immutable original is held before the
     # first native key/clock callback. A returned admission is never an input.
+    custody.OidcSessionActivationHistoryCustody.require_completion_on_work(owner, work=work)
     custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
         root_public_key=root, current_root_enrollment_bytes=state_enrollment, work=work)
     window, bound = custody.OidcSessionActivationHistoryCustody.processing_bounds_on_work(owner,

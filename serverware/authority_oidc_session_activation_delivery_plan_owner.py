@@ -1,11 +1,11 @@
-"""Configured stateless consume acquisition/signing, never durable custody.
+"""Configured consume planning with exact encrypted original retention.
 
 This owner composes actual read/write acquisition with genuine original state,
-completed-activation provenance and signed-plan production. Supplied independent
-configuration/policy pins still need cold admission. No arbitrary result, caller
-callback, AES key, retained locator, new token, SQL mutation or release is used.
-The existing historical owner keeps its real process purpose; this library
-does not turn the separate consume head requester into a historical custodian.
+completed-activation provenance and signed-plan production before durable append.
+Known-envelope replay binds the exact ciphertext and repeats original admission;
+storage integrity is never proof, execution authority or permission to retry.
+Independent configuration/policy pins still need actual cold root admission.
+No key, plaintext token, SQL mutation or release is returned.
 """
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ import threading
 
 from serverware import authority_oidc_session_activation_delivery_plan as plan
 from serverware import authority_oidc_session_activation_delivery_planning as planning
+from serverware import authority_oidc_session_activation_delivery_journal as custody
+from serverware import authority_oidc_session_activation_delivery_retained as retained
 from serverware import authority_oidc_session_activation_delivery_writes as writes
 from serverware import authority_oidc_session_activation_execution_expectations as expectations
 from serverware import authority_oidc_session_activation_history_custody as history
@@ -40,12 +42,13 @@ def _fail(message):
 
 @dataclass(frozen=True, slots=True, repr=False)
 class PreparedDeliveryPlan:
-    """Immutable token-free originals only; no retained or execution locator."""
+    """Token-free plan and exact journal identity; never execution authority."""
 
     request_bytes: bytes
     scope_bytes: bytes
     envelope_bytes: bytes
     plan_digest: str
+    journal_digest: str
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -71,6 +74,8 @@ class _Configuration:
     activation_scope_bytes: bytes
     activation_planner_public_key: object
     operation_public_key: object
+    journal: object
+    journal_configuration: tuple
 
 
 def _json(original, work):
@@ -86,6 +91,40 @@ def _scope_shape(value, work):
     state.head.authorization._token(value["databaseId"])
     for name in ("pendingSequence", "fence"):
         registration._integer(value[name], "configured activation " + name, 1)
+
+
+def _bytes_equal(left, right, work, label):
+    if type(left) is not bytes or type(right) is not bytes:
+        _fail("consume " + label + " requires immutable originals")
+    work.charge(input_bytes=len(left) + len(right))
+    if left != right:
+        _fail("consume " + label + " originals differ")
+
+
+def _journal_scope(configured, request, envelope, work):
+    return {"sourceRevision": configured.source_revision,
+        "configurationDigest": configured.configuration_digest,
+        "requestDigest": request["requestDigest"],
+        "planDigest": evidence.plan._frame(contract.IDENTITY_DOMAIN, (envelope,), work)}
+
+
+def _authenticate_known(envelope_bytes, request, scope, configured, current, work):
+    """Authenticate only the lookup prerequisite; full replay still follows."""
+    envelope = contract._decode_on_work(envelope_bytes, envelope=True, work=work)
+    payload = envelope["payload"]
+    for name in ("requestDigest", "operationId"):
+        registration._same(payload[name], request[name], work, "known consume " + name)
+    for name in ("configurationDigest", "plannerIdentity", "plannerSpkiDigest"):
+        registration._same(payload[name], scope[name], work, "known consume " + name)
+    unsigned = contract._encode_on_work(payload, work=work)
+    evidence.keys._public_binding(configured.planner_public_key, configured.planner_spki_digest, work)
+    evidence.capability._signature(configured.planner_public_key, envelope["signatureBase64Url"],
+        contract.SIGNATURE_DOMAIN, unsigned, evidence.capture._SharedLedger(work))
+    now = current()
+    evidence._fresh(payload, now, configured.maximum_plan_age_ns, configured.maximum_clock_skew_ns)
+    if now >= scope["deadlineEpochNs"] or payload["expiresAtEpochNs"] > scope["deadlineEpochNs"]:
+        _fail("known consume plan exceeds its independently expected original deadline")
+    return payload
 
 
 def _window(configured, live_window, deadline):
@@ -120,12 +159,13 @@ class OidcSessionActivationDeliveryPlanOwner:
             authn_policy, trust_policy, maximum_plan_age_ns, maximum_clock_skew_ns,
             state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
             historical_custody, activation_expectations, activation_scope,
-            activation_planner_public_key, operation_public_key,
+            activation_planner_public_key, operation_public_key, journal,
             live_window, transport_deadline_ns, work):
         ledger = evidence.capture._SharedLedger(work)
         if (type(read_planner) is not planning.OidcSessionActivationDeliveryReadPlanner
-                or type(historical_custody) is not history.OidcSessionActivationHistoryCustody):
-            _fail("consume planning requires the actual configured read and historical custody owners")
+                or type(historical_custody) is not history.OidcSessionActivationHistoryCustody
+                or type(journal) is not custody.DeliveryOriginalJournal):
+            _fail("consume planning requires actual configured read, history and journal owners")
         root, private, public = state_root_public_key, planner_private_key, planner_public_key
         original_planner, operation_key = activation_planner_public_key, operation_public_key
         if not isinstance(private, evidence.Ed25519PrivateKey):
@@ -178,18 +218,28 @@ class OidcSessionActivationDeliveryPlanOwner:
         if owned["spki"] in (root_spki, observed["scope"]["plannerSpkiDigest"]):
             _fail("consume planner requires a separate root/original-activation signing key")
         state.vector._decode_on_work(vector, work=work)
+        history.OidcSessionActivationHistoryCustody._require_consume_planning_on_work(
+            historical_custody, work=work)
         history.OidcSessionActivationHistoryCustody.bind_context_on_work(historical_custody,
             root_public_key=root, current_root_enrollment_bytes=enrolled, work=work)
         narrowed, clipped = history.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
             historical_custody, live_window=window, transport_deadline_ns=bound, work=work)
         historical_configuration = history.OidcSessionActivationHistoryCustody._snapshot_configuration(historical_custody)
+        journal_configuration = custody.DeliveryOriginalJournal._snapshot_configuration(journal)
+        if type(journal_configuration) is not tuple or len(journal_configuration) != 8:
+            _fail("consume journal configuration inventory differs")
+        registration._same(journal_configuration[:2],
+            (contract.authority.SOURCE_REVISION, owned["configuration"]), work, "consume journal source/configuration")
+        _bytes_equal(journal_configuration[3], historical_configuration.bundle_key, work, "journal/history bundle key")
+        _bytes_equal(journal_configuration[4], historical_configuration.delivery_key, work, "journal/history delivery key")
         current()
         configured = _Configuration(contract.authority.SOURCE_REVISION, read_planner, read_config,
             private, public, tuple(owned["identity"][name] for name in _IDENTITY_FIELDS),
             owned["spki"], owned["configuration"], registration._wire(owned["policy"], work),
             registration._wire(owned["trust"], work), owned["age"], owned["skew"], enrolled, root, vector,
             historical_custody, historical_configuration, registration._wire(observed, work),
-            registration._wire(owned["activationScope"], work), original_planner, operation_key)
+            registration._wire(owned["activationScope"], work), original_planner, operation_key,
+            journal, journal_configuration)
         object.__setattr__(self, "_configured", configured)
         object.__setattr__(self, "_seal", configured)
         object.__setattr__(self, "_pid", os.getpid())
@@ -207,8 +257,10 @@ class OidcSessionActivationDeliveryPlanOwner:
                 or planning.OidcSessionActivationDeliveryReadPlanner._snapshot_configuration(
                     configured.read_planner) is not configured.read_configuration
                 or history.OidcSessionActivationHistoryCustody._snapshot_configuration(
-                    configured.historical_custody) is not configured.historical_configuration):
-            _fail("consume configured read or historical custody owner changed")
+                    configured.historical_custody) is not configured.historical_configuration
+                or custody.DeliveryOriginalJournal._snapshot_configuration(
+                    configured.journal) is not configured.journal_configuration):
+            _fail("consume configured read, history or journal owner changed")
         return configured
 
     def _guard(self, configured, window, bound, work):
@@ -254,6 +306,8 @@ class OidcSessionActivationDeliveryPlanOwner:
             current()
             current = self._guard(configured, window, bound, work)
             subject, request = owned["transitionInputs"], owned["request"]
+            history.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(
+                configured.historical_custody, expected_consume_request=request, work=work)
             scope = {**subject, **_fixed_scope(configured, work), "deadlineEpochNs": window[3]}
             payload = state._verify_on_work(request=request, scope=scope, old_token_bytes=token,
                 complete_root_vector_bytes=configured.complete_root_vector_bytes,
@@ -281,24 +335,129 @@ class OidcSessionActivationDeliveryPlanOwner:
                 counted_before_heads=acquired.counted_before_heads, write_inputs=acquired.write_inputs, work=work)
             context = planning.transition.core.KernelContext(OPERATION, request["arguments"], acquired.selected_rows,
                 acquired.database_now, request["requestDigest"], query_reads=acquired.query_reads)
-            envelope = plan._produce_on_work(context, request=request, scope=scope, old_token_bytes=token,
-                business_before_roots=owned["businessBeforeRoots"], authorization_before_roots=owned["authorizationBeforeRoots"],
-                before_proofs=acquired.before_proofs, read_heads=acquired.read_heads, query_frontiers=acquired.query_frontiers,
-                expected_counted_heads=owned["expectedCountedHeads"], write_proof_bytes=proof,
-                state_enrollment_bytes=configured.state_enrollment_bytes, state_root_public_key=configured.state_root_public_key,
-                complete_root_vector_bytes=configured.complete_root_vector_bytes, head_query_bytes=query,
-                head_observation_bytes=observation, activation_originals=raw,
-                activation_expectations=_json(configured.activation_expectations_bytes, work),
-                activation_scope=_json(configured.activation_scope_bytes, work),
-                activation_planner_public_key=configured.activation_planner_public_key,
-                operation_public_key=configured.operation_public_key, historical_custody=configured.historical_custody,
-                planner_private_key=configured.planner_private_key, planner_public_key=configured.planner_public_key,
-                live_window=window, transport_deadline_ns=bound, work=work)
+            originals = {"request": request, "scope": scope, "old_token_bytes": token,
+                "business_before_roots": owned["businessBeforeRoots"],
+                "authorization_before_roots": owned["authorizationBeforeRoots"],
+                "before_proofs": acquired.before_proofs, "read_heads": acquired.read_heads,
+                "query_frontiers": acquired.query_frontiers, "expected_counted_heads": owned["expectedCountedHeads"],
+                "write_proof_bytes": proof, "state_enrollment_bytes": configured.state_enrollment_bytes,
+                "state_root_public_key": configured.state_root_public_key,
+                "complete_root_vector_bytes": configured.complete_root_vector_bytes,
+                "head_query_bytes": query, "head_observation_bytes": observation, "activation_originals": raw,
+                "activation_expectations": _json(configured.activation_expectations_bytes, work),
+                "activation_scope": _json(configured.activation_scope_bytes, work),
+                "activation_planner_public_key": configured.activation_planner_public_key,
+                "operation_public_key": configured.operation_public_key,
+                "historical_custody": configured.historical_custody,
+                "live_window": window, "transport_deadline_ns": bound, "work": work}
+            envelope = plan._produce_on_work(context, **originals,
+                planner_private_key=configured.planner_private_key, planner_public_key=configured.planner_public_key)
             signed = contract._decode_on_work(envelope, envelope=True, work=work)["payload"]
+            plan_digest = evidence.plan._frame(contract.IDENTITY_DOMAIN, (envelope,), work)
+            # Recapture ordinary owned originals, not a cached proof result.
+            invocation = plan._capture(context, **originals)
+            journal_scope, original_bytes = retained._encode_on_work(invocation,
+                envelope_bytes=envelope, plan_digest=plan_digest, work=work)
+            expiry = min(signed["expiresAtEpochNs"], payload["expiresAtEpochNs"])
+            window = plan.windows._narrow(window, deadline_epoch_ns=expiry,
+                maximum_lifetime_ns=configured.maximum_plan_age_ns,
+                maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
+            bound = min(bound, window[4])
+            current = self._guard(configured, window, bound, work)
+            current()
+            journal_digest = custody.DeliveryOriginalJournal.append(configured.journal,
+                scope=journal_scope, original_bytes=original_bytes,
+                live_window=window, transport_deadline_ns=bound, work=work)
             result = PreparedDeliveryPlan(registration._wire(request, work), registration._wire(scope, work),
-                envelope, evidence.plan._frame(contract.IDENTITY_DOMAIN, (envelope,), work))
-            if current() >= min(signed["expiresAtEpochNs"], payload["expiresAtEpochNs"]):
-                _fail("consume plan expired before token-free original return")
+                envelope, plan_digest, registration._digest(journal_digest))
+            if current() >= expiry:
+                _fail("consume plan expired after retention; no replacement or retry is authorized")
+            return result
+        finally:
+            lock.release()
+
+    def verify_retained(self, *, envelope_bytes, expected_request, expected_scope,
+            business_before_roots, authorization_before_roots, expected_counted_heads,
+            expected_journal_digest, live_window, transport_deadline_ns, work):
+        """Read only exact retained originals; never reacquire, re-sign or renew."""
+        configured = self._snapshot_configuration()
+        lock = self._lock
+        if not lock.acquire(blocking=False):
+            _fail("consume plan owner is already in use")
+        try:
+            envelope = state._original(envelope_bytes, contract.MAX_BYTES, "known consume plan")
+            owned = planning._capture(request=expected_request,
+                business_before_roots=business_before_roots,
+                authorization_before_roots=authorization_before_roots,
+                expected_counted_heads=expected_counted_heads,
+                transition_inputs={"scope": expected_scope, "journalDigest": expected_journal_digest},
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+            request, expected = owned["request"], owned["transitionInputs"]
+            scope, journal_digest = expected["scope"], registration._digest(expected["journalDigest"])
+            registration._closed(scope, state.SCOPE_FIELDS, "independently expected retained consume scope")
+            fixed = _fixed_scope(configured, work)
+            registration._same({name: scope[name] for name in fixed}, fixed, work, "configured retained consume scope")
+            for argument, name in (("delivery_id", "deliveryId"), ("user_id", "userId"),
+                    ("session_id", "sessionId"), ("credential_id", "credentialId"),
+                    ("credential_record_id", "credentialRecordId"), ("challenge_id", "challengeId")):
+                registration._same(scope[name], request["arguments"][argument], work, "retained consume subject")
+            window, bound = _window(configured, owned["liveWindow"], owned["transportDeadlineNs"])
+            window = plan.windows._narrow(window, deadline_epoch_ns=scope["deadlineEpochNs"],
+                maximum_lifetime_ns=configured.maximum_plan_age_ns,
+                maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
+            bound = min(bound, window[4])
+            current = self._guard(configured, window, bound, work)
+            current()
+            history.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(
+                configured.historical_custody, expected_consume_request=request, work=work)
+            window, bound = history.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
+                configured.historical_custody, live_window=window, transport_deadline_ns=bound, work=work)
+            current()
+            current = self._guard(configured, window, bound, work)
+            signed = _authenticate_known(envelope, request, scope, configured, current, work)
+            window = plan.windows._narrow(window, deadline_epoch_ns=signed["expiresAtEpochNs"],
+                maximum_lifetime_ns=configured.maximum_plan_age_ns,
+                maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
+            bound = min(bound, window[4])
+            current = self._guard(configured, window, bound, work)
+            journal_scope = _journal_scope(configured, request, envelope, work)
+            current()
+            original = custody.DeliveryOriginalJournal.read_bound(configured.journal,
+                scope=journal_scope, expected_journal_digest=journal_digest,
+                live_window=window, transport_deadline_ns=bound, work=work)
+            if original is None:
+                _fail("exact retained consume original is absent; no regeneration is authorized")
+            current()
+            context, originals = retained._restore_on_work(original, scope=journal_scope, work=work)
+            for name, value in (("request", request), ("scope", scope),
+                    ("activation_expectations", _json(configured.activation_expectations_bytes, work)),
+                    ("activation_scope", _json(configured.activation_scope_bytes, work))):
+                registration._same(originals[name], value, work, "independent retained consume " + name)
+            planning.semantics._canonical_equal(
+                (originals["business_before_roots"], originals["authorization_before_roots"],
+                    originals["expected_counted_heads"]),
+                (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"], owned["expectedCountedHeads"]),
+                work=work, label="retained consume independent primary roots and counted heads differ")
+            for name, value in (("envelope_bytes", envelope),
+                    ("state_enrollment_bytes", configured.state_enrollment_bytes),
+                    ("complete_root_vector_bytes", configured.complete_root_vector_bytes)):
+                _bytes_equal(originals[name], value, work, name)
+            current()
+            # Keys, custody and the original current allowance never come from storage.
+            full = plan._verify_full_on_work(context, **originals,
+                state_root_public_key=configured.state_root_public_key,
+                activation_planner_public_key=configured.activation_planner_public_key,
+                operation_public_key=configured.operation_public_key,
+                historical_custody=configured.historical_custody,
+                planner_public_key=configured.planner_public_key,
+                live_window=window, transport_deadline_ns=bound, work=work)
+            registration._same(full.plan_digest, journal_scope["planDigest"], work, "retained consume plan identity")
+            full.live()
+            result = PreparedDeliveryPlan(registration._wire(request, work), registration._wire(scope, work),
+                envelope, full.plan_digest, journal_digest)
+            full.live()
+            if current() >= full.valid_until_epoch_ns:
+                _fail("retained consume plan expired before token-free return")
             return result
         finally:
             lock.release()
@@ -310,8 +469,12 @@ class OidcSessionActivationDeliveryPlanOwner:
         if type(lock) is not _LOCK_TYPE or not lock.acquire(blocking=False):
             _fail("consume plan owner is already in use")
         try:
+            if self._closed:
+                return
+            configured = self._configured
             object.__setattr__(self, "_closed", True)
             object.__setattr__(self, "_configured", None)
             object.__setattr__(self, "_seal", None)
+            custody.DeliveryOriginalJournal.close(configured.journal)
         finally:
             lock.release()

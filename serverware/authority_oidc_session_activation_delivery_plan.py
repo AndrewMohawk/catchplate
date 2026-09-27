@@ -169,6 +169,8 @@ def _capture(context, *, request, scope, old_token_bytes, business_before_roots,
         (evidence.plan._ascii(contract.OPERATION, work), evidence.plan._ascii(digest, work)), work)
     registration._same(actual["operationId"], operation_id, work, "consume operation identity")
     transition._arguments(raw["arguments"], work)
+    custody.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(owner,
+        expected_consume_request=actual, work=work)
     custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
         root_public_key=root, current_root_enrollment_bytes=original_state[0], work=work)
     narrowed, narrowed_bound = custody.OidcSessionActivationHistoryCustody.processing_bounds_on_work(owner,

@@ -84,6 +84,7 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
     bound = min(window[4], inherited)
     # All independent input graphs and owner configurations are held before
     # native clocks, key operations, protected reads or journal access.
+    custody.OidcSessionActivationHistoryCustody.require_completion_on_work(owner, work=work)
     custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
         root_public_key=root, current_root_enrollment_bytes=state_enrollment, work=work)
     window, bound = custody.OidcSessionActivationHistoryCustody.processing_bounds_on_work(owner,

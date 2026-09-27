@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="730" viewBox="0 0 1000 730" role="img" aria-labelledby="activation-title activation-description">
-  <title id="activation-title">OIDC activation: 15 of 26 tracked source steps landed; two in progress, nine other open. Step 15 has six of eight source components landed; step 17 has durable reserve but no independent cold pending receiver.</title>
-  <desc id="activation-description">The 26 numbered segments match the linked status ledger. Steps 01 through 14 and 16 are landed; 15 private replay/custody and 17 reservation/pending admission are in progress; 18 one-use protected SQL is next and open; 19 through 26 are open. Step 16's distinct post-plan authorization and dedicated cold grant authorizer landed in d8e6bba without renewing original plan expiry or establishing public consent. Step 17's signed computation, durable exact reserve/ACK and cold state-v5 service landed in 81b7f7b, but the independent cold pending receiver is missing; its standalone admission API does not close the step. Each segment title names its stable task. The current-step detail has eight equal source-component segments with written names and states: F08.4e.2.a bound originals and genuine replay landed; b first-exact ciphertext store landed; c sender bootstrap and private export landed; d dedicated receiving bootstrap landed; e process-bound receiving owner landed; f generic frames and original-window forwarding landed; g receiving cold key and FD delivery partial/open; h dedicated grant/reserve/SQL role wiring partial/open. Grant and reserve delivery/wiring are landed; SQL remains open. These eight diagnostic components are inside step 15, not eight extra steps; the denominator stays 26 and step 15 stays open. F08.4e.4 through F08.4e.7 remain unchecked, as do public and portal flows. Parent progress remains 34 of 46; production acceptance remains 0 of 6 verified. These counts describe source checkpoints, not effort, an ETA or product readiness. Source is unbuilt, unexecuted and unprovisioned.</desc>
+  <title id="activation-title">OIDC activation: 18 of 26 named source steps landed; 8 open. Completion and historical reconciliation is next. Private replay/custody has 8 of 8 source components landed.</title>
+  <desc id="activation-description">Every numbered segment has a visible named checklist row and written status. Steps 01–18 are landed: retained finalization admission; assertion and CAS derivation; cookie binding and truthful login; complete original read proofs; encrypted token originals; business transition effects; full mutation and capacity adapter; signed-original mechanics; indexed write evidence; configured owner and private retention; root-authenticated config and snapshot; private service and key delivery; fresh latest-head admission; encrypted execution bundle; private activation replay; execution authorization grant; reservation and pending admission; one-use protected SQL. Step 19 completion and historical reconciliation is NEXT and open. Steps 20–26 are open: protected token release; target-bound permission; public activation dispatch; public recovery dispatch; explicit portal actions; fresh portal permission; truthful session confirmation. No leaf is in progress. bdac06bce0e5103922bcc27e4a6836ed50453e3f closes private SQL delivery/wiring, independent cold pending admission and protected issuer/IDs-only executor composition, not completion or token release. All eight private replay components are inside step 15, not additional tasks. Parent progress remains 34 of 46; production acceptance is 0 of 6 verified. Source is unbuilt, unexecuted and unprovisioned; counts are not effort, ETA or readiness percentages.</desc>
   <rect x="1" y="1" width="998" height="728" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">OIDC activation · granular source workflow</text>
-    <text x="24" y="71" fill="#6ee7b7" font-size="23" font-weight="700">15 / 26 landed</text>
-    <text x="235" y="70" fill="#cbd5e1" font-size="17">2 in progress + 9 other open</text>
+    <text x="24" y="71" fill="#6ee7b7" font-size="23" font-weight="700">18 / 26 landed</text>
+    <text x="235" y="70" fill="#cbd5e1" font-size="17">8 open · no in-progress leaves</text>
     <text x="24" y="95" fill="#94a3b8" font-size="14">Fixed tracked steps · full names, closure criteria and commit evidence in the linked ledger</text>
     <g font-size="12" font-weight="700" text-anchor="middle">
       <g fill="#34d399">
@@ -24,12 +24,12 @@
         <rect x="456" y="112" width="32" height="44" rx="5"><title>13 · F08.4d.5c · Fresh latest-head admission · LANDED</title></rect>
         <rect x="492" y="112" width="32" height="44" rx="5"><title>14 · F08.4e.1 · Encrypted execution bundle · LANDED</title></rect>
       </g>
-      <rect x="528" y="112" width="32" height="44" rx="5" fill="#fbbf24"><title>15 · F08.4e.2 · Private activation replay · IN PROGRESS, 6/8 source components landed; grant/reserve delivery and wiring landed, SQL open</title></rect>
+      <rect x="528" y="112" width="32" height="44" rx="5" fill="#34d399"><title>15 · F08.4e.2 · Private activation replay · LANDED · 8/8 source components</title></rect>
       <g fill="#334155" stroke="#94a3b8">
         <rect x="564" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>16 · F08.4e.3 · Execution authorization grant · LANDED · d8e6bba</title></rect>
-        <rect x="600" y="112" width="32" height="44" rx="5" fill="#fbbf24" stroke="none"><title>17 · F08.4e.4 · Reservation and pending admission · IN PROGRESS; signed computation, durable reserve/ACK and cold state-v5 service landed; independent pending receiver open</title></rect>
-        <rect x="636" y="112" width="32" height="44" rx="5" fill="#0f172a" stroke="#60a5fa" stroke-width="2"><title>18 · F08.4e.5 · One-use protected SQL · NEXT, OPEN; connect independent cold pending receiver</title></rect>
-        <rect x="672" y="112" width="32" height="44" rx="5"><title>19 · F08.4e.6 · Completion and reconciliation · OPEN</title></rect>
+        <rect x="600" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>17 · F08.4e.4 · Reservation and pending admission · LANDED; independent cold pending receiver connected</title></rect>
+        <rect x="636" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>18 · F08.4e.5 · One-use protected SQL · LANDED; durable attempt, actual issuer and IDs-only executor</title></rect>
+        <rect x="672" y="112" width="32" height="44" rx="5" fill="#0f172a" stroke="#60a5fa" stroke-width="2"><title>19 · F08.4e.6 · Completion and historical reconciliation · NEXT, OPEN</title></rect>
         <rect x="708" y="112" width="32" height="44" rx="5"><title>20 · F08.4e.7 · Protected token release · OPEN</title></rect>
         <rect x="744" y="112" width="32" height="44" rx="5"><title>21 · F08.5.1 · Target-bound permission · OPEN</title></rect>
         <rect x="780" y="112" width="32" height="44" rx="5"><title>22 · F08.5.2 · Public activation dispatch · OPEN</title></rect>
@@ -50,63 +50,75 @@
         <text x="364" y="148">✓</text><text x="400" y="148">✓</text><text x="436" y="148">✓</text>
         <text x="472" y="148">✓</text><text x="508" y="148">✓</text>
       </g>
-      <g fill="#422006"><text x="544" y="131">15</text><text x="544" y="148">→</text></g>
+      <g fill="#052e26"><text x="544" y="131">15</text><text x="544" y="148">✓</text></g>
       <g fill="#e2e8f0">
-        <text x="580" y="131" fill="#052e26">16</text><text x="616" y="131" fill="#422006">17</text><text x="652" y="131" fill="#93c5fd">18</text>
-        <text x="688" y="131">19</text><text x="724" y="131">20</text><text x="760" y="131">21</text>
+        <text x="580" y="131" fill="#052e26">16</text><text x="616" y="131" fill="#052e26">17</text><text x="652" y="131" fill="#052e26">18</text>
+        <text x="688" y="131" fill="#93c5fd">19</text><text x="724" y="131">20</text><text x="760" y="131">21</text>
         <text x="796" y="131">22</text><text x="832" y="131">23</text><text x="868" y="131">24</text>
         <text x="904" y="131">25</text><text x="940" y="131">26</text>
-        <text x="580" y="148" fill="#052e26">✓</text><text x="616" y="148" fill="#422006">→</text><text x="652" y="148" fill="#93c5fd">N</text>
-        <text x="688" y="148">—</text><text x="724" y="148">—</text><text x="760" y="148">—</text>
+        <text x="580" y="148" fill="#052e26">✓</text><text x="616" y="148" fill="#052e26">✓</text><text x="652" y="148" fill="#052e26">✓</text>
+        <text x="688" y="148" fill="#93c5fd">N</text><text x="724" y="148">—</text><text x="760" y="148">—</text>
         <text x="796" y="148">—</text><text x="832" y="148">—</text><text x="868" y="148">—</text>
         <text x="904" y="148">—</text><text x="940" y="148">—</text>
       </g>
     </g>
     <g font-size="13" font-weight="700">
-      <text x="24" y="181" fill="#6ee7b7">✓ LANDED · 01–14, 16</text>
-      <text x="245" y="181" fill="#fde68a">→ IN PROGRESS · 15, 17</text>
-      <text x="503" y="181" fill="#93c5fd">N = NEXT, OPEN · 18</text>
-      <text x="757" y="181" fill="#cbd5e1">— OPEN · 19–26</text>
+      <text x="24" y="181" fill="#6ee7b7">✓ LANDED · 01–18</text>
+      <text x="365" y="181" fill="#93c5fd">N = NEXT, OPEN · 19</text>
+      <text x="757" y="181" fill="#cbd5e1">— OPEN · 20–26</text>
     </g>
-    <rect x="24" y="203" width="952" height="420" rx="12" fill="#172033" stroke="#fbbf24"/>
-    <text x="42" y="235" fill="#fef3c7" font-size="21" font-weight="700">Inside step 15 · Private replay / custody</text>
-    <text x="42" y="262" fill="#6ee7b7" font-size="18" font-weight="700">6 / 8 SOURCE components landed</text>
-    <text x="425" y="262" fill="#cbd5e1" font-size="16">2 partial/open · step 15 is still IN PROGRESS</text>
-    <g>
-      <rect x="42" y="278" width="108" height="12" rx="3" fill="#34d399"><title>F08.4e.2.a · Bound originals and genuine replay · LANDED</title></rect>
-      <rect x="157" y="278" width="108" height="12" rx="3" fill="#34d399"><title>F08.4e.2.b · First-exact ciphertext store · LANDED</title></rect>
-      <rect x="272" y="278" width="108" height="12" rx="3" fill="#34d399"><title>F08.4e.2.c · Sender bootstrap and private export · LANDED</title></rect>
-      <rect x="387" y="278" width="108" height="12" rx="3" fill="#34d399"><title>F08.4e.2.d · Dedicated receiving bootstrap · LANDED</title></rect>
-      <rect x="502" y="278" width="108" height="12" rx="3" fill="#34d399"><title>F08.4e.2.e · Process-bound receiving owner · LANDED</title></rect>
-      <rect x="617" y="278" width="108" height="12" rx="3" fill="#34d399"><title>F08.4e.2.f · Generic frames and original-window forwarding · LANDED</title></rect>
-      <rect x="732" y="278" width="108" height="12" rx="3" fill="#422006" stroke="#fbbf24"><title>F08.4e.2.g · Receiving cold key and FD delivery · PARTIAL, OPEN; grant landed in d8e6bba, reserve in 81b7f7b; SQL open</title></rect>
-      <rect x="847" y="278" width="108" height="12" rx="3" fill="#422006" stroke="#fbbf24"><title>F08.4e.2.h · Dedicated grant/reserve/SQL role wiring · PARTIAL, OPEN; grant landed in d8e6bba, reserve in 81b7f7b; SQL open</title></rect>
+    <rect x="24" y="203" width="952" height="366" rx="12" fill="#172033" stroke="#475569"/>
+    <text x="42" y="229" fill="#f8fafc" font-size="17" font-weight="700">01–13 · Planning prerequisites</text>
+    <text x="514" y="229" fill="#f8fafc" font-size="17" font-weight="700">14–26 · Execution and user flow</text>
+    <g font-size="15" fill="#e2e8f0">
+      <text x="42" y="258">01</text><text x="75" y="258">Retained finalization admission</text>
+      <text x="42" y="282">02</text><text x="75" y="282">Assertion and CAS derivation</text>
+      <text x="42" y="306">03</text><text x="75" y="306">Cookie binding and truthful login</text>
+      <text x="42" y="330">04</text><text x="75" y="330">Complete original read proofs</text>
+      <text x="42" y="354">05</text><text x="75" y="354">Encrypted token originals</text>
+      <text x="42" y="378">06</text><text x="75" y="378">Business transition effects</text>
+      <text x="42" y="402">07</text><text x="75" y="402">Full mutation and capacity adapter</text>
+      <text x="42" y="426">08</text><text x="75" y="426">Signed-original mechanics</text>
+      <text x="42" y="450">09</text><text x="75" y="450">Indexed write evidence</text>
+      <text x="42" y="474">10</text><text x="75" y="474">Configured owner and private retention</text>
+      <text x="42" y="498">11</text><text x="75" y="498">Root-authenticated config and snapshot</text>
+      <text x="42" y="522">12</text><text x="75" y="522">Private service and key delivery</text>
+      <text x="42" y="546">13</text><text x="75" y="546">Fresh latest-head admission</text>
+      <text x="514" y="258">14</text><text x="550" y="258">Encrypted execution bundle</text>
+      <text x="514" y="282">15</text><text x="550" y="282">Private activation replay</text>
+      <text x="514" y="306">16</text><text x="550" y="306">Execution authorization grant</text>
+      <text x="514" y="330">17</text><text x="550" y="330">Reservation and pending admission</text>
+      <text x="514" y="354">18</text><text x="550" y="354">One-use protected SQL</text>
+      <text x="514" y="378" fill="#93c5fd">19</text><text x="550" y="378" fill="#93c5fd">Completion and reconciliation</text>
+      <text x="514" y="402">20</text><text x="550" y="402">Protected token release</text>
+      <text x="514" y="426">21</text><text x="550" y="426">Target-bound permission</text>
+      <text x="514" y="450">22</text><text x="550" y="450">Public activation dispatch</text>
+      <text x="514" y="474">23</text><text x="550" y="474">Public recovery dispatch</text>
+      <text x="514" y="498">24</text><text x="550" y="498">Explicit portal actions</text>
+      <text x="514" y="522">25</text><text x="550" y="522">Fresh portal permission</text>
+      <text x="514" y="546">26</text><text x="550" y="546">Truthful session confirmation</text>
     </g>
-    <g font-size="17" font-weight="600" fill="#f8fafc">
-      <text x="42" y="327">Bound originals &amp; genuine replay</text>
-      <text x="514" y="327">First-exact ciphertext store</text>
-      <text x="42" y="395">Sender bootstrap &amp; private export</text>
-      <text x="514" y="395">Dedicated receiving bootstrap</text>
-      <text x="42" y="463">Process-bound receiving owner</text>
-      <text x="514" y="463">Generic frames / window forwarding</text>
-      <text x="42" y="531">Receiving cold key &amp; FD delivery</text>
-      <text x="514" y="531">Dedicated grant/reserve/SQL roles</text>
+    <g font-size="12" font-weight="700" fill="#6ee7b7">
+      <text x="406" y="258">✓ LANDED</text><text x="406" y="282">✓ LANDED</text>
+      <text x="406" y="306">✓ LANDED</text><text x="406" y="330">✓ LANDED</text>
+      <text x="406" y="354">✓ LANDED</text><text x="406" y="378">✓ LANDED</text>
+      <text x="406" y="402">✓ LANDED</text><text x="406" y="426">✓ LANDED</text>
+      <text x="406" y="450">✓ LANDED</text><text x="406" y="474">✓ LANDED</text>
+      <text x="406" y="498">✓ LANDED</text><text x="406" y="522">✓ LANDED</text>
+      <text x="406" y="546">✓ LANDED</text>
+      <text x="888" y="258">✓ LANDED</text><text x="888" y="282">✓ LANDED</text>
+      <text x="888" y="306">✓ LANDED</text><text x="888" y="330">✓ LANDED</text>
+      <text x="888" y="354">✓ LANDED</text>
+      <text x="888" y="378" fill="#93c5fd">N · NEXT</text>
+      <text x="888" y="402" fill="#cbd5e1">— OPEN</text><text x="888" y="426" fill="#cbd5e1">— OPEN</text>
+      <text x="888" y="450" fill="#cbd5e1">— OPEN</text><text x="888" y="474" fill="#cbd5e1">— OPEN</text>
+      <text x="888" y="498" fill="#cbd5e1">— OPEN</text><text x="888" y="522" fill="#cbd5e1">— OPEN</text>
+      <text x="888" y="546" fill="#cbd5e1">— OPEN</text>
     </g>
-    <g font-size="14" font-weight="700" fill="#6ee7b7">
-      <text x="42" y="350">F08.4e.2.a · ✓ LANDED · 918581b</text>
-      <text x="514" y="350">F08.4e.2.b · ✓ LANDED · 07ca0fc</text>
-      <text x="42" y="418">F08.4e.2.c · ✓ LANDED · 6be6dfc</text>
-      <text x="514" y="418">F08.4e.2.d · ✓ LANDED · ad9fdf9</text>
-      <text x="42" y="486">F08.4e.2.e · ✓ LANDED · ad9fdf9</text>
-      <text x="514" y="486">F08.4e.2.f · ✓ LANDED · ad9fdf9</text>
-      <text x="42" y="554" fill="#fde68a">F08.4e.2.g · → PARTIAL / OPEN</text>
-      <text x="514" y="554" fill="#fde68a">F08.4e.2.h · → PARTIAL / OPEN</text>
-    </g>
-    <text x="42" y="576" fill="#cbd5e1" font-size="13">Grant + reserve landed · SQL open</text>
-    <text x="514" y="576" fill="#cbd5e1" font-size="13">Grant + reserve landed · SQL open</text>
-    <text x="42" y="592" fill="#cbd5e1" font-size="14">Detail within one step: not eight extra tasks, an effort percentage or production acceptance.</text>
-    <text x="24" y="653" fill="#fde68a" font-size="14" font-weight="700">17 → IN PROGRESS · Signed computation + durable reserve/ACK + cold state-v5 service landed</text>
-    <text x="24" y="678" fill="#93c5fd" font-size="14">Independent pending receiver OPEN · NEXT: 18, one-use SQL · 19–26 remain OPEN</text>
+    <text x="24" y="600" fill="#6ee7b7" font-size="17" font-weight="700">Inside step 15: 8/8 private replay/custody SOURCE components landed</text>
+    <text x="24" y="625" fill="#cbd5e1" font-size="14">Grant + reserve + SQL delivery/wiring complete · named evidence ledger in linked tracker</text>
+    <text x="24" y="650" fill="#cbd5e1" font-size="14">Those eight components stay inside one step: not extra tasks, effort or production acceptance.</text>
+    <text x="24" y="678" fill="#93c5fd" font-size="14">NEXT: original historical replay + authenticated completion · no SQL retry or token-release claim</text>
     <text x="24" y="705" fill="#94a3b8" font-size="14">Source-only · unbuilt / unexecuted / unprovisioned · parent 34/46 · production verified 0/6</text>
   </g>
 </svg>

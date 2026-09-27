@@ -51,8 +51,8 @@ Counts are not effort percentages or an ETA.
 Within **F08.4e.2 · Private replay/custody integration**, still in progress:
 
 - **Completed source:** encrypted bundle/candidate preparation, bound journal read and genuine receiving replay — [918581b](https://github.com/example/private-deployment).
-- **Also landed:** [first-exact ciphertext storage](docs/oidc-session-activation-execution-store.md) — [07ca0fc](https://github.com/example/private-deployment). This partial step does not close F08.4e.2.
-- **Current / next integration:** independently admitted cold custody, actual sender/export transport, and generic grant/reserve/SQL framing. Storage alone does not complete that path.
+- **Also landed:** first-exact storage ([07ca0fc](https://github.com/example/private-deployment)) and [root-admitted sender custody/private export](docs/oidc-session-activation-execution-export.md), including the encrypted planner response — [6be6dfc](https://github.com/example/private-deployment).
+- **Current / next integration:** independently admitted **receiving** execution custody and coherent generic grant/reserve/pending/packet/SQL framing. F08.4e.2 remains open; historical recovery, public permission and token delivery are separate work.
 
 Execution authorization is the next milestone after this integration; reservation,
 one-use SQL, completion, token delivery and separate public/portal flows follow.

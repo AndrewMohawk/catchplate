@@ -1,5 +1,3 @@
-> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
-
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -23,40 +21,62 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 [![Project source checkpoints: evidence handoff 10/10 landed; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 7/8; workloads and native 3/6; providers and operations 0/7. Every segment has a stable ID. Twelve checkpoints remain open, including F08 in progress. Source counts, not product readiness.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-**Still to do across the project:** historical authority (1 checkpoint), session
-activation (1), workload/native integration (3), and providers/operations (7).
+**All 12 unfinished project checkpoints:**
+
+| ID | Still to finish | Source status |
+| --- | --- | --- |
+| H05 | Historical authority across configuration/key changes | Open |
+| F08 | Protected session activation, token release and portal flow | In progress |
+| N04 | Workload identity provisioning and authenticated channels | Open |
+| N05 | Native enrollment, verified CA installation and proxy setup | Open |
+| N06 | Enclave TLS/proxy execution and credential custody | Open |
+| O01 | OAuth ownership across deployments and applications | Open |
+| O02 | Measured provider issuance and interrupted-exchange recovery | Open |
+| O03 | Public revocation and authenticated recovery | Open |
+| O04 | Protected provider and filesystem side effects | Open |
+| O05 | Interrupted policy-publication recovery | Open |
+| O06 | Independent RBAC rollback witness | Open |
+| O07 | Authenticated, signed and sequenced telemetry | Open |
+
 The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
-names each scope; the active session work is expanded below.
+defines each scope and its dependencies. Open items can already contain partial code.
 
-### Now building: protected token release
+### Now building: consume authorization and issuance
 
-**10/16 implementation-detail units landed · 1 in progress · 5 other open.**
-These are the pieces **inside activation step 20**, not 16 additional project
-milestones. Each numbered segment below has a name and written status.
+**3/12 substeps landed · 3 in progress · 6 open.** This zooms into the active
+token-release task so smaller source milestones are visible before that task closes.
 
-[![Protected token release, step 20: 01–10 landed in source. Row 11 private consume authorization and issuance is in progress, with authorization foundations committed in f6dd3cb; encrypted export, independent receiving replay and actual issuance/cold service remain within that row. Rows 12–16 are open. Ten landed, one in progress and five other open; not production verification.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![Consume authorization and issuance: 01 dedicated authorizer enrollment, 02 post-plan caller control and 03 encrypted-original format landed in f6dd3cb. 04 durable ciphertext storage, 05 verified retained export and 06 root-controlled key/store delivery are in progress and uncommitted. 07 cold planner connection, 08 private export service, 09 receiving-purpose custody, 10 independent original replay, 11 grant issuance and 12 cold grant service are open. Three landed, three in progress, six open. Source only, not production verification.](docs/images/consume-authorization-progress.svg)](docs/production-status.md#consume-authorization-substeps)
 
-**New source:** [consume authorization foundations](https://github.com/example/private-deployment); row 11 remains **in progress**.
-**Next within row 11:** first-exact encrypted export, independent receiving replay, and actual grant issuance/cold service.
+**Working on now:** durable encrypted storage, verified export and root-controlled
+key/storage delivery. **Next:** cold planner/service wiring, independent receiving
+custody and replay, then actual grant issuance and its isolated service.
 
-**Done** means committed source, **in progress** includes unfinished/uncommitted
-work, and **open** means its full criterion has not landed. The
-[16-row checklist](docs/production-status.md#token-release-implementation-detail)
-links each done item to its commit and states what closes every unfinished item.
-Counts are not effort percentages or an ETA.
+The [12-substep checklist](docs/production-status.md#consume-authorization-substeps)
+gives every segment a stable ID, completion criterion and commit evidence.
+**Landed** means committed source; **in progress** is unfinished work, including
+uncommitted edits; **open** is remaining scope. Subdivision adds no completed work.
+These 12 substeps sit **inside row 11 of token release (10/16 landed)**.
+Token release is step 20 of **activation (19/26 landed)**, within **F08
+(project 34/46 landed)**.
+Nested counts are never added together and are not effort percentages or an ETA.
 
 **After token release:** target-bound permission, public activation and recovery,
 explicit portal actions, fresh portal permission, and truthful session confirmation
 are still open. The full activation workflow remains **19/26 landed**.
 
 <details>
-<summary>All 46 project checkpoints and all 26 activation steps</summary>
+<summary>Full breakdown: 46 project checkpoints, 26 activation steps and 16 token-release units</summary>
 
 [![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 19/26 finer steps shown below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 **OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
 [![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 10 landed, 1 in progress and 5 other open. Row 11 has committed authorization foundations, not completed issuance. Next within it: encrypted export, independent receiving replay and actual issuance/cold service. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+
+**Protected token release — 10/16 landed; 1 in progress and 5 other open.**
+
+[![Protected token release: units 01–10 landed, 11 consume authorization and issuance in progress, 12–16 open. Unit 11 is expanded above into 12 substeps: 3 landed, 3 in progress and 6 open. Source counts only.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
@@ -76,7 +96,7 @@ release is claimed for the new protected path.
 [Open the full tracker →](docs/production-status.md) for checkpoint evidence and
 the [six separate production gates](docs/production-status.md#remaining-production-gates).
 
-<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg, implementation-progress.svg and token-release-progress.svg together. Activation has 26 fixed named F08 steps; token release has 16 detail units inside step 20, replacing c with twelve parts within the existing five diagnostic groups (5 - 1 + 12 = 16). Neither grouping parents nor diagnostic children are additive. Every segment needs a visible number, name, status and linked criterion/evidence. Uncommitted work cannot be landed. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg, implementation-progress.svg, token-release-progress.svg and consume-authorization-progress.svg together. Activation has 26 fixed named F08 steps; token release has 16 detail units inside step 20, replacing c with twelve parts within the existing five diagnostic groups (5 - 1 + 12 = 16). Row 11 has twelve separate authorization substeps A01-A12; neither those children nor grouping parents are additive. Every segment needs a visible number, name, status and linked criterion/evidence. Uncommitted work cannot be landed. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

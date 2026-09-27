@@ -32,6 +32,9 @@ _FINALIZATION_IDENTITY_DOMAIN = "serverware.registrationFinalizationReservationR
 _ACTIVATION_OPERATION = "oidc.session.activate"
 _ACTIVATION_SCHEMA = "serverware.oidcSessionActivationReservationRecord/v1"
 _ACTIVATION_IDENTITY_DOMAIN = "serverware.oidcSessionActivationReservationRecordIdentity/v1"
+_DELIVERY_OPERATION = "oidc.session.activation-delivery.consume"
+_DELIVERY_SCHEMA = "serverware.oidcSessionActivationDeliveryReservationRecord/v1"
+_DELIVERY_IDENTITY_DOMAIN = "serverware.oidcSessionActivationDeliveryReservationRecordIdentity/v1"
 MAX_REQUEST_BYTES = authorization.MAX_BYTES
 MAX_SNAPSHOT_BYTES = computation.MAX_SNAPSHOT_BYTES
 MAX_BYTES = journal.MAX_RECORD_BYTES
@@ -52,14 +55,16 @@ class RegistrationReservationRecordError(ValueError):
 
 
 def _profile(profile):
-    """Only three source-fixed private profiles; never a supplied codec/operation."""
-    if type(profile) is not int or profile not in (0, 1, 2):
+    """Only four source-fixed private profiles; never a supplied codec/operation."""
+    if type(profile) is not int or profile not in (0, 1, 2, 3):
         raise RegistrationReservationRecordError("reservation record profile is not source fixed")
     if profile == 0:
         return OPERATION, RECORD_SCHEMA, RECORD_IDENTITY_DOMAIN
     if profile == 1:
         return _FINALIZATION_OPERATION, _FINALIZATION_SCHEMA, _FINALIZATION_IDENTITY_DOMAIN
-    return _ACTIVATION_OPERATION, _ACTIVATION_SCHEMA, _ACTIVATION_IDENTITY_DOMAIN
+    if profile == 2:
+        return _ACTIVATION_OPERATION, _ACTIVATION_SCHEMA, _ACTIVATION_IDENTITY_DOMAIN
+    return _DELIVERY_OPERATION, _DELIVERY_SCHEMA, _DELIVERY_IDENTITY_DOMAIN
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -141,10 +146,16 @@ def _verify_profile_on_work(profile, *, request_bytes, snapshot_bytes, receipt_b
         authorization.plan._same(request[name], expected, work,
             "reservation independently admitted " + name)
 
-    snapshot = computation._decode_snapshot_on_work(held_snapshot, work=work)
+    snapshot_codec = computation
+    if profile == 3:
+        # A closed source profile, not a caller-selected codec or generic
+        # inventory expansion. Old profiles retain their exact wire decoder.
+        from serverware import authority_oidc_session_activation_delivery_computation
+        snapshot_codec = authority_oidc_session_activation_delivery_computation
+    snapshot = snapshot_codec._decode_snapshot_on_work(held_snapshot, work=work)
     # The actual decoder established canonical originals; frame those bytes
     # using the producer's domain rather than decoding or reserializing again.
-    snapshot_digest = authorization.plan._frame(computation.SNAPSHOT_DOMAIN, (held_snapshot,), work)
+    snapshot_digest = authorization.plan._frame(snapshot_codec.SNAPSHOT_DOMAIN, (held_snapshot,), work)
     authorization.plan._same(request["snapshotDigest"], snapshot_digest, work,
         "reservation original computation snapshot")
     for name in _SNAPSHOT_JOINS:

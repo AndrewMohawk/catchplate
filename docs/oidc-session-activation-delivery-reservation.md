@@ -1,0 +1,39 @@
+# Protected activation-delivery consume reservation originals
+
+This is source-only implementation: unbuilt, unexecuted and unprovisioned. It adds genuine consume reservation computation and original admission, not a running reserver service, SQL execution, token release or a completed row 12.
+
+The fixed operation is `oidc.session.activation-delivery.consume`. Its computation and local-record schemas are distinct from activation and registration. The generic computation snapshot decoder and generic execution inventory remain unchanged and reject consume originals.
+
+## Original-based composition
+
+[`authority_oidc_session_activation_delivery_reservation.py`](../serverware/authority_oidc_session_activation_delivery_reservation.py) exposes three private original-input boundaries:
+
+- `_produce_on_work` accepts exact signed consume plan/encrypted-originals raw2, closed independent request/scope/journal expectations, the complete before-vector, original caller authorization and grant, three original enrollments, independent root/planner/operation keys and configuration, an actual reserve receiving owner, an enrolled computation private key, independent predecessor sequence/head/fence, and the original work/window/positive transport deadline. It returns `DeliveryComputation(request_bytes, snapshot_bytes)` only.
+- `_verify_retained_on_work` accepts those public originals without a signer, plus exact reserve/snapshot/optional-ACK raw3. It genuinely replays before returning the unchanged originals. An absent ACK establishes no pending state; this path neither resigns nor resends anything.
+- `_verify_response_on_work` requires all three response originals, authenticates the actual state ACK and returns unchanged raw3. The ACK is not adopted as an independently trusted current pending head.
+
+The computation private key is held before shared capture callbacks. All immutable response originals and independent predecessor pins are held before hashes, signatures or clocks. The actual consume grant signature and original caller/root bindings precede private opening. A private `_verify_full_on_work` grant continuation returns `_VerifiedFullGrant(verified, replayed)` from exactly one genuine consume replay; the existing grant verifier retains its old signature/result and fixed grant purpose. No original-input API accepts either successful result object as authority.
+
+Reservation production and retained verification require the separately root-admitted `reserve` receiving purpose, UID/GID 65499. The private reservation full-result continuation can instead serve the fixed `sql-issuer` receiving purpose, UID/GID 65498, for [independent pending admission](oidc-session-activation-delivery-pending-admission.md). Neither uses the grant role as reserve or SQL authority. Its ordinary same-call result retains the genuine material, request, receipt, snapshot and replay alongside the current processing guard; it is not an execution token or a serialized proof.
+
+## Distinct computation snapshot
+
+[`authority_oidc_session_activation_delivery_computation.py`](../serverware/authority_oidc_session_activation_delivery_computation.py) fixes schema `serverware.oidcSessionActivationDeliveryComputationSnapshot/v1` and identity domain `serverware.oidcSessionActivationDeliveryComputationSnapshotIdentity/v1`. The canonical snapshot is at most 16 KiB and has exactly 18 fields:
+
+`schema`, `sourceRevision`, `enrollmentDigest`, `databaseId`, `generationDigest`, `producerMeasurementDigest`, `operation`, `requestDigest`, `operationId`, `capabilityDigest`, `retainedRecordDigest`, `planDigest`, `beforeVectorDigest`, `afterVectorDigest`, `resultDigest`, `originalFrames`, `originalIssuedAtEpochNs`, `originalExpiresAtEpochNs`.
+
+The snapshot commits the exact two original frame lengths/order/hashes under the actual consume frame caps, the real typed request and replay result, the genuine before/after vectors, and the original plan interval. `capabilityDigest` is the identity of the genuinely verified consume grant, not an independently accepted scalar grant. No selected private rows, plaintext tokens or AES keys are serialized.
+
+Only the reservation producer's same-call genuine replay reaches the private signing suffix. It admits the original current-root enrollment, verifies computation-key scope through the actual enrolled signing path and preserves the original issue time. Expiry only narrows to the grant, plan, current processing window and enrolled control-age ceiling. It signs the existing current-root `reserve` request format; the snapshot identity is distinct. The [v8 state peer](current-root-delivery-reserve-peer.md) separately enforces action/operation, predecessor, full current vector, fence and durable publication before ACK.
+
+## Lifetime, bounds and retained records
+
+No clock opening or work allowance is created here. Actual current clock checks preserve the supplied opening samples, monotonic bound, caller/custody continuity and original signed lifetimes through signing, signature checks and return. The final reserve guard also clips to the actual signed reserve expiry. Expired retained originals cannot authorize a fresh operation or historical retry.
+
+The cumulative 64 MiB original aggregate includes caller/grant, raw2, before-vector, enrollments, all four receiving-custody originals and received raw3. The shared capture meters additional originals before caller capture callbacks. Production conservatively reserves the maximum request/snapshot/ACK sizes before replay and signing. Per-frame bounds remain 256 KiB reserve request, 16 KiB snapshot and 16 KiB ACK; a lower work or transport allowance can reject an otherwise size-valid exchange.
+
+[`authority_oidc_session_activation_delivery_reservation_records.py`](../serverware/authority_oidc_session_activation_delivery_reservation_records.py) is the fourth fixed local-record profile, with schema `serverware.oidcSessionActivationDeliveryReservationRecord/v1` and identity domain `serverware.oidcSessionActivationDeliveryReservationRecordIdentity/v1`. The canonical record cap remains 1 MiB. Only this profile selects the new consume snapshot decoder; all three earlier profiles retain their original schemas, domains and behavior. The shared record verifier authenticates enrolled reserve and state signatures, exact canonical snapshot/vector associations, independent predecessor scope, completion capacity and ACK ancestry. Its historical signature check is storage integrity, not renewed execution permission. `executionRecordDigest` remains an opaque local locator, never proof of a grant or current pending state.
+
+The separate [durable delivery owner](oidc-session-activation-delivery-reservation-delivery.md) retains first-exact originals before exchange and an actual ACK before reporting durable delivery. The [fixed transport](oidc-session-activation-delivery-reservation-transport.md) returns unverified originals for genuine receiving admission; neither layer substitutes for replay. Ambiguous publication or response does not authorize overwrite, regeneration, automatic resend or SQL retry.
+
+The independent pending receiver requires its own database/generation/current-pending sequence/head/fence and predecessor pins, then compares the actual authenticated ACK against them. The present batch does not connect a cold consume reserver OS service or a cold SQL pending consumer. Protected one-use SQL, durable consume completion/recovery, exact committed-original plaintext-release admission and cold response/handoff remain separate unfinished work.

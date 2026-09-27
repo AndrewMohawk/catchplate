@@ -1,4 +1,4 @@
-# Consume-grant receiving custody bootstrap
+# Purpose-bound consume receiving custody bootstrap
 
 `oidc_session_activation_delivery_execution_custody_bootstrap.py` admits a distinct
 root-signed receiving purpose: `grant`, process
@@ -53,7 +53,32 @@ The returned private material contains owned facts and raw originals for the
 actual receiving owner, not an accepted proof-result input. This bootstrap alone
 does not deliver descriptors, inspect actual AES keys, decrypt a bundle, replay
 consume effects, authorize public/user permission, issue a grant, execute SQL or
-release a token. It creates no reserve/SQL/completion receiving purpose.
+release a token. No profile creates completion or SQL execution authority.
 
-This is source-only, unbuilt, unexecuted and uninstalled. It is a receiving-custody
-foundation inside row 11, not completion of consume issuance or a production gate.
+This is source-only, unbuilt, unexecuted and uninstalled. These receiving-custody
+contracts are distinct from the separately composed grant service and do not
+provide production-gate evidence.
+
+## Separate reserve and pending-receiver profiles
+
+The old `_verify_on_work` / `_produce_on_work` remain strictly grant/v1/65500.
+The new `_verify_reserve_on_work` / `_produce_reserve_on_work` and
+`_verify_sql_issuer_on_work` / `_produce_sql_issuer_on_work` have the same exact
+explicit original/key/window/work arguments, but each selects a separate closed
+root-signed profile, never an envelope-selected fallback:
+
+| Receiving envelope/payload version | Consumer role | Process mode | UID/GID | Required history |
+| --- | --- | --- | --- | --- |
+| v1 | `grant` | `oidc-session-activation-delivery-execution-authorizer` | 65500 | v3 consume-grant |
+| v2 | `reserve` | `oidc-session-activation-delivery-execution-reserver` | 65499 | v4 consume-reserve |
+| v3 | `sql-issuer` | `oidc-session-activation-delivery-execution-sql` | 65498 | v5 consume-sql-issuer |
+
+All profiles retain the same immutable original bounds, exact typed-request and
+activation-planner joins, key separation and original live interval checks.
+The selected fixed UID/GID must be distinct from the independently admitted
+generic configuration roles. Each receiver needs its own root signature and
+matching independently established identity; grant or planning custody cannot
+be lent to another role. Ordinary material is still output-only metadata.
+The `sql-issuer` profile is a library prerequisite for
+[independent pending admission](oidc-session-activation-delivery-pending-admission.md),
+not an implemented cold SQL consumer, issuance permission or proof of commit.

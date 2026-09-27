@@ -151,15 +151,41 @@ flag remains true only for v2 and is checked for consistency at each snapshot.
 Dispatch uses exact fixed roles. Existing bool-only helpers still reject a
 string or any other truthy substitute; v1/v2 entrypoints do not accept v3.
 
-The receiving path must additionally call the exact owner's
-`require_consume_grant_on_work(*, work)` before private consumption replay and
-bind the independently expected request. The shared read-only
-completed-activation provenance suffix accepts only explicit v2 or v3 custody;
+The grant receiving path must additionally require the exact v3 owner and bind
+the independently expected request. `require_consume_grant_on_work(*, work)`
+remains v3-only. The shared read-only
+completed-activation provenance suffix accepts explicit request-bound custody;
 planner construction remains v2-only and completion/recovery remains v1-only.
 Neither this history admission nor that semantic suffix issues a consume grant,
 executes or completes consumption, or releases a token. The new consume-bundle
 key, receiving execution authority and cold grant service are separate joins,
 not supplied by these two historical activation keys.
+
+## Separate consume-reserve v4 and SQL-issuer v5
+
+`_verify_consume_reserve_on_work` / `_produce_consume_reserve_on_work` and
+`_verify_consume_sql_issuer_on_work` / `_produce_consume_sql_issuer_on_work`
+retain the same explicit original/key/work/window/deadline signatures, but select
+only separately signed fixed profiles:
+
+| Version | Consumer role | Process mode | UID/GID |
+| --- | --- | --- | --- |
+| v4 | `consume-reserve-history` | `oidc-session-activation-delivery-execution-reserver` | 65499 |
+| v5 | `consume-sql-issuer-history` | `oidc-session-activation-delivery-execution-sql` | 65498 |
+
+Their schema prefixes are unchanged, with the explicit `/v4` and `/v5` suffixes.
+Both bind the real canonical `consumeRequest`, independently expected receiver
+identity, exact historical activation planner and private key pins, using the
+same bounds and current outer-lifetime checks. Existing v1–v3 APIs never accept
+these profiles automatically. The `for_consume_reserve` and `for_consume_sql_issuer`
+owner factories use the same explicit arguments as `for_consume_grant`; no owner
+is relabeled or borrowed across processes.
+
+The private semantic replay gate admits only v3/v4/v5 receiving histories; v2
+planning remains excluded. The outer receiving owner and grant admission still
+enforce the exact separately requested purpose. This library scope does not
+construct a cold SQL consumer, authorize SQL, prove a latest pending head or
+release a token. See [independent consume pending admission](oidc-session-activation-delivery-pending-admission.md).
 
 ## Scope and remaining boundary
 

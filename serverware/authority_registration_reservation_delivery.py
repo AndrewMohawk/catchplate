@@ -95,6 +95,10 @@ def _owner_profile(owner):
 
     if type(owner) is activation.OidcSessionActivationReservationDelivery:
         return 2
+    from serverware import authority_oidc_session_activation_delivery_reservation_delivery as consume
+
+    if type(owner) is consume.OidcSessionActivationDeliveryReservationDelivery:
+        return 3
     raise RegistrationReservationDeliveryError("reservation delivery owner type is not source fixed")
 
 
@@ -108,20 +112,24 @@ def _record_codec(owner):
         from serverware import authority_registration_finalization_reservation_records as finalization
 
         return finalization
-    from serverware import authority_oidc_session_activation_reservation_records as activation
+    if selected == 2:
+        from serverware import authority_oidc_session_activation_reservation_records as activation
 
-    return activation
+        return activation
+    from serverware import authority_oidc_session_activation_delivery_reservation_records as consume
+
+    return consume
 
 
 def _delivery_guard(owner, live_window, inherited, work):
-    if _owner_profile(owner) == 2:
-        # Activation may not manufacture a replacement allowance at delivery.
+    if _owner_profile(owner) in (2, 3):
+        # Activation and consume cannot replace their original allowance.
         authorization.shape._integer(inherited, minimum=1)
     return _live_guard(live_window, inherited, work)
 
 
 class _RegistrationReservationDeliveryBase:
-    """Shared mechanics for three exact fixed-operation durable owner types.
+    """Shared mechanics for four exact fixed-operation durable owner types.
 
     Journal ownership transfers at construction, including failure cleanup. Its
     preprovisioned directory must be separate from state/completion/SQL-attempt
@@ -164,7 +172,7 @@ class _RegistrationReservationDeliveryBase:
             authorization.shape._digest(expected_local_head_digest)
             expected = expected_local_sequence, expected_local_head_digest
             live = None
-            if self._record_profile == 2:
+            if self._record_profile in (2, 3):
                 evidence.capture._SharedLedger(work)
                 live, _bound = _delivery_guard(self, live_window, transport_deadline_ns, work)
                 live()

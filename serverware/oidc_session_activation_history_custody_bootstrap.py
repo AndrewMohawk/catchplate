@@ -41,6 +41,16 @@ CONSUME_GRANT_OPERATION = CONSUME_OPERATION
 CONSUME_GRANT_CONSUMER_ROLE = "consume-grant-history"
 CONSUME_GRANT_PROCESS_MODE = "oidc-session-activation-delivery-execution-authorizer"
 CONSUME_GRANT_SERVICE_UID = CONSUME_GRANT_SERVICE_GID = 65500
+CONSUME_RESERVE_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v4"
+CONSUME_RESERVE_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v4"
+CONSUME_RESERVE_CONSUMER_ROLE = "consume-reserve-history"
+CONSUME_RESERVE_PROCESS_MODE = "oidc-session-activation-delivery-execution-reserver"
+CONSUME_RESERVE_SERVICE_UID = CONSUME_RESERVE_SERVICE_GID = 65499
+CONSUME_SQL_ISSUER_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v5"
+CONSUME_SQL_ISSUER_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v5"
+CONSUME_SQL_ISSUER_CONSUMER_ROLE = "consume-sql-issuer-history"
+CONSUME_SQL_ISSUER_PROCESS_MODE = "oidc-session-activation-delivery-execution-sql"
+CONSUME_SQL_ISSUER_SERVICE_UID = CONSUME_SQL_ISSUER_SERVICE_GID = 65498
 MAX_CONSUME_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_BYTES = 8 * 1024 * 1024
 MAX_NODES, MAX_DEPTH = 256, 4
@@ -128,6 +138,14 @@ def _purpose_profile(purpose):
         return (CONSUME_GRANT_SCHEMA, CONSUME_GRANT_PAYLOAD_SCHEMA, CONSUME_GRANT_OPERATION,
             CONSUME_GRANT_CONSUMER_ROLE, CONSUME_GRANT_PROCESS_MODE,
             CONSUME_GRANT_SERVICE_UID, CONSUME_GRANT_SERVICE_GID)
+    if purpose == CONSUME_RESERVE_CONSUMER_ROLE:
+        return (CONSUME_RESERVE_SCHEMA, CONSUME_RESERVE_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+            CONSUME_RESERVE_CONSUMER_ROLE, CONSUME_RESERVE_PROCESS_MODE,
+            CONSUME_RESERVE_SERVICE_UID, CONSUME_RESERVE_SERVICE_GID)
+    if purpose == CONSUME_SQL_ISSUER_CONSUMER_ROLE:
+        return (CONSUME_SQL_ISSUER_SCHEMA, CONSUME_SQL_ISSUER_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+            CONSUME_SQL_ISSUER_CONSUMER_ROLE, CONSUME_SQL_ISSUER_PROCESS_MODE,
+            CONSUME_SQL_ISSUER_SERVICE_UID, CONSUME_SQL_ISSUER_SERVICE_GID)
     _fail("historical custody purpose is not a supported fixed profile")
 
 
@@ -138,7 +156,8 @@ def _profile(consume):
 
 def _requires_consume_request(purpose):
     _purpose_profile(purpose)
-    return purpose in (CONSUME_CONSUMER_ROLE, CONSUME_GRANT_CONSUMER_ROLE)
+    return purpose in (CONSUME_CONSUMER_ROLE, CONSUME_GRANT_CONSUMER_ROLE,
+        CONSUME_RESERVE_CONSUMER_ROLE, CONSUME_SQL_ISSUER_CONSUMER_ROLE)
 
 
 def _payload_shape(payload, *, consume=False):
@@ -402,3 +421,33 @@ def _produce_consume_grant_on_work(*, payload, root_private_key, root_public_key
     return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
         root_public_key=root_public_key, work=work, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, purpose=CONSUME_GRANT_CONSUMER_ROLE)
+
+
+def _verify_consume_reserve_on_work(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns):
+    """Fixed request-bound reserve v4 originals, never a grant-purpose fallback."""
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=CONSUME_RESERVE_CONSUMER_ROLE)
+
+
+def _produce_consume_reserve_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=CONSUME_RESERVE_CONSUMER_ROLE)
+
+
+def _verify_consume_sql_issuer_on_work(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns):
+    """Fixed request-bound SQL-issuer v5 originals, not permission to execute SQL."""
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=CONSUME_SQL_ISSUER_CONSUMER_ROLE)
+
+
+def _produce_consume_sql_issuer_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=CONSUME_SQL_ISSUER_CONSUMER_ROLE)

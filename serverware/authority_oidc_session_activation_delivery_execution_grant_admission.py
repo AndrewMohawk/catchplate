@@ -38,6 +38,7 @@ class _Held:
     custody_configuration: object
     extra_originals: tuple
     original_bytes: int
+    required_consumer_role: str
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -66,14 +67,16 @@ def _hold_on_work(*, authorization_bytes, authorization_enrollment_bytes,
         current_root_enrollment_bytes, grant_enrollment_bytes, root_public_key,
         configuration_digest, planner_public_key, operation_public_key, originals,
         expectations, before_vector_bytes, receiving_custody, live_window,
-        transport_deadline_ns, work, extra_originals=()):
+        transport_deadline_ns, work, extra_originals=(), required_consumer_role="grant"):
     capture._SharedLedger(work)
+    custody.bootstrap._profile(required_consumer_role)
     original = authorization._original(authorization_bytes, caller.MAX_AUTHORIZATION_BYTES,
         "consume grant caller authorization")
-    if type(extra_originals) is not tuple or len(extra_originals) > 1:
-        _fail("consume grant accepts at most one additional signed grant original")
-    extras = tuple(authorization._original(raw, wire.MAX_GRANT_BYTES,
-        "consume execution grant") for raw in extra_originals)
+    if type(extra_originals) is not tuple or len(extra_originals) > 4:
+        _fail("consume admission permits only a grant and fixed reserve/snapshot/ACK originals")
+    extras = tuple(authorization._original(raw,
+        wire.MAX_GRANT_BYTES if position == 0 else wire.MAX_ORIGINAL_BYTES,
+        "consume admission extra original") for position, raw in enumerate(extra_originals))
     if type(originals) is not tuple or len(originals) != 2:
         _fail("consume grant requires its exact original plan and ciphertext pair")
     signed = authorization._original(originals[0], caller.contract.MAX_BYTES, "consume plan")
@@ -97,13 +100,14 @@ def _hold_on_work(*, authorization_bytes, authorization_enrollment_bytes,
     if type(owner) is not _OWNER:
         _fail("consume grant requires the actual dedicated receiving custodian")
     configured = _OWNER._snapshot_configuration(owner)
+    _OWNER.require_consumer_role_on_work(owner, consumer_role=required_consumer_role, work=work)
     receiver_originals = (configured.custody_bytes, configured.planner_bootstrap_bytes,
         configured.planner_history_custody_bytes, configured.receiving_history_custody_bytes)
     total = sum(len(raw) for raw in (original, *extras, signed, encrypted, before,
         caller_raw, current_raw, grant_raw, *receiver_originals))
     if total > wire.MAX_ORIGINAL_BYTES:
         _fail("consume grant admission originals exceed the fixed aggregate bound")
-    # Hold the optional grant, every receiving original and configuration/key
+    # Hold the optional grant/raw3, every receiving original and configuration/key
     # reference before the caller's typed graph capture can hash or call out.
     work.charge(input_bytes=sum(map(len, (*extras, *receiver_originals))))
     inputs = caller._capture_on_work(originals=(signed, encrypted), expectations=expectations,
@@ -114,7 +118,7 @@ def _hold_on_work(*, authorization_bytes, authorization_enrollment_bytes,
         work=work, extra_originals=(original,))
     if _OWNER._snapshot_configuration(owner) is not configured:
         _fail("consume receiving configuration changed during input capture")
-    return _Held(inputs, original, owner, configured, extras, total)
+    return _Held(inputs, original, owner, configured, extras, total, required_consumer_role)
 
 
 def _frames(originals, work):
@@ -135,6 +139,7 @@ def _admit_on_work(held, work):
     inputs, owner, configured = held.inputs, held.receiving_custody, held.custody_configuration
     if _OWNER._snapshot_configuration(owner) is not configured:
         _fail("consume receiving configuration changed before admission")
+    _OWNER.require_consumer_role_on_work(owner, consumer_role=held.required_consumer_role, work=work)
     control = caller._verify_held_on_work(inputs, held.authorization_bytes, work)
     control.live()
     enrolled = enrollments._admit_enrollment_on_work(grant_enrollment_bytes=inputs.grant_enrollment,
@@ -209,6 +214,8 @@ def _replay_on_work(admitted, work):
         _fail("consume grant replay requires its same-call admitted originals")
     held, control = admitted.held, admitted.authorization
     inputs = held.inputs
+    _OWNER.require_consumer_role_on_work(held.receiving_custody,
+        consumer_role=held.required_consumer_role, work=work)
     admitted.live()
     actual = _OWNER.replay_on_work(held.receiving_custody,
         envelope_bytes=inputs.originals[0], encrypted_originals_bytes=inputs.originals[1],

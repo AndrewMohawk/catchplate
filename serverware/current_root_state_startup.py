@@ -343,7 +343,13 @@ def initialize_from_environment():
             decision = decisions.CurrentRootDecisionOwner(journal=journal, enrollment_bytes=enrollment,
                 root_public_key=root_key, state_private_key=private_key,
                 expected_sequence=sequence, expected_head_digest=head)
-            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V7:
+            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V8:
+                # V8 adds only the separate consume reserver. The actual
+                # owner joins signed reserve/consume before history return
+                # or publication; the consume planner remains head-only.
+                serving = service.CurrentRootDecisionService._with_delivery_reserver(
+                    owner=decision, timeout_seconds=timeout)
+            elif launch["schema"] == bootstrap.LAUNCH_SCHEMA_V7:
                 # V7 opts only the distinct consume planner into its own head
                 # protocol. It gets no activation, lookup or decision purpose.
                 serving = service.CurrentRootDecisionService._with_delivery_planner(

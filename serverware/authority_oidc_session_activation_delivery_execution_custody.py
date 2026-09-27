@@ -1,6 +1,6 @@
-"""Independent consume-grant receiving keys and live original replay.
+"""Independent purpose-bound consume receiving keys and live original replay.
 
-Only the fixed grant receiver may construct this owner from root-signed
+Only one of the three fixed receivers may construct this owner from root-signed
 originals and actual private keys. Every replay reauthenticates those originals
 and independently bound expectations. No planner owner, received result, key
 return, grant issuance, SQL privilege or historical execution renewal is here.
@@ -32,11 +32,30 @@ def _fail(message):
     raise DeliveryExecutionCustodyError(message)
 
 
-def _process():
-    if (os.getresuid() != (bootstrap.SERVICE_UID,) * 3
-            or os.getresgid() != (bootstrap.SERVICE_GID,) * 3 or os.getgroups()
-            or os.environ.get("SERVERWARE_PROCESS_MODE") != bootstrap.PROCESS_MODE):
-        _fail("consume receiving custody requires its fixed grant process")
+def _process(consumer_role=bootstrap.CONSUMER_ROLE):
+    _schema, _payload, mode, uid, gid, _history_role = bootstrap._profile(consumer_role)
+    if (os.getresuid() != (uid,) * 3 or os.getresgid() != (gid,) * 3 or os.getgroups()
+            or os.environ.get("SERVERWARE_PROCESS_MODE") != mode):
+        _fail("consume receiving custody requires its fixed purpose process")
+
+
+def _verifier(consumer_role):
+    bootstrap._profile(consumer_role)
+    if consumer_role == bootstrap.CONSUMER_ROLE:
+        return bootstrap._verify_on_work
+    if consumer_role == bootstrap.RESERVE_CONSUMER_ROLE:
+        return bootstrap._verify_reserve_on_work
+    return bootstrap._verify_sql_issuer_on_work
+
+
+def _history_factory(consumer_role):
+    bootstrap._profile(consumer_role)
+    owner = history.OidcSessionActivationHistoryCustody
+    if consumer_role == bootstrap.CONSUMER_ROLE:
+        return owner.for_consume_grant
+    if consumer_role == bootstrap.RESERVE_CONSUMER_ROLE:
+        return owner.for_consume_reserve
+    return owner.for_consume_sql_issuer
 
 
 def _identity(value, work):
@@ -76,10 +95,12 @@ class _Configuration:
     opening_sample: tuple
     maximum_age_ns: int
     maximum_clock_skew_ns: int
+    consumer_role: str
 
 
 def _verify(configured, window, bound, work):
-    return bootstrap._verify_on_work(custody_bytes=configured.custody_bytes,
+    verify = _verifier(configured.consumer_role)
+    return verify(custody_bytes=configured.custody_bytes,
         planner_bootstrap_bytes=configured.planner_bootstrap_bytes,
         planner_history_custody_bytes=configured.planner_history_custody_bytes,
         receiving_history_custody_bytes=configured.receiving_history_custody_bytes,
@@ -91,7 +112,10 @@ def _join(configured, material, work):
     actual = history.OidcSessionActivationHistoryCustody._snapshot_configuration(configured.historical)
     if actual is not configured.historical_configuration:
         _fail("consume receiving historical owner configuration changed")
-    history.OidcSessionActivationHistoryCustody.require_consume_grant_on_work(configured.historical, work=work)
+    registration._same(actual.consumer_role, bootstrap._profile(configured.consumer_role)[5], work,
+        "consume receiving historical purpose differs from its independently admitted role")
+    registration._same(material.payload["consumerRole"], configured.consumer_role, work,
+        "consume receiving original purpose changed")
     for left, right, label in (
             (_identity(material.receiver_identity, work), configured.receiver_identity_bytes, "receiver identity"),
             (actual.receiver_identity_bytes, configured.receiver_identity_bytes, "history receiver identity"),
@@ -142,6 +166,52 @@ class OidcSessionActivationDeliveryExecutionCustody:
             receiving_history_custody_bytes, root_public_key, expected_receiver_identity,
             execution_bundle_key, historical_bundle_key, delivery_custody_key,
             live_window, transport_deadline_ns, work):
+        self._initialize(custody_bytes=custody_bytes, planner_bootstrap_bytes=planner_bootstrap_bytes,
+            planner_history_custody_bytes=planner_history_custody_bytes,
+            receiving_history_custody_bytes=receiving_history_custody_bytes, root_public_key=root_public_key,
+            expected_receiver_identity=expected_receiver_identity, execution_bundle_key=execution_bundle_key,
+            historical_bundle_key=historical_bundle_key, delivery_custody_key=delivery_custody_key,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+            consumer_role=bootstrap.CONSUMER_ROLE)
+
+    @classmethod
+    def for_reserve(cls, *, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
+            receiving_history_custody_bytes, root_public_key, expected_receiver_identity,
+            execution_bundle_key, historical_bundle_key, delivery_custody_key,
+            live_window, transport_deadline_ns, work):
+        if cls is not OidcSessionActivationDeliveryExecutionCustody:
+            _fail("consume reserve custody requires the exact owner class")
+        owner = object.__new__(cls)
+        owner._initialize(custody_bytes=custody_bytes, planner_bootstrap_bytes=planner_bootstrap_bytes,
+            planner_history_custody_bytes=planner_history_custody_bytes,
+            receiving_history_custody_bytes=receiving_history_custody_bytes, root_public_key=root_public_key,
+            expected_receiver_identity=expected_receiver_identity, execution_bundle_key=execution_bundle_key,
+            historical_bundle_key=historical_bundle_key, delivery_custody_key=delivery_custody_key,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+            consumer_role=bootstrap.RESERVE_CONSUMER_ROLE)
+        return owner
+
+    @classmethod
+    def for_sql_issuer(cls, *, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
+            receiving_history_custody_bytes, root_public_key, expected_receiver_identity,
+            execution_bundle_key, historical_bundle_key, delivery_custody_key,
+            live_window, transport_deadline_ns, work):
+        if cls is not OidcSessionActivationDeliveryExecutionCustody:
+            _fail("consume pending custody requires the exact owner class")
+        owner = object.__new__(cls)
+        owner._initialize(custody_bytes=custody_bytes, planner_bootstrap_bytes=planner_bootstrap_bytes,
+            planner_history_custody_bytes=planner_history_custody_bytes,
+            receiving_history_custody_bytes=receiving_history_custody_bytes, root_public_key=root_public_key,
+            expected_receiver_identity=expected_receiver_identity, execution_bundle_key=execution_bundle_key,
+            historical_bundle_key=historical_bundle_key, delivery_custody_key=delivery_custody_key,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+            consumer_role=bootstrap.SQL_ISSUER_CONSUMER_ROLE)
+        return owner
+
+    def _initialize(self, *, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
+            receiving_history_custody_bytes, root_public_key, expected_receiver_identity,
+            execution_bundle_key, historical_bundle_key, delivery_custody_key,
+            live_window, transport_deadline_ns, work, consumer_role):
         evidence.capture._SharedLedger(work)
         if type(self) is not OidcSessionActivationDeliveryExecutionCustody:
             _fail("consume receiving custody requires its exact owner class")
@@ -158,10 +228,11 @@ class OidcSessionActivationDeliveryExecutionCustody:
         for key in (execution, historical_key, delivery):
             if type(key) is not bytes or len(key) != replay.bundle.KEY_BYTES:
                 _fail("consume receiving construction requires exact private key originals")
-        _process()
+        _process(consumer_role)
         _window, current = replay.lifetime._window(window, bound, work)
         current()
-        material = bootstrap._verify_on_work(custody_bytes=outer, planner_bootstrap_bytes=planner,
+        verify = _verifier(consumer_role)
+        material = verify(custody_bytes=outer, planner_bootstrap_bytes=planner,
             planner_history_custody_bytes=planning_history, receiving_history_custody_bytes=receiving_history,
             root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work)
         current()
@@ -171,7 +242,8 @@ class OidcSessionActivationDeliveryExecutionCustody:
         current()
         historical = None
         try:
-            historical = history.OidcSessionActivationHistoryCustody.for_consume_grant(
+            make_history = _history_factory(consumer_role)
+            historical = make_history(
                 custody_bytes=receiving_history, root_public_key=root, expected_receiver_identity=material.receiver_identity,
                 expected_consume_request=material.planner.payload["consumeRequest"], bundle_key=historical_key,
                 delivery_custody_key=delivery, live_window=window, transport_deadline_ns=bound, work=work)
@@ -180,7 +252,7 @@ class OidcSessionActivationDeliveryExecutionCustody:
                 history.OidcSessionActivationHistoryCustody._snapshot_configuration(historical),
                 receiver, material.planner.state_enrollment_bytes, material.attestation_interval,
                 material.opening_sample, material.planner.payload["maximumPlanAgeNs"],
-                material.planner.payload["maximumClockSkewNs"])
+                material.planner.payload["maximumClockSkewNs"], consumer_role)
             object.__setattr__(self, "_configured", configured)
             object.__setattr__(self, "_seal", configured)
             object.__setattr__(self, "_pid", os.getpid())
@@ -203,11 +275,18 @@ class OidcSessionActivationDeliveryExecutionCustody:
                 or type(self._configured) is not _Configuration or self._configured is not self._seal
                 or self._configured.source_revision != replay.contract.authority.SOURCE_REVISION):
             _fail("consume receiving custody is closed, changed or belongs to another process")
-        _process()
+        _process(self._configured.consumer_role)
         if history.OidcSessionActivationHistoryCustody._snapshot_configuration(
                 self._configured.historical) is not self._configured.historical_configuration:
             _fail("consume receiving historical owner changed")
         return self._configured
+
+    def require_consumer_role_on_work(self, *, consumer_role, work):
+        """Static exact-purpose join; replay still authenticates all root originals."""
+        evidence.capture._SharedLedger(work)
+        bootstrap._profile(consumer_role)
+        if self._snapshot_configuration().consumer_role != consumer_role:
+            _fail("consume receiving custody belongs to another fixed purpose")
 
     def _bounds(self, configured, window, deadline, work):
         narrowed = processing._narrow(window, deadline_epoch_ns=configured.attestation_interval[1],

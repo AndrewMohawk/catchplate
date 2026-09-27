@@ -152,7 +152,7 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
     _scope(expected, window, work)
     registration._closed(owned["activationScope"], plan._ACTIVATION_SCOPE_FIELDS,
         "independent consume execution activation scope")
-    custody.OidcSessionActivationHistoryCustody.require_consume_grant_on_work(owner, work=work)
+    custody.OidcSessionActivationHistoryCustody._require_consume_receiving_on_work(owner, work=work)
     custody.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(owner,
         expected_consume_request=request, work=work)
     custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,

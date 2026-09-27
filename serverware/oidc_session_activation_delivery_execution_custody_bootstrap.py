@@ -1,4 +1,4 @@
-"""Root-original receiving admission for consume-grant custody only.
+"""Root-original receiving admission for three fixed consume custody purposes.
 
 All nested inputs are detached immutable originals bound by the outer root
 signature. The actual consume planner and both distinct historical purposes
@@ -27,6 +27,16 @@ OPERATION = planner_bootstrap.OPERATION
 CONSUMER_ROLE = "grant"
 PROCESS_MODE = "oidc-session-activation-delivery-execution-authorizer"
 SERVICE_UID = SERVICE_GID = 65500
+RESERVE_SCHEMA = "serverware.signedOidcSessionActivationDeliveryExecutionCustody/v2"
+RESERVE_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryExecutionCustody/v2"
+RESERVE_CONSUMER_ROLE = "reserve"
+RESERVE_PROCESS_MODE = "oidc-session-activation-delivery-execution-reserver"
+RESERVE_SERVICE_UID = RESERVE_SERVICE_GID = 65499
+SQL_ISSUER_SCHEMA = "serverware.signedOidcSessionActivationDeliveryExecutionCustody/v3"
+SQL_ISSUER_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryExecutionCustody/v3"
+SQL_ISSUER_CONSUMER_ROLE = "sql-issuer"
+SQL_ISSUER_PROCESS_MODE = "oidc-session-activation-delivery-execution-sql"
+SQL_ISSUER_SERVICE_UID = SQL_ISSUER_SERVICE_GID = 65498
 MAX_BYTES = 16 * 1024
 MAX_ORIGINALS_BYTES = 64 * 1024 * 1024
 MAX_NODES, MAX_DEPTH = 256, 4
@@ -104,16 +114,41 @@ def _originals(planner, planning_history, receiving_history, *, outer_bytes):
     return originals
 
 
-def _payload_shape(payload):
+def _profile(consumer_role):
+    if type(consumer_role) is not str:
+        _fail("consume receiving purpose is not an exact source-fixed role")
+    if consumer_role == CONSUMER_ROLE:
+        return (SCHEMA, PAYLOAD_SCHEMA, PROCESS_MODE, SERVICE_UID, SERVICE_GID,
+            history_bootstrap.CONSUME_GRANT_CONSUMER_ROLE)
+    if consumer_role == RESERVE_CONSUMER_ROLE:
+        return (RESERVE_SCHEMA, RESERVE_PAYLOAD_SCHEMA, RESERVE_PROCESS_MODE,
+            RESERVE_SERVICE_UID, RESERVE_SERVICE_GID, history_bootstrap.CONSUME_RESERVE_CONSUMER_ROLE)
+    if consumer_role == SQL_ISSUER_CONSUMER_ROLE:
+        return (SQL_ISSUER_SCHEMA, SQL_ISSUER_PAYLOAD_SCHEMA, SQL_ISSUER_PROCESS_MODE,
+            SQL_ISSUER_SERVICE_UID, SQL_ISSUER_SERVICE_GID, history_bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE)
+    _fail("consume receiving purpose is not one of the three fixed profiles")
+
+
+def _history_verifier(consumer_role):
+    _profile(consumer_role)
+    if consumer_role == CONSUMER_ROLE:
+        return history_bootstrap._verify_consume_grant_on_work
+    if consumer_role == RESERVE_CONSUMER_ROLE:
+        return history_bootstrap._verify_consume_reserve_on_work
+    return history_bootstrap._verify_consume_sql_issuer_on_work
+
+
+def _payload_shape(payload, *, consumer_role=CONSUMER_ROLE):
+    _schema, payload_schema, mode, uid, gid, _history_role = _profile(consumer_role)
     shape._object(payload, _PAYLOAD_FIELDS, "consume receiving custody payload")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
-            ("operation", OPERATION), ("consumerRole", CONSUMER_ROLE), ("processMode", PROCESS_MODE),
+    for name, expected in (("schema", payload_schema), ("sourceRevision", authority.SOURCE_REVISION),
+            ("operation", OPERATION), ("consumerRole", consumer_role), ("processMode", mode),
             ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
-    for name, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID)):
+    for name, expected in (("serviceUid", uid), ("serviceGid", gid)):
         shape._integer(payload[name], 2**32 - 2, minimum=1)
         if payload[name] != expected:
-            _fail("consume receiving process identity differs from its fixed grant purpose")
+            _fail("consume receiving process identity differs from its fixed purpose")
     shape.validate_identity_shape(payload["receiverIdentity"])
     for name in ("configurationDigest", "generationDigest", "runtimeClosureDigest",
             "executionBundleKeyDigest", "historicalBundleKeyDigest", "deliveryKeyDigest"):
@@ -152,7 +187,8 @@ def _bind_original(record, original, current, work):
 
 
 def _admit_nested(payload, planner_original, planning_original, receiving_original,
-        root, window, bound, current, work):
+        root, window, bound, current, work, *, consumer_role):
+    _schema, _payload_schema, mode, uid, gid, history_role = _profile(consumer_role)
     for name, original in (("plannerBootstrap", planner_original),
             ("plannerHistoryCustody", planning_original), ("receivingHistoryCustody", receiving_original)):
         _bind_original(payload[name], original, current, work)
@@ -162,7 +198,7 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
     current()
     roles = planner.payload["configurationPayload"]["roles"]
     for name in shared.configuration._ROLE_NAMES:
-        for field, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID)):
+        for field, expected in (("serviceUid", uid), ("serviceGid", gid)):
             shape._integer(roles[name][field], 2**32 - 2, minimum=1)
             if roles[name][field] == expected:
                 _fail("consume receiving identity collides with an independently configured generic role")
@@ -170,15 +206,16 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
     planner_live = shared._launch_guard(planner.attestation_interval, planner.opening_sample, current, work)
     planning_live = shared._launch_guard(planning.attestation_interval, planning.opening_sample, planner_live, work)
     planning_live()
-    receiving = history_bootstrap._verify_consume_grant_on_work(custody_bytes=receiving_original,
+    verify_history = _history_verifier(consumer_role)
+    receiving = verify_history(custody_bytes=receiving_original,
         root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work)
     planning_live()
     live = shared._launch_guard(receiving.attestation_interval, receiving.opening_sample, planning_live, work)
     live()
     # These are fresh, distinct root grants. The embedded original activation
     # planner is historical; equality below never makes its spent interval live.
-    for name, expected in (("consumer_role", history_bootstrap.CONSUME_GRANT_CONSUMER_ROLE),
-            ("process_mode", PROCESS_MODE), ("service_uid", SERVICE_UID), ("service_gid", SERVICE_GID)):
+    for name, expected in (("consumer_role", history_role),
+            ("process_mode", mode), ("service_uid", uid), ("service_gid", gid)):
         plan._same(getattr(receiving, name), expected, work, "consume receiving history purpose differs")
     _same_bytes(planner.consume_request_bytes, receiving.consume_request_bytes, work,
         "consume receiving history is bound to a different typed request")
@@ -213,10 +250,12 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
     return planner, receiving, live
 
 
-def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
-        receiving_history_custody_bytes, root_public_key, live_window, transport_deadline_ns, work):
+def _verify_fixed_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
+        receiving_history_custody_bytes, root_public_key, live_window, transport_deadline_ns, work,
+        consumer_role):
     """Admit four original byte strings with the actual independent root key."""
     try:
+        schema = _profile(consumer_role)[0]
         original = custody_bytes
         if type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES:
             _fail("consume receiving envelope is not a bounded immutable original")
@@ -231,7 +270,7 @@ def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_c
         inherited()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed consume receiving custody")
-        shape._literal(envelope["schema"], SCHEMA)
+        shape._literal(envelope["schema"], schema)
         shape._base64url(envelope["signatureBase64Url"], signature=True)
         if type(envelope["payload"]) is not dict:
             _fail("consume receiving payload is not an exact object")
@@ -239,15 +278,15 @@ def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_c
         payload = envelope["payload"]
         unsigned = _wire(payload, work)
         inherited()
-        capability._signature(root, envelope["signatureBase64Url"], SCHEMA, unsigned, capture._SharedLedger(work))
+        capability._signature(root, envelope["signatureBase64Url"], schema, unsigned, capture._SharedLedger(work))
         inherited()
         _canonical(original, envelope, work)
-        _payload_shape(payload)
+        _payload_shape(payload, consumer_role=consumer_role)
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = shared._launch_guard(interval, opening, inherited, work)
         planner, receiving, live = _admit_nested(payload, planner_original, planning_original,
-            receiving_original, root, window, bound, current, work)
+            receiving_original, root, window, bound, current, work, consumer_role=consumer_role)
         live()
         material = _CustodyMaterial(original, planner_original, planning_original, receiving_original,
             planner, receiving, payload["receiverIdentity"], interval, opening, payload)
@@ -260,11 +299,12 @@ def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_c
         raise OidcSessionActivationDeliveryExecutionCustodyBootstrapError("consume receiving custody admission failed") from exc
 
 
-def _produce_on_work(*, payload, planner_bootstrap_bytes, planner_history_custody_bytes,
+def _produce_fixed_on_work(*, payload, planner_bootstrap_bytes, planner_history_custody_bytes,
         receiving_history_custody_bytes, root_private_key, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, consumer_role):
     """Sign only captured claims after genuine admission of all nested originals."""
     try:
+        schema = _profile(consumer_role)[0]
         private, root = root_private_key, root_public_key
         planner_original, planning_original, receiving_original = _originals(planner_bootstrap_bytes,
             planner_history_custody_bytes, receiving_history_custody_bytes, outer_bytes=MAX_BYTES)
@@ -276,17 +316,17 @@ def _produce_on_work(*, payload, planner_bootstrap_bytes, planner_history_custod
         bound = min(window[4], transport_deadline_ns)
         inherited = shared._processing(window, bound, work)
         inherited()
-        _payload_shape(owned)
+        _payload_shape(owned, consumer_role=consumer_role)
         interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = shared._launch_guard(interval, opening, inherited, work)
         _planner, _receiving, live = _admit_nested(owned, planner_original, planning_original,
-            receiving_original, root, window, bound, current, work)
+            receiving_original, root, window, bound, current, work, consumer_role=consumer_role)
         unsigned = _wire(owned, work)
         live()
         shared.keys._pair_on_work(private, root, work)
         live()
-        envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+        envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
         envelope_size, envelope_nodes = work.measure(envelope)
         payload_size, payload_nodes = work.measure(owned)
         if (envelope_size > MAX_BYTES or envelope_nodes > MAX_NODES
@@ -294,7 +334,7 @@ def _produce_on_work(*, payload, planner_bootstrap_bytes, planner_history_custod
             _fail("consume receiving signature output exceeds its original bounds")
         work.charge(input_bytes=envelope_size + 2 * payload_size + production._SIGNATURE_TRANSPORT_BYTES,
             json_nodes=envelope_nodes + payload_nodes)
-        message = plan._ascii(plan._frame(SCHEMA, (unsigned,), work), work)
+        message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
         live()
         signature = production._sign_and_verify(private, root, message, work)
         live()
@@ -312,3 +352,61 @@ def _produce_on_work(*, payload, planner_bootstrap_bytes, planner_history_custod
         if isinstance(exc, OidcSessionActivationDeliveryExecutionCustodyBootstrapError):
             raise
         raise OidcSessionActivationDeliveryExecutionCustodyBootstrapError("consume receiving custody production failed") from exc
+
+
+def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
+        receiving_history_custody_bytes, root_public_key, live_window, transport_deadline_ns, work):
+    """Preserved grant-only v1 admission; no automatic profile selection."""
+    return _verify_fixed_on_work(custody_bytes=custody_bytes, planner_bootstrap_bytes=planner_bootstrap_bytes,
+        planner_history_custody_bytes=planner_history_custody_bytes,
+        receiving_history_custody_bytes=receiving_history_custody_bytes, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+        consumer_role=CONSUMER_ROLE)
+
+
+def _verify_reserve_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
+        receiving_history_custody_bytes, root_public_key, live_window, transport_deadline_ns, work):
+    return _verify_fixed_on_work(custody_bytes=custody_bytes, planner_bootstrap_bytes=planner_bootstrap_bytes,
+        planner_history_custody_bytes=planner_history_custody_bytes,
+        receiving_history_custody_bytes=receiving_history_custody_bytes, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+        consumer_role=RESERVE_CONSUMER_ROLE)
+
+
+def _verify_sql_issuer_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
+        receiving_history_custody_bytes, root_public_key, live_window, transport_deadline_ns, work):
+    return _verify_fixed_on_work(custody_bytes=custody_bytes, planner_bootstrap_bytes=planner_bootstrap_bytes,
+        planner_history_custody_bytes=planner_history_custody_bytes,
+        receiving_history_custody_bytes=receiving_history_custody_bytes, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+        consumer_role=SQL_ISSUER_CONSUMER_ROLE)
+
+
+def _produce_on_work(*, payload, planner_bootstrap_bytes, planner_history_custody_bytes,
+        receiving_history_custody_bytes, root_private_key, root_public_key,
+        live_window, transport_deadline_ns, work):
+    return _produce_fixed_on_work(payload=payload, planner_bootstrap_bytes=planner_bootstrap_bytes,
+        planner_history_custody_bytes=planner_history_custody_bytes,
+        receiving_history_custody_bytes=receiving_history_custody_bytes, root_private_key=root_private_key,
+        root_public_key=root_public_key, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, consumer_role=CONSUMER_ROLE)
+
+
+def _produce_reserve_on_work(*, payload, planner_bootstrap_bytes, planner_history_custody_bytes,
+        receiving_history_custody_bytes, root_private_key, root_public_key,
+        live_window, transport_deadline_ns, work):
+    return _produce_fixed_on_work(payload=payload, planner_bootstrap_bytes=planner_bootstrap_bytes,
+        planner_history_custody_bytes=planner_history_custody_bytes,
+        receiving_history_custody_bytes=receiving_history_custody_bytes, root_private_key=root_private_key,
+        root_public_key=root_public_key, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, consumer_role=RESERVE_CONSUMER_ROLE)
+
+
+def _produce_sql_issuer_on_work(*, payload, planner_bootstrap_bytes, planner_history_custody_bytes,
+        receiving_history_custody_bytes, root_private_key, root_public_key,
+        live_window, transport_deadline_ns, work):
+    return _produce_fixed_on_work(payload=payload, planner_bootstrap_bytes=planner_bootstrap_bytes,
+        planner_history_custody_bytes=planner_history_custody_bytes,
+        receiving_history_custody_bytes=receiving_history_custody_bytes, root_private_key=root_private_key,
+        root_public_key=root_public_key, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, consumer_role=SQL_ISSUER_CONSUMER_ROLE)

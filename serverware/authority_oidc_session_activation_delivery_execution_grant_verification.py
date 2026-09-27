@@ -30,6 +30,14 @@ class _VerifiedGrant:
     live: object
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _VerifiedFullGrant:
+    """Private same-call continuation; never an accepted proof input."""
+
+    verified: _VerifiedGrant
+    replayed: object
+
+
 def _fail(message):
     raise DeliveryExecutionGrantVerificationError(message)
 
@@ -40,11 +48,37 @@ def _verify_on_work(*, grant_bytes, authorization_bytes, authorization_enrollmen
         expectations, before_vector_bytes, receiving_custody, live_window,
         transport_deadline_ns, work):
     """Authenticate the signed grant and replay its exact original consume plan."""
+    return _verify_full_on_work(grant_bytes=grant_bytes, authorization_bytes=authorization_bytes,
+        authorization_enrollment_bytes=authorization_enrollment_bytes,
+        current_root_enrollment_bytes=current_root_enrollment_bytes,
+        grant_enrollment_bytes=grant_enrollment_bytes, root_public_key=root_public_key,
+        configuration_digest=configuration_digest, planner_public_key=planner_public_key,
+        operation_public_key=operation_public_key, originals=originals, expectations=expectations,
+        before_vector_bytes=before_vector_bytes, receiving_custody=receiving_custody,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, required_consumer_role="grant").verified
+
+
+def _verify_full_on_work(*, grant_bytes, authorization_bytes, authorization_enrollment_bytes,
+        current_root_enrollment_bytes, grant_enrollment_bytes, root_public_key,
+        configuration_digest, planner_public_key, operation_public_key, originals,
+        expectations, before_vector_bytes, receiving_custody, live_window,
+        transport_deadline_ns, work, required_consumer_role="grant", extra_originals=()):
+    """Replay once for a fixed receiving purpose and retain actual replay facts.
+
+    Extra originals are only the bounded reserve/snapshot/ACK held by the
+    reservation continuation. They join the aggregate before admission callbacks.
+    Neither successful result type is accepted by an original-input entrypoint.
+    """
     try:
         # Immutable grant capture precedes every callback. The common capture
         # also meters this exact extra original before caller hashes or clocks.
         original = wire.authorization._original(grant_bytes, wire.MAX_GRANT_BYTES,
             "consume execution grant")
+        if type(extra_originals) is not tuple or len(extra_originals) > 3:
+            _fail("consume grant continuation originals are not a bounded tuple")
+        extras = tuple(wire.authorization._original(value, wire.MAX_ORIGINAL_BYTES,
+            "consume reservation continuation original") for value in extra_originals)
         held = admission._hold_on_work(authorization_bytes=authorization_bytes,
             authorization_enrollment_bytes=authorization_enrollment_bytes,
             current_root_enrollment_bytes=current_root_enrollment_bytes,
@@ -53,7 +87,8 @@ def _verify_on_work(*, grant_bytes, authorization_bytes, authorization_enrollmen
             operation_public_key=operation_public_key, originals=originals,
             expectations=expectations, before_vector_bytes=before_vector_bytes,
             receiving_custody=receiving_custody, live_window=live_window,
-            transport_deadline_ns=transport_deadline_ns, work=work, extra_originals=(original,))
+            transport_deadline_ns=transport_deadline_ns, work=work,
+            required_consumer_role=required_consumer_role, extra_originals=(original, *extras))
         admitted = admission._admit_on_work(held, work)
         admitted.live()
         payload, grant_digest = wire._verify_signature_on_work(original,
@@ -93,7 +128,7 @@ def _verify_on_work(*, grant_bytes, authorization_bytes, authorization_enrollmen
         live()
         verified = _VerifiedGrant(payload, grant_digest, result, valid_until, window, deadline, live)
         live()
-        return verified
+        return _VerifiedFullGrant(verified, replay.replayed)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, DeliveryExecutionGrantVerificationError):
             raise

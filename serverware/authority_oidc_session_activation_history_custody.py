@@ -100,6 +100,10 @@ def _verifier(purpose):
         return bootstrap._verify_consume_on_work
     if purpose == bootstrap.CONSUME_GRANT_CONSUMER_ROLE:
         return bootstrap._verify_consume_grant_on_work
+    if purpose == bootstrap.CONSUME_RESERVE_CONSUMER_ROLE:
+        return bootstrap._verify_consume_reserve_on_work
+    if purpose == bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE:
+        return bootstrap._verify_consume_sql_issuer_on_work
     _fail("historical activation custody has no verifier for this purpose")
 
 
@@ -171,6 +175,38 @@ class OidcSessionActivationHistoryCustody:
             delivery_custody_key=delivery_custody_key, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work,
             purpose=bootstrap.CONSUME_GRANT_CONSUMER_ROLE)
+        return owner
+
+    @classmethod
+    def for_consume_reserve(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
+            expected_consume_request, bundle_key, delivery_custody_key, live_window,
+            transport_deadline_ns, work):
+        """Fixed v4 reserve history; no grant/planning owner can be relabeled."""
+        if cls is not OidcSessionActivationHistoryCustody:
+            _fail("consume reserve history requires its exact owner class")
+        owner = object.__new__(cls)
+        owner._initialize(custody_bytes=custody_bytes, root_public_key=root_public_key,
+            expected_receiver_identity=expected_receiver_identity,
+            expected_consume_request=expected_consume_request, bundle_key=bundle_key,
+            delivery_custody_key=delivery_custody_key, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work,
+            purpose=bootstrap.CONSUME_RESERVE_CONSUMER_ROLE)
+        return owner
+
+    @classmethod
+    def for_consume_sql_issuer(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
+            expected_consume_request, bundle_key, delivery_custody_key, live_window,
+            transport_deadline_ns, work):
+        """Fixed v5 pending receiver history; this factory does not issue SQL."""
+        if cls is not OidcSessionActivationHistoryCustody:
+            _fail("consume SQL-issuer history requires its exact owner class")
+        owner = object.__new__(cls)
+        owner._initialize(custody_bytes=custody_bytes, root_public_key=root_public_key,
+            expected_receiver_identity=expected_receiver_identity,
+            expected_consume_request=expected_consume_request, bundle_key=bundle_key,
+            delivery_custody_key=delivery_custody_key, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work,
+            purpose=bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE)
         return owner
 
     def _initialize(self, *, custody_bytes, root_public_key, expected_receiver_identity,
@@ -359,11 +395,29 @@ class OidcSessionActivationHistoryCustody:
         if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_GRANT_CONSUMER_ROLE:
             _fail("consume-grant receiving requires its separate v3 history purpose")
 
+    def _require_consume_receiving_on_work(self, *, work):
+        """Semantic replay only; the outer receiver enforces its exact role."""
+        evidence.capture._SharedLedger(work)
+        if self._snapshot_configuration().consumer_role not in (
+                bootstrap.CONSUME_GRANT_CONSUMER_ROLE, bootstrap.CONSUME_RESERVE_CONSUMER_ROLE,
+                bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE):
+            _fail("consume execution replay requires a separately root-signed receiving purpose")
+
     def _require_consume_history_on_work(self, *, work):
-        """Read-only consume provenance for explicit v2/v3, never completion."""
+        """Read-only provenance for explicit request-bound purposes, never completion."""
         evidence.capture._SharedLedger(work)
         if not bootstrap._requires_consume_request(self._snapshot_configuration().consumer_role):
             _fail("consume provenance requires a request-bound history purpose")
+
+    def require_consume_reserve_on_work(self, *, work):
+        evidence.capture._SharedLedger(work)
+        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_RESERVE_CONSUMER_ROLE:
+            _fail("consume reserve requires its separate v4 history purpose")
+
+    def require_consume_sql_issuer_on_work(self, *, work):
+        evidence.capture._SharedLedger(work)
+        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE:
+            _fail("consume pending receiver requires its separate v5 history purpose")
 
     def bind_consume_request_on_work(self, *, expected_consume_request, work):
         """Join independent ordinary request data; return no authority carrier."""

@@ -26,20 +26,20 @@ activation (1), workload/native integration (3), and providers/operations (7).
 The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
 names each scope. Landed source does not imply current executability: the
 [shared execution replay inventory](docs/production-status.md#current-integration-boundary)
-now includes activation in committed source; dedicated receiving key delivery and
-execution-role composition remain open.
+now includes activation and a dedicated cold grant authorizer in committed source;
+receiving reserve/SQL key delivery and role composition remain open.
 
 <details>
 <summary>All 46 source checkpoints and the nested milestone bars</summary>
 
-[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 14/26 finer steps shown in the active-workflow bar below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 15/26 finer steps shown in the active-workflow bar below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 </details>
 
-**Current work: OIDC session activation — 14/26 detailed steps landed; 12 unfinished (1 in progress, 11 other open).**
+**Current work: OIDC session activation — 15/26 detailed steps landed; 11 unfinished (1 in progress, 10 other open).**
 ✓ Landed · → In progress · NEXT Open and next · — Open.
 
-[![OIDC activation: 14 of 26 tracked steps landed; step 15 private replay/custody is in progress and step 16 execution authorization grant is next. Inside step 15, six of eight source components are landed: original replay, first-exact storage, sender export, receiving bootstrap, process-bound receiving owner and generic frames/window forwarding. Receiving key/FD delivery and dedicated role wiring are open. These eight components are not added to the 26 steps. Source-only; production acceptance remains 0/6.](docs/images/activation-progress.svg)](docs/production-status.md#private-replay-detail-f084e2)
+[![OIDC activation: 15 of 26 tracked steps landed, including step 16 execution authorization grant; step 15 private replay/custody remains in progress and step 17 reservation/pending admission is next. Inside step 15, six of eight source components are landed: original replay, first-exact storage, sender export, receiving bootstrap, process-bound receiving owner and generic frames/window forwarding. Cold key/FD delivery and role wiring are partial: grant landed, reserve/SQL open. These eight components are not added to the 26 steps. Source-only; production acceptance remains 0/6.](docs/images/activation-progress.svg)](docs/production-status.md#private-replay-detail-f084e2)
 
 The previous three broad remaining segments are now **13 smaller tasks**—no
 completed work was lost or new product scope added. Each segment maps to a
@@ -48,12 +48,14 @@ Grouping milestones are not counted twice; these 26 steps all belong to F08.
 Counts are not effort percentages or an ETA.
 
 Inside **step 15 · Private replay/custody**, **6/8 source components are landed
-and 2 open**. The named detail above and its
+and 2 partial/open**: grant delivery/wiring landed, reserve/SQL still open. The
+named detail above and its
 [evidence ledger](docs/production-status.md#private-replay-detail-f084e2) show
 what has changed without adding eight tasks to the fixed 26-step total.
 
-Execution authorization is the next milestone after this integration; reservation,
-one-use SQL, completion, token delivery and separate public/portal flows follow.
+The [post-plan authorization grant](docs/oidc-session-activation-execution-authorization.md)
+is source-landed without renewing the plan's lifetime. Reservation/pending admission
+is next; one-use SQL, completion, token delivery and separate public/portal flows remain open.
 
 Full verification follows source freeze. Immutable dependencies and independently
 operated signing, Nitro/KMS and witness services remain prerequisites; the

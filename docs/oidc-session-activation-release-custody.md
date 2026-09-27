@@ -1,7 +1,9 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Delivery-key custody and guarded private token opening
 
 This is **partial step 20 source**, unbuilt, unexecuted and unprovisioned. The
-`.175` guarded-opening addition is authored but not yet credited as landed.
+`.175` guarded-opening addition is [source-landed in `5e5ca40`](https://github.com/example/private-deployment).
 Root-original-admitted delivery-key custody joins fresh release intent,
 independently signed committed-consumption proof and exact ciphertext scope.
 A separately root-authorized store retains the exact token-free outcome before

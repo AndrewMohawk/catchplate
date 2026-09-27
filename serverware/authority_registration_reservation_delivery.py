@@ -317,6 +317,48 @@ class RegistrationReservationDelivery:
             live()
             return record.receipt_bytes
 
+    def _original_for_execution_on_work(self, execution_record_digest, *,
+            expected_predecessor_sequence, expected_predecessor_head_digest, expected_fence,
+            work) -> RegistrationReservationOriginals | None:
+        """Find retained originals by an actual local execution-record digest.
+
+        The caller must derive this locator from its exact incoming originals
+        and supply the independently admitted predecessor scope. A match is
+        recovery data only, including after expiry; it is not renewed grant
+        authority, current state or permission to bypass delivery's live guard.
+        """
+        evidence.capture._SharedLedger(work)
+        authorization.shape._digest(execution_record_digest)
+        locator = execution_record_digest
+        scope = records._predecessor_scope(expected_predecessor_sequence,
+            expected_predecessor_head_digest, expected_fence)
+        self._require_process()
+        with self._lock:
+            self._require_ready()
+            count = len(self._history)
+            if count > self._maximum_records:
+                raise RegistrationReservationDeliveryError("reservation history exceeds its enrolled bound")
+            # The record objects contain bytes, not a JSON graph: reserve the
+            # bounded entry traversal, then charge each exact scalar comparison.
+            work.charge(json_nodes=count)
+            selected = None
+            for retained in self._history.values():
+                work.prepare_comparison(locator, retained.execution_record_digest)
+                if locator == retained.execution_record_digest:
+                    if selected is not None:
+                        raise RegistrationReservationDeliveryError("reservation execution locator is ambiguous")
+                    selected = retained
+            if selected is None:
+                self._require_ready()
+                return None
+            retained_scope = (selected.predecessor_sequence, selected.predecessor_head_digest, selected.fence)
+            work.prepare_comparison(scope, retained_scope)
+            if scope != retained_scope:
+                raise RegistrationReservationDeliveryError("reservation execution locator has different predecessor scope")
+            self._require_ready()
+            return RegistrationReservationOriginals(selected.execution_record_digest,
+                selected.request_bytes, selected.snapshot_bytes, selected.receipt_bytes)
+
     def originals(self, request_digest):
         """Read held originals, even after expiry, without claiming currentness."""
         authorization.shape._digest(request_digest)

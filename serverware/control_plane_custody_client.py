@@ -418,6 +418,34 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while reading execution grant originals")
         return record
 
+    def append_registration_signer_exchange(self, originals):
+        """Retain opaque signer request8/response2 without a delivery attempt.
+
+        This distinct content ID does not associate the exchange with a grant,
+        authenticate evidence or authorize registration finalization.
+        """
+        binding = _snapshot(self)
+        return journal.CustodyJournal.append_registration_signer_exchange(
+            binding.journal, originals)
+
+    def load_registration_signer_exchange(self, localdigest):
+        """Load exact historical signer originals/source, not successful replay.
+
+        Future use requires genuine original verification and independent
+        current scope. Loading never renews the retained signed lifetimes.
+        """
+        from serverware import control_plane_registration_signer_records as signer
+
+        digest = journal._digest(localdigest)
+        binding = _snapshot(self)
+        record = journal.CustodyJournal.load(binding.journal, digest)
+        if (type(record) is not records.PreparedRecord or record.digest != digest
+                or (record.family, record.selector) != (signer.FAMILY, signer.OPERATION)):
+            raise CustodyClientError("local record is not the distinct registration signer exchange")
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while reading signer originals")
+        return record
+
     def append_and_forward_evidence(self, purpose, originals, *, deadline_ns=None):
         """Append actual raw6 durably, then attempt its forwarding exactly once.
 

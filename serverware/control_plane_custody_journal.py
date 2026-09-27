@@ -8,7 +8,7 @@ removed. Recovery rejects unknown and temporary files rather than guessing
 whether an interrupted publication may safely be discarded.
 An OBSERVED marker records only first successful readback metadata; it is
 neither terminal business state nor authority to bypass fresh verification.
-Registration execution-grant records are a separate retention-only family;
+Registration execution-grant and signer-exchange records are retention-only families;
 they never admit attempted or observed markers or legacy forwarding.
 
 The private directory open-file description owns the singleton flock. The
@@ -27,6 +27,7 @@ import stat
 from serverware import control_plane_custody_records as records
 from serverware import control_plane_custody_observations as observations
 from serverware import control_plane_registration_execution_records as execution_records
+from serverware import control_plane_registration_signer_records as signer_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -37,7 +38,9 @@ _ATTEMPT_BYTES = 40
 _OBSERVATION_RESERVE = observations.MAX_OBSERVATION_BYTES
 _HEX = frozenset("0123456789abcdef")
 _READ_CHUNK = 1024 * 1024
-_MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES)
+_MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES,
+    signer_records.MAX_RECORD_BYTES)
+_RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY})
 
 
 class CustodyJournalError(RuntimeError):
@@ -80,13 +83,15 @@ def _identity(metadata):
 
 
 def _decode_prepared(encoded):
-    """Dispatch only the two fixed original-record formats, never a plugin."""
+    """Dispatch only the three fixed original-record formats, never a plugin."""
     if type(encoded) is not bytes:
         raise CustodyJournalError("prepared record is not immutable bytes")
     if encoded[:8] == records.PREPARED_RECORD_MAGIC:
         return records.decode_prepared(encoded)
     if encoded[:8] == execution_records.PREPARED_RECORD_MAGIC:
         return execution_records.decode_prepared(encoded)
+    if encoded[:8] == signer_records.PREPARED_RECORD_MAGIC:
+        return signer_records.decode_prepared(encoded)
     raise CustodyJournalError("prepared record version is unsupported")
 
 
@@ -96,7 +101,7 @@ class CustodyJournal:
     Construction completes the only recovery scan before making the owner
     available. Quota reserves forty attempt bytes and the maximum observation
     frame for each legacy prepared record still missing those markers.
-    Retention-only execution grants reserve no marker bytes. Preparation cannot
+    Retention-only execution grants and signer exchanges reserve no marker bytes. Preparation cannot
     consume another record's marker capacity. At most three times maximum_records
     published files are admitted; old records are never rewritten or removed.
     """
@@ -255,9 +260,9 @@ class CustodyJournal:
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
         retention_only = {digest for digest, entry in prepared.items()
-            if entry.family == execution_records.FAMILY}
+            if entry.family in _RETENTION_ONLY_FAMILIES}
         if (attempted | observed) & retention_only:
-            raise CustodyJournalError("retention-only grant record cannot have delivery markers")
+            raise CustodyJournalError("retention-only record cannot have delivery markers")
         if not observed <= attempted:
             raise CustodyJournalError("journal observation has no prepared and attempted original")
         marker_records = len(prepared) - len(retention_only)
@@ -282,8 +287,8 @@ class CustodyJournal:
                 or (record.family, record.selector, record.source_revision)
                     != (info.family, info.selector, info.source_revision)):
             raise CustodyJournalError("prepared record changed after admitted recovery")
-        if info.family == execution_records.FAMILY and (info.attempted or info.observed):
-            raise CustodyJournalError("retention-only grant record cannot have delivery markers")
+        if info.family in _RETENTION_ONLY_FAMILIES and (info.attempted or info.observed):
+            raise CustodyJournalError("retention-only record cannot have delivery markers")
         if info.attempted:
             marker_name = _name("attempted", digest)
             marker, marker_identity = self._read_file(marker_name, maximum_bytes=_ATTEMPT_BYTES)
@@ -326,7 +331,7 @@ class CustodyJournal:
                 self._io.poison()
                 raise
         record = _decode_prepared(encoded)
-        marker_reserve = (0 if record.family == execution_records.FAMILY else
+        marker_reserve = (0 if record.family in _RETENTION_ONLY_FAMILIES else
             _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
         if (len(self._entries) >= self._maximum_records
                 or len(encoded) + marker_reserve
@@ -363,6 +368,13 @@ class CustodyJournal:
             self._require_ready()
             return self._append(*execution_records.encode(originals))
 
+    def append_registration_signer_exchange(self, originals):
+        """Retain exact signer request8/response2, not a grant association or action."""
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            return self._append(*signer_records.encode(originals))
+
     def load(self, localdigest):
         digest = _digest(localdigest)
         self._require_process()
@@ -386,8 +398,8 @@ class CustodyJournal:
             entry = self._entries.get(digest)
             if entry is None:
                 raise CustodyJournalError("cannot attempt an absent local record")
-            if entry.family == execution_records.FAMILY:
-                raise CustodyJournalError("retention-only grant record cannot be attempted")
+            if entry.family in _RETENTION_ONLY_FAMILIES:
+                raise CustodyJournalError("retention-only record cannot be attempted")
             if entry.attempted:
                 raise CustodyJournalError("local record already has an attempt; repeat delivery is forbidden")
             try:
@@ -415,8 +427,8 @@ class CustodyJournal:
         with self._io.ready():
             self._require_ready()
             entry = self._entries.get(digest)
-            if entry is not None and entry.family == execution_records.FAMILY:
-                raise CustodyJournalError("retention-only grant record cannot have an observation")
+            if entry is not None and entry.family in _RETENTION_ONLY_FAMILIES:
+                raise CustodyJournalError("retention-only record cannot have an observation")
             if entry is None or not entry.attempted:
                 raise CustodyJournalError("readback observation requires a prepared and attempted record")
             try:

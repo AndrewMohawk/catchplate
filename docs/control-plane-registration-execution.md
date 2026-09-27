@@ -238,6 +238,33 @@ not expose originals or enable reconciliation, forwarding, reservation or
 execution. Journal fsync and recovery guarantees depend on the provisioned
 filesystem and do not establish off-host custody or resistance to rollback.
 
+### Standalone signer-exchange retention
+
+A separate [signer-exchange codec](../serverware/control_plane_registration_signer_records.py)
+preserves the exact signer request8 and response2 originals. Its `SWCPS001`
+frame, `serverware.controlPlaneRegistrationSignerExchangeRecord/v1` digest
+domain and fixed `registration-signer` family keep these bytes distinct from
+the grant bundle and all older record formats. Existing signer field/group
+bounds apply, with a combined 64 MiB body limit and at most 346 header bytes.
+The local digest identifies retained bytes; it does not authenticate the signer,
+associate them with a grant or authorize finalization.
+
+[`CustodyJournal.append_registration_signer_exchange(originals)`](../serverware/control_plane_custody_journal.py)
+uses the existing durable publication and recovery path without attempt or
+observation markers. The [cold custody client](../serverware/control_plane_custody_client.py)
+exposes the same append method, returning only a local digest, and
+`load_registration_signer_exchange(localdigest)`, returning an opaque
+`PreparedRecord` with the exact originals, original source revision, digest,
+family and fixed `webauthn.registration.evidence.admit` selector. The recovery
+UI admits this family for metadata inspection only, with no forwarding or
+reconciliation contract.
+
+**Existing grant preparation does not call this append method or persist the
+signer exchange.** A genuine preparation-path handoff and durable signer-to-grant
+association remain separate implementation needs before later original replay
+and credential finalization. Retention or loading supplies neither that
+association nor successful replay, current authority or a renewed lifetime.
+
 ## Remaining integration and release boundaries
 
 The dedicated [grant-authorizer service](registration-execution-authorizer.md)
@@ -248,8 +275,9 @@ retention journal is not a one-use execution ledger. Those remain separate
 
 A separate [reservation producer and durable delivery owner](registration-execution-reservation.md)
 now provide the source path from authenticated grant originals to an original
-state acknowledgment. They are not wired into these preparation handlers and
-do not supply the missing cold coordinator or SQL/finalization authority.
+state acknowledgment. The [cold reserver](registration-execution-reserver.md)
+composes them under independent root/key/checkpoint admission. It is not wired
+into these preparation handlers and supplies no SQL/finalization authority.
 
 The new endpoints provide API-only grant preparation, not the later public
 execution action or a complete operator UI workflow. Reservation/current-root

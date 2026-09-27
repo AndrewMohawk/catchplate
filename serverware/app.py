@@ -21184,20 +21184,25 @@ UI_HTML = r"""
       return typeof value === 'string' && /^[\x21-\x7e]{1,256}$/.test(value);
     }
 
+    function custodyRetentionOnly(family) {
+      return family === 'registration-execution' || family === 'registration-signer';
+    }
+
     function custodyMetadata(value) {
       const fields = ['localDigest', 'family', 'selector', 'sourceRevision', 'preparedBytes', 'attempted', 'observed'];
       const selectors = {evidence: ['registration', 'installation'], transition:
         ['webauthn.registration.finalize', 'webauthn.trust.stage', 'webauthn.trust.complete'],
-        'registration-execution': ['webauthn.registration.evidence.admit']};
+        'registration-execution': ['webauthn.registration.evidence.admit'],
+        'registration-signer': ['webauthn.registration.evidence.admit']};
       if (!custodyClosed(value, fields) || !custodyDigest(value.localDigest)
           || typeof value.family !== 'string' || typeof value.selector !== 'string'
           || !Object.prototype.hasOwnProperty.call(selectors, value.family)
           || !selectors[value.family].includes(value.selector) || !custodySource(value.sourceRevision)
           || !Number.isSafeInteger(value.preparedBytes) || value.preparedBytes < 1
-          || value.preparedBytes > 64 * 1024 * 1024 + (value.family === 'registration-execution' ? 346 : 323)
+          || value.preparedBytes > 64 * 1024 * 1024 + (custodyRetentionOnly(value.family) ? 346 : 323)
           || typeof value.attempted !== 'boolean' || typeof value.observed !== 'boolean'
           || (value.observed && !value.attempted)
-          || (value.family === 'registration-execution' && (value.attempted || value.observed))) throw new Error('Custody metadata response is malformed. Remote state remains unknown.');
+          || (custodyRetentionOnly(value.family) && (value.attempted || value.observed))) throw new Error('Custody metadata response is malformed. Remote state remains unknown.');
       return Object.fromEntries(fields.map((field) => [field, value[field]]));
     }
 
@@ -21241,7 +21246,7 @@ UI_HTML = r"""
         <td data-label="Local record"><code class="custody-digest">${esc(item.localDigest)}</code></td>
         <td data-label="Operation / source">${esc(item.family)} / ${esc(item.selector)}<br><span class="muted">${esc(item.sourceRevision)}</span></td>
         <td data-label="Prepared bytes">${esc(item.preparedBytes)}</td>
-        <td data-label="Local markers">${item.family === 'registration-execution'
+        <td data-label="Local markers">${custodyRetentionOnly(item.family)
           ? 'Retained only — no delivery contract<br>Local original metadata only'
           : `${item.attempted ? 'Attempted — never resend' : 'Prepared — not attempted'}<br>${item.observed ? 'First unsigned observation stored' : 'No local observation; remote state unknown'}`}</td>
         <td data-label="Actions"><div class="toolbar">
@@ -21255,11 +21260,11 @@ UI_HTML = r"""
       $('custody-next').disabled = custodyView.busy || start + page.length >= custodyView.records.length;
       const detail = custodyView.detail;
       $('custody-record-detail').innerHTML = detail ? `<h3>Local record inspection</h3>
-        <p>${detail.record.family === 'registration-execution'
+        <p>${custodyRetentionOnly(detail.record.family)
           ? 'Retained only — no delivery contract. Local original metadata only.'
           : detail.freshReadback ? 'The last explicit readback matched the retained originals. This is not ongoing freshness or business success.' : 'Local inspection only; no fresh remote read was performed.'}</p>
         <dl>${Object.entries(detail.record).map(([key, value]) => `<dt>${esc(key)}</dt><dd><code>${esc(value)}</code></dd>`).join('')}</dl>
-        <h3>${detail.record.family === 'registration-execution' ? 'Retention boundary' : 'First unsigned observation'}</h3>${detail.record.family === 'registration-execution'
+        <h3>${custodyRetentionOnly(detail.record.family) ? 'Retention boundary' : 'First unsigned observation'}</h3>${custodyRetentionOnly(detail.record.family)
           ? '<p>No delivery or reconciliation action is available for this family. Local retention does not establish current authority, one-use consumption or execution.</p>'
           : detail.observation
           ? `<p class="muted">First-observation provenance is preserved across matching fresh reads; its source and configuration are not current authority.</p><dl>${Object.entries(detail.observation).map(([key, value]) => `<dt>${esc(key)}</dt><dd><code>${esc(value)}</code></dd>`).join('')}</dl>`
@@ -21311,7 +21316,7 @@ UI_HTML = r"""
           custodyView.records = custodyView.records.map((item) => item.localDigest === digest ? detail.record : item);
           custodyView.message = action === 'reconcile'
             ? 'Fresh authenticated readback matched the originals. First unsigned observation preserved; no business completion or resend permission.'
-            : detail.record.family === 'registration-execution'
+            : custodyRetentionOnly(detail.record.family)
               ? 'Retained only — no delivery contract. Local original metadata inspected; no authority or execution established.'
               : 'Local metadata and first observation inspected. This did not establish fresh remote state.';
         }

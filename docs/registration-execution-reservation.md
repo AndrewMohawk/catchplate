@@ -11,6 +11,11 @@ credential or activation of an OIDC session. The distinct
 `webauthn.registration.finalize` operation must not consume this grant as its
 own permission.
 
+The [cold reserver service](registration-execution-reserver.md) now composes
+these components behind a fixed private raw10-to-raw3 exchange. Its independent
+cold authority and provisioning remain separate from public caller activation,
+protected SQL execution and credential finalization.
+
 ## Produce the actual reserve
 
 [`authority_registration_execution_reservation._produce_on_configuration`](../serverware/authority_registration_execution_reservation.py)
@@ -137,10 +142,12 @@ reservation delivery or add permission to execute from a local digest alone.
 
 Before a real execution coordinator can use this path, it still needs:
 
-- Independently admitted computation/completion key custody, state endpoint and
-  peer identity, current state/local checkpoints, and protected journal delivery.
-  The existing caller bootstrap supplies the caller key and three enrollment
-  originals, not these additional owners or authority.
+- Provisioned, independently admitted computation-key custody, state endpoint,
+  peer identity, state/local checkpoints and protected journal delivery for the
+  [implemented cold reserver](registration-execution-reserver.md). Completion
+  remains a separate cold role and key. The existing caller bootstrap supplies
+  the caller key and three enrollment originals, not these additional owners
+  or authority; its public execution handoff is still unwired.
 - The actual [protected successor issuer/executor](authority-successor-execution.md),
   distinct PostgreSQL roles and TLS identities, independently admitted complete
   structural-manifest digest, and a separate durable attempt owner/checkpoint.
@@ -152,8 +159,11 @@ Before a real execution coordinator can use this path, it still needs:
 - The original signer request8/response2 needed by the existing registration
   finalization preparation. The retained grant raw10 is a different inventory:
   authorization, planning7, before-vector and grant. It must not be reinterpreted
-  as signer originals. Credential finalization also requires the evidence-admit
-  business row actually committed and its own operation/purpose admission.
+  as signer originals. The [standalone signer-retention profile](control-plane-registration-execution.md#standalone-signer-exchange-retention)
+  exists, but preparation still needs to store and durably associate that
+  exchange with its grant. Credential finalization also requires the
+  evidence-admit business row actually committed and its own operation/purpose
+  admission.
 
 Independent provisioning, currentness/rollback authorities, deployment and
 consolidated frozen-source verification remain outstanding. This source slice

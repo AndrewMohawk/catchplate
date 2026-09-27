@@ -144,6 +144,10 @@ belongs to the separate UID65515 owner, key, journal and protected readers.
 Credential finalization must separately authenticate committed evidence and the
 retained original signer exchange. Neither path is activated by this service.
 
+The separate [cold completion recovery service source](registration-execution-completion-service.md)
+now composes those actual readback and durable delivery owners. It does not
+retry SQL, connect a public caller or finalize a credential.
+
 Present-caller execution-purpose admission is still required before a future
 public caller invokes this private service. Possessing preparation, grant or
 reservation originals is not a new public execute permission.

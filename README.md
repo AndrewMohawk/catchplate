@@ -18,27 +18,38 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Tracked source implementation: 33 of 46 checkpoints landed, 13 open including F07 in progress. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 6/8; workloads and native 3/6; providers and operations 0/7. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Tracked source implementation: 33 of 46 checkpoints landed, 13 open including F07 in progress. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 6/8; workloads and native 3/6; providers and operations 0/7. F07 detail: 3 of 8 substeps landed, 5 open; caller configuration is next. Child counts are not added to the overall total. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 **33 of 46 tracked source checkpoints landed · 13 open.** Each tile maps to a
 [named checklist item](docs/production-status.md#next-source-milestones): ✓ landed,
 → in progress, — open. Counts describe implementation checkpoints, not percentage of
 code, equal amounts of work, or an ETA. Current source is unbuilt and unexecuted.
 
-- **Just landed (partial F07):** isolated finalization completion service,
-  original-signature receiving checks and explicit state-service peer admission
-  ([d472bdb](https://github.com/example/private-deployment)).
-- **In progress (F07):** connect the completion caller, retained authenticated
-  outcomes/recovery, separate public permission and portal controls. Separate
-  OIDC session activation (F08) follows; neither checkpoint is closed yet.
-- **Production acceptance: 0/6 verified.** Full verification follows source
-  freeze. Immutable dependencies and independently operated signing, Nitro/KMS
-  and witness services remain prerequisites; the services are not provisioned.
+| Workstream | Landed source | Still to do |
+| --- | --- | --- |
+| Evidence handoff · 10/10 | Reserve, protected SQL, signed completion, retained originals | Current-release verification remains separate |
+| Historical recovery · 4/5 | Original-signature replay and recovery within the configured cohort | Resolve historical authority across source/configuration/key changes |
+| Permissions and grants · 10/10 | Separate permissions, grant issuance, retention and portal actions | Finalization completion controls are tracked below |
+| Finalization and sessions · 6/8 | Finalization reservation and one-use SQL execution | Complete/recover finalization; separately activate OIDC sessions |
+| Workloads and native · 3/6 | TLS-bound attestation, identity authoring, signed-handoff client | Provision service identities, finish native enrollment and enclave integration |
+| Providers and operations · 0/7 | Lower-level adapters and tooling exist; these integration closures remain open | OAuth ownership/custody, revocation, protected side effects, publication recovery, RBAC rollback protection, telemetry |
+
+**Current focus — F07: 3/8 substeps landed.** The worker, original-signature checks
+and state-service peer landed in
+[d472bdb](https://github.com/example/private-deployment).
+Next: caller configuration. Then historical ownership, durable outcomes/recovery,
+public permissions and portal controls. The [eight-step checklist](docs/production-status.md#f07-detail-finalization-completion-and-recovery)
+shows each part; these are inside F07, not extra milestones in the 46-item total.
+
+**Production acceptance: 0/6 verified.** Full verification follows source freeze.
+Immutable dependencies and independently operated signing, Nitro/KMS and witness
+services remain prerequisites; the services are not provisioned.
 
 [Open the full tracker →](docs/production-status.md) for every tile, committed
-evidence, broader remaining work and the separate production release gates.
+evidence, a [breakdown of the other open milestones](docs/production-status.md#remaining-work-breakdown)
+and the separate production release gates.
 
-<!-- Update named checkpoints, both implementation image descriptions, counts and SVG together at each milestone. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update named checkpoints, F07 child checklist, both implementation image descriptions, counts, summary table and SVG together at each milestone. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

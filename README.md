@@ -23,12 +23,12 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-- **Landed:** dedicated finalization caller/key custody, authorization before
-  new planning, and original-plan/grant verification
-  ([6f99905](https://github.com/example/private-deployment)).
+- **Landed:** finalization-grant service, same-read planning roots, durable grant
+  storage and a separately authorized portal action
+  ([48215ed](https://github.com/example/private-deployment)).
   Source-only; not deployed or runtime-verified.
-- **Next:** connect the finalization authorizer service, durable grant workflow
-  and public permission; then protected execution and separate OIDC activation.
+- **Next:** independent finalization reservation, protected execution and
+  completion; then separate OIDC session activation and remaining integration.
   Full verification follows implementation and source freeze; current source is
   unbuilt and unexecuted.
 - **External prerequisites:** an immutable dependency snapshot and independently

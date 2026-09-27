@@ -1,0 +1,309 @@
+"""Private active-plan signing with genuine original replay and no token export.
+
+The caller retains all original inputs and independently admits request, root,
+policy, subject, key and time provenance. Only a bounded signed commitment
+envelope leaves the producer. Verification requires those original inputs
+again and returns the actual recomputed transition, never an execution grant.
+No SQL, indexed after-root authority, durable retention, historical replay,
+registry factory or public activation is implemented by this private seam.
+"""
+from __future__ import annotations
+
+import base64
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import time
+
+from serverware import authority_oidc_session_activation_plan_contract as contract
+from serverware import authority_oidc_session_activation_reads as reads
+from serverware import authority_request_commitment as commitment
+from serverware import authority_transition_oidc_session_activation as transition
+
+
+assertion, registration, core = transition.assertion, transition.registration, transition.core
+evidence, clock = registration.evidence, assertion.clock
+_SCOPE_FIELDS = frozenset({"userId", "sessionId", "credentialId", "credentialRecordId", "challengeId",
+    "rpId", "origin", "authenticationPolicy", "trustPolicy", "configurationDigest",
+    "plannerIdentity", "plannerSpkiDigest", "maximumPlanAgeNs", "maximumClockSkewNs", "deadlineEpochNs"})
+
+
+class OidcSessionActivationPlanError(ValueError):
+    pass
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _Invocation:
+    request: dict
+    scope: dict
+    context: core.KernelContext
+    originals: tuple
+    raw_reads: dict
+    read_heads: tuple
+    query_frontiers: tuple
+    window: tuple
+    monotonic_deadline: int
+
+
+def _fail(message):
+    raise OidcSessionActivationPlanError(message)
+
+
+def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, live_window, transport_deadline_ns, work):
+    """Own every caller graph before clock, hash, signature or crypto callbacks."""
+    ledger = evidence.capture._SharedLedger(work)
+    if (type(context) is not core.KernelContext or context.operation != contract.OPERATION
+            or context.verified_webauthn_evidence is not None
+            or type(context.database_now) is not datetime or context.database_now.tzinfo is not timezone.utc):
+        _fail("activation plan requires its exact original UTC context")
+    database_now = context.database_now
+    if (type(assertion_bytes) is not bytes or not 2 <= len(assertion_bytes) <= assertion.MAX_ASSERTION_BYTES
+            or type(delivery_envelope_bytes) is not bytes
+            or len(delivery_envelope_bytes) != transition.delivery.ENVELOPE_BYTES
+            or type(delivery_custody_key) is not bytes or len(delivery_custody_key) != 32):
+        _fail("activation plan originals are outside their exact bounds")
+    originals = (assertion_bytes, assertion._token(old_token_bytes, work),
+        assertion._token(new_token_bytes, work), delivery_envelope_bytes, delivery_custody_key)
+    window = clock._validate(live_window)
+    bound = window[4]
+    if transport_deadline_ns is not None:
+        registration._integer(transport_deadline_ns, "activation plan inherited deadline", 1)
+        bound = min(bound, transport_deadline_ns)
+    owned = assertion._Capture(ledger, maximum_bytes=assertion.MAX_CONTEXT_BYTES).visit({
+        "request": request, "scope": scope})
+    raw, records, heads, frontiers = reads._capture(arguments=context.arguments,
+        request_digest=context.request_digest, selected_rows=context.selected_rows,
+        query_reads=context.query_reads, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, work=work)
+    expected = owned["scope"]
+    registration._closed(expected, _SCOPE_FIELDS, "independent activation plan scope")
+    for field in ("configurationDigest", "plannerSpkiDigest"):
+        registration._digest(expected[field])
+    evidence._identity(expected["plannerIdentity"])
+    registration._integer(expected["maximumPlanAgeNs"], "activation plan age", 1,
+        contract.authority.VERIFIER_RESPONSE_MAX_AGE_NS)
+    registration._integer(expected["maximumClockSkewNs"], "activation plan skew", 0,
+        contract.authority.VERIFIER_MAX_CLOCK_SKEW_NS)
+    registration._integer(expected["deadlineEpochNs"], "activation plan original deadline", 1)
+    if (window[5] != expected["maximumPlanAgeNs"] or window[6] != expected["maximumClockSkewNs"]
+            or window[3] > expected["deadlineEpochNs"]):
+        _fail("activation plan window differs from independent policy")
+    actual = owned["request"]
+    if type(actual) is not dict or actual.get("operation") != contract.OPERATION:
+        _fail("activation plan request has the wrong operation")
+    # All original graphs are owned above. Actual commitment work starts here.
+    digest = commitment._typed_request_digest(actual, work=work)
+    registration._same((digest, actual["arguments"]),
+        (raw["request_digest"], raw["arguments"]), work, "activation request/context join")
+    registration._same(actual["requestDigest"], digest, work, "activation request digest")
+    operation_id = evidence.plan._frame("serverware.policyAuthorityOperation/v2",
+        (evidence.plan._ascii(contract.OPERATION, work), evidence.plan._ascii(digest, work)), work)
+    registration._same(actual["operationId"], operation_id, work, "activation operation identity")
+    transition._arguments(raw["arguments"], work)
+    for name, maximum in (("userId", 1024), ("sessionId", 128), ("credentialId", 1366),
+            ("credentialRecordId", 1024), ("challengeId", 1024), ("rpId", 4096), ("origin", 8192)):
+        registration._text(expected[name], name, maximum, work)
+    held = core.KernelContext(contract.OPERATION, raw["arguments"], raw["selected_rows"],
+        database_now, digest, query_reads=records)
+    return _Invocation(actual, expected, held, originals, raw, heads, frontiers, window, bound)
+
+
+def _live(invocation, work):
+    """A sticky local guard, retaining the original caller window and cap."""
+    epoch, monotonic = invocation.window[0], invocation.window[2]
+
+    def check():
+        nonlocal epoch, monotonic
+        now = clock._check_on_work(invocation.window, work=work)
+        observed = evidence.production._callback(work, lambda: time.monotonic_ns())
+        registration._integer(observed, "activation plan monotonic sample", 1)
+        if now < epoch or observed < monotonic or observed >= invocation.monotonic_deadline:
+            _fail("activation plan deadline expired or clock reversed")
+        epoch, monotonic = now, observed
+        return now
+
+    return check
+
+
+def _wire(value, work):
+    return evidence.capability._wire(value, evidence.capture._SharedLedger(work),
+        contract.MAX_ORIGINAL_BYTES, reads.reads.MAX_JSON_NODES)
+
+
+def _bodies(invocation, work):
+    """Private canonical graph commitments, with no secret-token serialization."""
+    raw, context, expected = invocation.raw_reads, invocation.context, invocation.scope
+    records = []
+    for record in context.query_reads:
+        work.charge(input_bytes=len(record.declared_query_json) + len(record.resolved_query_json)
+            + sum(len(address.key_json) for address in record.addresses))
+        records.append({"queryId": record.query_id,
+            "declaredQueryJson": record.declared_query_json.decode("ascii"),
+            "resolvedQueryJson": record.resolved_query_json.decode("ascii"),
+            "returnedRowCount": record.returned_row_count,
+            "addresses": [{"table": address.table, "keyJson": address.key_json.decode("ascii"),
+                "keyDigest": address.key_digest, "present": address.present} for address in record.addresses]})
+    proof = {"schema": contract.PROOF_DOMAIN, "selectedRows": raw["selected_rows"],
+        "beforeProofs": raw["before_proofs"], "readHeads": raw["read_heads"],
+        "queryFrontiers": raw["query_frontiers"], "queryReads": records}
+    evaluation = {"schema": contract.CONTEXT_DOMAIN, "request": invocation.request,
+        "scope": expected, "databaseNow": context.database_now.isoformat(),
+        "businessBeforeRoots": raw["business_before_roots"],
+        "authorizationBeforeRoots": raw["authorization_before_roots"]}
+    # Domain-separated raw commitments are derived here, never accepted as an
+    # input in place of the actual original. The key is deliberately omitted.
+    inputs = {"schema": contract.INPUTS_DOMAIN}
+    for name, original in zip(("assertion", "oldToken", "newToken", "deliveryEnvelope"),
+            invocation.originals[:4]):
+        inputs[name] = {"digest": evidence.plan._frame(contract.INPUTS_DOMAIN + "/" + name,
+            (original,), work), "byteCount": len(original)}
+    return _wire(proof, work), _wire(evaluation, work), _wire(inputs, work)
+
+
+def _replay(invocation, work):
+    expected, original, raw = invocation.scope, invocation.originals, invocation.raw_reads
+    return transition._full_transition_on_work(invocation.context, assertion_bytes=original[0],
+        old_token_bytes=original[1], new_token_bytes=original[2], delivery_envelope_bytes=original[3],
+        delivery_custody_key=original[4], expected_user_id=expected["userId"],
+        expected_session_id=expected["sessionId"], expected_credential_id=expected["credentialId"],
+        expected_credential_record_id=expected["credentialRecordId"], expected_challenge_id=expected["challengeId"],
+        rp_id=expected["rpId"], origin=expected["origin"], authn_policy=expected["authenticationPolicy"],
+        trust_policy=expected["trustPolicy"], business_before_roots=raw["business_before_roots"],
+        authorization_before_roots=raw["authorization_before_roots"], before_proofs=raw["before_proofs"],
+        read_heads=invocation.read_heads, query_frontiers=invocation.query_frontiers,
+        live_window=invocation.window, work=work, transport_deadline_ns=invocation.monotonic_deadline)
+
+
+def _transition_bytes(actual, work):
+    if type(actual) is not core.KernelTransition:
+        _fail("activation original replay did not return its actual transition")
+    return _wire({"mutations": actual.mutations, "result": actual.result, "workUnits": actual.work_units}, work)
+
+
+def _expiry(invocation, work, issued):
+    """Bound the plan by the real selected input lifetimes, not a received claim."""
+    arguments, context = invocation.request["arguments"], invocation.context
+    session = context._exact("oidc_browser_sessions", {"id": arguments["session_id"]}, work=work)["row"]
+    challenge = context._exact("webauthn_challenges", {"id": arguments["challenge_id"]}, work=work)["row"]
+    limits = [invocation.scope["deadlineEpochNs"], issued + invocation.scope["maximumPlanAgeNs"],
+        registration._now(context.database_now) + arguments["delivery_ttl_seconds"] * 1_000_000_000]
+    for row, fields in ((session, ("expires_at", "pending_expires_at", "provider_expires_at")),
+            (challenge, ("expires_at",))):
+        for field in fields:
+            limits.append(assertion._time(row[field], field, work))
+    return min(limits)
+
+
+def _fresh(payload, invocation, now, work):
+    expected = invocation.scope
+    evidence._fresh(payload, now, expected["maximumPlanAgeNs"], expected["maximumClockSkewNs"])
+    if (payload["expiresAtEpochNs"] > _expiry(invocation, work, payload["issuedAtEpochNs"])
+            or now >= expected["deadlineEpochNs"]):
+        _fail("activation plan exceeds its independently admitted original lifetimes")
+
+
+def _produce_on_work(context, *, request, scope, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, planner_private_key, planner_public_key,
+        live_window, work, transport_deadline_ns=None):
+    """Genuinely replay all originals, then return only a signed token-free envelope."""
+    if (not isinstance(planner_private_key, evidence.Ed25519PrivateKey)
+            or not isinstance(planner_public_key, evidence.keys.Ed25519PublicKey)):
+        _fail("activation plan requires actual independently admitted Ed25519 keys")
+    invocation = _capture(context, request=request, scope=scope, assertion_bytes=assertion_bytes,
+        old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+        before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+    live = _live(invocation, work)
+    live()
+    proof_bytes, context_bytes, inputs_bytes = _bodies(invocation, work)
+    actual = _replay(invocation, work)
+    body_fields = contract._body_commitments_on_work(proof_bytes=proof_bytes,
+        context_bytes=context_bytes, inputs_bytes=inputs_bytes, transition_bytes=_transition_bytes(actual, work), work=work)
+    expected = invocation.scope
+    payload = {**contract._source_fields(), **body_fields,
+        "requestDigest": invocation.request["requestDigest"], "operationId": invocation.request["operationId"],
+        "configurationDigest": expected["configurationDigest"], "plannerIdentity": expected["plannerIdentity"],
+        "plannerSpkiDigest": expected["plannerSpkiDigest"], "issuedAtEpochNs": invocation.window[0],
+        "expiresAtEpochNs": min(_expiry(invocation, work, invocation.window[0]), invocation.window[3],
+            invocation.window[0] + invocation.monotonic_deadline - invocation.window[1])}
+    unsigned = contract._encode_on_work(payload, work=work)
+    _fresh(payload, invocation, live(), work)
+    evidence.keys._public_binding(planner_public_key, expected["plannerSpkiDigest"], work)
+    evidence.keys._pair_on_work(planner_private_key, planner_public_key, work)
+    message = evidence.plan._ascii(evidence.plan._frame(contract.SIGNATURE_DOMAIN, (unsigned,), work), work)
+    # Reserve fixed-size signature transport and both post-sign encodings before
+    # invoking the signing key. The genuine signer verifies its actual output.
+    placeholder = {"schema": contract.ENVELOPE_SCHEMA, "payload": payload, "signatureBase64Url": "A" * 86}
+    envelope_size, envelope_nodes = work.measure(placeholder)
+    payload_size, payload_nodes = work.measure(payload)
+    if envelope_size > contract.MAX_BYTES or envelope_nodes > contract.MAX_NODES:
+        _fail("activation plan signed output exceeds its wire bound")
+    work.charge(input_bytes=envelope_size + 2 * payload_size + evidence.production._SIGNATURE_TRANSPORT_BYTES,
+        json_nodes=envelope_nodes + payload_nodes)
+    _fresh(payload, invocation, live(), work)
+    signature = evidence.production._sign_and_verify(planner_private_key, planner_public_key, message, work)
+    _fresh(payload, invocation, live(), work)
+    # The held canonical payload, not a callback-returned projection, is signed.
+    if commitment.canonical_bytes(payload) != unsigned:
+        _fail("activation plan payload changed during signing")
+    encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+    contract.shape._base64url(encoded, signature=True)
+    envelope = commitment.canonical_bytes({"schema": contract.ENVELOPE_SCHEMA,
+        "payload": payload, "signatureBase64Url": encoded})
+    if len(envelope) != envelope_size:
+        _fail("activation plan output changed after sizing")
+    _fresh(payload, invocation, live(), work)
+    return envelope
+
+
+def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes, old_token_bytes,
+        new_token_bytes, delivery_envelope_bytes, delivery_custody_key, business_before_roots,
+        authorization_before_roots, before_proofs, read_heads, query_frontiers, planner_public_key,
+        live_window, work, transport_deadline_ns=None):
+    """Verify the signature and real body commitments, then repeat original replay.
+
+    This active-window API does not renew expired plans or authenticate history.
+    Its actual KernelTransition return is ordinary data, not an executor input
+    capability or an alternative to independently admitted current roots.
+    """
+    if not isinstance(planner_public_key, evidence.keys.Ed25519PublicKey):
+        _fail("activation plan verification requires an independently admitted public key")
+    if type(envelope_bytes) is not bytes or not 2 <= len(envelope_bytes) <= contract.MAX_BYTES:
+        _fail("activation plan requires a bounded immutable signed original")
+    invocation = _capture(context, request=request, scope=scope, assertion_bytes=assertion_bytes,
+        old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
+        before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+    live = _live(invocation, work)
+    live()
+    envelope = contract._decode_on_work(envelope_bytes, envelope=True, work=work)
+    payload, expected = envelope["payload"], invocation.scope
+    for name in ("configurationDigest", "plannerIdentity", "plannerSpkiDigest"):
+        registration._same(payload[name], expected[name], work, "independent activation plan " + name)
+    for name in ("requestDigest", "operationId"):
+        registration._same(payload[name], invocation.request[name], work, "activation plan " + name)
+    unsigned = contract._encode_on_work(payload, work=work)
+    evidence.keys._public_binding(planner_public_key, expected["plannerSpkiDigest"], work)
+    evidence.capability._signature(planner_public_key, envelope["signatureBase64Url"],
+        contract.SIGNATURE_DOMAIN, unsigned, evidence.capture._SharedLedger(work))
+    _fresh(payload, invocation, live(), work)
+    proof_bytes, context_bytes, inputs_bytes = _bodies(invocation, work)
+    for prefix, domain, original in (("proof", contract.PROOF_DOMAIN, proof_bytes),
+            ("context", contract.CONTEXT_DOMAIN, context_bytes), ("inputs", contract.INPUTS_DOMAIN, inputs_bytes)):
+        registration._same((payload[prefix + "Digest"], payload[prefix + "ByteCount"]),
+            (evidence.plan._frame(domain, (original,), work), len(original)), work,
+            "activation plan original " + prefix)
+    actual = _replay(invocation, work)
+    transition_bytes = _transition_bytes(actual, work)
+    registration._same((payload["transitionDigest"], payload["transitionByteCount"]),
+        (evidence.plan._frame(contract.TRANSITION_DOMAIN, (transition_bytes,), work), len(transition_bytes)),
+        work, "activation plan full transition replay")
+    _fresh(payload, invocation, live(), work)
+    return actual

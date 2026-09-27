@@ -1042,6 +1042,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_policy.py \
 	serverware/authority_oidc_session_activation.py \
 	serverware/authority_oidc_session_activation_reads.py \
+	serverware/authority_oidc_session_activation_planning.py \
+	serverware/authority_oidc_session_activation_plan_contract.py \
+	serverware/authority_oidc_session_activation_plan.py \
 	serverware/authority_transition_oidc_session_activation.py \
 	serverware/oidc_session_activation_delivery.py \
 	serverware/authority_transition_webauthn.py \
@@ -2943,6 +2946,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/webauthn-trust-bundle.v1.schema.json \
 				serverware/authority_oidc_session_activation.py \
 				serverware/authority_oidc_session_activation_reads.py \
+				serverware/authority_oidc_session_activation_planning.py \
+				serverware/authority_oidc_session_activation_plan_contract.py \
+				serverware/authority_oidc_session_activation_plan.py \
 				serverware/authority_transition_oidc_session_activation.py \
 				serverware/oidc_session_activation_delivery.py \
 				serverware/authority_transition_webauthn.py \

@@ -5,7 +5,8 @@ roots, then the actual original assertion and encrypted delivery are verified.
 Root/currentness, policy/key admission, retained-finalization ownership and the
 database clock remain the protected caller's responsibilities. No CAS-success
 carrier, legacy database helper, registered transition, SQL or token delivery is
-accepted or performed here. The shared audit-capacity finalizer is still needed.
+accepted or performed here. The full private adapter additionally invokes the
+real shared audit-capacity finalizer; it still proves no committed execution.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import time
 
 from serverware import authority_oidc_session_activation as assertion
 from serverware import authority_oidc_session_activation_reads as reads
+from serverware import authority_audit_capacity as capacity
 from serverware import oidc_session_activation_delivery as delivery
 from serverware import rbac
 
@@ -153,16 +155,17 @@ def _trust_scope(context, policy, now_ns, work):
     return trust.high_water_digest(document, work=work)
 
 
-def _transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+def _business_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
         delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
         expected_credential_id, expected_credential_record_id, expected_challenge_id,
         rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None):
-    """Return five ordinary business effects and data, never permission or commit success.
+    """Replay originals once and retain only this call's owned context and clock.
 
     Raw QueryRead records come from the exact context; raw primary/range proofs
     and independently admitted roots are mandatory separate inputs. The genuine
     reads worker is invoked here, not an externally supplied successful result.
+    No entrypoint accepts the returned private context/effects/liveness carrier.
     """
     ledger = registration.capture._SharedLedger(work)
     if (type(context) is not core.KernelContext or context.operation != OPERATION
@@ -301,4 +304,96 @@ def _transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_
     valid_until = min(intent["validUntilEpochNs"], assertion._time(delivery_expiry, "delivery expiry", work))
     if live() >= valid_until:
         _fail("activation originals expired before effect derivation finished")
+    return current, effects, result, live, valid_until
+
+
+def _transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
+        expected_credential_id, expected_credential_record_id, expected_challenge_id,
+        rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None):
+    """Preserve the five-business-effect API; no framework counter is appended here."""
+    _owned, effects, result, _live, _valid_until = _business_on_work(context,
+        assertion_bytes=assertion_bytes, old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        expected_credential_id=expected_credential_id, expected_credential_record_id=expected_credential_record_id,
+        expected_challenge_id=expected_challenge_id, rp_id=rp_id, origin=origin, authn_policy=authn_policy,
+        trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns)
     return effects, result
+
+
+def _full_transition_on_work(context, *, assertion_bytes, old_token_bytes, new_token_bytes,
+        delivery_envelope_bytes, delivery_custody_key, expected_user_id, expected_session_id,
+        expected_credential_id, expected_credential_record_id, expected_challenge_id,
+        rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
+        before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None):
+    """Return a genuine full KernelTransition after original replay and capacity CAS.
+
+    work_units ALREADY includes the actual query declarations and framework
+    units. A future planner must not finalize capacity or add those units again.
+    This is not a registered factory, after-root proof, signed plan or SQL result.
+    """
+    owned, effects, result, live, valid_until = _business_on_work(context,
+        assertion_bytes=assertion_bytes, old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes,
+        delivery_envelope_bytes=delivery_envelope_bytes, delivery_custody_key=delivery_custody_key,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        expected_credential_id=expected_credential_id, expected_credential_record_id=expected_credential_record_id,
+        expected_challenge_id=expected_challenge_id, rp_id=rp_id, origin=origin, authn_policy=authn_policy,
+        trust_policy=trust_policy, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
+        read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns)
+    # Everything below uses the actual proof-owned context from the same call,
+    # never the caller's possibly changed context/rows or a successful DTO input.
+    spec = registration.authority.operation_spec(OPERATION)
+    work.prepare_scan(owned.selected_rows)
+    business_rows = sum(not (item["table"] == capacity.AGGREGATE_TABLE
+        and item["key"] == {"aggregate_id": capacity.AGGREGATE_ID}) for item in owned.selected_rows)
+    if (business_rows > spec["maximumBusinessQueryRows"] or len(effects) != 5
+            or len(effects) > spec["maximumBusinessMutations"]):
+        _fail("activation business effect inventory exceeds its source allowance")
+    mutations, addresses = [], set()
+    for selected, after in effects:
+        address = selected["table"], registration._digest(selected["keyDigest"])
+        if address in addresses or selected["table"] == capacity.AGGREGATE_TABLE:
+            _fail("activation business effects duplicate a row or supply the framework counter")
+        addresses.add(address)
+        # These are the actual three copies made by core.mutation. That real
+        # renderer selects the exact source-owned INSERT/UPDATE template.
+        work.prepare_copy(selected["key"])
+        if selected["present"] is True:
+            work.prepare_copy(selected["row"])
+        work.prepare_copy(after)
+        mutations.append(core.mutation(operation=OPERATION, selected=selected, row=after))
+    work.prepare_copy(mutations)
+    business = tuple(mutations)
+    business_work = 8 + business_rows + 4 * len(business)
+    if business_work > spec["maximumBusinessWorkUnits"]:
+        _fail("activation kernel exceeds its business work allowance")
+    if live() >= valid_until:
+        _fail("activation originals expired before capacity finalization")
+    # The common finalizer validates the real existing capacity row, derives
+    # the complete outbox delta and appends its own full-row CAS. Missing/full/
+    # malformed capacity is an error; this adapter never initializes a counter.
+    finalized = capacity._finalize_capacity(owned, business, work=work)
+    if len(finalized) != 6 or len(finalized) > spec["maximumMutations"]:
+        _fail("activation full transition does not contain the six source mutations")
+    queries = reads._queries(arguments=owned.arguments,
+        cutoff_us=reads.complete.cutoff_microseconds(owned.database_now),
+        request_digest=owned.request_digest, work=work)
+    total_work = capacity.transition_work_units(OPERATION,
+        query_work_units=sum(query.work_units for query in queries),
+        kernel_work_units=business_work, mutations=finalized)
+    work.prepare_copy(finalized)
+    ordered = sorted(finalized, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
+    work.prepare_copy(ordered)
+    planned = tuple(ordered)
+    work.prepare_encoding(result)
+    transition = core.KernelTransition(mutations=planned, result=result, work_units=total_work)
+    if live() >= valid_until:
+        _fail("activation originals expired during full transition derivation")
+    return transition

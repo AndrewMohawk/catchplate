@@ -34,9 +34,10 @@ _CONFIGURED_CONTEXT = frozenset({"expectedPlannerIdentity", "expectedVerifierIde
 _CALL_CONTEXT = retention.production._CONTEXT_FIELDS - _CONFIGURED_CONTEXT - {"expectedBefore"}
 _READ_OPERATIONS = frozenset({"webauthn.credential.revoke",
     "webauthn.registration.finalize", "webauthn.trust.stage", "webauthn.trust.complete",
-    "webauthn.registration.evidence.admit", "webauthn.trust.installation.admit"})
+    "webauthn.registration.evidence.admit", "webauthn.trust.installation.admit",
+    "oidc.session.activate"})
 _COMPLETE_READ_OPERATIONS = frozenset({"webauthn.credential.revoke",
-    "webauthn.registration.finalize", "webauthn.trust.stage"})
+    "webauthn.registration.finalize", "webauthn.trust.stage", "oidc.session.activate"})
 
 
 class RevocationPlanningError(ValueError):
@@ -201,7 +202,7 @@ class _ProducedObservedPlanBytes:
 
 @contextmanager
 def _read_scope(read_configuration, *, operation, work):
-    """Own the genuine read transaction for six fixed successor operations.
+    """Own the genuine read transaction for seven fixed successor operations.
 
     The exact configuration triple has no signing key. Callers must own their
     invocation graphs before entering; the yielded cursor, manifest and trace

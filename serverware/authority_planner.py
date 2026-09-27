@@ -583,7 +583,8 @@ class PlannerTrace:
                  _counted_writes: bool = False) -> None:
         if (type(_complete_queries) is not bool
                 or _complete_queries and operation not in (authority_complete_query.OPERATION,
-                    authority_complete_query.REGISTRATION_OPERATION, authority_complete_query.STAGE_OPERATION)
+                    authority_complete_query.REGISTRATION_OPERATION, authority_complete_query.STAGE_OPERATION,
+                    authority_complete_query.ACTIVATION_OPERATION)
                 or type(_counted_writes) is not bool
                 or _counted_writes and (operation != authority_transition_webauthn_completion.OPERATION
                                        or _complete_queries)):

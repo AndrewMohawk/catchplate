@@ -62,6 +62,7 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
 
     Revocation preserves its existing role/potential-write union and no-context
     API. Registration/staging read heads follow their rebound argument family;
+    OIDC activation admits exactly its seven read heads, not write acquisition.
     a private transition owner can additionally require every
     potential source-write profile. Completion has exact primary-key reads,
     not a complete-range family: its private writer must explicitly request
@@ -71,8 +72,11 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
     if (type(include_write_heads) is not bool
             or type(operation) is not str or not 1 <= len(operation) <= 128
             or operation not in (complete.OPERATION, complete.REGISTRATION_OPERATION,
-                                 complete.STAGE_OPERATION, COMPLETION_OPERATION)):
+                                 complete.STAGE_OPERATION, complete.ACTIVATION_OPERATION,
+                                 COMPLETION_OPERATION)):
         raise IndexHeadReadError("counted head operation has no declared source inventory")
+    if operation == complete.ACTIVATION_OPERATION and include_write_heads:
+        raise IndexHeadReadError("activation acquisition admits its seven read heads only")
     if operation == COMPLETION_OPERATION:
         if not include_write_heads or arguments is not None or queries is not None:
             raise IndexHeadReadError("completion heads require explicit write-only source admission")
@@ -120,7 +124,12 @@ def validate_head_trace_key(operation: str, key: Any, *, arguments=None, queries
     """Validate one physical source-owned SELECT marker without hashing."""
     if type(operation) is not str or type(include_write_heads) is not bool:
         raise IndexHeadReadError("counted head operation is not an exact source identity")
-    if operation in (complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION) and arguments is None and queries is None:
+    if operation == complete.ACTIVATION_OPERATION and arguments is None and queries is None:
+        if include_write_heads:
+            raise IndexHeadReadError("activation trace admits its seven read heads only")
+        inventories = (tuple(sorted(complete._role(operation, name).index_id
+                                    for name in complete.ACTIVATION_ROLES)),)
+    elif operation in (complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION) and arguments is None and queries is None:
         # Trace markers carry no mode authority. The actual producer binds one
         # fixed mode/read-or-read-write inventory before SQL. Trace admission
         # alone cannot choose a subset or confer any operation authority.
@@ -225,7 +234,8 @@ def _read_index_heads_on_scope(cursor, *, operation, identities, trace, work, ac
     acquisition.require_active()
     if (acquisition.cursor is not cursor or acquisition.trace is not trace or acquisition.work is not work
             or type(operation) is not str or operation not in (complete.OPERATION,
-                complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION, COMPLETION_OPERATION)
+                complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
+                complete.ACTIVATION_OPERATION, COMPLETION_OPERATION)
             or type(getattr(trace, "operation", None)) is not str or trace.operation != operation
             or type(identities) is not tuple or not 1 <= len(identities) <= MAX_HEADS):
         raise IndexHeadReadError("counted head source scope changed")

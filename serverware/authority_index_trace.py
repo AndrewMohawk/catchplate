@@ -1,6 +1,6 @@
 """Hash-free admission of exact complete-query physical read markers.
 
-These shapes describe explicit revocation, registration and aggregate staging,
+These shapes describe explicit revocation, registration, activation and aggregate staging,
 plus completion's indexed-write frontier reads (not a complete-range family).
 They do not authenticate a supplied root, projection digest, interval, primary
 key, population or clock. Genuine producers and proof engines still bind those
@@ -66,7 +66,8 @@ def _source_role(operation: str, key: dict[str, Any]):
     # The actual source roles supply tables/indexes. Do not construct query
     # DTOs or profile commitments here: their constructors perform hashing.
     names = (complete.ROLES if operation == complete.OPERATION else
-             complete.REGISTRATION_ROLES if operation == complete.REGISTRATION_OPERATION else ())
+             complete.REGISTRATION_ROLES if operation == complete.REGISTRATION_OPERATION else
+             complete.ACTIVATION_ROLES if operation == complete.ACTIVATION_OPERATION else ())
     if operation == complete.STAGE_OPERATION:
         # Admit only the source's canonical bounded role spelling. Actual
         # rebinding still requires that ordinal in the owned stage arguments.
@@ -115,7 +116,8 @@ def validate_complete_read_trace(operation: str, table: str, key: Any) -> None:
     association, and must be explicitly enabled by the private planner caller.
     """
     if (type(operation) is not str or operation not in
-            (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION)
+            (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION,
+             complete.ACTIVATION_OPERATION)
             or type(table) is not str or not 1 <= len(table) <= 128):
         raise IndexTraceError("complete read operation or table is not source admitted")
     if table == heads.HEAD_TABLE:

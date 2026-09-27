@@ -8,6 +8,24 @@ append the audit event. It does not call a legacy DB helper, write SQL, deliver 
 token, or report a committed activation. The result explicitly says
 `activation-effects-derived` and `sessionActivated: false`.
 
+`_full_transition_on_work` accepts the **same original inputs** and returns the
+actual `core.KernelTransition`. It invokes that original-replaying business
+worker once, renders each of its five effects through `core.mutation`, then
+calls the genuine shared audit-capacity finalizer on the same proof-owned
+context. The sixth mutation is the finalizer's full-row capacity CAS, derived
+from the actual audit insertion. Missing, full, inconsistent or caller-supplied
+capacity fails; this adapter never initializes or fabricates a counter.
+
+The six mutations are sorted by the real table/key/operation ordering. Source
+limits remain 16 business rows/5 mutations/128 work units and 17 total
+rows/6 mutations/130 units. The full return's `work_units` **already includes**
+the actual query declarations, business kernel units and framework units via
+`transition_work_units`; a future planner must not finalize capacity or count
+query/framework work again. Metered proof/copy/hash work stays on the original
+supplied work object. The original liveness closure and earlier assertion,
+delivery and processing deadlines also remain active through finalization and
+the final return. No input accepts a successful effects or capacity carrier.
+
 The exact `KernelContext` contains the actual ten-field argument profile,
 selected rows, original `QueryRead` records, request digest and independently
 admitted database time. Private keyword inputs provide the original assertion,
@@ -60,11 +78,15 @@ monotonic cap. No new allowance, fresh expiry or delivery retry is manufactured.
 Database time is independently supplied and checked against that processing
 scope, not inferred from a response or advertised as a trusted clock.
 
-The common audit-capacity finalizer, typed planner/kernel factory registration, cold
-policy/key admission, protected one-use SQL, currentness admission and committed
-token delivery/recovery remain separate required integration. This source-only
+Typed planner/kernel factory registration, complete after-root/index-mutation
+proofs, composition with the [signed-plan producer/verifier](oidc-session-activation-plan.md), cold policy/key admission, protected one-use SQL,
+currentness admission and committed token delivery/recovery remain separate
+required integration. The original five-effect API remains unchanged; only the
+full adapter performs common capacity finalization. This source-only
 worker does not make the legacy production activation route usable or complete
 F08. No tests, builds or runtime validation ran. Frozen verification still needs
 valid originals, tampered/omitted range and primary proofs, uniqueness conflicts,
 RBAC/trust changes, replayed assertions/envelopes, expiry/clock reversal, shared
-work exhaustion and confirmation that no plaintext token escapes.
+work exhaustion and confirmation that no plaintext token escapes. Full-adapter
+coverage also needs missing/full/tampered capacity, the exact single audit delta,
+six source mutation templates and rejection of double finalization/accounting.

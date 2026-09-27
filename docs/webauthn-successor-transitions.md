@@ -5,7 +5,10 @@ have genuine configured programs in a separate `typed-successor-planning`
 registry. The additional `oidc.session.activate` declaration has only private
 [read admission](oidc-session-activation-reads.md), [business effects](oidc-session-activation-transition.md)
 and [encrypted-original delivery](oidc-session-activation-delivery.md) building
-blocks, **no successor factory**. Registry closure therefore reports that missing
+blocks, plus a [read-acquisition owner](oidc-session-activation-planning.md),
+full six-mutation audit-capacity adapter and [signed-plan producer/verifier](oidc-session-activation-plan.md),
+but **no successor factory**. Indexed write evidence, configured composition and
+private durable original retention are still missing. Registry closure therefore reports that missing
 program and remains fail-closed; the earlier six-program closure is not current
 startup evidence. Legacy kernel/planning inventories and
 legacy service, SQL execution and witness gates exclude these successors.

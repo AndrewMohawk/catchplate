@@ -16,19 +16,19 @@ long-lived credential.
 
 ## Production status
 
-Checkpoint: **2026-09-26 — pre-production, source-only.**
+Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 [![Production acceptance: 0 of 6 gates verified; 6 remain. Integration in progress; verification and release blocked; Nitro/KMS and witnesses not provisioned; live flows pending.](docs/images/production-progress.svg)](docs/production-status.md)
 
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-- **Landed:** separately authorized historical completion recovery with genuine
-  ownership replay and immutable reconciliation after uncertain outcomes
-  ([2938e94](https://github.com/example/private-deployment)).
+- **Landed:** explicit portal controls for retained registration actions and
+  separately authorized finalization preparation
+  ([567bb92](https://github.com/example/private-deployment)).
   Source-only; not deployed or runtime-verified.
-- **Next:** separate credential finalization, complete portal workflows and
-  independent historical authority resolution across configuration/key changes.
+- **Next:** dedicated authorization before finalization planning, protected
+  credential execution and separate OIDC session activation.
   Full verification follows implementation and source freeze; current source is
   unbuilt and unexecuted.
 - **External prerequisites:** an immutable dependency snapshot and independently

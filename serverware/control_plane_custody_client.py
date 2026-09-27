@@ -615,6 +615,29 @@ class ControlPlaneCustodyClient:
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed after release dispatch claim")
 
+    def claim_oidc_session_activation_dispatch(self, *, finalization_digest,
+            request_binding_digest, authorization_enrollment_digest, source_revision):
+        """Durably burn one retained activation target without storing secrets.
+
+        Genuine same-call ownership/permission admission and current metering
+        belong to the configured caller. This facade accepts metadata only;
+        an exact recovered claim never succeeds as a new dispatch permission.
+        """
+        from serverware import control_plane_oidc_session_activation_dispatch_attempt as attempts
+
+        record, _encoded = attempts.encode(finalization_digest=finalization_digest,
+            request_binding_digest=request_binding_digest,
+            authorization_enrollment_digest=authorization_enrollment_digest,
+            source_revision=source_revision)
+        binding = _snapshot(self)
+        journal.CustodyJournal.claim_oidc_session_activation_dispatch(binding.journal,
+            finalization_digest=record.finalization_digest,
+            request_binding_digest=record.request_binding_digest,
+            authorization_enrollment_digest=record.authorization_enrollment_digest,
+            source_revision=record.source_revision)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed after activation dispatch claim")
+
     def append_registration_finalization_sql_outcome(self, finalization_digest, originals):
         """Retain first unsigned raw4 without a renewed clock or success assertion."""
         local = journal._digest(finalization_digest)

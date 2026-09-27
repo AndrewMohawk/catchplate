@@ -2,7 +2,8 @@
 
 The explicit-revocation family retains its six roles unchanged. Successor
 registration has two unconditional roles and two additional OIDC-first-
-enrollment roles. OIDC activation has seven fixed equality ranges. Trust staging
+enrollment roles. OIDC activation and its distinct delivery-consumption operation
+each have seven fixed equality ranges. Trust staging
 has five fixed ranges and four dependent ranges per declared withdrawal, all
 under one unchanged 192-row closure.
 Arguments and cutoff are supplied intent/time, not facts.
@@ -30,6 +31,7 @@ OPERATION = "webauthn.credential.revoke"
 REGISTRATION_OPERATION = "webauthn.registration.finalize"
 STAGE_OPERATION = "webauthn.trust.stage"
 ACTIVATION_OPERATION = "oidc.session.activate"
+DELIVERY_OPERATION = "oidc.session.activation-delivery.consume"
 STAGE_MAX_ROWS = 192
 CASCADE_MAX = 32
 MAX_ARGUMENT_FIELDS = 64
@@ -114,6 +116,10 @@ _ACTIVATION_ARGUMENT_FIELDS = frozenset({
     "old_token_digest", "new_token_digest", "assertion_digest",
     "delivery_ttl_seconds", "businessIntent",
 })
+_DELIVERY_ARGUMENT_FIELDS = frozenset({
+    "delivery_id", "session_id", "user_id", "credential_id", "credential_record_id",
+    "challenge_id", "old_token_digest", "new_token_digest", "assertion_digest", "businessIntent",
+})
 _ACTIVATION_ROLES = (
     _Role("session_new_token", "oidc_browser_sessions", "oidc_session_token_digest",
           None, "activation_session_new_token"),
@@ -125,6 +131,9 @@ _ACTIVATION_ROLES = (
           "webauthn_publication_status", None, "activation_pending_trust", "pending"),
 )
 ACTIVATION_ROLES = tuple(role.name for role in _ACTIVATION_ROLES)
+_DELIVERY_ROLES = tuple(_Role(role.name, role.table, role.index_id, None,
+    "activation_delivery_consume_" + role.name, role.status) for role in _ACTIVATION_ROLES)
+DELIVERY_ROLES = tuple(role.name for role in _DELIVERY_ROLES)
 ROLES = tuple(role.name for role in _ROLES)
 _REGISTRATION_ROLES = (
     _Role("credential_id_history", "webauthn_credentials", "webauthn_credential_id",
@@ -166,8 +175,14 @@ def _operation(value: Any) -> None:
 
 def _role(operation: str, role: Any) -> _Role:
     _operation(operation)
-    if operation not in (OPERATION, REGISTRATION_OPERATION, STAGE_OPERATION, ACTIVATION_OPERATION) or type(role) is not str or not 1 <= len(role) <= 128:
+    if operation not in (OPERATION, REGISTRATION_OPERATION, STAGE_OPERATION,
+            ACTIVATION_OPERATION, DELIVERY_OPERATION) or type(role) is not str or not 1 <= len(role) <= 128:
         raise CompleteQueryError("complete query role is not declared for its operation")
+    if operation == DELIVERY_OPERATION:
+        for candidate in _DELIVERY_ROLES:
+            if role == candidate.name:
+                return candidate
+        raise CompleteQueryError("delivery consumption complete role is not source declared")
     if operation == ACTIVATION_OPERATION:
         for candidate in _ACTIVATION_ROLES:
             if role == candidate.name:
@@ -573,6 +588,8 @@ def family_roles(operation: str, *, arguments: Any) -> tuple[str, ...]:
     unchanged revocation family's existing validator still checks its inputs.
     """
     _operation(operation)
+    if operation == DELIVERY_OPERATION:
+        return DELIVERY_ROLES
     if operation == ACTIVATION_OPERATION:
         return ACTIVATION_ROLES
     if operation == OPERATION:
@@ -598,7 +615,7 @@ def family_limits(operation: str, *, arguments: Any) -> dict[str, int]:
     The fixed outside-prefix bound must be added by the actual frontier owner.
     """
     roles = family_roles(operation, arguments=arguments)
-    if operation == ACTIVATION_OPERATION:
+    if operation in (ACTIVATION_OPERATION, DELIVERY_OPERATION):
         return {"query_count": 7, "head_count": 7, "max_frontier_rows": 1}
     if operation == OPERATION:
         return {"query_count": 6, "head_count": 5, "max_frontier_rows": CASCADE_MAX}
@@ -742,9 +759,46 @@ def _bind_activation(declared: _Role, inputs: dict[str, Any], *,
     return CompleteIndexQuery(ACTIVATION_OPERATION, declared.name, selector, 1)
 
 
+def _delivery_binding_inputs(arguments: Any, cutoff_us: Any, *,
+                             work: _ValidationWork | None = None) -> dict[str, Any]:
+    """Exact release selectors; neither old-token possession nor current authority."""
+    _cutoff(cutoff_us)
+    if (type(arguments) is not dict or len(arguments) != len(_DELIVERY_ARGUMENT_FIELDS)
+            or set(arguments) != _DELIVERY_ARGUMENT_FIELDS
+            or type(arguments["businessIntent"]) is not dict):
+        raise CompleteQueryError("delivery consumption query arguments are not source closed")
+    values = {}
+    for name in ("delivery_id", "session_id", "user_id", "credential_record_id", "challenge_id"):
+        value = _source_id(arguments[name], work=work)
+        if name == "session_id":
+            if work is not None:
+                work.prepare_utf8(value)
+            if len(value.encode("utf-8")) > 128:
+                raise CompleteQueryError("delivery consumption session identifier exceeds its bound")
+        values[name] = value
+    values["credential_id"] = _registration_id(arguments["credential_id"], credential=True, work=work)
+    for name in ("old_token_digest", "new_token_digest", "assertion_digest"):
+        values[name] = _stage_digest(arguments[name], work=work)
+    return values
+
+
+def _bind_delivery(declared: _Role, inputs: dict[str, Any], *,
+                   work: _ValidationWork | None = None) -> CompleteIndexQuery:
+    if declared.name == "pending_trust_publications":
+        selector = (("status", "pending"),)
+    else:
+        name, argument = _ACTIVATION_SELECTORS[declared.name]
+        selector = ((name, inputs[argument]),)
+    if work is not None:
+        _prepare_constructor_work(declared.index_id, selector, work)
+    return CompleteIndexQuery(DELIVERY_OPERATION, declared.name, selector, 1)
+
+
 def bind_query(operation: str, role: str, *, arguments: Any, cutoff_us: int) -> CompleteIndexQuery:
     """Derive a fixed role from supplied intent/time, not caller index claims."""
     declared = _role(operation, role)
+    if operation == DELIVERY_OPERATION:
+        return _bind_delivery(declared, _delivery_binding_inputs(arguments, cutoff_us))
     if operation == ACTIVATION_OPERATION:
         return _bind_activation(declared, _activation_binding_inputs(arguments, cutoff_us))
     if operation == STAGE_OPERATION:
@@ -760,6 +814,9 @@ def _bind_query(
 ) -> CompleteIndexQuery:
     """Private metered route through the same binding and constructor body."""
     declared = _role(operation, role)
+    if operation == DELIVERY_OPERATION:
+        return _bind_delivery(declared,
+            _delivery_binding_inputs(arguments, cutoff_us, work=work), work=work)
     if operation == ACTIVATION_OPERATION:
         return _bind_activation(declared,
             _activation_binding_inputs(arguments, cutoff_us, work=work), work=work)
@@ -780,6 +837,17 @@ def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery
     enforce each shared union ceiling and the existing operation-wide bounds.
     """
     _operation(operation)
+    if operation == DELIVERY_OPERATION:
+        inputs = _delivery_binding_inputs(arguments, cutoff_us)
+        if type(complete_queries) is not tuple or len(complete_queries) != len(DELIVERY_ROLES):
+            raise CompleteQueryError("delivery consumption complete query inventory is not exact")
+        owned = tuple(snapshot_query(query) for query in complete_queries)
+        if tuple(query.role for query in owned) != DELIVERY_ROLES:
+            raise CompleteQueryError("delivery consumption complete roles differ from source order")
+        for query in owned:
+            if query != _bind_delivery(_role(operation, query.role), inputs):
+                raise CompleteQueryError("delivery consumption query differs from original arguments")
+        return owned
     if operation == ACTIVATION_OPERATION:
         inputs = _activation_binding_inputs(arguments, cutoff_us)
         if type(complete_queries) is not tuple or len(complete_queries) != len(ACTIVATION_ROLES):
@@ -830,6 +898,8 @@ def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery
 def role_manifest(operation: str) -> list[dict[str, Any]]:
     """Fresh fixed declarations for source commitment, not runtime activation."""
     _operation(operation)
+    if operation == DELIVERY_OPERATION:
+        return _activation_role_manifest(operation=DELIVERY_OPERATION)
     if operation == ACTIVATION_OPERATION:
         return _activation_role_manifest()
     if operation == STAGE_OPERATION:
@@ -865,9 +935,11 @@ def role_manifest(operation: str) -> list[dict[str, Any]]:
     return result
 
 
-def _activation_role_manifest() -> list[dict[str, Any]]:
+def _activation_role_manifest(*, operation: str = ACTIVATION_OPERATION) -> list[dict[str, Any]]:
+    if operation not in (ACTIVATION_OPERATION, DELIVERY_OPERATION):
+        raise CompleteQueryError("activation equality manifest has no source operation")
     result = []
-    for declared in _ACTIVATION_ROLES:
+    for declared in (_ACTIVATION_ROLES if operation == ACTIVATION_OPERATION else _DELIVERY_ROLES):
         profile = projection.profile_for(declared.index_id)
         if declared.name == "pending_trust_publications":
             sources = {"status": {"constant": "pending"}}
@@ -876,8 +948,8 @@ def _activation_role_manifest() -> list[dict[str, Any]]:
             sources = {selector: "arguments." + argument}
         result.append({
             "schema": ROLE_SCHEMA, "querySchema": QUERY_SCHEMA,
-            "operation": ACTIVATION_OPERATION, "role": declared.name,
-            "queryId": f"serverware.policyAuthorityQuery/{ACTIVATION_OPERATION}/{declared.name}/{declared.table}/v1",
+            "operation": operation, "role": declared.name,
+            "queryId": f"serverware.policyAuthorityQuery/{operation}/{declared.name}/{declared.table}/v1",
             "table": declared.table, "indexId": declared.index_id,
             "projectionDigest": profile.projection_digest, "selectorSources": sources,
             "rowBound": {"rule": "constant", "maximum": 1},

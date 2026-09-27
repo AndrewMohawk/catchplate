@@ -1,0 +1,101 @@
+# Delivery-key custody without token egress
+
+This is **partial step 20 source**, unbuilt, unexecuted and unprovisioned. It adds
+root-original-admitted delivery-key custody and exact authenticated ciphertext
+metadata inspection. It does **not** release a token, prove a fresh release
+intent, prove protected consumption, execute SQL or complete the browser flow.
+
+## Distinct root scope
+
+The bootstrap schemas are `serverware.signedOidcSessionActivationReleaseCustody/v1`
+and `serverware.oidcSessionActivationReleaseCustody/v1`. The fixed consumer is
+`token-release`; process mode is `oidc-session-activation-token-release`, UID/GID
+**65502**. The source scan found no existing use of that identity; no account,
+descriptor loader, service or filesystem is provisioned by these modules.
+Neither live execution consumers nor completion-history custody are widened.
+
+The genuine root signature covers current source, receiver identity, exact
+configuration/generation/runtime cohort, delivery-key digest, original planner
+bootstrap, activation request/operation identities, original delivery-envelope
+digest, exact eleven-field AEAD scope, fresh outer interval and the fixed
+`oidc.session.activation-delivery.consume` operation. It also pins
+`releaseIntentDigest` and `consumeRequestDigest`. These are **independent expected
+identities only**, not a claim that either original intent or committed
+consumption has been verified. No signed status or scalar success is accepted
+instead of those future original admissions.
+
+The original planner signature/configuration/policies/vector/enrollment are
+genuinely admitted historically within the current source cohort. Its dedicated
+delivery-key digest must match; genuine v3 admission preserves separation from
+the bundle and private-journal keys. This new owner receives **only the delivery
+AES key**, never bundle, planner, caller or completion signing keys. The root
+signature supplies trusted-host-local authority, not measured-runtime evidence;
+all hardware/TEE/HSM/witness flags remain false. The owner's independently
+supplied receiver identity must match the signed identity; it is not derived
+from the bootstrap it is meant to check.
+
+The root-pinned operation identity is rederived from the activation request
+digest, and delivery ID uses the actual request-bound `activation-delivery`
+derivation. The scope is exactly `deliveryId`, `userId`, `sessionId`,
+`credentialId`, `credentialRecordId`, `challengeId`, `assertionDigest`,
+`oldTokenDigest`, `newTokenDigest`, `createdAt`, `expiresAt`. Canonical credential
+encoding, digests, UTC timestamps, rotation and source lifetime bounds are
+checked. The fresh outer expiry cannot exceed the original delivery expiry;
+historical admission of an old planner never revives an expired delivery.
+
+## Private interfaces
+
+The bootstrap exposes:
+
+```text
+_verify_on_work(*, custody_bytes, root_public_key,
+               live_window, transport_deadline_ns, work)
+_produce_on_work(*, payload, root_private_key, root_public_key,
+                live_window, transport_deadline_ns, work)
+```
+
+Originals are immutable, canonical and bounded at 8 MiB for the outer and 4 MiB
+for its planner original. The actual bounded decoder/capture and cryptographic
+helpers share the supplied cumulative work. The producer owns its payload
+before callbacks, checks genuine original/key joins, and signs/verifies under
+the new domain. Returned material is ordinary owned data, never accepted as an
+authority input.
+
+`OidcSessionActivationReleaseCustody` requires original custody bytes, the root
+key, independently expected receiver identity, an exact 32-byte delivery key and
+the caller's current window/work/deadline. It binds exact class/PID/UID/GID,
+empty supplemental groups, fixed mode, source revision and held configuration.
+A nonblocking owner lock excludes overlapping checks and inspection.
+
+- `check_on_work(*, live_window, transport_deadline_ns, work)` reauthenticates the
+  original bootstrap and actual key binding; it returns no success carrier.
+- `inspect_delivery_on_work(*, envelope_bytes, live_window,
+  transport_deadline_ns, work)` hashes the exact 100-byte original, joins the
+  root pin and genuinely invokes the existing live AEAD/delivery-row helper
+  under the held key and root-owned scope. It returns only owned ordinary
+  `{deliveryScope, deliveryEnvelopeDigest}` metadata. No row, plaintext token,
+  intent-verification claim or consumption receipt is returned or retained.
+- `close()` closes the same-process owner and drops held references; this is not
+  a claim of guaranteed memory erasure.
+
+Every check/inspection reauthenticates original root scope, identity and key
+under the same supplied work. Narrowing preserves original epoch/monotonic
+opening samples and caps at the fresh release interval and inherited deadline.
+Sticky guards surround callbacks and final return. Old planner expiry is never
+a current clock sample, and no new work/window is opened.
+
+## Deliberately absent release path
+
+There is **no open, release or consume method**. Internal AEAD authentication
+cannot replace fresh original release intent and genuine committed one-use
+consumption through the separate protected operation. A pure kernel transition,
+`consumed_at` scalar, activation completion ACK, metadata result or caller-posted
+proof object is not that evidence. The legacy environment-secret decrypt/direct
+database recovery helper is not invoked.
+
+Future plaintext egress must first join actual original intent and protected
+plan/commit evidence to these independently expected identities and the exact
+delivery, then retain the exact allowed outcome for separately authorized
+recovery. That original-consuming integration, cold key/FD service, public
+permission, token response and current-session confirmation remain open.
+No test, parser, interpreter, build, provisioning or runtime verification was run.

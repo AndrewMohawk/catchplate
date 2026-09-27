@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.156"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.157"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -262,6 +262,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
 _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
     "webauthn.trust.stage", "webauthn.trust.complete", "webauthn.registration.create",
     "webauthn.registration.finalize", "webauthn.credential.revoke", "oidc.session.activate",
+    "oidc.session.activation-delivery.consume",
 })
 PROOF_PRIMITIVES = frozenset(
     {
@@ -292,6 +293,7 @@ _TYPED_WEBAUTHN_CHALLENGE_OPERATIONS = frozenset(
 _TYPED_SUCCESSOR_PLANNING_OPERATIONS = frozenset(
     {
         "oidc.session.activate",
+        "oidc.session.activation-delivery.consume",
         "webauthn.credential.revoke",
         "webauthn.registration.evidence.admit",
         "webauthn.registration.finalize",
@@ -2646,6 +2648,42 @@ _OPERATIONS = {
         maximum_mutations=5,
         maximum_work_units=128,
     ),
+    "oidc.session.activation-delivery.consume": _spec(
+        "consume_oidc_session_activation_delivery",
+        reads=(
+            "oidc_browser_sessions",
+            "oidc_session_activation_deliveries",
+            "webauthn_credentials",
+            "webauthn_challenges",
+            "webauthn_trust_publications",
+            "webauthn_trust_publication_high_water",
+            "rbac_role_bindings",
+            "rbac_authority_state",
+            "metadata_audit_outbox",
+        ),
+        writes=(
+            "oidc_session_activation_deliveries",
+            "metadata_audit_outbox",
+            "policy_authority_bounded_aggregate_states",
+        ),
+        # Dedicated original-possession/current-proof admission only. The
+        # legacy plaintext helper and generic assertion receipt are not adapters.
+        selectors={},
+        webauthn="original-pending-token-possession",
+        mutation_kinds={
+            "oidc_session_activation_deliveries": ("UPDATE",),
+            "metadata_audit_outbox": ("INSERT",),
+            "policy_authority_bounded_aggregate_states": ("UPDATE",),
+        },
+        proof_primitives=(
+            "primary-key-row",
+            "aggregate-high-water",
+            authority_complete_query.PROOF_PRIMITIVE,
+        ),
+        maximum_query_rows=16,
+        maximum_mutations=2,
+        maximum_work_units=128,
+    ),
     "webauthn.credential.revoke": _spec(
         "revoke_webauthn_credential",
         reads=_WEBAUTHN
@@ -3054,6 +3092,7 @@ def _synthesize_business_intent(
         "webauthn.challenge.create",
         "webauthn.challenge.consume",
         "oidc.session.activate",
+        "oidc.session.activation-delivery.consume",
     }:
         excluded.add("challenge_id")
     if work is not None:

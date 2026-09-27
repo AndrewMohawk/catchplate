@@ -12,7 +12,9 @@ claimed for this source checkpoint.
 uses the pinned `cryptography` AES-GCM primitive with an independently supplied
 exact 32-byte custody key. It neither generates that key nor loads an environment
 secret, key file, configuration fallback or caller-selected crypto provider.
-The eventual cold owner must admit the key and retain its purpose separation.
+The separate [release-custody owner](oidc-session-activation-release-custody.md)
+now admits original key/scope provenance for metadata inspection only; actual
+cold release-key delivery and one-use plaintext egress remain open.
 
 The original encrypted envelope is exactly 100 immutable bytes:
 
@@ -91,3 +93,34 @@ one-use delivery transition in the protected database transaction. An absent
 response cannot mean the activation did not commit. See the separate
 [original assertion admission](oidc-session-activation-admission.md) and
 [retained finalization prerequisite](retained-registration-activation.md).
+
+## Protected consumption source checkpoint (.157)
+
+The distinct `oidc.session.activation-delivery.consume` operation now has
+[original read-proof admission](oidc-session-activation-delivery-reads.md),
+[old-token/current-policy semantics](oidc-session-activation-delivery-consumption.md)
+and a genuine [indexed-write adapter](oidc-session-activation-delivery-writes.md).
+Actual current primary and complete-range proofs bind the active session,
+unconsumed delivery, credential, used challenge, trust and RBAC state. The
+original old token is independently hashed; a posted digest is insufficient.
+Same-call replay derives the delivery consumption CAS, deterministic audit
+insert and actual capacity CAS, with seven counted heads and five affected
+delivery indexes. These three effects do not prove a committed consumption.
+The typed-successor declaration intentionally lacks a real generic consume
+program/factory and fails closed; no placeholder connects it to execution.
+
+The dedicated [root-original release custody](oidc-session-activation-release-custody.md)
+uses UID/GID 65502 and only the independently admitted delivery key. It verifies
+historical planner/key provenance, fresh root-owned scope and exact live AEAD
+metadata, but returns no plaintext and has no release method. Expected
+release-intent/consume-request identities are not verified original authority.
+
+The design reuses the existing immutable protected execution packet and commit
+marker for the exact outcome and unchanged encrypted delivery. There is no new
+outcome table or legacy direct-UPDATE/decryption fallback. Real consume planning
+and retained originals, authorization, reservation and protected execution remain
+next, followed by genuine original commit admission and one-use plaintext
+release/cold handoff. Public permission and portal/current-auth confirmation
+remain separate. Step 20 is in progress; source-only counts remain **19/26
+landed, 1 in progress, 6 other open**, execution **6/7**, parent **34/46** and
+production **0/6**. No build, test, runtime execution or provisioning was run.

@@ -28,16 +28,18 @@ can only shorten it. The same bound covers connect, peer admission, header/body
 I/O, EOF and final return. The socket closes on success or failure; there is no
 automatic retry or error packet claiming that publication did not occur.
 
-The future cold serving owner must connect actual original caller/grant replay,
+The [cold serving owner](oidc-session-activation-delivery-execution-reserver-service.md)
+connects actual original caller/grant replay,
 root-held predecessor and local journal pins, the actual receiving custodian and
 [durable delivery](oidc-session-activation-delivery-reservation-delivery.md), then
-clip the original request window to the signed reserve expiry through response.
-It must spend every accepted connection, including rejection or uncertain
+clips the original request window to the signed reserve expiry through response.
+It spends every accepted connection, including rejection or uncertain
 delivery. The codec itself does not provide that lifecycle or current authority.
 
 Returned raw3 is unverified. A receiver must independently authenticate the
 original reserve/snapshot/ACK and live caller/grant/private plan, then compare
 separately held current-pending pins. Neither an ACK nor a successful socket
-exchange supplies those expected pins or authorizes SQL. Cold service and actual
-pending-consumer integration remain open; no token-release milestone closes
-because transport source exists.
+exchange supplies those expected pins or authorizes SQL. The actual cold SQL
+pending consumer remains open; its independently pinned
+[bootstrap](oidc-session-activation-delivery-execution-sql-bootstrap.md) alone
+does not close that connection or token-release row 12.

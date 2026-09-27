@@ -127,6 +127,7 @@ COPY --from=verified-production-source /source/serverware/oidc_session_activatio
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_authorizer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_authorizer_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_execution_authorizer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_authorizer_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_reserver_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_sql_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py
 COPY --from=verified-production-source /source/serverware /runtime/app/serverware
@@ -200,6 +201,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/oidc_session_activation_execution_authorizer_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_authorizer_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_reserver_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_execution_sql_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py \
     && chmod 0755 /runtime/custody-trust \

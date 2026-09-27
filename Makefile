@@ -1131,6 +1131,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_delivery_reservation_transport.py \
 	serverware/authority_oidc_session_activation_delivery_pending_admission.py \
 	serverware/oidc_session_activation_delivery_execution_reserver_bootstrap.py \
+	serverware/oidc_session_activation_delivery_execution_reserver_startup.py \
+	serverware/oidc_session_activation_delivery_execution_reserver_entrypoint.py \
+	serverware/oidc_session_activation_delivery_execution_reserver_launcher.py \
+	serverware/oidc_session_activation_delivery_execution_reserver_runner.py \
+	serverware/oidc_session_activation_delivery_execution_sql_bootstrap.py \
 	serverware/oidc_session_activation_delivery_planner_bootstrap.py \
 	serverware/oidc_session_activation_delivery_planner_entrypoint.py \
 	serverware/oidc_session_activation_delivery_planner_launcher.py \
@@ -3142,6 +3147,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_delivery_reservation_transport.py \
 				serverware/authority_oidc_session_activation_delivery_pending_admission.py \
 				serverware/oidc_session_activation_delivery_execution_reserver_bootstrap.py \
+				serverware/oidc_session_activation_delivery_execution_reserver_startup.py \
+				serverware/oidc_session_activation_delivery_execution_reserver_entrypoint.py \
+				serverware/oidc_session_activation_delivery_execution_reserver_launcher.py \
+				serverware/oidc_session_activation_delivery_execution_reserver_runner.py \
+				serverware/oidc_session_activation_delivery_execution_sql_bootstrap.py \
 				serverware/oidc_session_activation_delivery_planner_bootstrap.py \
 				serverware/oidc_session_activation_delivery_planner_entrypoint.py \
 				serverware/oidc_session_activation_delivery_planner_launcher.py \

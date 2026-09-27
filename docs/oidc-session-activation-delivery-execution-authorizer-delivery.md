@@ -63,13 +63,23 @@ Original construction and signed-launch bounds remain checked; they are not
 replaced by a fresh allowance after I/O or privilege drop.
 
 Listener/path identities and all sealed descriptors are checked before the
-empty-group permanent drop and again before isolated exec. Only the exact eight
-source-fixed environment entries and descriptors `198..208` are retained.
+empty-group permanent drop and again before same-process continuation. The
+already isolated launcher accepts only `--root-delivery`; there is no standalone
+`--run` or post-drop exec that could replace the construction allowance. The
+entrypoint resets the environment to the exact eight source-fixed entries and
+passes the actual work, original window and inherited deadline to the private
+runner/startup continuation in the same PID. Descriptors `198..208` remain
+close-on-exec; they survive the identity drop but are not exported to a child.
 Failure closes task-owned descriptors; no key or original is logged. The runner
 uses the actual [startup service](oidc-session-activation-delivery-execution-authorizer-service.md),
 polls only while idle, stops after the first accepted request, and closes the
 service on success, failure or cooperative termination. There is no automatic
 new request, re-signing or delivery retry.
+
+Sealed reads validate the original identity and actual bounded size, charge that
+size on the shared ledger, then wrap only the raw read in the metrics-preserving
+callback. Startup calls this charging helper directly between current-window
+guards; it does not nest a ledger mutation inside a read-only callback.
 
 `Dockerfile.production` copies the new fixed launcher from the verified source
 tree and makes it read-only. The separate service/socket templates declare

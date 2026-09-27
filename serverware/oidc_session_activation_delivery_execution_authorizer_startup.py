@@ -99,7 +99,7 @@ def _close_inherited():
 
 class _AuthorizerOwner:
     __slots__ = ("_material", "_root", "_key", "_custody", "_custody_configuration", "_originals", "_seal",
-        "_listener", "_listener_pins", "_sealed", "_startup_window", "_opening", "_interval", "_deadline",
+        "_listener", "_listener_pins", "_sealed", "_startup_window", "_inherited_deadline", "_opening", "_interval", "_deadline",
         "_last_epoch", "_last_monotonic", "_closed", "_failed", "_accepted", "_connection")
 
     def __init__(self):
@@ -112,14 +112,14 @@ class _AuthorizerOwner:
         _require_pid()
         try:
             held = (self._material, self._root, self._key, self._custody, self._originals,
-                self._startup_window, self._listener, self._listener_pins, self._sealed)
+                self._startup_window, self._inherited_deadline, self._listener, self._listener_pins, self._sealed)
             if (type(self) is not _AuthorizerOwner or self is not _owner or _state != "started"
                     or self._closed or self._failed or _environment() != _namespace
                     or type(self._seal) is not tuple or len(self._seal) != len(held)
                     or any(actual is not original for actual, original in zip(held, self._seal))
                     or self._opening is not self._material.opening_sample
                     or self._interval is not self._material.attestation_interval
-                    or self._deadline != min(self._startup_window[4],
+                    or self._deadline != min(self._inherited_deadline, self._startup_window[4],
                         self._opening[0] + self._interval[1] - self._opening[1])):
                 raise DeliveryExecutionAuthorizerStartupError("consume authorizer lifetime or held configuration changed")
             _process(_namespace)
@@ -269,7 +269,13 @@ class _AuthorizerOwner:
                     _state = "spent"
 
 
-def initialize_from_environment():
+def initialize_from_environment(*, work, live_window, transport_deadline_ns):
+    """Continue root delivery in its original, permanently dropped process.
+
+    The caller supplies the actual ledger/window opened before root/key I/O;
+    no default cold allowance or post-exec replacement exists. Admission still
+    reauthenticates every sealed original rather than accepting material DTOs.
+    """
     global _state, _owner, _namespace, _descriptors_owned
     _require_pid()
     with _LOCK:
@@ -286,10 +292,14 @@ def initialize_from_environment():
             from serverware import authority_oidc_session_activation_delivery_execution_custody as custody
             from serverware import authority_successor_execution_window as processing
             from serverware import authority_webauthn_evidence_plan_clock as clock
-            from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+            from serverware.authority_query_read_work import _ValidationWork
 
-            work = _ValidationWork(QueryReadValidationLimits())
-            window, bound = bootstrap._construction_on_work(work)
+            if type(work) is not _ValidationWork:
+                raise DeliveryExecutionAuthorizerStartupError("consume authorizer requires the actual inherited startup work")
+            window = clock._validate(live_window)
+            bootstrap.shape._integer(transport_deadline_ns, minimum=1)
+            inherited_deadline = transport_deadline_ns
+            bound = min(inherited_deadline, window[4])
             last_epoch, last_monotonic = window[0], window[2]
             callback = bootstrap.production._callback
 
@@ -322,8 +332,8 @@ def initialize_from_environment():
                 delivery.PLANNER_HISTORY_CUSTODY_FD, delivery.RECEIVING_HISTORY_CUSTODY_FD)
             public_originals, public_pins = [], []
             for descriptor, maximum in ((delivery.ROOT_FD, delivery.MAX_ROOT_BYTES), *zip(descriptors, maxima)):
-                raw, identity = callback(work,
-                    lambda descriptor=descriptor, maximum=maximum: delivery._read_on_work(descriptor, maximum, work))
+                current()
+                raw, identity = delivery._read_on_work(descriptor, maximum, work)
                 public_originals.append(raw)
                 public_pins.append((descriptor, maximum, False, identity))
                 current()
@@ -381,12 +391,14 @@ def initialize_from_environment():
             owner._listener, owner._listener_pins = listener, listener_pins
             owner._sealed = (*public_pins, *private_pins)
             owner._startup_window = window
+            owner._inherited_deadline = inherited_deadline
             owner._opening, owner._interval = material.opening_sample, material.attestation_interval
             owner._deadline = bound
             owner._last_epoch, owner._last_monotonic = sample[1], sample[2]
             owner._closed = owner._failed = owner._accepted = False
             owner._connection = None
-            owner._seal = (material, root, key, receiving, originals, window, listener, listener_pins, owner._sealed)
+            owner._seal = (material, root, key, receiving, originals, window, inherited_deadline,
+                listener, listener_pins, owner._sealed)
             _owner, _state = owner, "started"
             owner._live()
             final_epoch = current()

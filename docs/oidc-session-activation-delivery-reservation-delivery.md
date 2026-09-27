@@ -36,7 +36,9 @@ consume-head observation is not reservation authority.
 The returned ACK proves a signed reservation event, not an independently current
 pending head. The separate consume pending receiver must reauthenticate actual
 originals and compare independently held database/generation, predecessor,
-pending sequence/head and fence. Cold OS delivery/serving and the actual cold
-SQL pending consumer still require integration; this library does not complete
-token-release row 12. One-use SQL, completion/recovery and plaintext release
-remain separate unfinished work.
+pending sequence/head and fence. The [cold reserver service](oidc-session-activation-delivery-execution-reserver-service.md)
+now composes this delivery owner with actual receiving custody and fixed OS
+resources. The actual cold SQL pending consumer still requires integration;
+its [root bootstrap](oidc-session-activation-delivery-execution-sql-bootstrap.md)
+is only a prerequisite. Token-release row 12 remains in progress. One-use SQL,
+completion/recovery and plaintext release remain separate unfinished work.

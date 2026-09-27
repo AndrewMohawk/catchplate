@@ -7,6 +7,14 @@ library prerequisite: unbuilt, unexecuted and unprovisioned. The cold pending
 consumer is not connected in this batch, so token-release row 12 remains open
 and in progress despite the connected reservation primitives.
 
+The [independent SQL bootstrap](oidc-session-activation-delivery-execution-sql-bootstrap.md)
+now defines the root-held predecessor/current-pending pins, distinct receiving
+purpose, fixed resource inventory and separate issuer/executor database scope.
+It is not yet connected to an actual cold pending consumer or consume SQL
+producer. The [reserver service](oidc-session-activation-delivery-execution-reserver-service.md)
+only returns retained reservation originals; it does not select the SQL
+receiver's expected pending head.
+
 ## Original-only API
 
 `_admit_on_work` requires these keyword-only inputs:

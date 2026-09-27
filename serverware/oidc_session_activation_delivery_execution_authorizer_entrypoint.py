@@ -121,12 +121,17 @@ def _open_material(path, maximum, *, work, private=False):
         os.close(parent)
 
 
-def _read_on_work(descriptor, maximum, work):
-    size = os.fstat(descriptor).st_size
-    if not 2 <= size <= maximum:
-        raise RuntimeError("consume authorizer sealed original size differs")
+def _read_on_work(descriptor, maximum, work, *, private=False):
+    from serverware import authority_revocation_capability_production as production
+
+    identity = _sealed_identity(descriptor, maximum, private=private)
+    size = identity[0][6]
     work.charge(input_bytes=size)
-    return _read_original(descriptor, maximum)
+    raw, observed = production._callback(work,
+        lambda: _read_original(descriptor, maximum, private=private))
+    if observed != identity:
+        raise RuntimeError("consume authorizer sealed original changed before its charged read")
+    return raw, identity
 
 
 def _keys_on_work(material, work):
@@ -137,12 +142,9 @@ def _keys_on_work(material, work):
 
     evidence = custody.evidence
     evidence.capture._SharedLedger(work)
-    work.charge(input_bytes=3 * MAX_RAW_KEY_BYTES + MAX_KEY_BYTES)
     originals, identities = [], []
     for _path, descriptor, maximum in _KEY_FILES:
-        raw, identity = evidence.production._callback(work,
-            lambda descriptor=descriptor, maximum=maximum:
-                _read_original(descriptor, maximum, private=True))
+        raw, identity = _read_on_work(descriptor, maximum, work, private=True)
         originals.append(raw)
         identities.append((descriptor, maximum, identity))
     execution, historical, delivery_key, signing_raw = originals
@@ -284,7 +286,7 @@ def main():
             _sealed_identity(descriptor, maximum, private=True)
         current()
         for descriptor in INHERITED_DESCRIPTORS:
-            os.set_inheritable(descriptor, True)
+            os.set_inheritable(descriptor, False)
         _require_inventory(INHERITED_DESCRIPTORS)
         os.setgroups([])
         os.setresgid(SERVICE_GID, SERVICE_GID, SERVICE_GID)
@@ -295,14 +297,20 @@ def main():
         for descriptor, identity in retained.items():
             if delivery._material_identity(os.fstat(descriptor)) != identity:
                 owned.discard(descriptor)
-                raise RuntimeError("consume authorizer descriptor changed before exec")
+                raise RuntimeError("consume authorizer descriptor changed before continuation")
         if _listener(LISTENER_FD) != listener_pins:
-            raise RuntimeError("consume authorizer listener changed before exec")
+            raise RuntimeError("consume authorizer listener changed before continuation")
         bootstrap._fresh(material.attestation_interval, work, opening=material.opening_sample)
         current()
         _require_inventory(INHERITED_DESCRIPTORS)
-        os.execve(PYTHON, [PYTHON, "-I", LAUNCHER, "--run"], dict(ENVIRONMENT))
-        raise RuntimeError("consume authorizer runner exec unexpectedly returned")
+        # Continue in the already isolated PID so root I/O, reauthentication
+        # and cold construction retain the actual first ledger and window.
+        os.environ.clear()
+        os.environ.update(ENVIRONMENT)
+        from serverware import oidc_session_activation_delivery_execution_authorizer_runner as runner
+
+        current()
+        return runner._run_on_work(work=work, live_window=window, transport_deadline_ns=bound)
     finally:
         for descriptor in sorted(owned, reverse=True):
             try:

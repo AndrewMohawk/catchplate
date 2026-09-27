@@ -10,8 +10,12 @@ activation grant role nor a generic registration grant is a fallback.
 
 ## Cold ownership and one accepted exchange
 
-The startup API is `initialize_from_environment()`, `require_started()` and
-`close()`. Only genuine initialization constructs its private singleton.
+The startup API is
+`initialize_from_environment(*, work, live_window, transport_deadline_ns)`,
+`require_started()` and `close()`. Only the private same-process continuation
+from isolated root delivery supplies the original construction allowance;
+there is no standalone runner or default startup window. Genuine initialization
+constructs its private singleton from the sealed originals.
 `require_started().serve_once()` returns false after a bounded idle wait or true
 after its sole completed exchange. Every accepted connection spends the launch,
 including a wrong peer, malformed request, cancellation or uncertain delivery.
@@ -19,7 +23,7 @@ No second accepted request or in-process restart is permitted.
 
 The fixed process mode is
 `oidc-session-activation-delivery-execution-authorizer`, UID/GID `65500`, with
-empty supplementary groups and the exact eight-variable child environment.
+empty supplementary groups and the exact eight-variable environment after drop.
 The listener is
 `/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock`.
 Requests require peer UID/GID `65532`; the client checks the root-created
@@ -59,12 +63,20 @@ descriptors. Host-local custody is not protection against a hostile root.
 
 ## Original windows and genuine grant production
 
-One construction work allowance and real clock bracket open before sealed
-original reads or root-key crypto. The role verifier and actual receiving
-constructor get that same window and inherited deadline. Root-admitted policy
+One construction work allowance and real clock bracket open in root delivery
+before original file reads or root-key crypto. The permanent identity drop and
+private runner/startup call preserve that actual ledger, window and inherited
+deadline in the same PID; no post-drop exec or reconstruction resets them. The
+role verifier and actual receiving constructor get that same window and bound.
+Root-admitted policy
 and expiry may only narrow it. The later role freshness sample is an additional
 launch guard, never a replacement processing opening. Construction includes
 charged original/key reads and final original-window checks after owner setup.
+The charging helper admits each sealed identity/size and charges actual bytes
+before its read-only callback; startup invokes it directly between live guards.
+The inherited deadline is retained in the owner's identity seal and intersects
+the narrowed original window and signed-launch monotonic deadline throughout
+idle and request processing. All eleven original descriptors stay close-on-exec.
 
 The original construction deadline and both clock brackets remain guards during
 idle waits. The sole accepted request opens a separate work allowance/window

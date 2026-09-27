@@ -1,10 +1,12 @@
 # Consume execution reserver bootstrap
 
-This root-original profile admits the scope for a dedicated consume reserver.
-It is an integration prerequisite, not an installed or callable cold service.
-OS key/FD delivery, launcher/startup composition and an actual cold consumer of
-independently current pending state remain open. Token-release row 12 remains
-in progress. Source is unbuilt, unexecuted and unprovisioned.
+This root-original profile admits the scope for the dedicated consume reserver.
+Its [fixed OS delivery](oidc-session-activation-delivery-execution-reserver-delivery.md)
+and [cold service](oidc-session-activation-delivery-execution-reserver-service.md)
+are connected in source. The independently pinned SQL receiver has its own
+[bootstrap](oidc-session-activation-delivery-execution-sql-bootstrap.md), but its
+actual cold pending consumer remains open, so token-release row 12 stays in
+progress. Source is unbuilt, unexecuted and unprovisioned.
 
 [`oidc_session_activation_delivery_execution_reserver_bootstrap.py`](../serverware/oidc_session_activation_delivery_execution_reserver_bootstrap.py)
 genuinely verifies its own launch, the four detached receiving originals and
@@ -50,7 +52,7 @@ The launch's exact remaining fields are `schema`, `processMode`, `serviceUid`,
 The FD list is exactly 198–209 in order; timeout is an integer 1–30 seconds;
 device pins are UInt64 including zero and inode pins are positive UInt64.
 Journal capacity is 2–1024 records and must equal the actual current-root
-enrollment's `maxRecords`. Future cold delivery must independently inspect the
+enrollment's `maxRecords`. The fixed cold delivery independently inspects the
 real process, descriptors and paths; signed metadata alone is not that check.
 
 No grant, planner, state or completion signer, DB credential or journal-encryption
@@ -92,7 +94,7 @@ database, generation, current-root identity, consume planner and root operation
 key. The computation public key comes only from genuine current-root enrollment.
 Its SPKI and measurement pin must match the role, and its measurement must match
 the independently root-asserted receiver identity. Actual private-key pair and
-raw AES-key hash checks belong to future fixed delivery/private owners.
+raw AES-key hash checks are performed by fixed delivery/private owners.
 
 Computation is separated from current-root state/completion keys and additionally
 from root, both dedicated planners, caller, consume-grant authorizer and all
@@ -161,5 +163,7 @@ detached planner/history byte fields; it is ordinary owned data, not a proof tok
 
 `trustMode` is `trusted-host-local`; `hardwareBacked`, `nativeStageZero`,
 `hsmBackedKeys`, `teeVerified` and `externalWitnessVerified` must all be false.
-No OS delivery/startup, current pending consumer, consume SQL, completion/recovery,
-plaintext release, public permission or production gate is closed by this profile.
+This profile alone does not provide the OS delivery or startup lifecycle; the
+linked cold service composes them. The current pending consumer, consume SQL,
+completion/recovery, plaintext release, public permission and production gates
+remain unfinished.

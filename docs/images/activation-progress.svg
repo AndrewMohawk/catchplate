@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="730" viewBox="0 0 1000 730" role="img" aria-labelledby="activation-title activation-description">
-  <title id="activation-title">OIDC activation: 19 of 26 named source steps landed; 7 open and no active leaf. Step 20 protected token release is NEXT. Step 19 shows five source-landed diagnostic components, not extra tasks.</title>
-  <desc id="activation-description">Every numbered segment has a visible named row and written status. Steps 01–19 are source-landed; step 20 protected one-use token release is NEXT and open; steps 21–26 are open. No leaf is marked active. The fixed 26-leaf count is 19 landed and 7 open. Completion and historical reconciliation, step 19, closes in f59e050079e89d98d982a082a05dd619e09fa9e7 after five named diagnostic components: historical original replay in 74ff9e89edf577c7de1e8a107d2b9326052867cb; independent historical custody and durable recovery library in 91fcafdf9d3816a2449e211bb35752ca26bbb0c8; cold bootstrap, dedicated signing/AES keys, protected readers/TLS, journal and real service; signed state-v6 completion/lookup peer; genuine original response/client verification. The five-segment detail is inside step 19, not five extra leaves. Private replay remains 8/8 source components inside step 15. Execution is 6/7 source pieces landed; protected token release is NEXT. Public permission/dispatch/recovery and all three integrated portal steps remain open. Generic activation completion APIs remain rejected; the dedicated path requires historical custody. Parent progress remains 34/46 and production acceptance 0/6 verified. All source is unbuilt, unexecuted and unprovisioned. A signed completion is not a current browser session, token release or off-host currentness. Counts are not effort, ETA or readiness percentages.</desc>
-  <rect x="1" y="1" width="998" height="728" rx="16" fill="#0f172a" stroke="#475569"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="818" viewBox="0 0 1000 818" role="img" aria-labelledby="activation-title activation-description">
+  <title id="activation-title">OIDC activation: 19 of 26 source steps landed; step 20 in progress and 6 other open. Step 20 has 2 of 5 diagnostic parts landed; protected consumption is NEXT/open. Step 19 keeps all five landed components.</title>
+  <desc id="activation-description">Every numbered segment has a visible named row and written status. Steps 01–19 are source-landed; step 20 protected token release is in progress; steps 21–26 are open. The fixed count remains 19/26 landed, 1 in progress and 6 other open. Completion/history step 19 closes in f59e050079e89d98d982a082a05dd619e09fa9e7: historical replay 74ff9e89edf577c7de1e8a107d2b9326052867cb, custody/recovery 91fcafdf9d3816a2449e211bb35752ca26bbb0c8, actual cold service, signed state-v6 peer and genuine original response checks. Inside step 20, 4db227b75b13b104b51a3b2b3bda0ea5db8d46c7 lands part a current proofs/old-token possession/current policy/effects/indexed derivation and part b dedicated root-admitted UID 65502 delivery-AES custody with metadata-only access. Part c protected consume planning/issuance/SQL/recovery is NEXT/open; d committed-original release admission/exact outcome and e cold service/response/handoff are open. Both five-part bars are nonadditive diagnostics, not new leaves. No consumption execution, commit-original plaintext release or cold/public handoff exists yet. Execution remains 6/7, private replay 8/8, parent 34/46 and production acceptance 0/6 verified. Generic activation completion remains rejected; its dedicated path requires historical custody. Source is unbuilt, unexecuted and unprovisioned. Counts are not effort, ETA or readiness percentages; no current-session or off-host-currentness claim.</desc>
+  <rect x="1" y="1" width="998" height="816" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">OIDC activation · granular source workflow</text>
     <text x="24" y="71" fill="#6ee7b7" font-size="23" font-weight="700">19 / 26 landed</text>
-    <text x="235" y="70" fill="#cbd5e1" font-size="17">7 open · NEXT: protected token release · no active leaf</text>
+    <text x="235" y="70" fill="#cbd5e1" font-size="17">1 in progress · 6 other open · step 20 remains partial</text>
     <text x="24" y="95" fill="#94a3b8" font-size="14">Fixed tracked steps · full names, closure criteria and commit evidence in the linked ledger</text>
     <g font-size="12" font-weight="700" text-anchor="middle">
       <g fill="#34d399">
@@ -30,7 +30,7 @@
         <rect x="600" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>17 · F08.4e.4 · Reservation and pending admission · LANDED; independent cold pending receiver connected</title></rect>
         <rect x="636" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>18 · F08.4e.5 · One-use protected SQL · LANDED; durable attempt, actual issuer and IDs-only executor</title></rect>
         <rect x="672" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>19 · F08.4e.6 · Completion and historical reconciliation · LANDED · f59e050079e89d98d982a082a05dd619e09fa9e7. Five diagnostic components remain inside this leaf; no token release or current-session claim.</title></rect>
-        <rect x="708" y="112" width="32" height="44" rx="5" fill="#172554" stroke="#93c5fd" stroke-width="2"><title>20 · F08.4e.7 · Protected token release · NEXT, OPEN · no active implementation claimed</title></rect>
+        <rect x="708" y="112" width="32" height="44" rx="5" fill="#422006" stroke="#fbbf24" stroke-width="2"><title>20 · F08.4e.7 · Protected token release · IN PROGRESS · 2/5 diagnostic source parts landed; protected consume is NEXT/open, no plaintext release</title></rect>
         <rect x="744" y="112" width="32" height="44" rx="5"><title>21 · F08.5.1 · Target-bound permission · OPEN</title></rect>
         <rect x="780" y="112" width="32" height="44" rx="5"><title>22 · F08.5.2 · Public activation dispatch · OPEN</title></rect>
         <rect x="816" y="112" width="32" height="44" rx="5"><title>23 · F08.5.3 · Public recovery dispatch · OPEN</title></rect>
@@ -53,18 +53,18 @@
       <g fill="#052e26"><text x="544" y="131">15</text><text x="544" y="148">✓</text></g>
       <g fill="#e2e8f0">
         <text x="580" y="131" fill="#052e26">16</text><text x="616" y="131" fill="#052e26">17</text><text x="652" y="131" fill="#052e26">18</text>
-        <text x="688" y="131" fill="#052e26">19</text><text x="724" y="131" fill="#bfdbfe">20</text><text x="760" y="131">21</text>
+        <text x="688" y="131" fill="#052e26">19</text><text x="724" y="131" fill="#fde68a">20</text><text x="760" y="131">21</text>
         <text x="796" y="131">22</text><text x="832" y="131">23</text><text x="868" y="131">24</text>
         <text x="904" y="131">25</text><text x="940" y="131">26</text>
         <text x="580" y="148" fill="#052e26">✓</text><text x="616" y="148" fill="#052e26">✓</text><text x="652" y="148" fill="#052e26">✓</text>
-        <text x="688" y="148" fill="#052e26">✓</text><text x="724" y="148" fill="#bfdbfe">N</text><text x="760" y="148">—</text>
+        <text x="688" y="148" fill="#052e26">✓</text><text x="724" y="148" fill="#fde68a">→</text><text x="760" y="148">—</text>
         <text x="796" y="148">—</text><text x="832" y="148">—</text><text x="868" y="148">—</text>
         <text x="904" y="148">—</text><text x="940" y="148">—</text>
       </g>
     </g>
     <g font-size="13" font-weight="700">
       <text x="24" y="181" fill="#6ee7b7">✓ LANDED · 01–19</text>
-      <text x="365" y="181" fill="#93c5fd">N NEXT · 20 (open)</text>
+      <text x="365" y="181" fill="#fde68a">→ IN PROGRESS · 20</text>
       <text x="757" y="181" fill="#cbd5e1">— OPEN · 21–26</text>
     </g>
     <rect x="24" y="203" width="952" height="366" rx="12" fill="#172033" stroke="#475569"/>
@@ -90,7 +90,7 @@
       <text x="514" y="330">17</text><text x="550" y="330">Reservation and pending admission</text>
       <text x="514" y="354">18</text><text x="550" y="354">One-use protected SQL</text>
       <text x="514" y="378">19</text><text x="550" y="378">Completion and reconciliation</text>
-      <text x="514" y="402" fill="#93c5fd">20</text><text x="550" y="402" fill="#93c5fd">Protected token release</text>
+      <text x="514" y="402" fill="#fde68a">20</text><text x="550" y="402" fill="#fde68a">Protected token release</text>
       <text x="514" y="426">21</text><text x="550" y="426">Target-bound permission</text>
       <text x="514" y="450">22</text><text x="550" y="450">Public activation dispatch</text>
       <text x="514" y="474">23</text><text x="550" y="474">Public recovery dispatch</text>
@@ -110,7 +110,7 @@
       <text x="888" y="306">✓ LANDED</text><text x="888" y="330">✓ LANDED</text>
       <text x="888" y="354">✓ LANDED</text>
       <text x="888" y="378">✓ LANDED</text>
-      <text x="888" y="402" fill="#93c5fd">N NEXT</text><text x="888" y="426" fill="#cbd5e1">— OPEN</text>
+      <text x="864" y="402" fill="#fde68a">→ IN PROGRESS</text><text x="888" y="426" fill="#cbd5e1">— OPEN</text>
       <text x="888" y="450" fill="#cbd5e1">— OPEN</text><text x="888" y="474" fill="#cbd5e1">— OPEN</text>
       <text x="888" y="498" fill="#cbd5e1">— OPEN</text><text x="888" y="522" fill="#cbd5e1">— OPEN</text>
       <text x="888" y="546" fill="#cbd5e1">— OPEN</text>
@@ -131,7 +131,23 @@
       <text x="884" y="621">✓ Response checks</text>
     </g>
     <text x="24" y="653" fill="#cbd5e1" font-size="14">Named evidence in linked ledger · private replay stays 8/8 · no token release or current-session guarantee</text>
-    <text x="24" y="679" fill="#93c5fd" font-size="14">NEXT: 20 · Protected one-use token release. Six public/portal steps also remain open.</text>
-    <text x="24" y="705" fill="#94a3b8" font-size="14">Source-only · unbuilt / unexecuted / unprovisioned · parent 34/46 · production verified 0/6</text>
+    <text x="24" y="679" fill="#fde68a" font-size="16" font-weight="700">Inside step 20 · 2/5 diagnostic SOURCE parts landed · step stays in progress</text>
+    <g>
+      <rect x="24" y="692" width="184" height="28" rx="5" fill="#064e3b" stroke="#34d399"><title>F08.4e.7.a · Current proofs, original old-token possession/current policy, effects and indexed derivation · LANDED · 4db227b75b13b104b51a3b2b3bda0ea5db8d46c7 · no execution</title></rect>
+      <rect x="216" y="692" width="184" height="28" rx="5" fill="#064e3b" stroke="#34d399"><title>F08.4e.7.b · Dedicated root-admitted UID 65502 release-key custody · LANDED · 4db227b75b13b104b51a3b2b3bda0ea5db8d46c7 · metadata only, no plaintext release</title></rect>
+      <rect x="408" y="692" width="184" height="28" rx="5" fill="#172554" stroke="#93c5fd" stroke-width="2"><title>F08.4e.7.c · Protected consume planning, issuance, SQL and recovery · NEXT / OPEN, not active or landed</title></rect>
+      <rect x="600" y="692" width="184" height="28" rx="5" fill="#334155" stroke="#94a3b8"><title>F08.4e.7.d · Committed-original release admission and exact outcome · OPEN</title></rect>
+      <rect x="792" y="692" width="184" height="28" rx="5" fill="#334155" stroke="#94a3b8"><title>F08.4e.7.e · Cold service, response and handoff · OPEN</title></rect>
+    </g>
+    <g font-size="12" font-weight="600" text-anchor="middle">
+      <text x="116" y="711" fill="#d1fae5">✓ a · Proofs / effects</text>
+      <text x="308" y="711" fill="#d1fae5">✓ b · Metadata custody</text>
+      <text x="500" y="711" fill="#bfdbfe">N c · Consume pipeline</text>
+      <text x="692" y="711" fill="#e2e8f0">— d · Exact release</text>
+      <text x="884" y="711" fill="#e2e8f0">— e · Cold handoff</text>
+    </g>
+    <text x="24" y="744" fill="#cbd5e1" font-size="14">Diagnostic parts add no leaves · no consume SQL, committed-original plaintext release or cold/public handoff</text>
+    <text x="24" y="770" fill="#93c5fd" font-size="14">NEXT: 20.c · Protected consume planning / issuance / SQL / recovery. Six public/portal steps remain open.</text>
+    <text x="24" y="797" fill="#94a3b8" font-size="14">Source-only · unbuilt / unexecuted / unprovisioned · parent 34/46 · production verified 0/6</text>
   </g>
 </svg>

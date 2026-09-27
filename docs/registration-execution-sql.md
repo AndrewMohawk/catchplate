@@ -7,6 +7,10 @@ registration evidence business row, not credential finalization or session
 activation. It is unbuilt and unexecuted; **0 of 6 production acceptance gates
 are verified**. No cold SQL service or public execution path is activated.
 
+The [cold SQL service source and uninstalled packaging](registration-execution-sql-service.md)
+now provide a one-connection owner for this bridge. They do not activate a public
+caller, supply independent currentness or complete deployment.
+
 The existing [public reserve endpoints](control-plane-registration-reservation.md#public-reserve-endpoints)
 remain reservation-only. Their acknowledged status is not upgraded into SQL
 permission, and their `executionStarted` and `currentnessEstablished` flags

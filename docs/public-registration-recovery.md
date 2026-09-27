@@ -1,6 +1,6 @@
 # Public historical registration-completion recovery
 
-Two API-only POST routes select historical completion recovery:
+Two POST routes select historical completion recovery:
 
 - `/api/webauthn/register/recover-completion` for the current operator.
 - `/api/auth/session/webauthn/register/recover-completion` for a current pending
@@ -9,7 +9,10 @@ Two API-only POST routes select historical completion recovery:
 They use purpose `recover-registration-evidence-completion` and action
 `webauthn.registration.execution.recover`. They do not execute or retry SQL,
 finalize a credential, activate a pending session, or change existing live
-execution/completion routes. No portal UI is added.
+execution/completion routes. The [portal registration actions](portal-registration-handoff.md)
+now provide four explicit source-only buttons: Execute evidence, Request
+completion, Recover completion and Prepare finalization. The recovery button
+selects these routes; this UI has not been rendered or browser-verified.
 
 ## Request and present permission
 
@@ -74,7 +77,8 @@ to an asserted outcome.
 This is source-only and unexecuted, not deployment or full enrollment
 acceptance. Independent cold provisioning, historical original retention,
 completion/state authority and checkpoint admission remain prerequisites;
-credential finalization remains separate. Planned frozen verification covers
+actual credential finalization execution and separate OIDC browser-session
+activation remain incomplete. Planned frozen verification covers
 strict framing, wrong owner/session/purpose, no-history versus history gates,
 CSRF and stale approval/assertion/session rejection, authentic historical
 recovery and conflicting retention, redacted uncertainty, and no SQL dispatch.

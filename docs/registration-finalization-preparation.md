@@ -15,9 +15,13 @@ the business evidence table.
 
 The authenticated application must own that original exchange and separately
 complete its evidence business admission before invoking this continuation.
-Local raw6 custody is not that admission. No HTTP handler is changed to claim
-registration success, and no new generic caller-provided configuration, key,
-time, endpoint, work budget or derived credential is accepted.
+Local raw6 custody is not that admission. The separate
+[retained-original facade](retained-registration-finalization.md) now joins
+durable signer/grant ownership and acknowledged evidence completion before
+calling this helper under the same work allowance and processing window. Its
+[public preparation routes](public-registration-finalization.md) return local
+locators only, not registration success. No generic caller-provided
+configuration, key, time, endpoint, work budget or derived credential is accepted.
 
 ```mermaid
 flowchart TD
@@ -72,11 +76,13 @@ challenge, activates a session or automatically retries.
 
 ## Still required
 
-The caller still needs retained original-exchange ownership, actual unconsumed
-v2 business evidence, independent current-root/execution authorization and the
-separate durable execution/completion path. The private helper does not supply
-cross-restart custody for signer raw10, a public finalization endpoint or a
-replacement ceremony after expiry. The existing public `/prepare` endpoints
-continue to prepare evidence custody only; `/verify` remains on its existing
-legacy path. Independently operated production services, exact frozen builds
-and consolidated runtime verification remain outstanding.
+The caller still needs actual unconsumed v2 business evidence and separate
+finalization execution authorization, reservation, atomic credential
+finalization and authenticated outcome handling. The retained-original facade
+uses the existing durable signer/grant association; its public routes prepare
+and retain finalization raw7, but do not execute it or activate an OIDC browser
+session. The raw helper remains separate and supplies no replacement ceremony
+after expiry. The existing public `/prepare` endpoints continue to prepare
+evidence custody only; `/verify` remains on its existing legacy path.
+Independently operated production services, exact frozen builds and consolidated
+runtime verification remain outstanding.

@@ -125,15 +125,21 @@ The actual measured verifier's private
 `AuthorityProcess._prepare_webauthn_registration_finalization` now composes that
 original-byte verifier with genuine transition custody preparation. It returns
 prepared transition raw7 under the original receipt/window and inherited
-transport deadline, not a custody write or business result. It has no HTTP
-caller; server-observed sibling hints remain required, and those hints still
-must pass the downstream complete-population proof. Its returned originals
-would require durable journaling before separately authorized forwarding.
+transport deadline, not a custody write or business result. The separate
+[retained-original finalization facade](retained-registration-finalization.md)
+now supplies an application continuation from the durable signer/grant
+association and genuinely verified acknowledged evidence completion. Its
+[public preparation routes](public-registration-finalization.md) return the
+original execution locator and durably appended finalization raw7 locator with
+`status: finalization-prepared`. Server-observed sibling hints remain required
+and must pass the downstream complete-population proof. This does not forward
+or execute the prepared finalization, finalize a credential or activate a session.
 
 Complete OIDC sibling/history proofs, genuine business evidence admission and
 consumption of the unconsumed v2 receipt, current-root reservation and
 issuer/executor/atomic business execution remain required. HTTP preparation does
-none of those things. Independent service/key/storage provisioning and
+not perform finalization execution or separate OIDC browser-session activation.
+Independent service/key/storage provisioning and
 consolidated frozen verification are still required. No source path here renews
 an original grant, source window or receipt, or supplies cross-source historical
 authority.

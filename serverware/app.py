@@ -63,6 +63,11 @@ from serverware.portal_workload_enrollment import (
     WORKLOAD_ENROLLMENT_HTML,
     WORKLOAD_ENROLLMENT_SCRIPT,
 )
+from serverware.portal_registration_handoff import (
+    REGISTRATION_HANDOFF_CSS,
+    REGISTRATION_HANDOFF_HTML,
+    REGISTRATION_HANDOFF_SCRIPT,
+)
 from serverware.attestation import (
     AttestationContractError,
     TRUSTED_TLS_SCOPE_EXTENSION,
@@ -421,12 +426,15 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_registration_handoff_http as handoff_contract
     from serverware import control_plane_registration_recovery_routes as recovery_routes
     from serverware import control_plane_registration_recovery_http as recovery_contract
+    from serverware import control_plane_registration_finalization_routes as finalization_routes
+    from serverware import control_plane_registration_finalization_http as finalization_contract
 
     request_path = request.scope.get("path")
     handoff_request = (request.method == "POST" and request_path in (
         handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS))
     handoff_completion = request_path in handoff_routes.COMPLETE_PATHS
     recovery_request = request.method == "POST" and request_path in recovery_routes.PATHS
+    finalization_request = request.method == "POST" and request_path in finalization_routes.PATHS
     reservation_request = (
         request.method == "POST" and request_path in _REGISTRATION_RESERVATION_PATHS
     )
@@ -435,7 +443,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     )
     registration_preparation_request = (
         request.method == "POST" and request_path in _REGISTRATION_PREPARATION_PATHS
-    ) or execution_preparation_request or reservation_request or handoff_request or recovery_request
+    ) or execution_preparation_request or reservation_request or handoff_request or recovery_request or finalization_request
     preparation_error = (_registration_reservation_error if reservation_request
         else _registration_execution_preparation_error if execution_preparation_request
         else _registration_preparation_error)
@@ -444,6 +452,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             status, code, completion=handoff_completion)
     elif recovery_request:
         preparation_error = recovery_routes.error
+    elif finalization_request:
+        preparation_error = finalization_routes.error
     if registration_preparation_request:
         # This new route family has one exact framing path. Do not change the
         # existing browser /verify parser, defaults or finalization behavior.
@@ -457,7 +467,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             return preparation_error(400, "registration_preparation_framing_invalid")
         if request.headers.getlist("content-type") != ["application/json"]:
             return preparation_error(415, "registration_preparation_json_required")
-        route_limit = (recovery_contract.MAX_REQUEST_BYTES if recovery_request
+        route_limit = (finalization_contract.MAX_REQUEST_BYTES if finalization_request
+            else recovery_contract.MAX_REQUEST_BYTES if recovery_request
             else handoff_contract.MAX_REQUEST_BYTES if handoff_request else _REGISTRATION_PREPARATION_MAX_BYTES)
         if int(lengths[0]) > route_limit:
             return preparation_error(413, "registration_preparation_body_too_large")
@@ -510,6 +521,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         **{path: handoff_contract.MAX_REQUEST_BYTES for path in (
             handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS)},
         **{path: recovery_contract.MAX_REQUEST_BYTES for path in recovery_routes.PATHS},
+        **{path: finalization_contract.MAX_REQUEST_BYTES for path in finalization_routes.PATHS},
         "/api/authority/control-plane/execute":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/authority/control-plane/custody/reconcile": 256,
@@ -597,7 +609,9 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             if len(body) != content_length:
                 return preparation_error(400, "registration_preparation_framing_invalid")
             try:
-                if recovery_request:
+                if finalization_request:
+                    request.state.registration_finalization_payload = finalization_contract.parse_request(request._body)
+                elif recovery_request:
                     request.state.registration_recovery_payload = recovery_contract.parse_request(request._body)
                 elif handoff_request:
                     request.state.registration_handoff_payload = handoff_contract.parse_request(
@@ -613,7 +627,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
                     request.state.registration_execution_preparation_payload = (
                         WebAuthnRegistrationExecutionPrepare.model_validate(_plain_setup_json(document))
                     )
-                elif not handoff_request and not recovery_request:
+                elif not handoff_request and not recovery_request and not finalization_request:
                     request.state.registration_preparation_payload = (
                         WebAuthnRegistrationPrepare.model_validate(_plain_setup_json(document))
                     )
@@ -4489,6 +4503,7 @@ def _control_plane_requester_roles(action: str) -> set[str]:
         "webauthn.registration.execution.execute",
         "webauthn.registration.execution.complete",
         "webauthn.registration.execution.recover",
+        "webauthn.registration.finalization.prepare",
         "webauthn.credential.revoke",
         "break_glass.grant",
     }:
@@ -20646,6 +20661,7 @@ UI_HTML = r"""
     }
     .workspace-nav a:hover,
     .workspace-nav a:focus-visible { color: var(--text); background: #eef3ef; }
+    __SERVERWARE_REGISTRATION_HANDOFF_CSS__
     .custody-digest { overflow-wrap: anywhere; word-break: break-word; }
     #custody-record-detail { margin-top: 14px; }
     #custody-record-detail dt { margin-top: 8px; color: var(--muted); }
@@ -20967,6 +20983,7 @@ UI_HTML = r"""
     <a href="#credential-workspace">Credentials</a>
     <a href="#policy-workspace">Policies</a>
     <a href="#approval-workspace">Approvals</a>
+    <a href="#registration-handoff-workspace">Registration actions</a>
     <a href="#audit-workspace">Audit</a>
     <a id="custody-nav" href="#custody-workspace" hidden>Custody recovery</a>
     <a href="#attestation-workspace">Attestation</a>
@@ -20997,6 +21014,7 @@ UI_HTML = r"""
         <tbody id="webauthn-credentials"><tr class="empty-row"><td colspan="5" class="muted">No passkeys registered</td></tr></tbody>
       </table>
     </section>
+      __SERVERWARE_REGISTRATION_HANDOFF_HTML__
       <section id="setup-workspace" class="setup-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Setup and Verify</h2>
@@ -21844,7 +21862,8 @@ UI_HTML = r"""
     function captureControlState() {
       const values = {};
       document.querySelectorAll('input, select, textarea').forEach((control) => {
-        if (control.id === 'admin-token' || control.readOnly) return;
+        if (control.id === 'admin-token' || control.id === 'webauthn-bootstrap-token'
+            || control.id.startsWith('registration-handoff-') || control.readOnly) return;
         const key = controlStateKey(control);
         if (!key) return;
         values[key] = {value: control.value, checked: Boolean(control.checked)};
@@ -21856,6 +21875,7 @@ UI_HTML = r"""
       Object.entries(values || {}).forEach(([key, saved]) => {
         const control = key.startsWith('id:') ? $(key.slice(3)) : null;
         if (!control) return;
+        if (control.id === 'webauthn-bootstrap-token' || control.id.startsWith('registration-handoff-')) return;
         if (control.id.startsWith('setup-')) return;
         if (control.tagName === 'SELECT' && !Array.from(control.options).some((option) => option.value === saved.value)) return;
         control.value = saved.value;
@@ -24624,8 +24644,10 @@ UI_HTML = r"""
     }
     __SERVERWARE_WORKLOAD_IDENTITY_SCRIPT__
     __SERVERWARE_WORKLOAD_ENROLLMENT_SCRIPT__
+    __SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
+    initRegistrationHandoff();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
       clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
@@ -24679,6 +24701,9 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_WORKLOAD_IDENTITY_SCRIPT__", WORKLOAD_IDENTITY_SCRIPT),
     ("__SERVERWARE_WORKLOAD_ENROLLMENT_HTML__", WORKLOAD_ENROLLMENT_HTML),
     ("__SERVERWARE_WORKLOAD_ENROLLMENT_SCRIPT__", WORKLOAD_ENROLLMENT_SCRIPT),
+    ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),
+    ("__SERVERWARE_REGISTRATION_HANDOFF_HTML__", REGISTRATION_HANDOFF_HTML),
+    ("__SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__", REGISTRATION_HANDOFF_SCRIPT),
 ):
     if UI_HTML.count(_portal_placeholder) != 1:
         raise RuntimeError("portal workload fragment placeholder is missing or duplicated")
@@ -24687,7 +24712,9 @@ for _portal_placeholder, _portal_fragment in (
 
 from serverware import control_plane_registration_handoff_routes as _registration_handoff_routes
 from serverware import control_plane_registration_recovery_routes as _registration_recovery_routes
+from serverware import control_plane_registration_finalization_routes as _registration_finalization_routes
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
+_fastapi_app.include_router(_registration_finalization_routes.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

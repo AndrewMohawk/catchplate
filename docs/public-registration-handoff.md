@@ -109,8 +109,12 @@ implemented in source, with genuine historical ownership replay, fresh
 recovery-purpose permission and bounded reconciliation/transport/storage. These
 original execute/complete actions remain live-only; recovery never retries SQL.
 
-Separate credential finalization, complete portal UX, independent currentness,
-provisioning, frozen verification and full production acceptance remain open.
+The [portal registration actions](portal-registration-handoff.md) now expose
+four explicit source-only buttons: Execute evidence, Request completion,
+Recover completion and Prepare finalization. This UI has not been rendered or
+browser-verified. Actual credential finalization execution, separate OIDC
+browser-session activation, independent currentness, provisioning, frozen
+verification and full production acceptance remain open.
 No service/key/role configuration, database mutation or runtime activation was
 performed while authoring this source.
 

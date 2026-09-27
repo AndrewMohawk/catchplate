@@ -367,6 +367,20 @@ def prepare_registration_finalization(*, request_originals, response_originals):
     is called. This returns only the local prepared-record digest, never a
     credential, active session, remote receipt or permission to execute.
     """
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    return _prepare_registration_finalization_on_work(request_originals=request_originals,
+        response_originals=response_originals, work=_ValidationWork(QueryReadValidationLimits()))
+
+
+def _prepare_registration_finalization_on_work(*, request_originals, response_originals,
+        work, live_window=None, transport_deadline_ns=None):
+    """Same live continuation; retained callers supply their original work/window.
+
+    Only the unchanged standalone entrypoint opens its initial window here.
+    An inherited window is checked as supplied and can only acquire an earlier
+    monotonic bound. Neither mode bypasses live signer or planner admission.
+    """
     from serverware import authority_webauthn_enrollment_issuer as issuer
     from serverware import authority_webauthn_registration_custody_caller as raw
     from serverware import authority_webauthn_registration_signer_response as verifying
@@ -374,9 +388,6 @@ def prepare_registration_finalization(*, request_originals, response_originals):
     from serverware import control_plane_custody_startup as custody_startup
     from serverware import control_plane_enrollment_startup as enrollment_startup
     from serverware import db
-    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
-
-    work = _ValidationWork(QueryReadValidationLimits())
     ledger = issuer.evidence.capture._SharedLedger(work)
     request = verifying.wire._request_originals(request_originals)
     response = verifying.wire._response_originals(response_originals)
@@ -403,10 +414,19 @@ def prepare_registration_finalization(*, request_originals, response_originals):
         maximum_bytes=8192).visit(material.runtime_role_identities)
     skew = material.issuer_policy["maximumClockSkewNs"]
     clock = issuer.authorization.clock
-    window = clock._open_on_work(deadline_epoch_ns=binding.attestation_interval[1],
-        maximum_lifetime_ns=min(binding.maximum_deadline_ns,
-            issuer.authority.VERIFIER_RESPONSE_MAX_AGE_NS),
-        maximum_clock_skew_ns=skew, work=work)
+    if live_window is None:
+        window = clock._open_on_work(deadline_epoch_ns=binding.attestation_interval[1],
+            maximum_lifetime_ns=min(binding.maximum_deadline_ns,
+                issuer.authority.VERIFIER_RESPONSE_MAX_AGE_NS),
+            maximum_clock_skew_ns=skew, work=work)
+    else:
+        window = clock._validate(live_window)
+        if (window[3] > binding.attestation_interval[1]
+                or window[5] > binding.maximum_deadline_ns or window[6] > skew):
+            raise RegistrationPreparationError("registration finalization widens its cold processing scope")
+    if transport_deadline_ns is not None:
+        issuer.evidence.plan.contract._integer(transport_deadline_ns, minimum=1)
+    bound = window[4] if transport_deadline_ns is None else min(window[4], transport_deadline_ns)
     last_epoch = window[0]
 
     def current():
@@ -420,7 +440,7 @@ def prepare_registration_finalization(*, request_originals, response_originals):
         if now < last_epoch:
             raise RegistrationPreparationError("registration finalization clock reversed")
         last_epoch = now
-        callback(work, lambda: raw._check_deadline(window[4]))
+        callback(work, lambda: raw._check_deadline(bound))
 
     current()
     # Empty hints are used only to derive selectors from genuine original
@@ -444,7 +464,7 @@ def prepare_registration_finalization(*, request_originals, response_originals):
     # unconsumed v2 evidence row at its own actual planning cutoff.
     prepared = custody_client.ControlPlaneCustodyClient.prepare_registration_finalization(
         custody, originals, sibling_challenge_ids=siblings,
-        deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+        deadline_epoch_ns=window[3], deadline_ns=bound, work=work)
     current()
     # As with evidence preparation, a late append retains opaque originals;
     # it grants no lifetime renewal. No remote writer is contacted here.

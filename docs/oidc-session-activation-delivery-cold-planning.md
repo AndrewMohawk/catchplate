@@ -47,8 +47,11 @@ outer/history-narrowed deadline used by actual prepare. Retained verification
 uses the independently supplied original deadline, and post-owner checks keep
 the original signed plan expiry live through the wrapper's final return.
 
-This slice declares future FDs but does not deliver sealed keys, launch/listen,
-install a service, or provision DB/TLS/state-socket access. It is not a runnable
-or deployed cold service claim. No automatic retry, fresh public
-consent, issuance/reservation/one-use SQL/recovery, token release, or production
-verification is supplied. Expired consume plans are never accepted as live.
+The `.160` [OS delivery](oidc-session-activation-delivery-planner-delivery.md)
+and [private service](oidc-session-activation-delivery-planner-service.md) now
+connect the fixed descriptors to this actual factory and its two operations.
+They preserve the original construction lifetime through idle acceptance and a
+single accepted exchange. This is unbuilt, unexecuted source, not an installed
+service or provisioned DB/TLS/state-socket access. No automatic retry, fresh
+public consent, issuance/reservation/one-use SQL/recovery, token release or
+production verification is supplied. Expired consume plans are never live.

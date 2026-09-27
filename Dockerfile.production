@@ -123,6 +123,7 @@ COPY --from=verified-production-source /source/serverware/registration_finalizat
 COPY --from=verified-production-source /source/serverware/registration_execution_completion_launcher.py /runtime/authority-bootstrap/registration_execution_completion_launcher.py
 COPY --from=verified-production-source /source/serverware/registration_finalization_completion_launcher.py /runtime/authority-bootstrap/registration_finalization_completion_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_planner_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_planner_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_authorizer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_authorizer_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_sql_launcher.py
@@ -158,6 +159,8 @@ COPY --from=verified-production-source /source/ops/systemd/serverware-registrati
 COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-completion.service.in /runtime/app/ops/systemd/serverware-registration-finalization-completion.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-planner.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-planner.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-planner.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-planner.service.in
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-planner.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-planner.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-planner.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-planner.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-authorizer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-authorizer.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-authorizer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-authorizer.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-reserver.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-reserver.socket
@@ -190,6 +193,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/registration_execution_completion_launcher.py \
         /runtime/authority-bootstrap/registration_finalization_completion_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_planner_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_delivery_planner_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_execution_authorizer_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_execution_sql_launcher.py \

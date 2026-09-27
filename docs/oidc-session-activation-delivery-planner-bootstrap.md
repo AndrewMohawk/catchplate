@@ -21,7 +21,8 @@ and enrolled state/computation/completion keys. The new journal key is separate
 from the historical bundle/delivery/original-journal keys. Its directory identity
 cannot reuse either historical activation journal or export directory.
 
-The fixed *future delivery declaration* is UID/GID 65501, peer 65532, process
+The fixed [OS delivery profile](oidc-session-activation-delivery-planner-delivery.md)
+is UID/GID 65501, peer 65532, process
 `oidc-session-activation-delivery-planner`:
 
 | FD | Declared original/resource |
@@ -45,7 +46,10 @@ plan or its historical launch. Policy must not widen the nested history purpose.
 The [cold factory](oidc-session-activation-delivery-cold-planning.md) consumes
 these originals itself and is source-connected to the actual retained plan
 owner and independent journal; the matching UID 65501 history purpose is checked
-again before actual planning or retained replay. This bootstrap does not load
-sealed FDs, provision a service, issue a grant, reserve state, execute SQL, consume delivery, decrypt a
-token, or establish fresh public consent. Source-only checks are not runtime or
-production verification; launcher/key delivery and protected execution remain open.
+again before actual planning or retained replay. The `.160` launcher and
+[private service](oidc-session-activation-delivery-planner-service.md) separately
+admit these originals and connect sealed FD delivery to that factory. No service
+was provisioned or executed. This bootstrap issues no grant, reserves no state,
+executes no SQL, consumes no delivery, releases no token and establishes no fresh
+public consent. Source-only checks are not runtime or production verification;
+protected execution and release remain open.

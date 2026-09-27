@@ -73,7 +73,9 @@ its legacy `kernel_factory` remains absent. There is no optional stateless
 fallback. The [cold configuration wrapper](oidc-session-activation-delivery-cold-planning.md)
 authenticates root-original policy/resources, constructs actual history/reader/
 journal/plan owners and preserves the original root lifetime around fixed calls.
-It is not an installed consume service. OS key/descriptor delivery, launcher and
-serving lifecycle remain open, followed by purpose authorization/reservation,
-protected SQL, original commit admission, one-use release, recovery and
-public/portal handoff. No tests, runtime, provisioning or deployment were performed.
+The `.160` [OS delivery](oidc-session-activation-delivery-planner-delivery.md) and
+[private service](oidc-session-activation-delivery-planner-service.md) connect
+that wrapper to one bounded prepare or retained-replay exchange. It is not an
+installed consume service. Purpose authorization/reservation, protected SQL,
+original commit admission, one-use release, recovery and public/portal handoff
+remain open. No tests, runtime, provisioning or deployment were performed.

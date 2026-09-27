@@ -23,12 +23,12 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-- **Landed:** an opt-in private reservation handoff retains preparation before
-  sending and verifies the original response
-  ([de9adb6](https://github.com/example/private-deployment)).
-  Existing public preparation routes still do not execute anything.
-- **Next:** connect the public execution handoff, protected one-use SQL and
-  completion recovery, then separately authorized credential finalization.
+- **Landed:** explicit operator and pending-session reservation actions, with
+  separate authorization and clear uncertain-outcome handling
+  ([230c4c3](https://github.com/example/private-deployment)).
+  Reservation does not execute SQL or complete registration.
+- **Next:** connect independently current state, protected one-use SQL and
+  completion recovery to the public workflow, then credential finalization.
   Full verification follows implementation and source freeze; current source is
   unbuilt and unexecuted.
 - **External prerequisites:** an immutable dependency snapshot and independently

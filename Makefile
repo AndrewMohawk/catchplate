@@ -1111,6 +1111,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_delivery_execution_enrollment.py \
 	serverware/authority_oidc_session_activation_delivery_execution_expectations.py \
 	serverware/authority_oidc_session_activation_delivery_execution_authorization.py \
+	serverware/oidc_session_activation_delivery_execution_custody_bootstrap.py \
+	serverware/authority_oidc_session_activation_delivery_execution_custody.py \
+	serverware/authority_oidc_session_activation_delivery_execution_replay.py \
 	serverware/oidc_session_activation_delivery_planner_bootstrap.py \
 	serverware/oidc_session_activation_delivery_planner_entrypoint.py \
 	serverware/oidc_session_activation_delivery_planner_launcher.py \
@@ -3102,6 +3105,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_delivery_execution_enrollment.py \
 				serverware/authority_oidc_session_activation_delivery_execution_expectations.py \
 				serverware/authority_oidc_session_activation_delivery_execution_authorization.py \
+				serverware/oidc_session_activation_delivery_execution_custody_bootstrap.py \
+				serverware/authority_oidc_session_activation_delivery_execution_custody.py \
+				serverware/authority_oidc_session_activation_delivery_execution_replay.py \
 				serverware/oidc_session_activation_delivery_planner_bootstrap.py \
 				serverware/oidc_session_activation_delivery_planner_entrypoint.py \
 				serverware/oidc_session_activation_delivery_planner_launcher.py \

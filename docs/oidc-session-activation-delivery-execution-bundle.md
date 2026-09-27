@@ -96,8 +96,15 @@ These are source connections, not custody or replay properties of the codec.
 The transport reserves a whole exchange and may reject ciphertext that fits
 the store; an uncertain response does not undo durable publication.
 
-Independent receiving-purpose custody/full replay, actual grant issuance,
-reservation, SQL, completion/recovery and public handoff remain unfinished.
+The .163 source separately connects a distinct root-signed
+[receiving bootstrap](oidc-session-activation-delivery-execution-custody-bootstrap.md),
+actual [consume-grant key custodian](oidc-session-activation-delivery-execution-custody.md)
+and [independent original-proof replay](oidc-session-activation-delivery-execution-replay.md).
+The receiver authenticates the known plan before opening and repeats genuine
+proof/provenance admission under independent pins; none of this follows from
+the codec's authenticated bytes alone. Actual grant issuance and its cold
+service remain next, followed by reservation, SQL, completion/recovery and
+committed-original release/public handoff.
 Repeated explicit seals may produce different ciphertext; this codec supplies
 no retry or automatic reseal path. Its owning integrations must preserve actual
 original evidence, independent scope and remaining lifetime. Step 20 and the

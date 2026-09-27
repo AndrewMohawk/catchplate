@@ -1,6 +1,6 @@
 # Private historical activation custody
 
-`OidcSessionActivationHistoryCustody` is a separate source-only owner for fixed
+The default `OidcSessionActivationHistoryCustody` constructor is a source-only owner for fixed
 purpose `completion-history`, process `oidc-session-activation-completion` and
 UID/GID 65503. It does not relabel or widen the three live receiving roles.
 The owner itself performs no key delivery or provisioning. The dedicated
@@ -20,6 +20,17 @@ canonical historical policy, complete vector, state enrollment and both original
 intervals. Exact class, PID, real/effective/saved UID/GID, empty supplementary
 groups, fixed process mode, nonblocking lock and unchanged configuration are
 checked. Close invalidates configuration and all retained guards.
+
+Two explicit factories use the same exact owner class for different root-signed
+request-bound purposes: `for_consume_planning` selects v2 at UID/GID 65501;
+`for_consume_grant` selects v3 at UID/GID 65500 and mode
+`oidc-session-activation-delivery-execution-authorizer`. Both additionally
+require an independently captured `expected_consume_request`. Neither factory
+accepts the other purpose's original or reclassifies an existing owner.
+See [request-bound consume history](oidc-session-activation-delivery-history-custody.md).
+Private configuration appends the exact `consumer_role` discriminator while
+retaining the old `consume_planning` flag strictly for v2. Snapshots check their
+consistency alongside the original process, PID, seal and request scope.
 
 ## Static context and current role admission
 
@@ -76,6 +87,24 @@ outer/current liveness, configuration continuity and the actual exchange guard.
 It cannot be called recursively while the owner is in use. No successful result
 is accepted as authority at another input boundary, and no generic executor or
 live-plan result is produced.
+
+For v2/v3, `bind_consume_request_on_work` must join the independently expected
+typed consume request to the root-signed canonical original. Before private
+opening and after actual activation replay, the owner also joins subject IDs,
+token/assertion digests and the deterministically derived delivery ID to that
+request. The current `check_on_work`, `processing_bounds_on_work` and replay
+APIs genuinely reauthenticate the appropriate v3 original just as the distinct
+v1/v2 paths do, retaining the first outer opening and inherited allowance.
+
+`require_consume_grant_on_work(*, work)` accepts only actual v3 custody;
+`_require_consume_planning_on_work` stays v2-only and
+`require_completion_on_work` stays v1-only. The private
+`_require_consume_history_on_work` permits explicit v2/v3 only for the shared
+read-only completed-activation provenance suffix. These static gates return no
+proof and do not replace original reauthentication, request binding or full
+semantic replay. In particular, v3 cannot enter completion production/recovery,
+and historical custody itself neither signs a consume grant nor supplies the
+separate consume execution-bundle key.
 
 ## Dedicated completion composition
 

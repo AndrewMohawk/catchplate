@@ -2,7 +2,8 @@
 
 The original planner bootstrap is genuine historical evidence, not present
 receiving authority. A distinct root-signed outer purpose authorizes one fixed
-completion or request-bound consume-planning process for a fresh bounded interval. No live consumer is widened,
+completion, consume-planning or consume-grant process for a fresh bounded
+interval. Both consume purposes bind the exact original request. No live consumer is widened,
 no expired launch is renewed, and no incoming successful material is accepted.
 This module performs no key delivery, filesystem, transport, signing of
 completion, SQL, token release or historical-cohort resolution.
@@ -34,6 +35,12 @@ CONSUME_OPERATION = "oidc.session.activation-delivery.consume"
 CONSUME_CONSUMER_ROLE = "consume-planning-history"
 CONSUME_PROCESS_MODE = "oidc-session-activation-delivery-planner"
 CONSUME_SERVICE_UID = CONSUME_SERVICE_GID = 65501
+CONSUME_GRANT_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v3"
+CONSUME_GRANT_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v3"
+CONSUME_GRANT_OPERATION = CONSUME_OPERATION
+CONSUME_GRANT_CONSUMER_ROLE = "consume-grant-history"
+CONSUME_GRANT_PROCESS_MODE = "oidc-session-activation-delivery-execution-authorizer"
+CONSUME_GRANT_SERVICE_UID = CONSUME_GRANT_SERVICE_GID = 65500
 MAX_CONSUME_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_BYTES = 8 * 1024 * 1024
 MAX_NODES, MAX_DEPTH = 256, 4
@@ -102,17 +109,45 @@ def _fresh(interval, work, opening=None):
     return planner_bootstrap._fresh(interval, work, opening=opening)
 
 
-def _profile(consume):
+def _purpose_from_consume(consume):
     if type(consume) is not bool:
         _fail("historical custody purpose selector is not source-fixed")
-    return ((CONSUME_SCHEMA, CONSUME_PAYLOAD_SCHEMA, CONSUME_OPERATION,
-        CONSUME_CONSUMER_ROLE, CONSUME_PROCESS_MODE, CONSUME_SERVICE_UID, CONSUME_SERVICE_GID)
-        if consume else (SCHEMA, PAYLOAD_SCHEMA, OPERATION, CONSUMER_ROLE,
-            PROCESS_MODE, SERVICE_UID, SERVICE_GID))
+    return CONSUME_CONSUMER_ROLE if consume else CONSUMER_ROLE
+
+
+def _purpose_profile(purpose):
+    if type(purpose) is not str:
+        _fail("historical custody requires an exact fixed purpose")
+    if purpose == CONSUMER_ROLE:
+        return (SCHEMA, PAYLOAD_SCHEMA, OPERATION, CONSUMER_ROLE,
+            PROCESS_MODE, SERVICE_UID, SERVICE_GID)
+    if purpose == CONSUME_CONSUMER_ROLE:
+        return (CONSUME_SCHEMA, CONSUME_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+            CONSUME_CONSUMER_ROLE, CONSUME_PROCESS_MODE, CONSUME_SERVICE_UID, CONSUME_SERVICE_GID)
+    if purpose == CONSUME_GRANT_CONSUMER_ROLE:
+        return (CONSUME_GRANT_SCHEMA, CONSUME_GRANT_PAYLOAD_SCHEMA, CONSUME_GRANT_OPERATION,
+            CONSUME_GRANT_CONSUMER_ROLE, CONSUME_GRANT_PROCESS_MODE,
+            CONSUME_GRANT_SERVICE_UID, CONSUME_GRANT_SERVICE_GID)
+    _fail("historical custody purpose is not a supported fixed profile")
+
+
+def _profile(consume):
+    """Preserve the exact bool-only v1/v2 selector; no truthy v3 alias."""
+    return _purpose_profile(_purpose_from_consume(consume))
+
+
+def _requires_consume_request(purpose):
+    _purpose_profile(purpose)
+    return purpose in (CONSUME_CONSUMER_ROLE, CONSUME_GRANT_CONSUMER_ROLE)
 
 
 def _payload_shape(payload, *, consume=False):
-    _schema, payload_schema, operation, role, mode, uid, gid = _profile(consume)
+    return _payload_for_purpose(payload, purpose=_purpose_from_consume(consume))
+
+
+def _payload_for_purpose(payload, *, purpose):
+    _schema, payload_schema, operation, role, mode, uid, gid = _purpose_profile(purpose)
+    consume = _requires_consume_request(purpose)
     fields = _PAYLOAD_FIELDS | {"consumeRequest"} if consume else _PAYLOAD_FIELDS
     shape._object(payload, fields, "activation history custody payload")
     for field, expected in (("schema", payload_schema), ("sourceRevision", authority.SOURCE_REVISION),
@@ -214,12 +249,13 @@ def _admit_planner(payload, root, window, deadline, work, current):
     return admitted
 
 
-def _verify_for_purpose(*, custody_bytes, root_public_key, work, live_window,
-        transport_deadline_ns, consume):
+def _verify_fixed_purpose(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns, purpose):
     """Authenticate fresh outer purpose and genuine historical inner originals."""
     try:
         original, root = custody_bytes, root_public_key
-        schema, _payload_schema, _operation, role, mode, uid, gid = _profile(consume)
+        schema, _payload_schema, _operation, role, mode, uid, gid = _purpose_profile(purpose)
+        consume = _requires_consume_request(purpose)
         if type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES:
             _fail("activation history custody is not a bounded immutable original")
         authorization._public(root)
@@ -242,7 +278,7 @@ def _verify_for_purpose(*, custody_bytes, root_public_key, work, live_window,
         inherited()
         _canonical(original, envelope, work)
         payload = envelope["payload"]
-        _payload_shape(payload, consume=consume)
+        _payload_for_purpose(payload, purpose=purpose)
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = planner_bootstrap._launch_guard(interval, opening, inherited, work)
@@ -260,12 +296,13 @@ def _verify_for_purpose(*, custody_bytes, root_public_key, work, live_window,
         raise OidcSessionActivationHistoryCustodyBootstrapError("activation history custody admission failed") from exc
 
 
-def _produce_for_purpose(*, payload, root_private_key, root_public_key, work,
-        live_window, transport_deadline_ns, consume):
+def _produce_fixed_purpose(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns, purpose):
     """Sign fresh independently established history scope, never invent its pins."""
     try:
         private, root = root_private_key, root_public_key
-        schema = _profile(consume)[0]
+        schema = _purpose_profile(purpose)[0]
+        consume = _requires_consume_request(purpose)
         authorization._private(private)
         authorization._public(root)
         owned = _capture(payload, work)
@@ -274,7 +311,7 @@ def _produce_for_purpose(*, payload, root_private_key, root_public_key, work,
         deadline = min(window[4], transport_deadline_ns)
         inherited = planner_bootstrap._processing(window, deadline, work)
         inherited()
-        _payload_shape(owned, consume=consume)
+        _payload_for_purpose(owned, purpose=purpose)
         interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = planner_bootstrap._launch_guard(interval, opening, inherited, work)
@@ -312,6 +349,20 @@ def _produce_for_purpose(*, payload, root_private_key, root_public_key, work,
         raise OidcSessionActivationHistoryCustodyBootstrapError("activation history custody production failed") from exc
 
 
+def _verify_for_purpose(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns, consume):
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=_purpose_from_consume(consume))
+
+
+def _produce_for_purpose(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns, consume):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=_purpose_from_consume(consume))
+
+
 def _verify_on_work(*, custody_bytes, root_public_key, work, live_window, transport_deadline_ns):
     """Preserved completion-only v1 original admission."""
     return _verify_for_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
@@ -322,6 +373,14 @@ def _verify_consume_on_work(*, custody_bytes, root_public_key, work, live_window
     """Fixed request-bound consume-planning v2 original admission only."""
     return _verify_for_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
         work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns, consume=True)
+
+
+def _verify_consume_grant_on_work(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns):
+    """Fixed request-bound consume-grant v3 original admission only."""
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=CONSUME_GRANT_CONSUMER_ROLE)
 
 
 def _produce_on_work(*, payload, root_private_key, root_public_key, work,
@@ -336,3 +395,10 @@ def _produce_consume_on_work(*, payload, root_private_key, root_public_key, work
     return _produce_for_purpose(payload=payload, root_private_key=root_private_key,
         root_public_key=root_public_key, work=work, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, consume=True)
+
+
+def _produce_consume_grant_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=CONSUME_GRANT_CONSUMER_ROLE)

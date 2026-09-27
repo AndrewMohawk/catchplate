@@ -89,8 +89,14 @@ cap because it reserves the complete request, both headers and every other
 response field. The service refuses an oversized raw7 response; uncertainty
 does not mean durable storage was rolled back or authorize automatic retry.
 
-Independent consume receiving custody/full replay and actual grant issuance
-remain next, followed by reservation, one-use SQL and durable completion/recovery.
+The .163 source adds separate independent
+[receiving bootstrap](oidc-session-activation-delivery-execution-custody-bootstrap.md),
+[key custody](oidc-session-activation-delivery-execution-custody.md) and
+[full original replay](oidc-session-activation-delivery-execution-replay.md).
+The receiver does not adopt an export status, sender owner or stored expectation
+as authority; it supplies its own root-bound scope, keys and current guards.
+Actual consume-grant issuance and its cold service remain next, followed by
+reservation, one-use SQL and durable completion/recovery.
 Exact committed-original release and public/portal handoff are not enabled.
 No build, import, test, runtime check, key/directory provisioning or installation
 was performed; step 20 and production acceptance remain open.

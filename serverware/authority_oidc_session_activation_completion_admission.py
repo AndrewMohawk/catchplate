@@ -159,7 +159,7 @@ def _admit_originals_on_work(*, originals, expectations, planner_public_key,
 
     live()
     if include_delivery:
-        custody.OidcSessionActivationHistoryCustody._require_consume_planning_on_work(owner, work=work)
+        custody.OidcSessionActivationHistoryCustody._require_consume_history_on_work(owner, work=work)
     else:
         custody.OidcSessionActivationHistoryCustody.require_completion_on_work(owner, work=work)
     custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,

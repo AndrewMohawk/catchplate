@@ -2,8 +2,8 @@
 
 These source-only profiles admit separate fresh, independently root-authorized
 receiving purposes for historical activation completion and request-bound
-delivery-consumption planning. Neither extends the live
-execution-custody consumer map, relabel a live SQL issuer or renew an expired
+delivery-consumption planning or grant receiving. None extends the live
+execution-custody consumer map, relabels a live SQL issuer or renews an expired
 planner launch. It is unbuilt and unexecuted; no key, account, descriptor,
 filesystem path or service is provisioned by this module.
 
@@ -118,6 +118,48 @@ checks; it does not accept a subclass or a successful material carrier.
 
 See [consume-planning history custody](oidc-session-activation-delivery-history-custody.md)
 for the actual replay and caller-purpose joins.
+
+## Separate consume-grant receiving v3
+
+`_verify_consume_grant_on_work(*, custody_bytes, root_public_key, work,
+live_window, transport_deadline_ns)` and the analogous
+`_produce_consume_grant_on_work(*, payload, root_private_key, root_public_key,
+work, live_window, transport_deadline_ns)` select only:
+
+- `serverware.signedOidcSessionActivationHistoryCustody/v3` and
+  `serverware.oidcSessionActivationHistoryCustody/v3`;
+- operation `oidc.session.activation-delivery.consume`, consumer role
+  `consume-grant-history`, mode
+  `oidc-session-activation-delivery-execution-authorizer`, and UID/GID
+  `65500:65500`;
+- the same exact request-bound payload grammar and original byte/cumulative
+  work caps as v2, including the independently root-signed `consumeRequest`.
+
+This fresh signature is a separate receiving-purpose authorization, not a v2
+planning launch renamed by the caller. It genuinely admits the historical
+activation planner original, exact configuration/runtime/source cohort, vector,
+enrollment and historical bundle/delivery key pins. The unchanged material
+fields expose the actual v3 `consumer_role`, process/UID/GID and immutable
+`consume_request_bytes`; no material is accepted as proof input.
+
+`OidcSessionActivationHistoryCustody.for_consume_grant` has exactly the same
+keyword arguments as `for_consume_planning`, including independent expected
+receiver identity and consume request. It retains the fresh v3 opening and
+current inherited bound, never the expired historical launch as a clock.
+Private configuration appends `consumer_role`; the legacy `consume_planning`
+flag remains true only for v2 and is checked for consistency at each snapshot.
+Dispatch uses exact fixed roles. Existing bool-only helpers still reject a
+string or any other truthy substitute; v1/v2 entrypoints do not accept v3.
+
+The receiving path must additionally call the exact owner's
+`require_consume_grant_on_work(*, work)` before private consumption replay and
+bind the independently expected request. The shared read-only
+completed-activation provenance suffix accepts only explicit v2 or v3 custody;
+planner construction remains v2-only and completion/recovery remains v1-only.
+Neither this history admission nor that semantic suffix issues a consume grant,
+executes or completes consumption, or releases a token. The new consume-bundle
+key, receiving execution authority and cold grant service are separate joins,
+not supplied by these two historical activation keys.
 
 ## Scope and remaining boundary
 

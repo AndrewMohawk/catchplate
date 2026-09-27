@@ -1,7 +1,7 @@
-# Request-bound consume-planning history custody
+# Request-bound consume history custody
 
-This source-only prerequisite adds a distinct root-signed history purpose for
-`oidc.session.activation-delivery.consume`. It is not completion signing,
+These source-only prerequisites add distinct root-signed history purposes for
+`oidc.session.activation-delivery.consume`. They do not authorize completion signing,
 protected consumption execution, committed-release admission or token release.
 No keys, account, descriptors or service are provisioned here; the source is
 unbuilt and unexecuted.
@@ -13,15 +13,22 @@ mode `oidc-session-activation-delivery-planner`; the v1 completion profile remai
 fixed at `65503:65503`. Neither the live execution-custody consumer map nor the
 completion signer purpose is widened.
 
+The separate [historical bootstrap v3](oidc-session-activation-history-custody-bootstrap.md#separate-consume-grant-receiving-v3)
+fixes role `consume-grant-history`, UID/GID `65500:65500` and mode
+`oidc-session-activation-delivery-execution-authorizer`. It uses the same closed
+consume-request grammar, but requires a new genuine root signature for that
+receiving purpose. There is no v2-to-v3 fallback or shared UID allowlist.
+
 ## Exact original and owner joins
 
-The root-signed v2 payload binds the canonical typed consume request original,
+Both root-signed v2/v3 payloads bind the canonical typed consume request original,
 not just caller-selected user IDs. Actual source commitment and argument checks
 cover delivery/session/user/credential/challenge, old/new token and assertion
 digests, and the business intent. The material's `consume_request_bytes` is
 ordinary immutable original data, never an incoming admission token.
 
-`OidcSessionActivationHistoryCustody.for_consume_planning` requires:
+`OidcSessionActivationHistoryCustody.for_consume_planning` and the separate
+`for_consume_grant` factory require the same explicit keyword arguments:
 
 ```text
 custody_bytes, root_public_key, expected_receiver_identity,
@@ -31,7 +38,7 @@ live_window, transport_deadline_ns, work
 
 Both expected identity and request are independently supplied, bounded and
 captured before callbacks. They must match genuine root admission. The factory
-returns the existing exact owner class, sealed to the fixed v2 process/PID and
+returns the existing exact owner class, sealed to its fixed v2 or v3 process/PID and
 originals. The ordinary default constructor remains v1-only. Each current use
 reauthenticates the original outer signature, policy, original vector/enrollment,
 request and actual separate AES keys without accepting a supplied success DTO.
@@ -54,14 +61,22 @@ activation rotation, not an arbitrary activation encrypted under the same key.
 
 The consume plan captures and binds its actual request before using the owner.
 The original-only delivery-provenance response suffix explicitly receives that
-request, requires v2, and then performs the real historical exchange and signed
-completion/ACK joins. It returns diagnostic identities and current processing
+request, requires explicit v2 or v3 custody, and then performs the real historical
+exchange and signed completion/ACK joins. It returns diagnostic identities and current processing
 liveness only—no original plaintext token, selected rows or executable proof.
+
+Actual planner construction still requires the strict v2-only
+`_require_consume_planning_on_work` gate. The receiving replay separately requires
+`require_consume_grant_on_work(*, work)` before opening and binds its independent
+request; v1 completion and v2 planning owners fail that v3-only gate. The shared
+read-only semantic suffix is not consume execution, completion or grant issuance.
+The appended private `consumer_role` is exact and consistent with the retained
+v2-only `consume_planning` flag; no arbitrary truthy purpose selector is accepted.
 
 Standard completion admission, response verification, request transport,
 production and retained recovery require v1 before protected I/O or signing.
-The v2 owner cannot enter those paths, and v1 cannot be relabeled for consume
-planning. Generic activation completion APIs remain rejected; the dedicated
+Neither v2 nor v3 can enter those paths, and v1 cannot be relabeled for a consume
+purpose. Generic activation completion APIs remain rejected; the dedicated
 completion path requires v1 historical custody.
 
 The owner does not create fresh consume read proofs, grant permission, persist a

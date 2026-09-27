@@ -1,7 +1,8 @@
 """Distinct root-admitted historical activation custody; no live execution.
 
-Separate fixed completion-history and request-bound consume-planning processes
-may hold these AES originals under their own fresh root-signed purposes.
+Separate fixed completion-history, consume-planning and consume-grant processes
+may hold these AES originals under their own fresh root-signed purposes. Both
+consume profiles bind an independently expected original consume request.
 Every entrypoint requiring current authority reauthenticates the fresh outer
 bootstrap; expired planner policy remains original metadata, never a clock or
 renewed launch. No material/result carrier is accepted in place of originals.
@@ -49,6 +50,7 @@ class _Configuration:
     receiver_identity_bytes: bytes
     consume_planning: bool
     consume_request_bytes: bytes | None
+    consumer_role: str
 
 
 def _identity(value, work):
@@ -80,15 +82,30 @@ def _key_bindings(material, bundle, delivery, work):
 
 
 def _process(consume):
-    _schema, _payload, _operation, _role, mode, uid, gid = bootstrap._profile(consume)
+    return _process_for_purpose(bootstrap._purpose_from_consume(consume))
+
+
+def _process_for_purpose(purpose):
+    _schema, _payload, _operation, _role, mode, uid, gid = bootstrap._purpose_profile(purpose)
     if (os.getresuid() != (uid,) * 3 or os.getresgid() != (gid,) * 3 or os.getgroups()
             or os.environ.get("SERVERWARE_PROCESS_MODE") != mode):
         _fail("historical activation custody requires its fixed purpose process")
 
 
+def _verifier(purpose):
+    bootstrap._purpose_profile(purpose)
+    if purpose == bootstrap.CONSUMER_ROLE:
+        return bootstrap._verify_on_work
+    if purpose == bootstrap.CONSUME_CONSUMER_ROLE:
+        return bootstrap._verify_consume_on_work
+    if purpose == bootstrap.CONSUME_GRANT_CONSUMER_ROLE:
+        return bootstrap._verify_consume_grant_on_work
+    _fail("historical activation custody has no verifier for this purpose")
+
+
 def _activation_binding(configured, request, work):
     """Join original activation data to the independently root-bound consume."""
-    if not configured.consume_planning:
+    if not bootstrap._requires_consume_request(configured.consumer_role):
         return
     consume = evidence.wire._decode_object(configured.consume_request_bytes, work=work,
         maximum_bytes=bootstrap.MAX_CONSUME_REQUEST_BYTES,
@@ -121,7 +138,7 @@ class OidcSessionActivationHistoryCustody:
         self._initialize(custody_bytes=custody_bytes, root_public_key=root_public_key,
             expected_receiver_identity=expected_receiver_identity, bundle_key=bundle_key,
             delivery_custody_key=delivery_custody_key, live_window=live_window,
-            transport_deadline_ns=transport_deadline_ns, work=work, consume=False,
+            transport_deadline_ns=transport_deadline_ns, work=work, purpose=bootstrap.CONSUMER_ROLE,
             expected_consume_request=None)
 
     @classmethod
@@ -136,16 +153,33 @@ class OidcSessionActivationHistoryCustody:
             expected_receiver_identity=expected_receiver_identity,
             expected_consume_request=expected_consume_request, bundle_key=bundle_key,
             delivery_custody_key=delivery_custody_key, live_window=live_window,
-            transport_deadline_ns=transport_deadline_ns, work=work, consume=True)
+            transport_deadline_ns=transport_deadline_ns, work=work,
+            purpose=bootstrap.CONSUME_CONSUMER_ROLE)
+        return owner
+
+    @classmethod
+    def for_consume_grant(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
+            expected_consume_request, bundle_key, delivery_custody_key, live_window,
+            transport_deadline_ns, work):
+        """Fixed v3 receiving purpose; never relabel a v1/v2 owner or material."""
+        if cls is not OidcSessionActivationHistoryCustody:
+            _fail("consume-grant history requires the exact configured owner class")
+        owner = object.__new__(cls)
+        owner._initialize(custody_bytes=custody_bytes, root_public_key=root_public_key,
+            expected_receiver_identity=expected_receiver_identity,
+            expected_consume_request=expected_consume_request, bundle_key=bundle_key,
+            delivery_custody_key=delivery_custody_key, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work,
+            purpose=bootstrap.CONSUME_GRANT_CONSUMER_ROLE)
         return owner
 
     def _initialize(self, *, custody_bytes, root_public_key, expected_receiver_identity,
             bundle_key, delivery_custody_key, live_window, transport_deadline_ns, work,
-            consume, expected_consume_request):
+            purpose, expected_consume_request):
         evidence.capture._SharedLedger(work)
         if type(self) is not OidcSessionActivationHistoryCustody:
             _fail("historical activation custody requires its exact owner class")
-        bootstrap._profile(consume)
+        consume = bootstrap._requires_consume_request(purpose)
         original = caller.authorization._original(custody_bytes, bootstrap.MAX_BYTES,
             "historical activation custody bootstrap")
         root, bundle, delivery = root_public_key, bundle_key, delivery_custody_key
@@ -159,13 +193,14 @@ class OidcSessionActivationHistoryCustody:
         receiver = _identity(expected_receiver_identity, work)
         expected_request = (bootstrap._consume_request_on_work(expected_consume_request, work)
             if consume else None)
-        _process(consume)
+        _process_for_purpose(purpose)
         _window, processing = history.delivery._window(window, bound, work)
         processing()
-        verify = bootstrap._verify_consume_on_work if consume else bootstrap._verify_on_work
+        verify = _verifier(purpose)
         material = verify(custody_bytes=original, root_public_key=root,
             live_window=window, transport_deadline_ns=bound, work=work)
         processing()
+        registration._same(material.consumer_role, purpose, work, "historical receiving purpose")
         history.replay._bytes_equal(_identity(material.receiver_identity, work), receiver,
             work, "independent historical receiving identity")
         if consume:
@@ -178,7 +213,8 @@ class OidcSessionActivationHistoryCustody:
             material.planner.complete_root_vector_bytes, policy,
             material.planner.maximum_plan_age_ns, material.planner.maximum_clock_skew_ns,
             material.planner.attestation_interval,
-            material.attestation_interval, material.opening_sample, receiver, consume, expected_request)
+            material.attestation_interval, material.opening_sample, receiver,
+            purpose == bootstrap.CONSUME_CONSUMER_ROLE, expected_request, purpose)
         object.__setattr__(self, "_configured", configured)
         object.__setattr__(self, "_seal", configured)
         object.__setattr__(self, "_pid", os.getpid())
@@ -195,8 +231,16 @@ class OidcSessionActivationHistoryCustody:
                 or type(self._configured) is not _Configuration or self._configured is not self._seal
                 or self._configured.source_revision != history.contract.authority.SOURCE_REVISION):
             _fail("historical activation custody is closed, changed or belongs to another process")
-        _process(self._configured.consume_planning)
-        return self._configured
+        configured = self._configured
+        consume = bootstrap._requires_consume_request(configured.consumer_role)
+        if (type(configured.consume_planning) is not bool
+                or configured.consume_planning is not (configured.consumer_role == bootstrap.CONSUME_CONSUMER_ROLE)
+                or (consume and (type(configured.consume_request_bytes) is not bytes
+                    or not 2 <= len(configured.consume_request_bytes) <= bootstrap.MAX_CONSUME_REQUEST_BYTES))
+                or (not consume and configured.consume_request_bytes is not None)):
+            _fail("historical activation custody purpose and original-request scope differ")
+        _process_for_purpose(configured.consumer_role)
+        return configured
 
     def _guard(self, configured, window, bound, work):
         opening, interval = configured.opening_sample, configured.attestation_interval
@@ -230,12 +274,13 @@ class OidcSessionActivationHistoryCustody:
     def _reauthenticate_locked(self, configured, window, bound, work):
         current = self._guard(configured, window, bound, work)
         current()
-        verify = (bootstrap._verify_consume_on_work if configured.consume_planning
-            else bootstrap._verify_on_work)
+        verify = _verifier(configured.consumer_role)
         material = verify(custody_bytes=configured.custody_bytes,
             root_public_key=configured.root_public_key, live_window=window,
             transport_deadline_ns=bound, work=work)
         current()
+        registration._same(material.consumer_role, configured.consumer_role, work,
+            "original historical receiving purpose")
         registration._same(material.attestation_interval, configured.attestation_interval, work,
             "original historical receiving interval")
         registration._same(material.planner.attestation_interval, configured.planner_interval, work,
@@ -249,7 +294,7 @@ class OidcSessionActivationHistoryCustody:
                 (material.planner.state_enrollment_bytes, configured.state_enrollment_bytes, "state enrollment"),
                 (material.planner.complete_root_vector_bytes, configured.complete_vector_bytes, "complete vector")):
             history.replay._bytes_equal(actual, expected, work, "historical receiving " + label)
-        if configured.consume_planning:
+        if bootstrap._requires_consume_request(configured.consumer_role):
             history.replay._bytes_equal(material.consume_request_bytes, configured.consume_request_bytes,
                 work, "original root-bound consume request")
         elif material.consume_request_bytes is not None:
@@ -300,20 +345,32 @@ class OidcSessionActivationHistoryCustody:
     def require_completion_on_work(self, *, work):
         """Static fixed-purpose guard; current I/O still needs real reauthentication."""
         evidence.capture._SharedLedger(work)
-        if self._snapshot_configuration().consume_planning:
-            _fail("consume-planning history cannot authorize completion or recovery")
+        if self._snapshot_configuration().consumer_role != bootstrap.CONSUMER_ROLE:
+            _fail("consume history cannot authorize completion or recovery")
 
     def _require_consume_planning_on_work(self, *, work):
         evidence.capture._SharedLedger(work)
-        if not self._snapshot_configuration().consume_planning:
+        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_CONSUMER_ROLE:
             _fail("consume planning requires its separate root-signed history purpose")
+
+    def require_consume_grant_on_work(self, *, work):
+        """Static v3-only receiving gate; original reauthentication is separate."""
+        evidence.capture._SharedLedger(work)
+        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_GRANT_CONSUMER_ROLE:
+            _fail("consume-grant receiving requires its separate v3 history purpose")
+
+    def _require_consume_history_on_work(self, *, work):
+        """Read-only consume provenance for explicit v2/v3, never completion."""
+        evidence.capture._SharedLedger(work)
+        if not bootstrap._requires_consume_request(self._snapshot_configuration().consumer_role):
+            _fail("consume provenance requires a request-bound history purpose")
 
     def bind_consume_request_on_work(self, *, expected_consume_request, work):
         """Join independent ordinary request data; return no authority carrier."""
         expected = bootstrap._consume_request_on_work(expected_consume_request, work)
         configured = self._snapshot_configuration()
-        if not configured.consume_planning:
-            _fail("completion history cannot be relabeled for consume planning")
+        if not bootstrap._requires_consume_request(configured.consumer_role):
+            _fail("completion history cannot be relabeled for a consume purpose")
         lock = self._lock
         if not lock.acquire(blocking=False):
             _fail("historical activation custody is already in use")

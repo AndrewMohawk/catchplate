@@ -67,7 +67,12 @@ connect all eleven fixed descriptors to this actual factory and its three operat
 They preserve the original construction lifetime through idle acceptance and a
 single accepted exchange. This is unbuilt, unexecuted source, not an installed
 service or provisioned DB/TLS/state-socket access. This closes sender-side export
-composition only, not independently admitted receiving custody/full replay or
-actual grant issuance. No automatic retry, fresh public consent,
+composition only; its results are not receiving authority. The separate .163
+[receiving bootstrap](oidc-session-activation-delivery-execution-custody-bootstrap.md),
+[actual key custodian](oidc-session-activation-delivery-execution-custody.md) and
+[original-proof replay](oidc-session-activation-delivery-execution-replay.md)
+now connect independent consume-grant receiving admission without borrowing this
+planner's authority. Actual grant issuance and its cold service remain next.
+No automatic retry, fresh public consent,
 reservation/one-use SQL/recovery, token release or
 production verification is supplied. Expired consume plans are never live.

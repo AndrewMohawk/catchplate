@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="430" viewBox="0 0 800 430" role="img" aria-labelledby="title description">
-  <title id="title">Tracked source implementation: 31 of 46 checkpoints landed; 15 open, including 1 in progress</title>
-  <desc id="description">Six rows show one equal-sized segment per named source checkpoint. Evidence handoff E01 through E10: 10 of 10 landed. Historical recovery H01 through H05: 4 of 5 landed; H05 open. Permissions and grants G01 through G10: 10 of 10 landed. Finalization and sessions F01 through F08: 4 of 8 landed; F05 is in progress and remains open; F06 through F08 open. Workloads and native N01 through N06: 3 of 6 landed; N04 through N06 open. Providers and operations O01 through O07: 0 of 7 landed. A check means landed, an arrow means in progress, and a dash means open. All 15 unlanded checkpoints remain open, including the one in-progress checkpoint. These counts describe only the tracked source-integration checklist, not whole-product completion, code or effort percentages, runtime verification, production acceptance or an estimated completion date.</desc>
+  <title id="title">Tracked source implementation: 32 of 46 checkpoints landed; 14 open, including 1 in progress</title>
+  <desc id="description">Six rows show one equal-sized segment per named source checkpoint. Evidence handoff E01 through E10: 10 of 10 landed. Historical recovery H01 through H05: 4 of 5 landed; H05 open. Permissions and grants G01 through G10: 10 of 10 landed. Finalization and sessions F01 through F08: 5 of 8 landed; F06 is in progress and remains open; F07 and F08 open. Workloads and native N01 through N06: 3 of 6 landed; N04 through N06 open. Providers and operations O01 through O07: 0 of 7 landed. A check means landed, an arrow means in progress, and a dash means open. All 14 unlanded checkpoints remain open, including the one in-progress checkpoint. These counts describe only the tracked source-integration checklist, not whole-product completion, code or effort percentages, runtime verification, production acceptance or an estimated completion date.</desc>
   <rect x="1" y="1" width="798" height="428" rx="12" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <defs>
@@ -18,8 +18,8 @@
       </g>
     </defs>
     <text x="24" y="31" fill="#f8fafc" font-size="16" font-weight="700">TRACKED SOURCE IMPLEMENTATION</text>
-    <text x="776" y="31" fill="#6ee7b7" font-size="16" font-weight="700" text-anchor="end">31 OF 46 LANDED</text>
-    <text x="24" y="55" fill="#cbd5e1" font-size="13">15 open, including 1 in progress (F05) · source-only, not runtime-verified</text>
+    <text x="776" y="31" fill="#6ee7b7" font-size="16" font-weight="700" text-anchor="end">32 OF 46 LANDED</text>
+    <text x="24" y="55" fill="#cbd5e1" font-size="13">14 open, including 1 in progress (F06) · source-only, not runtime-verified</text>
 
     <g transform="translate(0 77)">
       <text x="24" y="16" fill="#f8fafc" font-size="14" font-weight="600">Evidence handoff</text>
@@ -66,14 +66,14 @@
     </g>
     <g transform="translate(0 227)">
       <text x="24" y="16" fill="#f8fafc" font-size="14" font-weight="600">Finalization &amp; sessions</text>
-      <text x="24" y="34" fill="#cbd5e1" font-size="12">F01–F08 · 4 / 8 landed</text>
+      <text x="24" y="34" fill="#cbd5e1" font-size="12">F01–F08 · 5 / 8 landed</text>
       <g font-size="11" text-anchor="middle">
         <g transform="translate(238)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F01</text></g>
         <g transform="translate(292)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F02</text></g>
         <g transform="translate(346)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F03</text></g>
         <g transform="translate(400)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F04</text></g>
-        <g transform="translate(454)" fill="#fde68a"><use href="#in-progress"/><text x="23" y="33">F05</text></g>
-        <g transform="translate(508)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">F06</text></g>
+        <g transform="translate(454)" fill="#d1fae5"><use href="#landed"/><text x="23" y="33">F05</text></g>
+        <g transform="translate(508)" fill="#fde68a"><use href="#in-progress"/><text x="23" y="33">F06</text></g>
         <g transform="translate(562)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">F07</text></g>
         <g transform="translate(616)" fill="#e2e8f0"><use href="#open"/><text x="23" y="33">F08</text></g>
       </g>

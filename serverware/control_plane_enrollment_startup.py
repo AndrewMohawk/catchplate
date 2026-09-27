@@ -241,7 +241,7 @@ class _EnrollmentOwner:
             transport_deadline_ns, work):
         """One genuine raw10-to-raw3 reserve exchange after separate present permission.
 
-        Only explicit nested finalization v2 supplies its independent scope.
+        Only explicit nested finalization v2/v3 supplies its independent scope.
         This neither stores the response nor establishes latest state or SQL authority.
         """
         from serverware import control_plane_registration_finalization_execution as finalization
@@ -249,6 +249,21 @@ class _EnrollmentOwner:
         _require_pid()
         with _LOCK:
             return finalization._reserve_on_owner(self, originals=originals,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+
+    def _request_registration_finalization_sql(self, *, originals, live_window,
+            transport_deadline_ns, work):
+        """One explicit private SQL exchange; separate present permission is required.
+
+        Nested v3 supplies independently root-admitted pending pins and endpoint.
+        This does not retain outcomes, authenticate signed completion or activate
+        sessions. An error may follow an irreversible remote attempt or commit.
+        """
+        from serverware import control_plane_registration_finalization_sql as sql
+
+        _require_pid()
+        with _LOCK:
+            return sql._request_on_owner(self, originals=originals,
                 live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
     @property

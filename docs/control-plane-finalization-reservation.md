@@ -65,13 +65,16 @@ copied from the reserve acknowledgment or local reservation slot. Root signing
 authenticates the assertion's origin, not its continuing truth at action time.
 Even the existing nonce-bound state-owner lookup is an authenticated observation
 of that owner's state, not independent hostile-host antirollback or an atomic
-off-host action-time lease. A later SQL caller still needs genuine original
+off-host action-time lease. The separate SQL caller still needs genuine original
 pending/grant/plan admission and the actual protected database checks; static
 pins do not close the external currentness/one-use production gate.
 
-This source addition does not connect a private SQL dispatch method or a cold
-finalization SQL service. Pending-scope-to-action orchestration remains open;
-the presence of the profile is not completion of that integration milestone.
+The [private SQL caller](control-plane-finalization-sql.md) and [cold worker](registration-finalization-sql-service.md)
+now connect those independently admitted pins to genuine original verification
+and protected SQL composition in source. The configured property itself is
+still not a request or proof of execution. Separate public execution permission,
+retained outcomes, completion/recovery and external action-time authority remain
+open; the reservation path does not automatically invoke the SQL path.
 
 ## One original-bound exchange
 

@@ -2,9 +2,11 @@
 
 This source-only slice connects genuine `webauthn.registration.finalize`
 originals to the actual protected successor issuer and executor. It is partial
-F06 implementation, **not** a cold SQL service, public execute action, deployed
-credential-finalization workflow or OIDC activation. The source is unbuilt and
-unexecuted; production acceptance remains **0/6 verified**.
+F06 implementation, **not** a public execute action, deployed credential-finalization
+workflow or OIDC activation. A separate [cold SQL worker](registration-finalization-sql-service.md)
+and [private caller](control-plane-finalization-sql.md) now connect this composition
+in source. The source is unbuilt and unexecuted; production acceptance remains
+**0/6 verified**.
 
 ## Inputs and independent authority
 
@@ -48,7 +50,7 @@ a fabricated checkpoint nor a fresh currentness witness.
 Issuer and executor retain their distinct fixed database roles and admitted
 TLS identities. Their query and structural-catalog pins must agree; this does
 **not** establish database identity, certificate provenance or deployment
-admission. The future cold owner must independently admit the intended database,
+admission. The cold owner must independently admit the intended database,
 each role's connection/TLS material and the protected attempt journal/checkpoint.
 No DSN is inferred from originals, and comparing or parsing DSNs is not used to
 manufacture provenance.
@@ -82,11 +84,10 @@ retry permission. Cancellation propagates. No raw input, key, DSN or driver
 exception text is included in those outcome errors.
 
 The [reservation flow](control-plane-finalization-reservation.md) remains a
-separate operation. This slice adds no caller-facing execution endpoint, cold
-service/bootstrap or control-plane outcome association. The separate
-[raw13/raw4 transport](registration-finalization-sql-transport.md) now defines
-the dedicated bounded exchange but is not connected to a cold worker. Independently
-admitted action-time pending scope, protected service/database/journal
+separate operation. This slice adds no caller-facing execution endpoint or
+control-plane outcome association. The dedicated worker and private caller
+use the [raw13/raw4 transport](registration-finalization-sql-transport.md).
+Independently admitted action-time pending scope, protected service/database/journal
 provisioning, separate signed completion/recovery and the complete portal
 workflow still require integration. OIDC session activation remains its own
 authenticated transition after actual credential finalization. No services,

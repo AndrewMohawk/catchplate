@@ -1,0 +1,22 @@
+# Uninstalled deployment input; no accounts or execution authority provisioned.
+# Recreating this socket invalidates independently signed resource identities.
+[Unit]
+Description=Serverware dedicated finalization SQL ingress
+Before=serverware-registration-finalization-sql.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/serverware/registration-finalization/sql.sock
+FileDescriptorName=serverware-registration-finalization-sql
+SocketUser=65509
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=serverware-registration-finalization-sql.service
+
+[Install]
+WantedBy=sockets.target

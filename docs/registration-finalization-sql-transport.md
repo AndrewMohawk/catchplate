@@ -1,9 +1,10 @@
 # Finalization SQL original transport
 
 The source [transport](../serverware/authority_registration_finalization_sql_transport.py)
-defines one dedicated raw13/raw4 exchange for the future cold finalization SQL
-worker. It is unbuilt and unexecuted. It does not install that worker, enable a
-public execution route or grant SQL permission.
+defines one dedicated raw13/raw4 exchange for the [cold finalization SQL
+worker](registration-finalization-sql-service.md). It is unbuilt and unexecuted.
+It does not install that worker, enable a public execution route or grant SQL
+permission.
 
 The fixed endpoint is `/run/serverware/registration-finalization/sql.sock`, with
 root socket-activation listener UID/GID `0:0`, a bounded 1–30 second duration,
@@ -39,7 +40,8 @@ and exact EOF. The complete request/response body also stays within 64 MiB.
 The codec adds no work allowance, parser, key, fallback endpoint or reconnection.
 
 The [cold caller profile](control-plane-registration-finalization-custody.md)
-may independently pin the endpoint and pending state, but its v3 configuration
-property does not connect it to an executing service. Cold service/launcher,
-protected attempt custody, public-purpose dispatch, retained outcomes, separate
-completion and action-time external authority remain required integration work.
+independently pins the endpoint and pending state. The [private caller](control-plane-finalization-sql.md)
+and dedicated cold worker now connect the exchange in source. The configuration
+property itself performs no request. Actual provisioning, public-purpose
+dispatch, retained outcomes, separate completion and action-time external
+authority remain required work.

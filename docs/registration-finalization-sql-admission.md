@@ -47,12 +47,18 @@ retimed or extended.
 
 ## Private continuation, not an authority token
 
-The private `_AdmittedSqlInputs` contains only `issue_arguments`, `live_window`,
-`deadline_ns` and `live`. Its arguments match the genuine issuer's original-input
-API, excluding the separately supplied work/window/deadline. They retain raw4,
+The private `_AdmittedSqlInputs` contains `issue_arguments`, `live_window`,
+`deadline_ns`, `live` and `marker_expectation`. Its arguments match the genuine
+issuer's original-input API, excluding the separately supplied work/window/deadline. They retain raw4,
 original reserve/snapshot/ack, original grant and enrollment, independently
 configured keys and the unchanged expected pending pins. No public entrypoint
 accepts this result as a successful verification carrier.
+
+`marker_expectation` is the exact eighteen-field source marker derived by the
+actual pending helper from this call's authenticated enrollment, reserve,
+receipt and reconstructed snapshot. The [private SQL caller](control-plane-finalization-sql.md)
+uses it only to compare a returned unsigned observation; it is neither an
+accepted input proof nor independently signed completion.
 
 `live()` returns a real checked epoch-nanosecond sample while retaining sticky
 clock checks and original finalization/reserve freshness. The returned window

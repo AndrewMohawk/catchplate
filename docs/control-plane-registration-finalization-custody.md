@@ -104,8 +104,9 @@ new key, descriptor, environment variable or fallback.
 No returned reserve receipt, retained record or observed database value supplies
 the independent pending head. A root-signed cold pin remains a provenance-bound
 assertion, not proof that an off-host head is still current at action time.
-Actual original admission, protected one-use database effects, independent
-currentness and the cold dispatch/coordinator connection remain separate.
+Actual original admission and protected one-use database effects remain separate
+checks in the [private SQL caller/worker path](control-plane-finalization-sql.md).
+Neither that source integration nor the cold pin establishes independent currentness.
 See the [pending-scope boundary](control-plane-finalization-reservation.md#opt-in-current-pending-pins-not-a-witness).
 
 ## Actual key delivery and lifetime
@@ -150,10 +151,12 @@ and durable original association. The service source and packaging remain
 unbuilt, unexecuted and unprovisioned; the fixed path is not evidence of socket
 availability or deployment. The explicit nested v2 reservation flow still
 requires the independently provisioned reserver and state v2 peer admission.
-Nested v3 now supplies explicit SQL/current-pending configuration, but does not
-add the private SQL dispatch method or cold finalization SQL worker. Protected
-pending/SQL/completion orchestration and separate OIDC session activation remain
-outstanding; a configured property is not a completed source-integration gate.
+Nested v3 now supplies explicit SQL/current-pending configuration to the private
+SQL request method and dedicated cold worker. They authenticate original pending
+scope before actual protected issuance/execution; the caller joins every returned
+marker field to the verified original plan. Public finalization execution,
+retained outcomes, signed completion/recovery and separate OIDC session activation
+remain outstanding. A configured property alone is not a completed workflow.
 Trusted-host-local descriptor continuity is not independent enclave evidence.
 
 This implementation has not been built or executed. Deferred frozen validation

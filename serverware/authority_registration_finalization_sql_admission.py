@@ -40,6 +40,7 @@ class _AdmittedSqlInputs:
     live_window: tuple
     deadline_ns: int
     live: object
+    marker_expectation: dict
 
 
 def _same_original(actual, expected, work, label):
@@ -171,6 +172,8 @@ def _admit_on_configuration(*, payload, configuration_digest, generation,
     snapshot_digest = computation._snapshot_digest_on_work(reserved[1], work=work)
     evidence.plan._same(snapshot_digest, request["snapshotDigest"], work,
         "finalization SQL reserve does not commit its actual snapshot original")
+    marker_expectation = pending._marker(material, request, request_digest,
+        receipt, receipt_digest, snapshot, work)
     live()
     arguments = {"operation": OPERATION, "originals": admitted.raw4,
         "expectations": admitted.history, "planner_public_key": admitted.configured.pins[1],
@@ -185,4 +188,4 @@ def _admit_on_configuration(*, payload, configuration_digest, generation,
         "expected_pending_sequence": sequence, "expected_pending_head_digest": head,
         "expected_fence": fence}
     live()
-    return _AdmittedSqlInputs(arguments, window, bound, live)
+    return _AdmittedSqlInputs(arguments, window, bound, live, marker_expectation)

@@ -1,0 +1,13 @@
+# Optional production source overlay for an explicitly enabled v5 release client.
+# Provision the finite release worker and searchable socket directory separately.
+# This read-only bind grants no root authority, key custody or public endpoint.
+# The signed v5 bootstrap uses the existing authority-trust directory mount.
+services:
+  serverware:
+    volumes:
+      - type: bind
+        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR:?set preprovisioned private release socket directory}
+        target: /run/serverware/oidc-session-activation-token-release
+        read_only: true
+        bind:
+          create_host_path: false

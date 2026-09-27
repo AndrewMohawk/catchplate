@@ -23,6 +23,10 @@ CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnr
 CONTROL_PLANE_ENROLLMENT_V3_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v3"
 CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v4"
 CONTROL_PLANE_ENROLLMENT_V4_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v4"
+CONTROL_PLANE_ENROLLMENT_V5_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v5"
+CONTROL_PLANE_ENROLLMENT_V5_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v5"
+CONTROL_PLANE_RELEASE_SCHEMA = "serverware.controlPlaneOidcSessionActivationRelease/v1"
+CONTROL_PLANE_RELEASE_SOCKET = "/run/serverware/oidc-session-activation-token-release/release.sock"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
 CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES = 4096
 CONTROL_PLANE_ENROLLMENT_KEY_NAME = "serverware-control-plane-enrollment-signing-key"
@@ -633,8 +637,96 @@ def _control_plane_finalization_key_slot(value, *, issuer_descriptor, bootstrap_
     return CONTROL_PLANE_FINALIZATION_KEY_FD
 
 
+def _control_plane_release_public_shape(value):
+    """Closed public-data projection only: no release key, FD, crypto or clock."""
+    if value is None:
+        return
+    if (type(value) is not dict
+            or set(value) != {"schema", "clientAuthorization", "serverBootstrap", "expectedScope"}
+            or value["schema"] != CONTROL_PLANE_RELEASE_SCHEMA):
+        raise RuntimeError("control-plane release public configuration is not closed")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    total = 0
+    for name, maximum in (("clientAuthorization", 16 * 1024), ("serverBootstrap", 16 * 1024 * 1024)):
+        original = value[name]
+        if type(original) is not dict or set(original) != {"base64Url", "byteCount"}:
+            raise RuntimeError("control-plane release public original is not closed")
+        encoded, size = original["base64Url"], original["byteCount"]
+        if (type(size) is not int or not 2 <= size <= maximum or type(encoded) is not str
+                or len(encoded) != (4 * size + 2) // 3
+                or any(character not in alphabet for character in encoded)):
+            raise RuntimeError("control-plane release public original exceeds its delivery bound")
+        unused = 4 if size % 3 == 1 else 2 if size % 3 == 2 else 0
+        if unused and alphabet.index(encoded[-1]) & ((1 << unused) - 1):
+            raise RuntimeError("control-plane release public original encoding is not canonical")
+        total += size
+    if total > CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES:
+        raise RuntimeError("control-plane release public originals exceed the parent bound")
+
+    def digest(value):
+        if (type(value) is not str or len(value) != 71 or not value.startswith("sha256:")
+                or any(character not in "0123456789abcdef" for character in value[7:])):
+            raise RuntimeError("control-plane release identity is not canonical SHA-256")
+
+    scope = value["expectedScope"]
+    if (type(scope) is not dict or set(scope) != {"serverBootstrapDigest", "profile", "requestIdentity",
+            "configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest",
+            "clientId", "clientIdentity", "callerId", "receiverIdentity", "producerId",
+            "producerIdentity", "stateReceiptDigest", "expectedRelease", "expectedOutcomeDigest", "endpoint"}
+            or type(scope["profile"]) is not str or scope["profile"] not in ("live-release", "recovery")):
+        raise RuntimeError("control-plane release independent scope is not closed")
+    for name in ("serverBootstrapDigest", "requestIdentity", "configurationDigest", "generationDigest",
+            "runtimeClosureDigest", "stateReceiptDigest", "expectedOutcomeDigest"):
+        digest(scope[name])
+    token_start = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    for name in ("databaseId", "clientId", "callerId", "producerId"):
+        token = scope[name]
+        if (type(token) is not str or not 1 <= len(token) <= 128 or token[0] not in token_start
+                or any(character not in token_start + "._:-" for character in token)):
+            raise RuntimeError("control-plane release identifier is not a bounded ASCII token")
+    for name in ("clientIdentity", "receiverIdentity", "producerIdentity"):
+        identity = scope[name]
+        if type(identity) is not dict or set(identity) != {
+                "sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest"}:
+            raise RuntimeError("control-plane release identity scope is not closed")
+        for item in identity.values():
+            digest(item)
+    release = scope["expectedRelease"]
+    if type(release) is not dict or set(release) != {"activationRequestDigest", "activationOperationId",
+            "consumeRequestDigest", "deliveryEnvelopeDigest", "deliveryScope", "consumeBinding"}:
+        raise RuntimeError("control-plane release target is not closed")
+    for name in ("activationRequestDigest", "activationOperationId", "consumeRequestDigest", "deliveryEnvelopeDigest"):
+        digest(release[name])
+    binding = release["consumeBinding"]
+    if type(binding) is not dict or set(binding) != {"packetDigest", "pendingDecisionDigest",
+            "completionRequestDigest", "effectsDigest", "afterVectorDigest"}:
+        raise RuntimeError("control-plane release consume binding is not closed")
+    for item in binding.values():
+        digest(item)
+    delivery = release["deliveryScope"]
+    limits = {"deliveryId": 128, "userId": 4096, "sessionId": 128, "credentialId": 1366,
+        "credentialRecordId": 4096, "challengeId": 4096, "assertionDigest": 71,
+        "oldTokenDigest": 71, "newTokenDigest": 71, "createdAt": 64, "expiresAt": 64}
+    if type(delivery) is not dict or set(delivery) != set(limits):
+        raise RuntimeError("control-plane release delivery scope is not closed")
+    for name, maximum in limits.items():
+        item = delivery[name]
+        if type(item) is not str or not 1 <= len(item) <= maximum or "\x00" in item:
+            raise RuntimeError("control-plane release delivery field exceeds its shape bound")
+    for name in ("assertionDigest", "oldTokenDigest", "newTokenDigest"):
+        digest(delivery[name])
+    endpoint = scope["endpoint"]
+    if (type(endpoint) is not dict or set(endpoint) != {"path", "timeoutSeconds", "peerUid", "peerGid"}
+            or endpoint["path"] != CONTROL_PLANE_RELEASE_SOCKET
+            or type(endpoint["timeoutSeconds"]) is not int or not 1 <= endpoint["timeoutSeconds"] <= 30
+            or any(type(endpoint[name]) is not int or endpoint[name] != 0 for name in ("peerUid", "peerGid"))):
+        raise RuntimeError("control-plane release endpoint differs from its fixed public contract")
+    # All signature, source-cohort, canonical timestamp, target and freshness
+    # checks remain in actual child admission. This adds no delivered slot.
+
+
 def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
-    """Project closed v2/v3/v4 slots; child admission alone supplies authority."""
+    """Project closed v2-v5 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -653,19 +745,24 @@ def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
         if (type(value) is not dict or set(value) != {"schema", "payload", "signatureBase64Url"}
                 or value["schema"] not in (CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V5_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
         is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
+        is_v5 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V5_BOOTSTRAP_SCHEMA
         payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
             "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
-        if is_v3 or is_v4:
+        if is_v3 or is_v4 or is_v5:
             payload_fields.add("registrationExecution")
-        if is_v4:
+        if is_v4 or is_v5:
             payload_fields.add("registrationFinalization")
+        if is_v5:
+            payload_fields.add("oidcSessionActivationRelease")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V4_PAYLOAD_SCHEMA if is_v4
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V5_PAYLOAD_SCHEMA if is_v5
+                    else CONTROL_PLANE_ENROLLMENT_V4_PAYLOAD_SCHEMA if is_v4
                     else CONTROL_PLANE_ENROLLMENT_V3_PAYLOAD_SCHEMA if is_v3
                     else CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap payload is not closed")
@@ -691,16 +788,18 @@ def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
         if target is not None and (type(target) is not int or not 32 <= target <= 1023):
             raise RuntimeError("control-plane enrollment key descriptor is outside its exact range")
         execution_target = (_control_plane_execution_key_slot(payload["registrationExecution"],
-            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 or is_v4 else None)
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 or is_v4 or is_v5 else None)
         finalization_target = (_control_plane_finalization_key_slot(payload["registrationFinalization"],
-            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v4 else None)
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v4 or is_v5 else None)
+        if is_v5:
+            _control_plane_release_public_shape(payload["oidcSessionActivationRelease"])
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:
             raise RuntimeError("control-plane enrollment bootstrap is not original canonical JSON")
     except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
         raise RuntimeError("control-plane enrollment bootstrap is invalid") from exc
-    return target, execution_target, finalization_target, is_v4
+    return target, execution_target, finalization_target, is_v4 or is_v5
 
 
 def _control_plane_enrollment_key_slots(descriptor: int) -> tuple[int | None, int | None]:
@@ -737,7 +836,7 @@ def _open_control_plane_registration_execution_key(bootstrap_descriptor: int, *,
 
 def _open_control_plane_registration_finalization_key(bootstrap_descriptor: int, *,
         occupied_descriptors: set[int]) -> int | None:
-    """Deliver only v4's independent key; a disabled v4 must leave FD204 absent."""
+    """Deliver v4/v5's independent key; disabled finalization leaves FD204 absent."""
     slots = _control_plane_enrollment_purpose_slots(bootstrap_descriptor)
     target, reserved = slots[2], slots[3]
     if reserved and target is None:

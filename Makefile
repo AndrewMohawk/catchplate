@@ -1116,6 +1116,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_release_connection.py \
 	serverware/oidc_session_activation_release_transport.py \
 	serverware/oidc_session_activation_release_client_authorization.py \
+	serverware/control_plane_oidc_session_activation_release_bootstrap.py \
+	serverware/control_plane_oidc_session_activation_release_client.py \
+	serverware/control_plane_oidc_session_activation_release_attempt.py \
 	serverware/authority_oidc_session_activation_release_response.py \
 	serverware/oidc_session_activation_release_entrypoint.py \
 	serverware/oidc_session_activation_release_launcher.py \
@@ -3181,6 +3184,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_release_connection.py \
 				serverware/oidc_session_activation_release_transport.py \
 				serverware/oidc_session_activation_release_client_authorization.py \
+				serverware/control_plane_oidc_session_activation_release_bootstrap.py \
+				serverware/control_plane_oidc_session_activation_release_client.py \
+				serverware/control_plane_oidc_session_activation_release_attempt.py \
 				serverware/authority_oidc_session_activation_release_response.py \
 				serverware/oidc_session_activation_release_entrypoint.py \
 				serverware/oidc_session_activation_release_launcher.py \

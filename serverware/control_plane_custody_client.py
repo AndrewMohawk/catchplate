@@ -591,6 +591,30 @@ class ControlPlaneCustodyClient:
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed after finalization SQL claim")
 
+    def claim_oidc_session_activation_release(self, *, client_authorization_digest,
+            request_identity, profile, server_bootstrap_digest, expected_outcome_digest):
+        """Durably burn a public-only release grant; never store frames or tokens.
+
+        The actual configured caller supplies genuine root-admitted identities,
+        meters the fixed metadata bound, and keeps its current guard around this
+        native-only operation. Local durability grants no release permission.
+        """
+        from serverware import control_plane_oidc_session_activation_release_attempt as attempts
+
+        record, _encoded = attempts.encode(
+            client_authorization_digest=client_authorization_digest,
+            request_identity=request_identity, profile=profile,
+            server_bootstrap_digest=server_bootstrap_digest,
+            expected_outcome_digest=expected_outcome_digest)
+        binding = _snapshot(self)
+        journal.CustodyJournal.claim_oidc_session_activation_release(binding.journal,
+            client_authorization_digest=record.client_authorization_digest,
+            request_identity=record.request_identity, profile=record.profile,
+            server_bootstrap_digest=record.server_bootstrap_digest,
+            expected_outcome_digest=record.expected_outcome_digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed after release dispatch claim")
+
     def append_registration_finalization_sql_outcome(self, finalization_digest, originals):
         """Retain first unsigned raw4 without a renewed clock or success assertion."""
         local = journal._digest(finalization_digest)

@@ -8,6 +8,41 @@ registration to the independent signer and successor execution. The private
 separately, including its [dedicated cold launch](registration-evidence-signer-startup.md).
 Actual deployment provisioning and public orchestration remain open.
 
+## Private release client extension
+
+Source `.180` adds an explicit [v5 public-only release configuration](control-plane-oidc-session-activation-release-bootstrap.md)
+and a [one-use private caller](control-plane-oidc-session-activation-release-client.md).
+The original v2 issuer contract below remains unchanged; v3/v4 execution and
+finalization retain their existing fields and reserved key slots. Only v5 can
+configure this release lane, including when the separate issuer is disabled.
+The actual startup owner must run as UID/GID 65532 and keeps the same runtime
+root, configuration, original receipt and inherited descriptor identities.
+The release component receives no private key and introduces no descriptor.
+Other enabled purposes in the same process can still have their own keys.
+
+The private owner method preserves the supplied request work/window, admits
+fresh original client/server authority, durably claims token-free dispatch
+metadata, performs one fixed exchange and independently verifies the original
+response. Failure never clears the spent flag or grants an automatic retry.
+The existing continuity check now returns its actual receipt epoch so the
+composition can retain that observation; it does not renew the receipt or
+load an unrelated HTTP signing key. No public handler or session cookie is wired.
+
+The optional source overlay
+[`docker-compose.oidc-session-activation-release.yml`](../docker-compose.oidc-session-activation-release.yml)
+adds only a read-only socket-directory bind at the fixed
+`/run/serverware/oidc-session-activation-token-release`. Its required host-source
+variable is `SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR`, with
+`create_host_path: false`; it is not a process endpoint override. The separately
+provisioned listener has mode 0660 and owner/group `65502:65532`, with searchable
+parent directories. A read-only directory bind permits connecting, not replacing
+the listener. Actual peer credentials and signed original response admission
+remain mandatory. Select this overlay only for an explicitly enabled v5 lane;
+it neither creates the worker/socket nor mounts a release or signing key.
+The existing enrollment-only offline preparer is unchanged and does not compose
+this overlay. Any separately composed artifact still requires independent
+immutable-release admission and frozen verification. No deployment is performed.
+
 ## Decision and trust boundary
 
 The runtime root has one additional, explicitly domain-separated bootstrap

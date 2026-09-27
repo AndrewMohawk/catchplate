@@ -100,7 +100,7 @@ def _read_original(descriptor, *, private):
 
 
 def _continuity(owner):
-    """Check the same cold owner and original receipt; never renew either."""
+    """Check the same owner/receipt and return its actual sampled epoch."""
     _require_pid()
     if (type(owner) is not _EnrollmentOwner or owner._closed
             or _owner is not owner or _state != "started"
@@ -113,7 +113,7 @@ def _continuity(owner):
     actual = custody.require_started()
     if actual is not owner._custody or client._snapshot(actual) is not owner._binding:
         raise EnrollmentStartupError("enrollment custody runtime owner changed")
-    client._receipt_now(owner._binding)
+    observed_epoch = client._receipt_now(owner._binding)
     if _descriptor_identity(owner._bootstrap_fd, private=False) != owner._bootstrap_identity:
         raise EnrollmentStartupError("enrollment bootstrap custody changed")
     if (owner._key_fd is not None
@@ -125,6 +125,7 @@ def _continuity(owner):
     if (owner._finalization_key_fd is not None and _descriptor_identity(
             owner._finalization_key_fd, private=True) != owner._finalization_key_identity):
         raise EnrollmentStartupError("registration finalization caller key custody changed")
+    return observed_epoch
 
 
 def _response_spki(path, uid, work=None):
@@ -178,7 +179,8 @@ class _EnrollmentOwner:
     __slots__ = ("_material", "_private_key", "_custody", "_binding", "_bootstrap_fd",
         "_bootstrap_identity", "_key_fd", "_key_identity", "_response_path", "_response_pin", "_closed",
         "_execution_key", "_execution_key_fd", "_execution_key_identity",
-        "_finalization_key", "_finalization_key_fd", "_finalization_key_identity")
+        "_finalization_key", "_finalization_key_fd", "_finalization_key_identity",
+        "_release_spent")
 
     def __init__(self):
         raise EnrollmentStartupError("enrollment owner requires fixed cold startup")
@@ -225,6 +227,30 @@ class _EnrollmentOwner:
             and finalization.completion_packet_digest is not None
             and finalization.completion_authorization_digest is not None
             and finalization.current_pending is not None)
+
+    @property
+    def release_client_enabled(self):
+        """Explicit v5 public configuration, not request or session authority."""
+        _continuity(self)
+        if type(self._release_spent) is not bool:
+            raise EnrollmentStartupError("release caller dispatch state changed")
+        return (self._material is not None and self._material.release_client is not None
+            and not self._release_spent)
+
+    def _request_oidc_session_activation_release(self, *, request_originals,
+            live_window, transport_deadline_ns, work):
+        """One private, original-bound release; no public permission or retry.
+
+        The actual composition owns fresh root admission, the durable token-free
+        dispatch claim, fixed transport and original receiving verification.
+        It borrows no issuer/finalization signing key and starts no allowance.
+        """
+        from serverware import control_plane_oidc_session_activation_release_client as release
+
+        _require_pid()
+        with _LOCK:
+            return release._request_on_owner(self, request_originals=request_originals,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
     def _authorize_registration_finalization(self, *, request_originals, response_originals,
             sibling_challenge_ids, live_window, work, transport_deadline_ns=None):
@@ -674,6 +700,8 @@ def initialize_from_environment():
             key, key_identity, response_path, response_pin = None, None, None, None
             execution_key, execution_fd, execution_identity = None, None, None
             finalization_key, finalization_fd, finalization_identity = None, None, None
+            if material.release_client is not None and identity != (65532, 65532):
+                raise EnrollmentStartupError("release caller requires the fixed control-plane identity")
             if (material.finalization_slot_reserved and material.finalization is None
                     and 204 in inventory):
                 raise EnrollmentStartupError("disabled v4 finalization forbids its reserved inherited key slot")
@@ -779,6 +807,7 @@ def initialize_from_environment():
             owner._execution_key_identity = execution_identity
             owner._finalization_key, owner._finalization_key_fd = finalization_key, finalization_fd
             owner._finalization_key_identity = finalization_identity
+            owner._release_spent = False
             owner._response_path, owner._response_pin = response_path, response_pin
             _owner, _state = owner, "started"
             return owner
@@ -821,6 +850,7 @@ def close():
         _owner, _state = None, "closed"
         if owner is not None:
             owner._closed = True
+            owner._release_spent = True
             owner._private_key, owner._material = None, None
             owner._execution_key = None
             owner._finalization_key = None

@@ -13,7 +13,8 @@ provisioning or production evidence.
 _verify_on_work(
     *, response_originals, request_originals,
     client_authorization_bytes, server_bootstrap_bytes, root_public_key,
-    expected_client_scope, live_window, transport_deadline_ns, work
+    expected_client_scope, live_window, transport_deadline_ns, work,
+    _continuity=None
 ) -> token64
 ```
 
@@ -97,6 +98,20 @@ Historical evidence does not clip the new processing window to an expired old
 intent or silently create a new one. Any failed admission, comparison, budget
 or current guard withholds the token; no error body or retry authority results.
 
+The optional private `_continuity` seam adds the actual configured caller's
+owner/FD guard without changing standalone admission. Before phase checks and
+after mandatory samples, the receiver supplies its retained epoch/monotonic
+floors; the real owner absorbs them, checks its original resources and clocks,
+and returns an exact immutable integer pair that can only increase those
+floors. The receiver retains that pair before its next sample. Neither side
+can hide rollback below the other's newer observation. This is restrictive
+clock continuity, not a success or authority input; all original checks still
+run, and callback work may increase but never reset its original ledger. The
+returned floors must also remain strictly below the receiver's current narrowed
+epoch deadline and monotonic bound, including after its final inner guard. The
+configured caller tail-returns this verifier's bytes without a weaker native
+suffix after the final genuine original and owner checks.
+
 ## Remaining boundary
 
 This verifies that returned secret bytes match the exact authenticated release
@@ -105,7 +120,9 @@ server execution, store fsync/readback, network delivery, recipient
 acknowledgment, single egress, latest session state or hostile-host rollback
 resistance. Computing an outcome identity is not observing durable retention.
 
-This standalone verifier does not perform network I/O or authorize a new
-exchange. The actual guarded caller composition and private handoff remain
-component 16.5; public/portal authority and independent production gates remain
-separate. No key provisioning, service installation or runtime claim follows.
+This verifier itself does not perform network I/O or authorize a new exchange.
+The [configured private caller](control-plane-oidc-session-activation-release-client.md)
+separately composes one guarded exchange and this genuine verifier; it supplies
+the restrictive continuity seam, never a caller-posted callback. Public/portal
+authority and independent production gates remain separate. No key
+provisioning, service installation or runtime claim follows.

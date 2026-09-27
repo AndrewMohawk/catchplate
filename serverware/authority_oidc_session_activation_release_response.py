@@ -85,15 +85,42 @@ def _hold(*, response_originals, request_originals, client_authorization_bytes,
     return _Held(response, request, client, bootstrap, root, scope, window, bound)
 
 
-def _lifetime(held, work):
+def _lifetime(held, work, continuity=None):
     window, bound = held.window, held.deadline_ns
     _original, original_current = delivery._window(window, bound, work)
     guards = [original_current]
     last_epoch, last_monotonic = window[0], window[2]
+    if continuity is not None and not callable(continuity):
+        _fail("release response restrictive owner continuity is not callable")
+
+    def continue_owner():
+        nonlocal last_epoch, last_monotonic
+        if continuity is None:
+            return
+        limits, before = work.limits, work.metrics
+        ceiling = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+        # This can only add a restriction. No result is consumed as authority;
+        # all mandatory original guards and admission paths still run below.
+        observed = continuity(last_epoch, last_monotonic)
+        capture._SharedLedger(work)
+        after = work.metrics
+        if (work.limits is not limits
+                or ceiling != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or after.hash_work < before.hash_work or after.input_bytes < before.input_bytes
+                or after.json_nodes < before.json_nodes):
+            _fail("release response owner continuity reset its original work")
+        if (type(observed) is not tuple or len(observed) != 2
+                or any(type(value) is not int or value < 1 for value in observed)
+                or observed[0] < last_epoch or observed[1] < last_monotonic):
+            _fail("release response owner continuity lowered its retained clock floors")
+        if observed[0] >= window[3] or observed[1] >= bound:
+            _fail("release response owner continuity exceeded its narrowed deadline")
+        last_epoch, last_monotonic = observed
 
     def current():
         nonlocal last_epoch, last_monotonic
         capture._SharedLedger(work)
+        continue_owner()
         # Keep cross-stage maxima; a newly attached guard cannot hide a rollback
         # behind its own older original opening or a different guard's sample.
         for guard in (*guards, original_current):
@@ -104,6 +131,7 @@ def _lifetime(held, work):
             if observed < last_epoch or monotonic < last_monotonic or monotonic >= bound:
                 _fail("release response original clocks expired or reversed across admission")
             last_epoch, last_monotonic = observed, monotonic
+            continue_owner()
         return last_epoch
 
     def attach(guard):
@@ -160,7 +188,7 @@ def _state_keys(held, material, current, work):
 
 def _verify_on_work(*, response_originals, request_originals,
         client_authorization_bytes, server_bootstrap_bytes, root_public_key,
-        expected_client_scope, live_window, transport_deadline_ns, work):
+        expected_client_scope, live_window, transport_deadline_ns, work, _continuity=None):
     """Return exact token64 only after genuine same-call public-original checks.
 
     This is standalone receiving verification, not a transport/caller owner.
@@ -172,7 +200,7 @@ def _verify_on_work(*, response_originals, request_originals,
         server_bootstrap_bytes=server_bootstrap_bytes, root_public_key=root_public_key,
         expected_client_scope=expected_client_scope, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work)
-    current, attach, narrow = _lifetime(held, work)
+    current, attach, narrow = _lifetime(held, work, _continuity)
     current()
     client = clients._verify_on_work(authorization_bytes=held.client_authorization,
         server_bootstrap_bytes=held.server_bootstrap, root_public_key=held.root_public_key,

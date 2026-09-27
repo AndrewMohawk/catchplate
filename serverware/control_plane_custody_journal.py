@@ -18,6 +18,8 @@ finalization/evidence/signer chain; storage supplies no outcome authentication.
 Separate finalization SQL/completion records require that retained reservation;
 completion reconciliation never replaces its original uncertain outcome.
 A SQL-CLAIMED record burns only one local dispatch, never remote SQL permission.
+Dedicated token-free release claims burn one exact root client authorization;
+they are not prepared records or members of any generic forwarding family.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -42,6 +44,7 @@ from serverware import control_plane_registration_finalization_associations as f
 from serverware import control_plane_registration_finalization_reservation_records as finalization_reservations
 from serverware import control_plane_registration_finalization_outcome_records as finalization_outcomes
 from serverware import control_plane_registration_outcome_records as outcome_records
+from serverware import control_plane_oidc_session_activation_release_attempt as release_attempts
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -161,6 +164,8 @@ class CustodyJournal:
     grants seven, signer records one and finalization grants seven each.
     Old records are never rewritten or removed; legacy marker byte
     reservations remain intact.
+    Public-only release claims share the prepared-record logical capacity and
+    the unchanged physical/quota ceilings, without reserving legacy markers.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -185,6 +190,7 @@ class CustodyJournal:
         self._finalization_reservations = {}
         self._finalization_outcomes = {}
         self._registration_outcomes = {}
+        self._release_attempts = {}
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -282,6 +288,7 @@ class CustodyJournal:
         finalization_reserved = {}
         finalization_sql = {}
         registration_outcomes = {}
+        release_claims = {}
         uncertain_completions = set()
         uncertain_finalization_completions = set()
         count = 0
@@ -311,6 +318,8 @@ class CustodyJournal:
                     kind = "finalization-completion-outcome"
                 elif name.startswith("finalization-completion-reconciled-"):
                     kind = "finalization-completion-reconciled"
+                elif name.startswith(release_attempts.KIND + "-"):
+                    kind = release_attempts.KIND
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -330,6 +339,7 @@ class CustodyJournal:
                     finalization_reservations.MAX_RECORD_BYTES if kind == "finalization-reserved" else
                     finalization_outcomes._maximum(_FINALIZATION_OUTCOME_FILES[kind])
                         if kind in _FINALIZATION_OUTCOME_FILES else
+                    release_attempts.MAX_RECORD_BYTES if kind == release_attempts.KIND else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -342,8 +352,15 @@ class CustodyJournal:
                         raise CustodyJournalError("prepared filename differs from its original content")
                     prepared[digest] = JournalEntry(digest, record.family, record.selector,
                         record.source_revision, len(encoded), False)
-                    if len(prepared) > self._maximum_records:
+                    if len(prepared) + len(release_claims) > self._maximum_records:
                         raise CustodyJournalError("journal prepared record limit exceeded")
+                elif kind == release_attempts.KIND:
+                    claim = release_attempts.decode(encoded)
+                    if claim.client_authorization_digest != digest or digest in release_claims:
+                        raise CustodyJournalError("release claim filename differs from its authorization")
+                    release_claims[digest] = claim
+                    if len(prepared) + len(release_claims) > self._maximum_records:
+                        raise CustodyJournalError("journal release claim record limit exceeded")
                 elif kind == "attempted":
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
@@ -402,6 +419,7 @@ class CustodyJournal:
             raise CustodyJournalError("journal has insufficient reserved marker capacity")
         self._entries = {digest: replace(entry, attempted=digest in attempted, observed=digest in observed)
             for digest, entry in prepared.items()}
+        self._release_attempts = release_claims
         for association in associated.values():
             _association_scope(association, self._entries)
         self._associations = associated
@@ -623,7 +641,7 @@ class CustodyJournal:
         record = _decode_prepared(encoded)
         marker_reserve = (0 if record.family in _RETENTION_ONLY_FAMILIES else
             _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
-        if (len(self._entries) >= self._maximum_records
+        if (len(self._entries) + len(self._release_attempts) >= self._maximum_records
                 or len(self._file_identities) >= 7 * self._maximum_records
                 or len(encoded) + marker_reserve
                     > self._quota - self._used_bytes - self._reserved_bytes):
@@ -703,7 +721,7 @@ class CustodyJournal:
             missing = tuple((digest, encoded) for digest, encoded in originals
                 if digest not in self._entries)
             required_bytes = sum(len(encoded) for _, encoded in missing) + len(association_encoded)
-            if (len(self._entries) + len(missing) > self._maximum_records
+            if (len(self._entries) + len(self._release_attempts) + len(missing) > self._maximum_records
                     or len(self._file_identities) + len(missing) + 1 > 7 * self._maximum_records
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete preparation capacity is exhausted")
@@ -784,7 +802,7 @@ class CustodyJournal:
                 raise
             missing = int(digest not in self._entries)
             required_bytes = missing * len(encoded) + len(marker)
-            if (len(self._entries) + missing > self._maximum_records
+            if (len(self._entries) + len(self._release_attempts) + missing > self._maximum_records
                     or len(self._file_identities) + missing + 1 > 7 * self._maximum_records
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete finalization retention capacity is exhausted")
@@ -1102,6 +1120,53 @@ class CustodyJournal:
                 record, _ = self._load(digest)
                 self._require_ready()
                 return record
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def claim_oidc_session_activation_release(self, *, client_authorization_digest,
+            request_identity, profile, server_bootstrap_digest, expected_outcome_digest):
+        """Burn this exact root client authorization before any private exchange.
+
+        The caller owns genuine original admission and current work metering.
+        No received frames or secret tokens are retained. Fresh root issuance,
+        never this marker, is required for another authorized exchange.
+        """
+        record, encoded = release_attempts.encode(
+            client_authorization_digest=client_authorization_digest,
+            request_identity=request_identity, profile=profile,
+            server_bootstrap_digest=server_bootstrap_digest,
+            expected_outcome_digest=expected_outcome_digest)
+        digest = record.client_authorization_digest
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest in self._release_attempts:
+                # A duplicate never succeeds, even if all metadata is exact.
+                # Recheck the retained identity without interpreting old source
+                # metadata as current authority or rewriting the claim.
+                try:
+                    name = _name(release_attempts.KIND, digest)
+                    retained, identity = self._read_file(name,
+                        maximum_bytes=release_attempts.MAX_RECORD_BYTES)
+                    if (identity != self._file_identities.get(name)
+                            or release_attempts.decode(retained) != self._release_attempts[digest]):
+                        raise CustodyJournalError("release claim changed after admitted recovery")
+                    self._require_ready()
+                except BaseException:
+                    self._io.poison()
+                    raise
+                raise CustodyJournalError("release client authorization was already claimed; repeat is forbidden")
+            if (len(self._entries) + len(self._release_attempts) >= self._maximum_records
+                    or len(self._file_identities) >= 7 * self._maximum_records
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal release claim capacity is exhausted")
+            try:
+                self._require_ready()
+                self._publish(release_attempts.KIND, digest, encoded)
+                self._used_bytes += len(encoded)
+                self._release_attempts[digest] = record
+                self._require_ready()
             except BaseException:
                 self._io.poison()
                 raise

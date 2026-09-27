@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1606" viewBox="0 0 1000 1606" role="img" aria-labelledby="title description">
   <title id="title">Source implementation: 34 of 46 parents landed; 12 open including F08. F08 has 19/26 leaves landed. Step 20 remains in progress, with a separate 16-unit detail view.</title>
-  <desc id="description">Six cards list all 46 stable parents: evidence 10/10, history 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. Parent total remains 34/46. F08 direct 3/6, protected 4/5, planning 5/5, cold admission 3/3, execution 6/7 and private replay 8/8 remain unchanged. Activation stays 19/26 landed, step 20 in progress and 6 other open. Step 20 retains 2/5 diagnostic groups; detail is 13/16 landed, 1 in progress and 2 other open. Rows 12 reservation/pending and 13 one-use SQL landed in bdaee24 after 4d4091c and dd460ba. Row 14 completion/recovery is IN PROGRESS with historical replay, custody and recovery libraries; cold service, state route and response verification remain open. Exact release and cold handoff also remain open. Group c is 11/12 landed, 1 in progress and 0 other open; its parent remains in progress. Authorization stays 12/12, grant detail 5/5 and SQL diagnostics 6/6. The linked ledger retains criteria and commit evidence. Nested counts are nonadditive. No plaintext release or current-session claim. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
+  <desc id="description">Six cards list all 46 stable parents: evidence 10/10, history 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. Parent total remains 34/46. F08 direct 3/6, protected 4/5, planning 5/5, cold admission 3/3, execution 6/7 and private replay 8/8 remain unchanged. Activation stays 19/26 landed, step 20 in progress and 6 other open. Step 20 has 3/5 diagnostic groups and 14/16 detail units landed, 0 in progress and 2 open. Row 14 completion/recovery has all six source components landed; group c is 12/12 landed. Row 15 exact committed-original release is NEXT/open, not active; row 16 cold handoff remains open. Authorization stays 12/12, grant detail 5/5 and SQL diagnostics 6/6. The linked ledger retains criteria and commit evidence. Nested counts are nonadditive. No plaintext release or current-session claim. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="1604" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="40" fill="#f8fafc" font-size="26" font-weight="700">Implementation, checkpoint by checkpoint</text>
@@ -216,7 +216,7 @@
         <rect x="204" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4b landed: encrypted-original helper, not durable custody</title></rect>
         <rect x="388" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4c landed: business effects</title></rect>
         <rect x="572" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4d landed: protected planning, 5 of 5 source pieces</title></rect>
-        <rect x="756" y="45" width="176" height="28" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4e in progress: 6/7 pieces landed; private replay 8/8. Step 20 groups stay 2/5; detail is 13/16 landed, 1 in progress and 2 other open. Rows 12–13 landed bdaee24. Group c is 11/12 landed, 1 in progress and 0 other open. Row 14 completion/recovery is IN PROGRESS; cold service, state route and response checks remain open, as do exact release and cold handoff. Authorization stays 12/12, grant detail 5/5 and SQL diagnostics 6/6. No plaintext release or current-session guarantee.</title></rect>
+        <rect x="756" y="45" width="176" height="28" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4e in progress: 6/7 pieces landed; private replay 8/8. Step 20 groups 3/5; detail 14/16 landed, 0 in progress and 2 open. Row 14 completion/recovery and its six source components landed; group c 12/12. Row 15 exact release NEXT/open, not active; row 16 cold handoff open. Authorization 12/12, grant detail 5/5 and SQL diagnostics 6/6 unchanged. No plaintext release or current-session guarantee.</title></rect>
       </g>
       <g text-anchor="middle" font-size="13" font-weight="700">
         <text x="108" y="64" fill="#0f172a">✓ a · Read proofs</text>
@@ -241,7 +241,7 @@
         <text x="660" y="136" fill="#0f172a">✓ d.4 · Configured owner</text>
         <text x="844" y="136" fill="#0f172a">✓ d.5 · Cold admission</text>
       </g>
-      <text x="20" y="169" fill="#94a3b8" font-size="13">19/26 · groups 2/5 · detail 13/16 + 1 in progress + 2 open · row 14 recovery IN PROGRESS</text>
+      <text x="20" y="169" fill="#94a3b8" font-size="13">19/26 · groups 3/5 · detail 14/16 + 0 active + 2 open · NEXT / OPEN 15 exact release</text>
     </g>
 
     <text x="24" y="1537" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>

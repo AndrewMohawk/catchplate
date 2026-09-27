@@ -37,8 +37,13 @@ sends nine bodies in fixed order: authorization, planning request3, planning
 response4 and before-vector. The three enrollment originals come only from the
 cold bootstrap, never the request. Lengths are bounded before allocation, one
 absolute request deadline covers framing, and trailing bytes or missing EOF
-deny. Transport returns unverified original grant bytes; the caller still needs
-genuine signature and scope admission. It does not retry or mint a success token.
+deny. Transport returns unverified original grant bytes. The separate
+[opt-in control-plane v3 caller](control-plane-registration-execution.md) now
+performs genuine local signature, original authorization, planning and vector
+admission through
+[`authority_registration_execution_response`](../serverware/authority_registration_execution_response.py)
+before returning those unchanged bytes. It does not retry or mint a success
+token; present operator/session permission must still precede the private call.
 
 The key admitted by this owner is the dedicated **grant-authorizer** key. The
 caller authorization key, planner key and evidence key remain distinct; no
@@ -136,8 +141,10 @@ The service has no durable one-use ledger. Producing a grant does not create a
 reservation, protected execution packet, attempt marker or database effect, and
 it does not authorize credential finalization. The separate current-root,
 complete-history, protected-custody, one-attempt, SQL and postcommit-completion
-requirements remain unchanged. Public-route integration, independently
-provisioned accounts/keys/bootstrap/listener, rollback protection, immutable
+requirements remain unchanged. The caller-side private orchestration returns
+an unpersisted raw10 original bundle, not a completed registration or durable
+grant journal. Present new-purpose caller admission, public-route/UI integration,
+independently provisioned accounts/keys/bootstrap/listener, rollback protection, immutable
 release admission and consolidated frozen-source verification remain open.
 
 Before the consolidated verification phase, coverage must exercise genuine

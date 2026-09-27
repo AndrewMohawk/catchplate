@@ -19,9 +19,15 @@ CONTROL_PLANE_CUSTODY_FD_MAX = 1023
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME = "SERVERWARE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v2"
 CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v2"
+CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v3"
+CONTROL_PLANE_ENROLLMENT_V3_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v3"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
 CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES = 4096
 CONTROL_PLANE_ENROLLMENT_KEY_NAME = "serverware-control-plane-enrollment-signing-key"
+CONTROL_PLANE_EXECUTION_SCHEMA = "serverware.controlPlaneRegistrationExecution/v1"
+CONTROL_PLANE_EXECUTION_KEY_NAME = "serverware-registration-execution-caller-key"
+CONTROL_PLANE_EXECUTION_KEY_FD = 203
+CONTROL_PLANE_EXECUTION_SOCKET = "/run/serverware/registration-execution/authorizer.sock"
 TRUSTED_HOST_LOCAL_WITNESS_STATE_PATH = (
     "/var/lib/serverware/authority-witness"
 )
@@ -437,8 +443,43 @@ def _material_identity(metadata):
         metadata.st_mtime_ns, metadata.st_ctime_ns)
 
 
-def _control_plane_enrollment_key_slot(descriptor: int) -> int | None:
-    """Project a delivery slot only; the child must verify root authorization."""
+def _control_plane_execution_key_slot(value, *, issuer_descriptor, bootstrap_descriptor):
+    """Closed v3 delivery projection, not signature or purpose admission."""
+    if value is None:
+        return None
+    if (type(value) is not dict or set(value) != {"schema", "executionCallerPrivateKeyFd",
+            "currentRootEnrollment", "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
+            or value["schema"] != CONTROL_PLANE_EXECUTION_SCHEMA
+            or type(value["executionCallerPrivateKeyFd"]) is not int
+            or value["executionCallerPrivateKeyFd"] != CONTROL_PLANE_EXECUTION_KEY_FD
+            or issuer_descriptor is None
+            or CONTROL_PLANE_EXECUTION_KEY_FD in (issuer_descriptor, bootstrap_descriptor)):
+        raise RuntimeError("registration execution caller key delivery scope is invalid")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    for name, maximum in (("currentRootEnrollment", 128 * 1024),
+            ("grantEnrollment", 16 * 1024), ("authorizationEnrollment", 16 * 1024)):
+        original = value[name]
+        if type(original) is not dict or set(original) != {"base64Url", "byteCount"}:
+            raise RuntimeError("registration execution enrollment record is not closed")
+        encoded, size = original["base64Url"], original["byteCount"]
+        if (type(size) is not int or not 2 <= size <= maximum or type(encoded) is not str
+                or len(encoded) != (4 * size + 2) // 3
+                or any(character not in alphabet for character in encoded)):
+            raise RuntimeError("registration execution enrollment original exceeds its delivery bound")
+    endpoint = value["authorizerEndpoint"]
+    if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds",
+            "listenerUid", "listenerGid"}
+            or endpoint["socketPath"] != CONTROL_PLANE_EXECUTION_SOCKET
+            or type(endpoint["requestTimeoutSeconds"]) is not int
+            or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
+            or any(type(endpoint[name]) is not int or endpoint[name] != 0
+                for name in ("listenerUid", "listenerGid"))):
+        raise RuntimeError("registration execution endpoint differs from its fixed delivery contract")
+    return CONTROL_PLANE_EXECUTION_KEY_FD
+
+
+def _control_plane_enrollment_key_slots(descriptor: int) -> tuple[int | None, int | None]:
+    """Project exact v2/v3 slots; only the child admits root authority and keys."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -455,13 +496,18 @@ def _control_plane_enrollment_key_slot(descriptor: int) -> int | None:
     try:
         value = json.loads(original)
         if (type(value) is not dict or set(value) != {"schema", "payload", "signatureBase64Url"}
-                or value["schema"] != CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA):
+                or value["schema"] not in (CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
+        is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
+        payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
+            "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
+        if is_v3:
+            payload_fields.add("registrationExecution")
         payload = value["payload"]
-        if (type(payload) is not dict or set(payload) != {"schema", "sourceRevision",
-                "configurationDigest", "configurationPayload", "generation",
-                "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
-                or payload["schema"] != CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA):
+        if (type(payload) is not dict or set(payload) != payload_fields
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V3_PAYLOAD_SCHEMA if is_v3
+                    else CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap payload is not closed")
         signature = value["signatureBase64Url"]
         alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -484,13 +530,20 @@ def _control_plane_enrollment_key_slot(descriptor: int) -> int | None:
         target = payload["issuerPrivateKeyFd"]
         if target is not None and (type(target) is not int or not 32 <= target <= 1023):
             raise RuntimeError("control-plane enrollment key descriptor is outside its exact range")
+        execution_target = (_control_plane_execution_key_slot(payload["registrationExecution"],
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 else None)
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:
             raise RuntimeError("control-plane enrollment bootstrap is not original canonical JSON")
     except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
         raise RuntimeError("control-plane enrollment bootstrap is invalid") from exc
-    return target
+    return target, execution_target
+
+
+def _control_plane_enrollment_key_slot(descriptor: int) -> int | None:
+    """Retain the existing evidence-issuer slot projection API."""
+    return _control_plane_enrollment_key_slots(descriptor)[0]
 
 
 def _open_control_plane_enrollment_key(bootstrap_descriptor: int, *,
@@ -502,8 +555,27 @@ def _open_control_plane_enrollment_key(bootstrap_descriptor: int, *,
     belong to the child; no inventory or key environment is synthesized here.
     """
     target = _control_plane_enrollment_key_slot(bootstrap_descriptor)
+    return _open_control_plane_purpose_key(bootstrap_descriptor, target=target,
+        source_name=CONTROL_PLANE_ENROLLMENT_KEY_NAME, occupied_descriptors=occupied_descriptors)
+
+
+def _open_control_plane_registration_execution_key(bootstrap_descriptor: int, *,
+        occupied_descriptors: set[int]) -> int | None:
+    """Deliver only the opt-in dedicated caller key; never infer its inventory."""
+    target = _control_plane_enrollment_key_slots(bootstrap_descriptor)[1]
+    return _open_control_plane_purpose_key(bootstrap_descriptor, target=target,
+        source_name=CONTROL_PLANE_EXECUTION_KEY_NAME, occupied_descriptors=occupied_descriptors)
+
+
+def _open_control_plane_purpose_key(bootstrap_descriptor: int, *, target,
+        source_name: str, occupied_descriptors: set[int]) -> int | None:
+    if source_name not in (CONTROL_PLANE_ENROLLMENT_KEY_NAME, CONTROL_PLANE_EXECUTION_KEY_NAME):
+        raise RuntimeError("control-plane private-key source is not a fixed purpose")
     if target is None:
         return None
+    if (type(target) is not int or not 32 <= target <= 1023 or target == bootstrap_descriptor
+            or source_name == CONTROL_PLANE_EXECUTION_KEY_NAME and target != CONTROL_PLANE_EXECUTION_KEY_FD):
+        raise RuntimeError("control-plane private-key target differs from its fixed purpose")
     if target in occupied_descriptors:
         raise RuntimeError("control-plane enrollment key descriptor is already assigned")
     owned: list[int] = []
@@ -525,7 +597,7 @@ def _open_control_plane_enrollment_key(bootstrap_descriptor: int, *,
             if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0
                     or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
                 raise RuntimeError("control-plane enrollment key ancestor is not root-owned nonwritable material")
-        key = _open_source(CONTROL_PLANE_ENROLLMENT_KEY_NAME, expected_owner_uid=0,
+        key = _open_source(source_name, expected_owner_uid=0,
             maximum_bytes=CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES,
             required_mode=0o400, directory_fd=parent)
         owned.append(key)
@@ -1258,6 +1330,10 @@ def _normal_main(role: str) -> int:
                 enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
             if enrollment_key is not None:
                 descriptors.append(enrollment_key)
+            execution_key = _open_control_plane_registration_execution_key(
+                enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
+            if execution_key is not None:
+                descriptors.append(execution_key)
             environment["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
             _drop_identity(role)
             os.execve(

@@ -284,6 +284,41 @@ class ControlPlaneCustodyClient:
         preparing._check_deadline(bound)
         return preparing._response_originals(result)
 
+    def prepare_registration_execution_plan(self, originals, *, deadline_epoch_ns,
+            work, deadline_ns=None):
+        """Obtain original planning request3/response4 and a complete vector.
+
+        The fixed verifier, not the browser, acquires and joins the vector.
+        Returned bytes are not current-root authority or an execution grant.
+        The separate caller/authorizer exchange must authenticate them again.
+        """
+        from serverware import authority_webauthn_registration_execution_caller as preparing
+        from serverware import authority_webauthn_registration_signer_response as verifying
+
+        held = preparing._request_originals(originals)
+        verifying.evidence.plan.contract._integer(deadline_epoch_ns, minimum=1)
+        expiry, inherited = deadline_epoch_ns, deadline_ns
+        if inherited is not None:
+            verifying.evidence.plan.contract._integer(inherited, minimum=1)
+        binding = _snapshot(self)
+        callback = verifying.evidence.production._callback
+        before = callback(work, time.monotonic_ns)
+        now = callback(work, lambda: _receipt_now(binding))
+        bound = min(before + binding.maximum_deadline_ns,
+            before + min(expiry, binding.attestation_interval[1]) - now)
+        if inherited is not None:
+            bound = min(bound, inherited)
+        preparing._check_deadline(bound)
+        result = callback(work, lambda: preparing._socket_request(binding.relay_path,
+            configuration_digest=binding.configuration_digest, deadline_epoch_ns=expiry,
+            originals=held, deadline_ns=bound, expected_peer_uid=binding.relay_uid,
+            expected_peer_gid=binding.relay_gid))
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("registration execution caller changed during preparation")
+        callback(work, lambda: _receipt_now(binding))
+        preparing._check_deadline(bound)
+        return preparing._response_originals(result)
+
     def prepare_registration_finalization(self, originals, *, sibling_challenge_ids,
             deadline_epoch_ns, work, deadline_ns=None):
         """Return opaque raw7 from original signer raw10 and bounded lookup hints.

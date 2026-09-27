@@ -2,9 +2,11 @@
 
 This source slice adds a separate, root-delegated caller permission for the
 fixed `webauthn.registration.evidence.admit` successor operation. It is a
-prerequisite for producing an execution grant, not a cold authorizer service,
-public registration route, reservation or database operation. The current tree
-is unbuilt and unexecuted.
+prerequisite for producing an execution grant, not a public registration route,
+reservation or database operation. Separate source now supplies a
+[cold authorizer](registration-execution-authorizer.md) and an opt-in
+[private control-plane caller path](control-plane-registration-execution.md).
+The current tree is unbuilt and unexecuted.
 
 ## Evidence signing is not execution permission
 
@@ -60,7 +62,7 @@ through the genuine original-input path before signing caller authorization.
 A supplied request dictionary, plan digest or successful-verification object
 cannot replace those originals.
 
-The actual authenticated caller owner must separately admit this new execution
+The actual authenticated application must separately admit this new execution
 purpose and the caller's present permission before invoking the producer.
 Possession of the old enrollment grant or evidence originals does not supply
 that permission. The return value is original signed authorization bytes, not
@@ -91,9 +93,13 @@ now has source for its own process owner, fixed four-FD delivery, private
 original-input transport and uninstalled packaging. It owns the dedicated
 grant-authorizer key, not the caller-authorization key. Existing cold enrollment
 and registration-evidence signer owners are not silently extended or given
-SQL authority. A protected caller-side owner and actual present caller admission
-for the new request-signing purpose remain separate requirements; no public
-registration route is activated by this composition.
+SQL authority. The opt-in control-plane enrollment bootstrap v3 now retains the
+separate caller key and three original enrollments, with private methods for
+authorization, one authorizer exchange and genuine local grant verification.
+V2 remains evidence-only. Actual present caller/new-purpose admission and public
+handler/UI orchestration remain separate requirements; no public registration
+route is activated by this composition. The returned raw10 grant bundle is
+in-memory only, not a durable grant journal or a one-use reservation.
 
 No reserve, current-root pending decision, custody packet, attempt marker or SQL
 write follows from issuing or verifying this authorization. The separate

@@ -1,0 +1,132 @@
+"""Private caller continuation for the separately enrolled execution purpose.
+
+Only the existing cold enrollment owner supplies configuration, original
+enrollments, endpoint and the NEW caller key. Real application authentication,
+current role/session/CSRF admission and consent to this purpose must precede
+issuance; old evidence-signing permission and original byte containers are not
+substitutes. Public custody-only routes do not invoke this continuation.
+
+One inherited work allowance and absolute deadline cover each call. Received
+grant originals undergo genuine local replay/signature/scope verification.
+Nothing here writes SQL, reserves a root, stores a one-use marker or finalizes
+a credential. No environment discovery, key fallback, retry or renewal exists.
+"""
+from __future__ import annotations
+
+import time
+
+from serverware import control_plane_enrollment_startup as startup
+from serverware import authority_registration_execution_authorization as authorization
+from serverware import authority_registration_execution_issuance as issuance
+from serverware import authority_registration_execution_response as receiving
+from serverware import authority_registration_execution_transport as transport
+from serverware import authority_webauthn_evidence_custody_configuration as configuration
+
+
+evidence, clock = issuance.evidence, issuance.clock
+
+
+def _scope(owner, *, deadline_epoch_ns, deadline_ns, work):
+    """Hold actual cold inputs; returned local settings are not a proof token."""
+    startup._require_pid()
+    if type(owner) is not startup._EnrollmentOwner:
+        raise startup.EnrollmentStartupError("execution caller requires the actual cold enrollment owner")
+    material, binding, private = owner._material, owner._binding, owner._execution_key
+    if material is None or material.execution is None or private is None:
+        raise startup.EnrollmentStartupError("separate registration execution permission is disabled")
+    execution = material.execution
+    if (material.issuer_policy is None or owner._private_key is None
+            or binding.caller_uid != 65532 or owner._execution_key_fd != execution.caller_private_key_fd
+            or material.configuration_digest != binding.configuration_digest):
+        raise startup.EnrollmentStartupError("registration execution cold scope differs")
+    shape = evidence.plan.contract
+    shape._integer(deadline_epoch_ns, minimum=1)
+    shape._integer(deadline_ns, minimum=1)
+    deadline, inherited = deadline_epoch_ns, deadline_ns
+    endpoint = execution.authorizer_endpoint
+    ledger = evidence.capture._SharedLedger(work)
+    common = {
+        "payload": issuance.configuration._ConfigurationCapture(ledger,
+            maximum_bytes=issuance.response.authority.MAX_REQUEST_BYTES).visit(material.configuration_payload),
+        "configuration_digest": material.configuration_digest,
+        "generation": evidence.capture._JSONCapture(ledger).visit(material.generation),
+        "runtime_role_identities": evidence.capture._JSONCapture(ledger,
+            maximum_bytes=8192).visit(material.runtime_role_identities),
+        "authorization_enrollment_bytes": execution.authorization_enrollment_bytes,
+        "current_root_enrollment_bytes": execution.current_root_enrollment_bytes,
+        "grant_enrollment_bytes": execution.grant_enrollment_bytes,
+        "root_public_key": binding.runtime_root_public_key,
+    }
+    startup._live(owner, work=work)
+    window = clock._open_on_work(deadline_epoch_ns=min(deadline, binding.attestation_interval[1]),
+        maximum_lifetime_ns=min(binding.maximum_deadline_ns,
+            int(endpoint[1] * 1_000_000_000), evidence.authority.VERIFIER_RESPONSE_MAX_AGE_NS),
+        maximum_clock_skew_ns=material.issuer_policy["maximumClockSkewNs"], work=work)
+    bound = min(window[4], inherited)
+    last_epoch, last_monotonic = window[0], window[2]
+
+    def live():
+        nonlocal last_epoch, last_monotonic
+        startup._live(owner, work=work)
+        if (owner._material is not material or owner._binding is not binding
+                or material.execution is not execution or owner._execution_key is not private):
+            raise startup.EnrollmentStartupError("registration execution caller changed during its operation")
+        now = clock._check_on_work(window, work=work)
+        monotonic = evidence.production._callback(work, time.monotonic_ns)
+        shape._integer(monotonic, minimum=1)
+        if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+            raise startup.EnrollmentStartupError("registration execution caller expired or its clocks reversed")
+        last_epoch, last_monotonic = now, monotonic
+
+    live()
+    return common, endpoint, private, window[3], bound, live
+
+
+def _authorize_on_owner(owner, *, request_originals, response_originals,
+        deadline_epoch_ns, deadline_ns, work):
+    """Sign the exact reconstructed request after real application admission."""
+    request_raw = issuance.response.wire._request_originals(request_originals)
+    response_raw = issuance.response.wire._response_originals(response_originals)
+    common, _endpoint, private, deadline, bound, live = _scope(owner,
+        deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work)
+    original = issuance._produce_on_configuration(**common,
+        request_originals=request_raw, response_originals=response_raw,
+        caller_private_key=private, deadline_epoch_ns=deadline, transport_deadline_ns=bound, work=work)
+    live()
+    return original
+
+
+def _request_on_owner(owner, *, authorization_bytes, request_originals,
+        response_originals, before_vector_bytes, deadline_epoch_ns, deadline_ns, work):
+    """Authenticate caller permission, exchange once, then admit original grant."""
+    if (type(request_originals) is not tuple or len(request_originals) != 3
+            or type(response_originals) is not tuple or len(response_originals) != 4):
+        raise startup.EnrollmentStartupError("execution caller requires original planning request3/response4")
+    originals = transport._originals((authorization_bytes, *request_originals,
+        *response_originals, before_vector_bytes), transport.REQUEST_LIMITS)
+    common, endpoint, _private, deadline, bound, live = _scope(owner,
+        deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work)
+    configured = configuration._capture_on_work(purpose="registration", payload=common["payload"],
+        configuration_digest=common["configuration_digest"], generation=common["generation"],
+        runtime_role_identities=common["runtime_role_identities"], work=work)
+    checked = authorization._verify_on_work(authorization_bytes=originals[0],
+        authorization_enrollment_bytes=common["authorization_enrollment_bytes"],
+        current_root_enrollment_bytes=common["current_root_enrollment_bytes"],
+        grant_enrollment_bytes=common["grant_enrollment_bytes"], root_public_key=common["root_public_key"],
+        configuration_digest=common["configuration_digest"], planner_public_key=configured.pins[1],
+        evidence_public_key=configured.pins[4], deadline_epoch_ns=deadline,
+        transport_deadline_ns=bound, work=work)
+    deadline, bound = min(deadline, checked.expires_at_epoch_ns), min(bound, checked.deadline_ns)
+    live()
+    # Actual socket calls and errors preserve the same allowance. Endpoint
+    # authority is from v3 root admission, never from a browser or returned plan.
+    returned = evidence.production._callback(work,
+        lambda: transport._socket_request(endpoint, originals=originals, deadline_ns=bound))
+    live()
+    grant = receiving._verify_on_configuration(**common, request_originals=originals[1:4],
+        response_originals=originals[4:8], before_vector_bytes=originals[8],
+        authorization_bytes=originals[0], grant_bytes=returned, deadline_epoch_ns=deadline,
+        transport_deadline_ns=bound, work=work)
+    live()
+    transport._check_deadline(bound)
+    return grant

@@ -196,6 +196,56 @@ def prepare_and_forward_registration_custody(originals):
         custody, "registration", prepared, deadline_ns=window[4])
 
 
+def prepare_registration_execution_grant(originals):
+    """Private authenticated-app action; return original grant-bundle raw10.
+
+    The real operator/OIDC handler must separately admit the present caller and
+    new execution-request purpose before this call. Existing public custody-only
+    routes do not invoke it. An original-input container is not that permission.
+    Order: original caller authorization, planning request3, response4, complete
+    before-vector, original verified grant. This neither journals nor forwards
+    execution, reserves a current root or reports registration success.
+    """
+    from serverware import control_plane_custody_client as custody_client
+    from serverware import control_plane_custody_startup as custody_startup
+    from serverware import control_plane_enrollment_startup as enrollment_startup
+    from serverware import authority_webauthn_enrollment_issuer as issuer
+    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+    work = _ValidationWork(QueryReadValidationLimits())
+    callback = issuer.evidence.production._callback
+    enrollment = callback(work, enrollment_startup.require_started)
+    if (type(enrollment) is not enrollment_startup._EnrollmentOwner
+            or not callback(work, lambda: enrollment.execution_enabled)):
+        raise RegistrationPreparationError("registration execution purpose is not cold-enabled")
+    material = enrollment._material
+    exchange, custody, window = _prepare_registration_exchange_on_work(originals, work)
+    clock = issuer.authorization.clock
+    clock._check_on_work(window, work=work)
+    authorization = enrollment_startup._EnrollmentOwner._authorize_registration_execution(
+        enrollment, request_originals=exchange[0], response_originals=exchange[1],
+        deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+    work.charge(input_bytes=sum(len(raw) for raw in exchange[0])
+        + sum(len(raw) for raw in exchange[1]))
+    planning = custody_client.ControlPlaneCustodyClient.prepare_registration_execution_plan(
+        custody, exchange[0] + exchange[1], deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+    clock._check_on_work(window, work=work)
+    grant = enrollment_startup._EnrollmentOwner._request_registration_execution_grant(
+        enrollment, authorization_bytes=authorization, request_originals=planning[:3],
+        response_originals=planning[3:7], before_vector_bytes=planning[7],
+        deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+    if (callback(work, enrollment_startup.require_started) is not enrollment
+            or enrollment._material is not material
+            or callback(work, custody_startup.require_started) is not custody):
+        raise RegistrationPreparationError("registration execution cold owner changed")
+    clock._check_on_work(window, work=work)
+    total = len(authorization) + sum(len(raw) for raw in planning) + len(grant)
+    if total > issuer.authority.MAX_RESULT_BYTES:
+        raise RegistrationPreparationError("registration execution originals exceed the source aggregate")
+    work.charge(input_bytes=total)
+    return (authorization, *planning, grant)
+
+
 def prepare_registration_finalization(*, request_originals, response_originals):
     """Replay retained signer originals, observe hints, prepare and retain raw7.
 

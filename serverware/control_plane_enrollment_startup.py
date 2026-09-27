@@ -118,6 +118,9 @@ def _continuity(owner):
     if (owner._key_fd is not None
             and _descriptor_identity(owner._key_fd, private=True) != owner._key_identity):
         raise EnrollmentStartupError("enrollment issuer key custody changed")
+    if (owner._execution_key_fd is not None and _descriptor_identity(
+            owner._execution_key_fd, private=True) != owner._execution_key_identity):
+        raise EnrollmentStartupError("registration execution caller key custody changed")
 
 
 def _response_spki(path, uid, work=None):
@@ -169,7 +172,8 @@ def _live(owner, *, work=None):
 
 class _EnrollmentOwner:
     __slots__ = ("_material", "_private_key", "_custody", "_binding", "_bootstrap_fd",
-        "_bootstrap_identity", "_key_fd", "_key_identity", "_response_path", "_response_pin", "_closed")
+        "_bootstrap_identity", "_key_fd", "_key_identity", "_response_path", "_response_pin", "_closed",
+        "_execution_key", "_execution_key_fd", "_execution_key_identity")
 
     def __init__(self):
         raise EnrollmentStartupError("enrollment owner requires fixed cold startup")
@@ -178,6 +182,40 @@ class _EnrollmentOwner:
     def enabled(self):
         _live(self)
         return self._private_key is not None
+
+    @property
+    def execution_enabled(self):
+        _live(self)
+        return self._execution_key is not None
+
+    def _authorize_registration_execution(self, *, request_originals, response_originals,
+            deadline_epoch_ns, deadline_ns, work):
+        """Private continuation after real present caller/purpose admission.
+
+        Original evidence replay establishes request identity, not actor/session
+        permission. The authenticated application must admit that separately.
+        No existing public evidence-only preparation route invokes this method.
+        """
+        from serverware import control_plane_registration_execution as execution
+
+        _require_pid()
+        with _LOCK:
+            return execution._authorize_on_owner(self, request_originals=request_originals,
+                response_originals=response_originals, deadline_epoch_ns=deadline_epoch_ns,
+                deadline_ns=deadline_ns, work=work)
+
+    def _request_registration_execution_grant(self, *, authorization_bytes,
+            request_originals, response_originals, before_vector_bytes,
+            deadline_epoch_ns, deadline_ns, work):
+        """Exchange once and genuinely admit the original grant; never execute."""
+        from serverware import control_plane_registration_execution as execution
+
+        _require_pid()
+        with _LOCK:
+            return execution._request_on_owner(self, authorization_bytes=authorization_bytes,
+                request_originals=request_originals, response_originals=response_originals,
+                before_vector_bytes=before_vector_bytes, deadline_epoch_ns=deadline_epoch_ns,
+                deadline_ns=deadline_ns, work=work)
 
     def request_registration_evidence(self, originals, *, source_originals,
             verified_at, deadline_epoch_ns, work, deadline_ns=None):
@@ -447,6 +485,7 @@ def initialize_from_environment():
             key_fd, policy, public_key = (material.issuer_private_key_fd,
                 material.issuer_policy, material.issuer_public_key)
             key, key_identity, response_path, response_pin = None, None, None, None
+            execution_key, execution_fd, execution_identity = None, None, None
             if policy is None:
                 if key_fd is not None or public_key is not None:
                     raise EnrollmentStartupError("disabled enrollment bootstrap contains issuer key material")
@@ -476,10 +515,33 @@ def initialize_from_environment():
                 response_pin = _response_spki(response_path, identity[0], work)
                 if response_pin == issuer_pin:
                     raise EnrollmentStartupError("enrollment issuer and actual HTTP response key must differ")
+            if material.execution is not None:
+                execution = material.execution
+                execution_fd = execution.caller_private_key_fd
+                if (identity != (65532, 65532) or policy is None or key is None
+                        or execution_fd != 203 or execution_fd in (descriptor, key_fd)
+                        or execution_fd not in inventory):
+                    raise EnrollmentStartupError("execution caller key requires its distinct original admitted slot")
+                execution_raw, execution_identity = _read_original(execution_fd, private=True)
+                if (not execution_raw.startswith(b"-----BEGIN PRIVATE KEY-----\n")
+                        or not execution_raw.endswith(b"-----END PRIVATE KEY-----\n")):
+                    raise EnrollmentStartupError("execution caller key must be unencrypted PKCS8 PEM")
+                work.charge(input_bytes=len(execution_raw))
+                execution_key = issuer.evidence.production._callback(work,
+                    lambda: serialization.load_pem_private_key(execution_raw, password=None))
+                del execution_raw
+                if not isinstance(execution_key, Ed25519PrivateKey):
+                    raise EnrollmentStartupError("execution caller key must be Ed25519")
+                issuer.evidence.keys._pair_on_work(execution_key, execution.caller_public_key, work)
+                execution_pin = issuer.evidence.keys._spki_on_work(execution.caller_public_key, work)
+                if execution_pin in (issuer_pin, response_pin):
+                    raise EnrollmentStartupError("execution caller key reuses an enrollment or HTTP response key")
             if (material.configuration_digest != digest or _environment() != namespace
                     or (os.geteuid(), os.getegid()) != identity
                     or _descriptor_identity(descriptor, private=False) != original_identity
                     or key_fd is not None and _descriptor_identity(key_fd, private=True) != key_identity
+                    or execution_fd is not None and _descriptor_identity(
+                        execution_fd, private=True) != execution_identity
                     or custody.require_started() is not custody_owner
                     or client._snapshot(custody_owner) is not binding):
                 raise EnrollmentStartupError("enrollment startup inputs changed during admission")
@@ -489,6 +551,8 @@ def initialize_from_environment():
             owner._custody, owner._binding = custody_owner, binding
             owner._bootstrap_fd, owner._bootstrap_identity = descriptor, original_identity
             owner._key_fd, owner._key_identity, owner._closed = key_fd, key_identity, False
+            owner._execution_key, owner._execution_key_fd = execution_key, execution_fd
+            owner._execution_key_identity = execution_identity
             owner._response_path, owner._response_pin = response_path, response_pin
             _owner, _state = owner, "started"
             return owner
@@ -532,3 +596,4 @@ def close():
         if owner is not None:
             owner._closed = True
             owner._private_key, owner._material = None, None
+            owner._execution_key = None

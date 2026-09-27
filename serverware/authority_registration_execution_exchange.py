@@ -9,8 +9,8 @@ roots and inputs; the planner-signed response binds that request and exact raw3.
 Only genuine live replay admits its three bounded planner time observations.
 
 The dedicated caller authorization is separately verified by the actual grant
-producer and joined to the replayed request before signing. Its original issue
-and expiry remain intact. All phases share the caller's cumulative work and
+producer or receiving verifier and joined to the replayed request. Its original
+issue and expiry remain intact. All phases share the caller's cumulative work and
 original deadlines. The complete before vector is checked by genuine downstream
 replay, not promoted to current-root authority. No socket, DSN, SQL, reservation,
 one-use store, deployment, trusted clock or new work allowance is supplied here.
@@ -18,6 +18,7 @@ one-use store, deployment, trusted clock or new work allowance is supplied here.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from serverware import authority_registration_execution_authorization as authorization
 from serverware import authority_registration_execution_grant_production as producing
@@ -38,6 +39,25 @@ class RegistrationExecutionExchangeError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _AdmittedExchange:
+    """Private same-call observations; no public entrypoint accepts this type."""
+
+    configured: object
+    originals: tuple
+    before: bytes
+    authorization: bytes
+    authorization_enrollment: bytes
+    grant_enrollment: bytes
+    current_enrollment: bytes
+    root: object
+    configuration_digest: str
+    history: dict
+    deadline_epoch_ns: int
+    deadline_ns: int
+    live: object
+
+
 def _produce_on_configuration(*, payload, configuration_digest, generation,
         runtime_role_identities, request_originals, response_originals,
         before_vector_bytes, authorization_bytes, authorization_enrollment_bytes,
@@ -48,6 +68,41 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
     The request tuple is (control, context, inputs); the response tuple is
     (control, plan envelope, inputs, evaluation context). The cold owner retains
     all independent pins. The returned bytes are a grant, not execution success.
+    """
+    signer = authorizer_private_key
+    grants.authorization._private(signer)
+    admitted = _admit_on_configuration(payload=payload, configuration_digest=configuration_digest,
+        generation=generation, runtime_role_identities=runtime_role_identities,
+        request_originals=request_originals, response_originals=response_originals,
+        before_vector_bytes=before_vector_bytes, authorization_bytes=authorization_bytes,
+        authorization_enrollment_bytes=authorization_enrollment_bytes,
+        grant_enrollment_bytes=grant_enrollment_bytes,
+        current_root_enrollment_bytes=current_root_enrollment_bytes, root_public_key=root_public_key,
+        deadline_epoch_ns=deadline_epoch_ns, work=work, transport_deadline_ns=transport_deadline_ns)
+    # Genuine plan/vector replay and original request authorization remain in
+    # the producer. Private same-call metadata cannot replace either gate.
+    result = producing._produce_on_work(originals=admitted.originals, expectations=admitted.history,
+        planner_public_key=admitted.configured.pins[1], evidence_public_key=admitted.configured.pins[4],
+        before_vector_bytes=admitted.before, authorization_bytes=admitted.authorization,
+        authorization_enrollment_bytes=admitted.authorization_enrollment,
+        grant_enrollment_bytes=admitted.grant_enrollment,
+        current_root_enrollment_bytes=admitted.current_enrollment, root_public_key=admitted.root,
+        authorizer_private_key=signer, configuration_digest=admitted.configuration_digest,
+        deadline_epoch_ns=admitted.deadline_epoch_ns, work=work, transport_deadline_ns=admitted.deadline_ns)
+    admitted.live()
+    return result
+
+
+def _admit_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, request_originals, response_originals,
+        before_vector_bytes, authorization_bytes, authorization_enrollment_bytes,
+        grant_enrollment_bytes, current_root_enrollment_bytes, root_public_key,
+        deadline_epoch_ns, work, transport_deadline_ns=None, _returned_grant_bytes=None):
+    """Authenticate original planning traffic for the fixed producer or receiver.
+
+    A received original grant is included in the aggregate byte inventory, not
+    admitted here. Both callers themselves perform the genuine request-purpose
+    and grant gates; no incoming successful exchange carrier is accepted.
     """
     ledger = evidence.capture._SharedLedger(work)
     if type(request_originals) is not tuple or len(request_originals) != 3:
@@ -67,14 +122,18 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
         grants.MAX_ENROLLMENT_BYTES, "successor grant enrollment")
     current_enrollment = grants.authorization._original(current_root_enrollment_bytes,
         grants.authorization.MAX_ENROLLMENT_BYTES, "current-root enrollment")
+    extra_bytes = 0
+    if _returned_grant_bytes is not None:
+        held_grant = grants.authorization._original(_returned_grant_bytes,
+            grants.MAX_GRANT_BYTES, "returned registration execution grant")
+        extra_bytes = len(held_grant)
     # Count both transmitted input occurrences in the source inventory, even
     # though their byte equality is mandatory after response authentication.
     if sum(len(raw) for raw in (*request_raw, *response_raw, before_raw, caller_raw,
-            caller_enrollment, grant_enrollment, current_enrollment)) > MAX_ORIGINAL_BYTES:
+            caller_enrollment, grant_enrollment, current_enrollment)) + extra_bytes > MAX_ORIGINAL_BYTES:
         raise RegistrationExecutionExchangeError("registration execution originals exceed the source aggregate")
-    root, signer, digest = root_public_key, authorizer_private_key, configuration_digest
+    root, digest = root_public_key, configuration_digest
     grants.authorization._public(root)
-    grants.authorization._private(signer)
     shape = evidence.plan.contract
     shape._digest(digest)
     shape._integer(deadline_epoch_ns, minimum=1)
@@ -123,6 +182,7 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
         if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
             raise RegistrationExecutionExchangeError("registration exchange expired or its original clocks reversed")
         last_epoch, last_monotonic = now, monotonic
+        return now
 
     live()
     # A verified request alone does not authenticate returned historical bytes.
@@ -150,15 +210,5 @@ def _produce_on_configuration(*, payload, configuration_digest, generation,
     evidence.plan._same(enrollment.payload["generationDigest"], configured.generation_digest,
         work, "registration grant enrollment differs from the active planning generation")
     live()
-    # This raw-original composition repeats genuine plan/vector replay and
-    # verifies the dedicated caller request before joining its exact request
-    # and operation IDs. No same-call successful carrier replaces those gates.
-    result = producing._produce_on_work(originals=raw3, expectations=history,
-        planner_public_key=configured.pins[1], evidence_public_key=configured.pins[4],
-        before_vector_bytes=before_raw, authorization_bytes=caller_raw,
-        authorization_enrollment_bytes=caller_enrollment, grant_enrollment_bytes=grant_enrollment,
-        current_root_enrollment_bytes=current_enrollment, root_public_key=root,
-        authorizer_private_key=signer, configuration_digest=digest,
-        deadline_epoch_ns=effective_expiry, work=work, transport_deadline_ns=bound)
-    live()
-    return result
+    return _AdmittedExchange(configured, raw3, before_raw, caller_raw, caller_enrollment,
+        grant_enrollment, current_enrollment, root, digest, history, effective_expiry, bound, live)

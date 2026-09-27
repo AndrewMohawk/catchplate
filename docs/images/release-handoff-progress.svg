@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="566" viewBox="0 0 1000 566" role="img" aria-labelledby="release-handoff-title release-handoff-description">
+  <title id="release-handoff-title">Remaining exact release and private handoff: row 15 has 0 of 6 diagnostics landed; row 16 has 0 of 5 landed. All 11 are open, none active.</title>
+  <desc id="release-handoff-description">Two lanes explain the remaining token-release rows without adding project milestones. Row 15 exact committed-original release has six open diagnostics: F08.4e.7.d.1 fresh private release authorization is NEXT, queued and not active; d.2 committed-original packet, commit and effects verification; d.3 exact completion/state target and ciphertext proof into the distinct release purpose, not a second required replay; d.4 durable exact outcome; d.5 guarded token opening; d.6 uncertain-outcome recovery. Row 16 cold private handoff has five open diagnostics: F08.4e.7.e.1 root bootstrap and key delivery; e.2 isolated cold service; e.3 bounded private transport; e.4 independent response verifier; e.5 authorized private handoff. Every task has a visible name and written status as well as a colored segment, and links to its ledger criterion. These eleven nested diagnostics are not eleven new project milestones or effort estimates. Parent token release remains 14/16 source-landed; production acceptance remains 0/6 verified. Private release authorization is not later public or portal permission. Source only, unbuilt, unexecuted and unprovisioned; no plaintext release, deployed service or current-session claim.</desc>
+  <rect x="1" y="1" width="998" height="564" rx="16" fill="#0f172a" stroke="#475569"/>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="24" y="35" fill="#f8fafc" font-size="25" font-weight="700">Exact release and private handoff · remaining source work</text>
+    <text x="24" y="60" fill="#94a3b8" font-size="14">11 nested diagnostics · not 11 new project milestones · all open, none active</text>
+
+    <g aria-label="Row 15: exact committed-original release, zero of six landed">
+      <rect x="12" y="78" width="976" height="190" rx="10" fill="#172033" stroke="#475569"/>
+      <text x="24" y="101" fill="#f8fafc" font-size="19" font-weight="700">15 · Exact committed-original release</text>
+      <text x="976" y="101" text-anchor="end" fill="#cbd5e1" font-size="15">0 / 6 landed · 0 active · 6 open</text>
+      <g font-size="16" font-weight="700" text-anchor="middle">
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="24" y="112" width="152" height="34" rx="5" fill="#172554" stroke="#60a5fa" stroke-width="2"><title>15.1 · F08.4e.7.d.1 · Fresh private release authorization · NEXT / OPEN, not active</title></rect>
+          <text x="100" y="135" fill="#bfdbfe">N 15.1</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="184" y="112" width="152" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>15.2 · F08.4e.7.d.2 · Committed-original verification · OPEN</title></rect>
+          <text x="260" y="135" fill="#e2e8f0">○ 15.2</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="344" y="112" width="152" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>15.3 · F08.4e.7.d.3 · Completion-to-release proof · OPEN</title></rect>
+          <text x="420" y="135" fill="#e2e8f0">○ 15.3</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="504" y="112" width="152" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>15.4 · F08.4e.7.d.4 · Durable exact outcome · OPEN</title></rect>
+          <text x="580" y="135" fill="#e2e8f0">○ 15.4</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="664" y="112" width="152" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>15.5 · F08.4e.7.d.5 · Guarded token opening · OPEN</title></rect>
+          <text x="740" y="135" fill="#e2e8f0">○ 15.5</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="824" y="112" width="152" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>15.6 · F08.4e.7.d.6 · Uncertain-outcome recovery · OPEN</title></rect>
+          <text x="900" y="135" fill="#e2e8f0">○ 15.6</text>
+        </a>
+      </g>
+      <a href="../production-status.md#exact-release-and-handoff-detail">
+        <g fill="#f8fafc" font-size="15" font-weight="600">
+          <text x="24" y="174">15.1 Fresh release authorization</text>
+          <text x="344" y="174">15.2 Committed-original verification</text>
+          <text x="664" y="174">15.3 Completion-to-release proof</text>
+          <text x="24" y="228">15.4 Durable exact outcome</text>
+          <text x="344" y="228">15.5 Guarded token opening</text>
+          <text x="664" y="228">15.6 Uncertain-outcome recovery</text>
+        </g>
+        <g fill="#cbd5e1" font-size="12">
+          <text x="24" y="194" fill="#93c5fd">NEXT / OPEN · F08.4e.7.d.1</text>
+          <text x="344" y="194">OPEN · F08.4e.7.d.2</text>
+          <text x="664" y="194">OPEN · F08.4e.7.d.3</text>
+          <text x="24" y="248">OPEN · F08.4e.7.d.4</text>
+          <text x="344" y="248">OPEN · F08.4e.7.d.5</text>
+          <text x="664" y="248">OPEN · F08.4e.7.d.6</text>
+        </g>
+      </a>
+    </g>
+
+    <g aria-label="Row 16: cold private handoff, zero of five landed">
+      <rect x="12" y="280" width="976" height="190" rx="10" fill="#172033" stroke="#475569"/>
+      <text x="24" y="303" fill="#f8fafc" font-size="19" font-weight="700">16 · Cold private handoff</text>
+      <text x="976" y="303" text-anchor="end" fill="#cbd5e1" font-size="15">0 / 5 landed · 0 active · 5 open</text>
+      <g font-size="16" font-weight="700" text-anchor="middle">
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="24" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.1 · F08.4e.7.e.1 · Root bootstrap and key delivery · OPEN</title></rect>
+          <text x="116" y="337" fill="#e2e8f0">○ 16.1</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="216" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.2 · F08.4e.7.e.2 · Isolated cold service · OPEN</title></rect>
+          <text x="308" y="337" fill="#e2e8f0">○ 16.2</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="408" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.3 · F08.4e.7.e.3 · Bounded private transport · OPEN</title></rect>
+          <text x="500" y="337" fill="#e2e8f0">○ 16.3</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="600" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.4 · F08.4e.7.e.4 · Independent response verifier · OPEN</title></rect>
+          <text x="692" y="337" fill="#e2e8f0">○ 16.4</text>
+        </a>
+        <a href="../production-status.md#exact-release-and-handoff-detail">
+          <rect x="792" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.5 · F08.4e.7.e.5 · Authorized private handoff · OPEN</title></rect>
+          <text x="884" y="337" fill="#e2e8f0">○ 16.5</text>
+        </a>
+      </g>
+      <a href="../production-status.md#exact-release-and-handoff-detail">
+        <g fill="#f8fafc" font-size="15" font-weight="600">
+          <text x="24" y="376">16.1 Root bootstrap and key delivery</text>
+          <text x="344" y="376">16.2 Isolated cold service</text>
+          <text x="664" y="376">16.3 Bounded private transport</text>
+          <text x="24" y="430">16.4 Independent response verifier</text>
+          <text x="344" y="430">16.5 Authorized private handoff</text>
+        </g>
+        <g fill="#cbd5e1" font-size="12">
+          <text x="24" y="396">OPEN · F08.4e.7.e.1</text>
+          <text x="344" y="396">OPEN · F08.4e.7.e.2</text>
+          <text x="664" y="396">OPEN · F08.4e.7.e.3</text>
+          <text x="24" y="450">OPEN · F08.4e.7.e.4</text>
+          <text x="344" y="450">OPEN · F08.4e.7.e.5</text>
+        </g>
+      </a>
+    </g>
+
+    <text x="24" y="497" fill="#93c5fd" font-size="13">N NEXT = queued / open, not active</text>
+    <text x="390" y="497" fill="#cbd5e1" font-size="13">○ OPEN = remaining source work</text>
+    <text x="24" y="523" fill="#94a3b8" font-size="13">Nonadditive · parent token release 14/16 source-landed · production 0/6 verified · criteria linked</text>
+    <text x="24" y="548" fill="#94a3b8" font-size="12">Source only · unbuilt / unexecuted / unprovisioned · private handoff is not public or portal permission</text>
+  </g>
+</svg>

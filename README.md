@@ -49,23 +49,23 @@ defines each scope and its dependencies. Open items can already contain partial 
 
 [![Protected token release: units 01–14 landed; 15 exact committed-original token release is NEXT/open and 16 cold release response and handoff remains open. Each segment has a task name and source status. These are source checkpoints, not runtime token release or production readiness.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
-| Unit | Still to finish | Status |
-| --- | --- | --- |
-| 15 | Release a token only from the exact authorized, committed originals | Next / open |
-| 16 | Connect the cold release service, verified response and authorized handoff | Open |
+**Zoom into the two unfinished units — 11 named substeps, all still open:**
 
-**Latest completed step — completion and recovery: 6/6 source substeps landed.**
+[![Exact release and private handoff: 15.1 fresh release authorization is NEXT/open; 15.2 committed-original verification, 15.3 completion-to-release proof, 15.4 durable exact outcome, 15.5 guarded token opening and 15.6 uncertain-outcome recovery are open. Cold handoff: 16.1 root bootstrap and key delivery, 16.2 isolated cold service, 16.3 bounded private transport, 16.4 independent response verifier and 16.5 authorized private handoff are open. Zero of eleven nested source components landed; parent progress remains 14/16, not production readiness.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
 
-[![Completion and recovery detail: historical original replay, completion-purpose custody, commit observation/durable recovery, cold resources/service, completion state/lookup route and authenticated private response are all source-landed. Six of six substeps landed, closing row 14 in source. Exact token release and cold release handoff remain open. No runtime or production readiness claim.](docs/images/consume-completion-progress.svg)](docs/production-status.md#consume-completion-and-recovery-detail)
+Each segment has a stable ID and a [specific completion criterion](docs/production-status.md#exact-release-and-handoff-detail).
+As a substep lands, its segment turns green and gains commit evidence; the
+enclosing unit closes only when all its criteria are met. This subdivision adds
+no new scope or completed work: token release stays **14/16**, not 14/27.
 
-The [latest implementation](https://github.com/example/private-deployment)
-connects the cold completion service, dedicated state route, and genuine private response verification.
-**Next:** exact committed-original token release, then the cold release service and handoff.
-Each segment has a [completion criterion and commit evidence](docs/production-status.md#consume-completion-and-recovery-detail).
-These six substeps belong to unit 14; they do not add six project milestones.
+**Most recently completed:** unit 14, completion and recovery — **6/6 source
+substeps**, with the cold service, dedicated state route and private response
+verification [committed in 3d8cb87](https://github.com/example/private-deployment).
 
 <details>
-<summary>Completed source detail: reservation/SQL 6/6, authorization 12/12 and grant issuance 5/5</summary>
+<summary>Completed source detail: completion/recovery 6/6, reservation/SQL 6/6, authorization 12/12 and grant issuance 5/5</summary>
+
+[![Completion and recovery detail: historical original replay, completion-purpose custody, commit observation/durable recovery, cold resources/service, completion state/lookup route and authenticated private response are all source-landed. Six of six substeps landed, closing row 14 in source. Exact token release and cold release handoff remain open. No runtime or production readiness claim.](docs/images/consume-completion-progress.svg)](docs/production-status.md#consume-completion-and-recovery-detail)
 
 [![Reservation and SQL detail: reserve originals/durable ACK, cold reserver, independent current-pending receiver, protected packet/issuer, one-use SQL/durable attempt, and cold SQL service/response are all source-landed. These six diagnostic components subdivide units 12–13. No runtime or production credit.](docs/images/consume-sql-progress.svg)](docs/production-status.md#consume-reservation-and-sql-detail)
 
@@ -73,7 +73,8 @@ These six substeps belong to unit 14; they do not add six project milestones.
 
 [![Consume-grant issuance detail inside A11: wire/signature contract, caller/root admission and replay-derived claims, grant production, independent grant verification, and source integration with inventory and consumer joins all landed in 4b421e2. Five landed, zero in progress, zero open. These nested components are not additional parent completions; source only, not tested or running.](docs/images/consume-grant-progress.svg)](docs/production-status.md#consume-grant-issuance-detail)
 
-The [six reservation/SQL components](docs/production-status.md#consume-reservation-and-sql-detail),
+The [six completion/recovery components](docs/production-status.md#consume-completion-and-recovery-detail),
+[six reservation/SQL components](docs/production-status.md#consume-reservation-and-sql-detail),
 [12-substep checklist](docs/production-status.md#consume-authorization-substeps)
 and [five-part A11 detail](docs/production-status.md#consume-grant-issuance-detail)
 retain stable IDs, closure criteria and commit evidence. These are nested source
@@ -119,7 +120,7 @@ release is claimed for the new protected path.
 [Open the full tracker →](docs/production-status.md) for checkpoint evidence and
 the [six separate production gates](docs/production-status.md#remaining-production-gates).
 
-<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg, implementation-progress.svg, token-release-progress.svg, consume-authorization-progress.svg, consume-grant-progress.svg, consume-sql-progress.svg and consume-completion-progress.svg together. Keep unfinished work visible and older completed detail collapsible. Activation has 26 fixed named F08 steps; token release has 16 units within step 20. Row 11 has twelve authorization substeps A01-A12; A11 has five fixed components. Rows 12 and 13 have six diagnostic components, displayed as 12.1-12.3 and 13.1-13.3. Row 14 has six diagnostic components, displayed as 14.1-14.6. No children or grouping parents are additive. Every segment needs a visible number, name, status and linked criterion/evidence; distinguish blue NEXT/open from amber active work. Green means commit-backed landed source, never uncommitted work; gray means other open scope. Make denominator changes explicit and keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update README counts/descriptions, production-status.md evidence/checklists and affected progress SVGs together. Keep unfinished work visible and completed detail collapsible. Activation has 26 fixed named F08 steps; token release has 16 units within step 20. Row 11 has authorization substeps A01-A12; A11 has five components. Rows 12/13 have six diagnostics (12.1-12.3, 13.1-13.3); row 14 has six (14.1-14.6). release-handoff-progress.svg exposes eleven inside rows 15/16 (15.1-15.6, 16.1-16.5), not additional units. No children or grouping parents are additive. Every segment needs a visible ID, name, status and linked criterion/evidence; blue NEXT/open is queued, amber is partial work. Green requires the actual implementation commit. Explain denominator changes; keep source and production acceptance separate; reopen invalidated gates. -->
 
 ## Why Serverware?
 

@@ -31,8 +31,11 @@ No historical/bundle AES key, signer, TLS credential, SQL connection or state
 client is admitted by this resource profile.
 
 The process starts with real/effective/saved root UID/GID and the exact eight
-source environment entries. Any socket-activation environment must be consumed
-by a future launcher before this call. All five descriptors become
+source environment entries. The [fixed root delivery entrypoint](oidc-session-activation-release-delivery.md)
+consumes the socket-activation environment before this call. Its private
+`_intake_from_delivery_on_work` continuation retains the actual pre-I/O delivery
+guard alongside intake's own genuine original admission and clock guards;
+it cannot replace or widen them. All five descriptors become
 close-on-exec, supplemental groups are cleared and UID/GID are permanently
 dropped to `65502` in the same PID. The inherited no-new-privileges condition
 and absence of effective/permitted/inheritable/ambient capabilities are checked;

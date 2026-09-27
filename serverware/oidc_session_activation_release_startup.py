@@ -1,23 +1,24 @@
 """Construct one root-selected private release owner from actual cold resources.
 
-No listener is accepted and no request or response is transported here. The
-original construction work/window survives resource intake and permanent drop,
-then bounds one original-only operation and its still-held private result.
+The original construction work/window survives resource intake and permanent
+drop, one owned accept and one original-only operation. Framing belongs to the
+separate finite service; accepted sockets never widen the descriptor inventory.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import select
 import stat
 import threading
 import time
 
 from serverware import oidc_session_activation_release_bootstrap as bootstrap
 from serverware import oidc_session_activation_release_resources as resources
+from serverware import oidc_session_activation_release_connection as connections
 from serverware import authority_oidc_session_activation_release_custody as custody
 from serverware import authority_oidc_session_activation_release_recovery as recovery
 from serverware import authority_oidc_session_activation_release_outcome_store as stores
-from serverware import current_root_state_entrypoint as fd_inventory
 from serverware.authority_query_read_work import _ValidationWork
 
 
@@ -107,7 +108,7 @@ def _owner_configuration(owner, profile):
     _fail("release startup selected owner differs from its root profile")
 
 
-def _directory(configured):
+def _directory(configured, connection):
     journal = configured.journal
     if (type(journal) is not stores.storage.CurrentRootJournal
             or configured.store._journal is not journal
@@ -119,7 +120,15 @@ def _directory(configured):
             or (value.st_dev, value.st_ino, value.st_uid, value.st_gid) != configured.directory
             or os.get_inheritable(configured.journal_fd)):
         _fail("release startup owned journal no longer matches root pins")
-    fd_inventory._require_inventory((*_INHERITED, configured.journal_fd))
+    expected = (*_INHERITED, configured.journal_fd)
+    if connection is not None:
+        if type(connection) is not connections._AcceptedConnection:
+            _fail("release startup requires its actual accepted connection owner")
+        accepted = connections._AcceptedConnection._check(connection)
+        if accepted.descriptor in expected:
+            _fail("release accepted connection overlaps an inherited resource")
+        expected = (*expected, accepted.descriptor)
+    connections._require_inventory(expected)
 
 
 def _hold_originals(*, proof_bytes, proof_enrollment_bytes, intent_bytes,
@@ -152,6 +161,10 @@ class _StartedRelease:
     _lock: object
     _closed: bool
     _spent: bool
+    _accept_spent: bool
+    _connection: connections._AcceptedConnection | None
+    _connection_seal: connections._AcceptedConnection | None
+    _cleanup_failed: bool
     _last_epoch: int
     _last_monotonic: int
 
@@ -163,6 +176,7 @@ class _StartedRelease:
         if (type(self) is not _StartedRelease or self._closed or self._pid != os.getpid()
                 or type(self._lock) is not _LOCK_TYPE or type(configured) is not _Configuration
                 or configured is not self._seal or configured.source_revision != bootstrap.authority.SOURCE_REVISION
+                or self._connection is not self._connection_seal
                 or type(self._lifetime) is not tuple or self._lifetime is not self._lifetime_seal):
             _fail("release startup is closed, changed or belongs to another process")
         if (resources._Resources._snapshot_configuration(configured.resources) is not configured.resource_configuration
@@ -182,7 +196,8 @@ class _StartedRelease:
         work, window, bound = self._lifetime
         self._epoch(resources._Resources._check_on_work(configured.resources, work=work))
         self._epoch(configured.role_live())
-        production._callback(work, lambda: _directory(configured))
+        work.charge(input_bytes=4096)
+        production._callback(work, lambda: _directory(configured, self._connection))
         self._epoch(clock._check_on_work(window, work=work))
         monotonic = production._callback(work, time.monotonic_ns)
         shape._integer(monotonic, minimum=1)
@@ -229,14 +244,101 @@ class _StartedRelease:
 
     def _poison_close(self):
         configured = self._configured
+        connection = self._connection
+        failed = self._cleanup_failed
         object.__setattr__(self, "_closed", True)
         object.__setattr__(self, "_spent", True)
+        object.__setattr__(self, "_accept_spent", True)
+        object.__setattr__(self, "_connection", None)
+        object.__setattr__(self, "_connection_seal", None)
         object.__setattr__(self, "_configured", None)
         object.__setattr__(self, "_seal", None)
         _state("closed")
+        if connection is not None:
+            try:
+                connections._AcceptedConnection.close(connection)
+            except BaseException:
+                failed = True
         if type(configured) is _Configuration:
-            return _close_owned(configured.owner, configured.store, configured.resources)
-        return True
+            failed = not _close_owned(configured.owner, configured.store, configured.resources) or failed
+        object.__setattr__(self, "_cleanup_failed", failed)
+        return not failed
+
+    def request_profile(self):
+        """Return the genuinely root-selected grammar under the current guard."""
+        self.processing_context()
+        return self._identity().profile
+
+    def accept_on_work(self):
+        """Wait and own exactly one native connection before any request I/O."""
+        lock = self._lock
+        if type(lock) is not _LOCK_TYPE or not lock.acquire(blocking=False):
+            _fail("release startup is already in use")
+        try:
+            self._current()
+            if self._accept_spent or self._spent or self._connection is not None:
+                _fail("release startup cannot accept a second exchange")
+            object.__setattr__(self, "_accept_spent", True)
+            configured = self._identity()
+            work = self._lifetime[0]
+            while True:
+                self._current()
+                remaining = (self._lifetime[2] - self._last_monotonic) / 1_000_000_000
+                if remaining <= 0:
+                    _fail("release startup original accept allowance expired")
+                work.charge(input_bytes=64)
+                ready, _writable, _exceptional = production._callback(work,
+                    lambda: select.select((configured.listener_fd,), (), (), min(remaining, 0.1)))
+                self._current()
+                if ready:
+                    break
+
+            def acquire():
+                connection = connections._accept(configured.listener_fd)
+                # Claim inside the native callback, before any suffix can fail.
+                object.__setattr__(self, "_connection", connection)
+                object.__setattr__(self, "_connection_seal", connection)
+
+            work.charge(input_bytes=4096)
+            self._current()
+            production._callback(work, acquire)
+            self._current()
+            return self._connection._configured.connection
+        except BaseException:
+            self._poison_close()
+            raise
+        finally:
+            lock.release()
+
+    def close_connection(self):
+        """Close only the real owned connection, then restore the exact inventory."""
+        lock = self._lock
+        if type(lock) is not _LOCK_TYPE or not lock.acquire(blocking=False):
+            _fail("release startup cannot close a connection during another operation")
+        try:
+            self._current()
+            connection = self._connection
+            if type(connection) is not connections._AcceptedConnection:
+                _fail("release startup has no accepted connection to close")
+            work = self._lifetime[0]
+
+            def close_owned():
+                try:
+                    connections._AcceptedConnection.close(connection)
+                except BaseException:
+                    object.__setattr__(self, "_cleanup_failed", True)
+                    raise
+                finally:
+                    object.__setattr__(self, "_connection", None)
+                    object.__setattr__(self, "_connection_seal", None)
+
+            production._callback(work, close_owned)
+            self._current()
+        except BaseException:
+            self._poison_close()
+            raise
+        finally:
+            lock.release()
 
     def processing_context(self):
         """Checked original allowance, never a replacement request window."""
@@ -328,6 +430,8 @@ class _StartedRelease:
         if type(self) is not _StartedRelease or self._pid != os.getpid():
             _fail("release startup close belongs to another process")
         if self._closed:
+            if self._cleanup_failed:
+                _fail("release startup cleanup remained uncertain; no retry is permitted")
             return
         lock = self._lock
         if type(lock) is not _LOCK_TYPE or not lock.acquire(blocking=False):
@@ -432,6 +536,8 @@ def _construct(resource_owner):
         for name, value in (("_configured", configured), ("_seal", configured),
                 ("_lifetime", lifetime), ("_lifetime_seal", lifetime), ("_pid", os.getpid()),
                 ("_lock", threading.Lock()), ("_closed", False), ("_spent", False),
+                ("_accept_spent", False), ("_connection", None), ("_connection_seal", None),
+                ("_cleanup_failed", False),
                 ("_last_epoch", last_epoch), ("_last_monotonic", last_monotonic)):
             object.__setattr__(started, name, value)
         started._narrow_from_actual(store._lifetime)

@@ -1113,6 +1113,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_release_bootstrap.py \
 	serverware/oidc_session_activation_release_resources.py \
 	serverware/oidc_session_activation_release_startup.py \
+	serverware/oidc_session_activation_release_connection.py \
+	serverware/oidc_session_activation_release_transport.py \
+	serverware/oidc_session_activation_release_entrypoint.py \
+	serverware/oidc_session_activation_release_launcher.py \
+	serverware/oidc_session_activation_release_runner.py \
+	serverware/oidc_session_activation_release_service.py \
 	serverware/authority_oidc_session_activation_release_custody.py \
 	serverware/authority_oidc_session_activation_delivery_reads.py \
 	serverware/authority_transition_oidc_session_activation_delivery.py \
@@ -3170,6 +3176,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_release_bootstrap.py \
 				serverware/oidc_session_activation_release_resources.py \
 				serverware/oidc_session_activation_release_startup.py \
+				serverware/oidc_session_activation_release_connection.py \
+				serverware/oidc_session_activation_release_transport.py \
+				serverware/oidc_session_activation_release_entrypoint.py \
+				serverware/oidc_session_activation_release_launcher.py \
+				serverware/oidc_session_activation_release_runner.py \
+				serverware/oidc_session_activation_release_service.py \
 				serverware/authority_oidc_session_activation_release_custody.py \
 				serverware/authority_oidc_session_activation_delivery_reads.py \
 				serverware/authority_transition_oidc_session_activation_delivery.py \

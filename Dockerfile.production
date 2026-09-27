@@ -132,6 +132,7 @@ COPY --from=verified-production-source /source/serverware/oidc_session_activatio
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_sql_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_completion_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_launcher.py
 COPY --from=verified-production-source /source/serverware /runtime/app/serverware
 COPY --from=verified-production-source /source/scripts /runtime/app/scripts
 COPY --from=verified-production-source /source/schemas /runtime/app/schemas
@@ -179,6 +180,8 @@ COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-sessi
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-completion.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-completion.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-completion.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-completion.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-completion.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-completion.service.in
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-token-release.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-token-release.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-token-release.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-token-release.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.socket /runtime/app/ops/systemd/serverware-policy-custody@.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.service.in /runtime/app/ops/systemd/serverware-policy-custody@.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /runtime/app/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d
@@ -212,6 +215,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_sql_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_delivery_completion_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_release_launcher.py \
     && chmod 0755 /runtime/custody-trust \
     && chmod 0750 /runtime/gate-materials \
     && find /runtime/app/ops/policy-custody /runtime/app/ops/systemd -type d -exec chmod 0555 {} + \

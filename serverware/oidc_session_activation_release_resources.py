@@ -310,12 +310,41 @@ class _Resources:
 
 def _intake_on_work(*, work, live_window, transport_deadline_ns):
     """Take fixed inherited resources; admit first, then permanently drop."""
+    return _intake_originals_on_work(work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, delivery_current=None)
+
+
+def _intake_from_delivery_on_work(*, work, live_window, transport_deadline_ns,
+        delivery_current):
+    """Retain the actual root delivery guard; it can only further restrict use."""
+    if not callable(delivery_current):
+        _fail("release delivery continuation requires its original current guard")
+    return _intake_originals_on_work(work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, delivery_current=delivery_current)
+
+
+def _intake_originals_on_work(*, work, live_window, transport_deadline_ns,
+        delivery_current):
     bootstrap.capture._SharedLedger(work)
     window = bootstrap.clock._validate(live_window)
     bootstrap.shape._integer(transport_deadline_ns, minimum=1)
     bound = min(window[4], transport_deadline_ns)
     _process(root=True)
-    _window, original_current = bootstrap.delivery._window(window, bound, work)
+    _window, intake_current = bootstrap.delivery._window(window, bound, work)
+    last_epoch = window[0]
+
+    def original_current():
+        nonlocal last_epoch
+        first = last_epoch if delivery_current is None else delivery_current()
+        bootstrap.shape._integer(first, minimum=1)
+        if first < last_epoch:
+            _fail("release clock reversed across root delivery and resource intake")
+        observed = intake_current()
+        if observed < first:
+            _fail("release resource clock precedes its original root delivery observation")
+        last_epoch = observed
+        return observed
+
     owned, result = {}, None
     try:
         original_current()

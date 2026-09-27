@@ -45,14 +45,15 @@ defines each scope and its dependencies. Open items can already contain partial 
 
 ### Protected token release: remaining source work
 
-**11/16 units landed · 0 in progress · 5 open.**
+**11/16 units landed · 1 in progress · 4 other open.**
 
-[![Protected token release: units 01–11 landed, zero in progress and five open. Row 12 reservation and pending admission is NEXT/open, not active; rows 13 one-use protected consume SQL, 14 durable completion and recovery, 15 exact committed-original token release and 16 cold release response and handoff are open. Row 11's authorization substeps are 12/12 landed and its A11 issuance detail is 5/5 landed. Source counts only; no runtime token release or production claim.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![Protected token release: units 01–11 landed, row 12 reservation and pending admission in progress, and four other units open: one-use protected consume SQL, durable completion and recovery, exact committed-original token release, and cold release response and handoff. Row 11's authorization substeps are 12/12 landed and its A11 issuance detail is 5/5 landed. Source counts only; no runtime token release or production claim.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
-Five remain: **reservation/pending admission (NEXT/open)**, one-use consume SQL,
+Five remain: **reservation/pending admission (in progress)**, one-use consume SQL,
 durable completion/recovery, exact committed-original release, and cold response/handoff.
-The [cold grant service](https://github.com/example/private-deployment)
-closes row 11 in source; no runtime grant or service is demonstrated.
+The [reservation source batch](https://github.com/example/private-deployment)
+lands its libraries and bootstrap; cold reserver delivery/startup and the cold SQL
+pending consumer remain. No runtime grant, reservation or service is demonstrated.
 
 <details>
 <summary>Completed source detail: authorization 12/12 and grant issuance 5/5</summary>
@@ -86,7 +87,7 @@ are still open. The full activation workflow remains **19/26 landed**.
 
 **OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 11 landed, zero in progress and five open. Row 11's authorization substeps are 12/12 landed and A11 issuance is 5/5 landed. Row 12 consume reservation/pending admission is next and open, not active. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 11 landed, row 12 consume reservation/pending admission in progress and four other open. Row 11's authorization substeps are 12/12 landed and A11 issuance is 5/5 landed. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).

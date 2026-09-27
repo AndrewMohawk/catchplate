@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="444" viewBox="0 0 1000 444" role="img" aria-labelledby="grant-title grant-description">
   <title id="grant-title">Inside A11 consume-grant issuance: all 5 source substeps landed, 0 in progress, 0 open.</title>
-  <desc id="grant-description">Five named source substeps inside A11, not new milestones; stable tracker IDs F08.4e.7.c.9.11.1 through F08.4e.7.c.9.11.5. All five are source-landed in 4b421e2d26777b904ebe807fcd9dce367a8826f6: A11.1 wire and signature contract, A11.2 caller/root admission and derived claims, A11.3 grant producer, A11.4 independent grant verifier and A11.5 source integration and consumer join. Five landed, none in progress and none open within A11. No test or runtime credit is awarded. A12 cold consume-grant service, isolated signer and root-controlled key/FD delivery are source-landed in 8ac2374000de874efb1ededa1a65037d5460b18d. Row 11 is landed with 12/12 substeps landed, 0 in progress and 0 open. Token release is 11/16 landed, 0 in progress and 5 open; reservation/pending row 12 is NEXT/OPEN, not active work. Activation remains 19/26, project 34/46 and production acceptance 0/6 verified. Nested counts are nonadditive, not effort or readiness percentages. Source only: unbuilt and unexecuted.</desc>
+  <desc id="grant-description">Five named source substeps inside A11, not new milestones; stable tracker IDs F08.4e.7.c.9.11.1 through F08.4e.7.c.9.11.5. All five are source-landed in 4b421e2d26777b904ebe807fcd9dce367a8826f6: A11.1 wire and signature contract, A11.2 caller/root admission and derived claims, A11.3 grant producer, A11.4 independent grant verifier and A11.5 source integration and consumer join. Five landed, none in progress and none open within A11. No test or runtime credit is awarded. A12 cold consume-grant service, isolated signer and root-controlled key/FD delivery are source-landed in 8ac2374000de874efb1ededa1a65037d5460b18d. Row 11 is landed with 12/12 substeps landed, 0 in progress and 0 open. Token release is 11/16 landed, 1 in progress and 4 other open. Reservation/pending row 12 is IN PROGRESS: foundations are committed in 4d4091c72543477823ff4031bfac60e03d79b925, but cold reserver OS/startup and the actual cold SQL pending consumer remain unfinished. That commit is partial evidence, not whole-unit closure. Activation remains 19/26, project 34/46 and production acceptance 0/6 verified. Nested counts are nonadditive, not effort or readiness percentages. Source only: unbuilt and unexecuted.</desc>
   <rect x="1" y="1" width="998" height="442" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">Inside A11 · Consume-grant issuance and verification</text>
@@ -18,7 +18,7 @@
       <text x="116" y="137">A11.1</text><text x="308" y="137">A11.2</text><text x="500" y="137">A11.3</text><text x="692" y="137">A11.4</text><text x="884" y="137">A11.5</text>
     </g>
     <text x="24" y="178" fill="#6ee7b7" font-size="13">✓ LANDED = committed source</text>
-    <text x="530" y="178" fill="#93c5fd" font-size="13">NEXT / OPEN: row 12 reservation / pending</text>
+    <text x="530" y="178" fill="#fde68a" font-size="13">Row 12 IN PROGRESS · 4d4091c partial</text>
     <g fill="#f8fafc" font-size="16" font-weight="600">
       <text x="24" y="212">A11.1 · Wire / signature contract</text>
       <text x="24" y="252">A11.2 · Caller/root admission and derived claims</text>
@@ -33,7 +33,8 @@
       <text x="575" y="332">✓ LANDED · 4b421e2</text>
       <text x="575" y="372">✓ LANDED · 4b421e2</text>
     </g>
-    <text x="24" y="410" fill="#94a3b8" font-size="13">Nonadditive · row 11 12/12 LANDED · token release 11/16 (0 in progress, 5 open) · activation 19/26 · project 34/46</text>
+    <text x="24" y="391" fill="#fde68a" font-size="13">Row 12 left: cold reserver OS/startup + actual cold SQL pending consumer · no whole-unit closure</text>
+    <text x="24" y="410" fill="#94a3b8" font-size="13">Nonadditive · row 11 12/12 LANDED · token release 11/16 (1 in progress, 4 other open) · activation 19/26 · project 34/46</text>
     <text x="24" y="432" fill="#94a3b8" font-size="13">Source only · unbuilt / unexecuted · production 0/6 verified · A12 cold grant service LANDED · 8ac2374</text>
   </g>
 </svg>

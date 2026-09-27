@@ -1,5 +1,3 @@
-> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
-
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -27,8 +25,9 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 activation (1), workload/native integration (3), and providers/operations (7).
 The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
 names each scope. Landed source does not imply current executability: the
-[shared execution replay integration](docs/production-status.md#current-integration-boundary)
-still fails closed pending activation support.
+[shared execution replay inventory](docs/production-status.md#current-integration-boundary)
+now includes activation in committed source; dedicated receiving key delivery and
+execution-role composition remain open.
 
 <details>
 <summary>All 46 source checkpoints and the nested milestone bars</summary>
@@ -40,7 +39,7 @@ still fails closed pending activation support.
 **Current work: OIDC session activation — 14/26 detailed steps landed; 12 unfinished (1 in progress, 11 other open).**
 ✓ Landed · → In progress · NEXT Open and next · — Open.
 
-[![OIDC activation: 26 named source steps, 14 landed and 12 unfinished. Step 14 encrypted execution bundle is landed; step 15 private activation replay and custody integration is in progress; step 16 execution authorization grant is next and open. Remaining steps separately track reservation, protected SQL, completion, token release, public permissions and dispatch, recovery, portal actions, fresh permission and session confirmation. Source-only, not production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: 14 of 26 tracked steps landed; step 15 private replay/custody is in progress and step 16 execution authorization grant is next. Inside step 15, six of eight source components are landed: original replay, first-exact storage, sender export, receiving bootstrap, process-bound receiving owner and generic frames/window forwarding. Receiving key/FD delivery and dedicated role wiring are open. These eight components are not added to the 26 steps. Source-only; production acceptance remains 0/6.](docs/images/activation-progress.svg)](docs/production-status.md#private-replay-detail-f084e2)
 
 The previous three broad remaining segments are now **13 smaller tasks**—no
 completed work was lost or new product scope added. Each segment maps to a
@@ -48,11 +47,10 @@ completed work was lost or new product scope added. Each segment maps to a
 Grouping milestones are not counted twice; these 26 steps all belong to F08.
 Counts are not effort percentages or an ETA.
 
-Within **F08.4e.2 · Private replay/custody integration**, still in progress:
-
-- **Completed source:** encrypted bundle/candidate preparation, bound journal read and genuine receiving replay — [918581b](https://github.com/example/private-deployment).
-- **Also landed:** first-exact storage ([07ca0fc](https://github.com/example/private-deployment)) and [root-admitted sender custody/private export](docs/oidc-session-activation-execution-export.md), including the encrypted planner response — [6be6dfc](https://github.com/example/private-deployment).
-- **Current / next integration:** independently admitted **receiving** execution custody and coherent generic grant/reserve/pending/packet/SQL framing. F08.4e.2 remains open; historical recovery, public permission and token delivery are separate work.
+Inside **step 15 · Private replay/custody**, **6/8 source components are landed
+and 2 open**. The named detail above and its
+[evidence ledger](docs/production-status.md#private-replay-detail-f084e2) show
+what has changed without adding eight tasks to the fixed 26-step total.
 
 Execution authorization is the next milestone after this integration; reservation,
 one-use SQL, completion, token delivery and separate public/portal flows follow.
@@ -64,7 +62,7 @@ services are not provisioned.
 [Open the full tracker →](docs/production-status.md) for checkpoint evidence and
 the [six separate production gates](docs/production-status.md#remaining-production-gates).
 
-<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg and implementation-progress.svg together. The active bar counts deepest named F08 leaves exactly once, excluding grouping parents; document any inventory/denominator change. Every segment needs a visible number, named status and linked evidence. NEXT is open, not an active or completed claim. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg and implementation-progress.svg together. The active bar counts 26 fixed named F08 steps once, excluding grouping parents; diagnostic detail inside a step is not additive. Document any inventory/denominator change. Every segment needs a visible number, named status and linked evidence. NEXT is open, not an active or completed claim. Child counts do not change parent totals. Keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

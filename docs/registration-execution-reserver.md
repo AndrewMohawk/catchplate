@@ -156,6 +156,9 @@ scope v2 and independent predecessor pins; nested v1 and public preparation
 behavior stay unchanged. Returned acknowledgment is not a current-head lease.
 Protected SQL issuance/execution, completion and credential finalization still
 require their separate authorities and actual owners.
+The source [registration SQL bridge](registration-execution-sql.md) provides
+that issuer/executor composition only with independently current pending scope;
+this reserver and its public reserve callers do not activate it.
 
 Genuine prepare-and-retain now preserves signer request8/response2 and commits
 their [local association with the grant](control-plane-custody-journal.md#associated-registration-preparation)

@@ -197,3 +197,7 @@ The source now provides the explicit public reserve action, not a complete
 public execution workflow. Action-time current-head authority, protected SQL,
 completion and separate credential finalization remain separate and are not
 activated here. No production acceptance gate is closed.
+
+The separate [registration SQL bridge](registration-execution-sql.md) now
+composes actual protected issuer/executor owners from original raw10/raw3 and
+independently current pending scope. These public reserve routes do not call it.

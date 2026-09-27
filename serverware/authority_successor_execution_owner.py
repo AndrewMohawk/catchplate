@@ -300,6 +300,12 @@ class SuccessorExecutionIssuer:
         object.__setattr__(self, "_configuration", configured)
         object.__setattr__(self, "_pid", os.getpid())
 
+    def _snapshot_configuration(self):
+        """Hold actual cold inputs across a composed original-only request."""
+        if type(self) is not SuccessorExecutionIssuer or os.getpid() != self._pid:
+            raise SuccessorExecutionOwnerError("successor issuance requires its actual process-bound owner")
+        return _configuration(self._configuration, authority.SUCCESSOR_ISSUER_ROLE)
+
     def issue(self, *, operation, originals, expectations, planner_public_key,
             operation_public_key, enrollment_bytes, root_public_key,
             reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes,
@@ -307,9 +313,7 @@ class SuccessorExecutionIssuer:
             expected_database_id, expected_generation_digest, expected_pending_sequence,
             expected_pending_head_digest, expected_fence, live_window, work,
             transport_deadline_ns=None):
-        if type(self) is not SuccessorExecutionIssuer or os.getpid() != self._pid:
-            raise SuccessorExecutionOwnerError("successor issuance requires its actual process-bound owner")
-        configured = _configuration(self._configuration, authority.SUCCESSOR_ISSUER_ROLE)
+        configured = SuccessorExecutionIssuer._snapshot_configuration(self)
         window, bound = _window(live_window, transport_deadline_ns)
         prepared = packet._prepare_on_work(operation=operation, originals=originals, expectations=expectations,
             planner_public_key=planner_public_key, operation_public_key=operation_public_key,
@@ -352,8 +356,12 @@ class SuccessorExecutionExecutor:
         object.__setattr__(self, "_attempts", attempt_owner)
         object.__setattr__(self, "_pid", os.getpid())
 
-    def execute(self, *, pending_decision_digest, packet_digest, live_window, work,
-            transport_deadline_ns=None):
+    def _snapshot_configuration(self):
+        """Require the actual process, catalog pin and ready attempt owner.
+
+        This observation does not claim an attempt or create a checkpoint.
+        Execution still performs its own durable claim before opening SQL.
+        """
         if type(self) is not SuccessorExecutionExecutor or os.getpid() != self._pid:
             raise SuccessorExecutionOwnerError("successor execution requires its actual process-bound owner")
         configured = _configuration(self._configuration, authority.SUCCESSOR_EXECUTOR_ROLE)
@@ -361,6 +369,12 @@ class SuccessorExecutionExecutor:
         if (type(owner) is not attempts.SuccessorExecutionAttempts
                 or owner.structure_manifest_digest != configured[7]):
             raise SuccessorExecutionOwnerError("successor execution attempt owner changed")
+        return configured
+
+    def execute(self, *, pending_decision_digest, packet_digest, live_window, work,
+            transport_deadline_ns=None):
+        configured = SuccessorExecutionExecutor._snapshot_configuration(self)
+        owner = self._attempts
         evidence.capture._SharedLedger(work)
         authorization.shape._digest(pending_decision_digest)
         authorization.shape._digest(packet_digest)

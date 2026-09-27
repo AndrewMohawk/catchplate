@@ -20,6 +20,7 @@ No private key, signing, grant consumption, store, socket or new work is used.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from serverware import authority_revocation_configuration as configuration
@@ -104,12 +105,15 @@ def _finalization_request_on_work(arguments, envelope_bytes, work):
 
 
 def _verify_on_configuration_core(*, finalization, sibling_challenge_ids, execution=False,
+        handoff_subject=False,
         payload, configuration_digest, generation, runtime_role_identities,
         request_originals, response_originals, work):
     """One genuine replay; only the fixed output derivation differs."""
     ledger = evidence.capture._SharedLedger(work)
     if (type(finalization) is not bool or type(execution) is not bool
-            or execution and finalization or type(sibling_challenge_ids) is not list
+            or type(handoff_subject) is not bool
+            or execution and finalization or handoff_subject and (execution or finalization)
+            or type(sibling_challenge_ids) is not list
             or len(sibling_challenge_ids) > production.registration.MAX_SIBLINGS
             or not finalization and sibling_challenge_ids
             or any(type(value) is not str or not 1 <= len(value) <= 4096
@@ -271,7 +275,7 @@ def _verify_on_configuration_core(*, finalization, sibling_challenge_ids, execut
         source_request.MAX_CONTEXT_BYTES, source_request.MAX_CONTEXT_NODES)
     evidence.capability._canonical(request_bytes, request, ledger,
         authority.MAX_REQUEST_BYTES, source_request.MAX_CONTEXT_NODES)
-    if not execution:
+    if not execution and not handoff_subject:
         return request, returned_inputs
 
     # The dedicated execution-request issuer needs the actual configured keys
@@ -283,6 +287,36 @@ def _verify_on_configuration_core(*, finalization, sibling_challenge_ids, execut
     inherited_deadline = min(grant_window[4], source_window[4])
     if original_expires <= original_issued:
         raise WebAuthnRegistrationSignerResponseError("execution request original intervals do not intersect")
+    if handoff_subject:
+        # These scalars are projected only after the SAME complete source,
+        # enrollment, ceremony, attestation and evidence replay regenerated the
+        # request above. Neither a local association nor an unsigned payload
+        # can choose a user/session or the request to which it belongs.
+        subject = {"userId": grant_context["userId"],
+            "challengeId": grant_context["registrationChallengeId"],
+            "sessionId": grant_context["oidcSessionId"],
+            "mode": grant_context["expectedAuthorization"]["mode"],
+            "requestDigest": request["requestDigest"], "operationId": request["operationId"]}
+        last_epoch = now
+        last_monotonic = evidence.production._callback(work, time.monotonic_ns)
+        evidence.plan.contract._integer(last_monotonic, minimum=1)
+
+        def live():
+            nonlocal last_epoch, last_monotonic
+            current = _fresh(**freshness)
+            evidence._fresh(evidence_timing, current, evidence_age, evidence_skew)
+            monotonic = evidence.production._callback(work, time.monotonic_ns)
+            evidence.plan.contract._integer(monotonic, minimum=1)
+            if (current < last_epoch or monotonic < last_monotonic
+                    or current >= original_expires or monotonic >= inherited_deadline):
+                raise WebAuthnRegistrationSignerResponseError(
+                    "registration subject originals expired or their clocks reversed")
+            last_epoch, last_monotonic = current, monotonic
+            return current
+
+        live()
+        return subject, original_expires, inherited_deadline, live
+
     custody = admission.configuration._capture_on_work(purpose="registration",
         payload=owned_payload, configuration_digest=digest, generation=owned_generation,
         runtime_role_identities=owned_runtime, work=work)
@@ -328,6 +362,21 @@ def _verify_execution_request_on_configuration(*, payload, configuration_digest,
     No successful replay object is accepted as input to an issuance API.
     """
     return _verify_on_configuration_core(finalization=False, execution=True,
+        sibling_challenge_ids=[], payload=payload, configuration_digest=configuration_digest,
+        generation=generation, runtime_role_identities=runtime_role_identities,
+        request_originals=request_originals, response_originals=response_originals, work=work)
+
+
+def _verify_handoff_subject_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, request_originals, response_originals, work):
+    """Return same-replay subject data and its unchanged live-only bounds.
+
+    Private output only: no API accepts this tuple as ownership or permission.
+    The retained handoff inspector must additionally authenticate the actual
+    execution grant/planning exchange and join its request to this replay.
+    Existing pair, execution-issuance and finalization outputs are unchanged.
+    """
+    return _verify_on_configuration_core(finalization=False, handoff_subject=True,
         sibling_challenge_ids=[], payload=payload, configuration_digest=configuration_digest,
         generation=generation, runtime_role_identities=runtime_role_identities,
         request_originals=request_originals, response_originals=response_originals, work=work)

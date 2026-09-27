@@ -203,7 +203,7 @@ class _EnrollmentOwner:
             and execution.sql_endpoint is not None and execution.completion_endpoint is not None
             and execution.current_pending is not None and execution.completion_packet_digest is not None)
 
-    def _execute_retained_registration(self, *, local_digest,
+    def _execute_retained_registration(self, *, local_digest, expected_user_id, expected_session_id,
             deadline_epoch_ns, deadline_ns, work):
         """Private one-use dispatch after separate present-caller authorization."""
         from serverware import control_plane_registration_handoff as handoff
@@ -211,9 +211,10 @@ class _EnrollmentOwner:
         _require_pid()
         with _LOCK:
             return handoff._execute_on_owner(self, local_digest=local_digest,
+                expected_user_id=expected_user_id, expected_session_id=expected_session_id,
                 deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work)
 
-    def _request_retained_registration_completion(self, *, local_digest,
+    def _request_retained_registration_completion(self, *, local_digest, expected_user_id, expected_session_id,
             deadline_epoch_ns, deadline_ns, work):
         """Private live-original completion request, never historical recovery."""
         from serverware import control_plane_registration_handoff as handoff
@@ -221,6 +222,7 @@ class _EnrollmentOwner:
         _require_pid()
         with _LOCK:
             return handoff._complete_on_owner(self, local_digest=local_digest,
+                expected_user_id=expected_user_id, expected_session_id=expected_session_id,
                 deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work)
 
     def _authorize_registration_execution(self, *, request_originals, response_originals,

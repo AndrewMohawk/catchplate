@@ -108,9 +108,10 @@ particular, response-derived pins cannot supply a missing independent checkpoint
 
 The [private retained-original caller](control-plane-registration-handoff.md)
 now composes actual transport, this verifier and durable outcome association
-while original caller/grant authorization remains live. Historical caller
-recovery, present-purpose public admission and any public action remain separate
-work. This receiver does not activate public execution,
+while original caller/grant authorization remains live. Separate
+[public actions](public-registration-handoff.md) now perform present-purpose and
+ownership admission in source. Historical caller recovery remains separate
+work. This receiver does not itself authorize a public action,
 credential finalization or session/workload enrollment. Finalization still
 requires its own genuine committed-evidence and exact signer-original joins.
 No production acceptance gate is closed.

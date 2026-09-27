@@ -162,6 +162,9 @@ def validate_control_plane_configuration() -> None:
         required_actions.add("webauthn.registration.execution.prepare")
     if enrollment_owner is not None and enrollment_owner.reservation_enabled:
         required_actions.add("webauthn.registration.execution.reserve")
+    if enrollment_owner is not None and enrollment_owner.sql_handoff_enabled:
+        required_actions.update(("webauthn.registration.execution.execute",
+            "webauthn.registration.execution.complete"))
     if "*" not in configured_actions and not required_actions.issubset(
         configured_actions
     ):

@@ -71,6 +71,30 @@ class _VerifiedAuthorization:
     last_monotonic_ns: int
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalAuthorization:
+    """Authenticated original facts, never a live execution permission."""
+
+    request_digest: str
+    operation_id: str
+    authorization_digest: str
+    authorization_id: str
+    issued_at_epoch_ns: int
+    expires_at_epoch_ns: int
+    configuration_digest: str
+    database_id: str
+    generation_digest: str
+    current_root_enrollment_digest: str
+    grant_enrollment_digest: str
+    authorization_enrollment_digest: str
+    caller_id: str
+    caller_spki_digest: str
+    caller_measurement_digest: str
+    audience_spki_digest: str
+    maximum_age_ns: int
+    maximum_clock_skew_ns: int
+
+
 def _common(payload, schema):
     shape._literal(payload["schema"], schema)
     shape._literal(payload["sourceRevision"], grants.authority.SOURCE_REVISION)
@@ -317,3 +341,86 @@ def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes,
     live()
     return _VerifiedAuthorization(payload["requestDigest"], operation_id, identity,
         issued, expires, window, bound, last_epoch, last_monotonic)
+
+
+def _verify_historical_on_work(*, authorization_bytes, authorization_enrollment_bytes,
+        current_root_enrollment_bytes, grant_enrollment_bytes, root_public_key,
+        configuration_digest, planner_public_key, evidence_public_key,
+        live_window, work, transport_deadline_ns=None):
+    """Authenticate original caller facts without renewing executable authority.
+
+    The supplied current processing window is not derived from the historical
+    authorization and is never returned. Historical planning request/response
+    admission and present recovery permission remain separate caller duties.
+    """
+    capture._SharedLedger(work)
+    original = authorization._original(authorization_bytes, MAX_AUTHORIZATION_BYTES,
+        "historical registration execution request authorization")
+    enrollment_raw = authorization._original(authorization_enrollment_bytes,
+        MAX_ENROLLMENT_BYTES, "historical registration execution caller enrollment")
+    current_raw = authorization._original(current_root_enrollment_bytes,
+        authorization.MAX_ENROLLMENT_BYTES, "historical current-root enrollment")
+    grant_raw = authorization._original(grant_enrollment_bytes,
+        grants.MAX_ENROLLMENT_BYTES, "historical successor grant enrollment")
+    # Exact bytes and scalar pins are retained before decoding, crypto or clocks.
+    maximum = (MAX_AUTHORIZATION_BYTES + MAX_ENROLLMENT_BYTES
+        + authorization.MAX_ENROLLMENT_BYTES + grants.MAX_ENROLLMENT_BYTES)
+    if sum(map(len, (original, enrollment_raw, current_raw, grant_raw))) > maximum:
+        raise RegistrationExecutionAuthorizationError("historical authorization originals exceed their bound")
+    root, planner, evidence = root_public_key, planner_public_key, evidence_public_key
+    for key in (root, planner, evidence):
+        authorization._public(key)
+    config = configuration_digest
+    shape._digest(config)
+    window = clock._validate(live_window)
+    inherited = transport_deadline_ns
+    if inherited is not None:
+        shape._integer(inherited, minimum=1)
+    bound = window[4] if inherited is None else min(window[4], inherited)
+    last_epoch, last_monotonic = window[0], window[2]
+
+    def current():
+        nonlocal last_epoch, last_monotonic
+        now = clock._check_on_work(window, work=work)
+        monotonic = production._callback(work, time.monotonic_ns)
+        shape._integer(monotonic, minimum=1)
+        if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+            raise RegistrationExecutionAuthorizationError("historical authorization processing expired or its clocks reversed")
+        last_epoch, last_monotonic = now, monotonic
+        return now
+
+    current()
+    envelope = _read(original, enrollment=False, work=work)
+    material = _admit_enrollment_on_work(authorization_enrollment_bytes=enrollment_raw,
+        current_root_enrollment_bytes=current_raw, grant_enrollment_bytes=grant_raw,
+        root_public_key=root, configuration_digest=config,
+        planner_public_key=planner, evidence_public_key=evidence, work=work)
+    current()
+    policy = material.payload
+    _signature(envelope, material.caller_public_key, MAX_AUTHORIZATION_BYTES, work)
+    payload = envelope["payload"]
+    for name in _SCOPE_FIELDS:
+        plan._same(payload[name], policy[name], work, "historical registration execution request " + name)
+    plan._same(payload["authorizationEnrollmentDigest"], material.enrollment_digest, work,
+        "historical registration execution request caller enrollment")
+    plan._same(payload["callerMeasurementDigest"], policy["callerKey"]["measurementDigest"], work,
+        "historical registration execution request caller measurement")
+    issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
+    maximum_age, skew = policy["maximumAgeNs"], policy["maximumClockSkewNs"]
+    # Enrollment controls bound this ORIGINAL interval. There is deliberately
+    # no now < expires check and no replacement opening/window for that request.
+    authorization._interval(payload, maximum_age)
+    operation_id = plan._frame("serverware.policyAuthorityOperation/v2",
+        (OPERATION.encode("ascii"), payload["requestDigest"].encode("ascii")), work)
+    plan._same(payload["operationId"], operation_id, work,
+        "historical registration execution request actual operation identity")
+    identity = plan._frame(REQUEST_IDENTITY_DOMAIN, (original,), work)
+    _unchanged(original, envelope, MAX_AUTHORIZATION_BYTES, work)
+    if issued > current() + skew:
+        raise RegistrationExecutionAuthorizationError("historical authorization issue time is in the future")
+    return _HistoricalAuthorization(payload["requestDigest"], operation_id, identity,
+        payload["authorizationId"], issued, expires, payload["configurationDigest"],
+        payload["databaseId"], payload["generationDigest"], payload["currentRootEnrollmentDigest"],
+        payload["grantEnrollmentDigest"], material.enrollment_digest, payload["callerId"],
+        policy["callerKey"]["spkiDigest"], payload["callerMeasurementDigest"],
+        payload["audienceSpkiDigest"], maximum_age, skew)

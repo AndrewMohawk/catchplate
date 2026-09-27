@@ -417,7 +417,13 @@ async def csrf_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
+    from serverware import control_plane_registration_handoff_routes as handoff_routes
+    from serverware import control_plane_registration_handoff_http as handoff_contract
+
     request_path = request.scope.get("path")
+    handoff_request = (request.method == "POST" and request_path in (
+        handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS))
+    handoff_completion = request_path in handoff_routes.COMPLETE_PATHS
     reservation_request = (
         request.method == "POST" and request_path in _REGISTRATION_RESERVATION_PATHS
     )
@@ -426,10 +432,13 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     )
     registration_preparation_request = (
         request.method == "POST" and request_path in _REGISTRATION_PREPARATION_PATHS
-    ) or execution_preparation_request or reservation_request
+    ) or execution_preparation_request or reservation_request or handoff_request
     preparation_error = (_registration_reservation_error if reservation_request
         else _registration_execution_preparation_error if execution_preparation_request
         else _registration_preparation_error)
+    if handoff_request:
+        preparation_error = lambda status, code: handoff_routes.error(
+            status, code, completion=handoff_completion)
     if registration_preparation_request:
         # This new route family has one exact framing path. Do not change the
         # existing browser /verify parser, defaults or finalization behavior.
@@ -443,7 +452,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             return preparation_error(400, "registration_preparation_framing_invalid")
         if request.headers.getlist("content-type") != ["application/json"]:
             return preparation_error(415, "registration_preparation_json_required")
-        if int(lengths[0]) > _REGISTRATION_PREPARATION_MAX_BYTES:
+        route_limit = handoff_contract.MAX_REQUEST_BYTES if handoff_request else _REGISTRATION_PREPARATION_MAX_BYTES
+        if int(lengths[0]) > route_limit:
             return preparation_error(413, "registration_preparation_body_too_large")
     setup_canary_request = (
         request.method == "POST"
@@ -491,6 +501,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
                 content={"detail": "authority route requires Content-Length"},
             )
     request_limit = {
+        **{path: handoff_contract.MAX_REQUEST_BYTES for path in (
+            handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS)},
         "/api/authority/control-plane/execute":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/authority/control-plane/custody/reconcile": 256,
@@ -578,8 +590,12 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             if len(body) != content_length:
                 return preparation_error(400, "registration_preparation_framing_invalid")
             try:
-                document = parse_strict_json_object(request._body,
-                    limits=_REGISTRATION_PREPARATION_JSON_LIMITS)
+                if handoff_request:
+                    request.state.registration_handoff_payload = handoff_contract.parse_request(
+                        request._body, completion=handoff_completion)
+                else:
+                    document = parse_strict_json_object(request._body,
+                        limits=_REGISTRATION_PREPARATION_JSON_LIMITS)
                 if reservation_request:
                     request.state.registration_reservation_payload = (
                         WebAuthnRegistrationReservation.model_validate(_plain_setup_json(document))
@@ -588,7 +604,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
                     request.state.registration_execution_preparation_payload = (
                         WebAuthnRegistrationExecutionPrepare.model_validate(_plain_setup_json(document))
                     )
-                else:
+                elif not handoff_request:
                     request.state.registration_preparation_payload = (
                         WebAuthnRegistrationPrepare.model_validate(_plain_setup_json(document))
                     )
@@ -4461,6 +4477,8 @@ def _control_plane_requester_roles(action: str) -> set[str]:
         "webauthn.credential.register",
         "webauthn.registration.execution.prepare",
         "webauthn.registration.execution.reserve",
+        "webauthn.registration.execution.execute",
+        "webauthn.registration.execution.complete",
         "webauthn.credential.revoke",
         "break_glass.grant",
     }:
@@ -24657,4 +24675,7 @@ for _portal_placeholder, _portal_fragment in (
     UI_HTML = UI_HTML.replace(_portal_placeholder, _portal_fragment)
 
 
+from serverware import control_plane_registration_handoff_routes as _registration_handoff_routes
+
+_fastapi_app.include_router(_registration_handoff_routes.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

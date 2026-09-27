@@ -4,8 +4,9 @@ This source-only, trusted-host-local service owns read-only recovery and durable
 delivery of completion for `webauthn.registration.evidence.admit`. It does not
 invoke the SQL issuer/executor, clear an execution attempt, finalize a credential
 or activate a session. Its source and packaging are unbuilt, unexecuted and
-uninstalled. No public caller is connected; **0 of 6 production acceptance
-gates are verified**.
+uninstalled. [Explicit public actions](public-registration-handoff.md) are now
+wired through the separately authorized live-original caller in source, not
+deployed. **0 of 6 production acceptance gates are verified**.
 
 The [SQL service](registration-execution-sql-service.md) may return an unsigned
 commit observation or an uncertain outcome. Neither substitutes for this

@@ -6,8 +6,9 @@ is `webauthn.registration.evidence.admit`. It authenticates original controls
 and invokes the actual protected issuer and one-use executor; it does not
 finalize a credential, sign a completion or activate a session.
 
-The source and packaging are unbuilt, unexecuted and uninstalled. No public
-caller is connected to this service. Existing public reserve routes remain
+The source and packaging are unbuilt, unexecuted and uninstalled.
+[Explicit public actions](public-registration-handoff.md) now connect the
+separately authorized retained-original caller in source. Public reserve routes remain
 reservation-only. **0 of 6 production acceptance gates are verified.**
 
 ## Independent cold inputs
@@ -146,10 +147,10 @@ retained original signer exchange. Neither path is activated by this service.
 
 The separate [cold completion recovery service source](registration-execution-completion-service.md)
 now composes those actual readback and durable delivery owners. It does not
-retry SQL, connect a public caller or finalize a credential.
+retry SQL or finalize a credential.
 
-Present-caller execution-purpose admission is still required before a future
-public caller invokes this private service. Possessing preparation, grant or
+Present-caller execution-purpose and ownership admission precedes the public
+caller's invocation of this private service. Possessing preparation, grant or
 reservation originals is not a new public execute permission.
 
 ## Source packaging, not deployment

@@ -2,7 +2,7 @@
 
 The private control-plane continuation now connects retained registration
 originals to the actual cold SQL and completion transports. This is **source
-implementation only: unbuilt, unexecuted and not publicly activated**. Existing
+implementation only: unbuilt and unexecuted**. Existing
 public reserve routes still reserve only; they additionally retain the exact
 authenticated reserve request, snapshot and acknowledgment under the prepared
 grant. No credential is finalized and no session is activated here.
@@ -14,15 +14,16 @@ provides two private application entrypoints:
 
 | Action | Result and boundary |
 | --- | --- |
-| `execute_retained_registration(local_digest)` | `(local_digest, SQL raw4)` after one durable local dispatch claim, live original replay, one fixed transport exchange and marker equality. The SQL response remains unsigned. |
-| `request_retained_registration_completion(local_digest)` | `(local_digest, completion raw4)` after live original authorization and genuine returned-original verification. It does not finalize a credential. |
+| `execute_retained_registration(local_digest, *, expected_user_id, expected_session_id)` | `(local_digest, SQL raw4)` after ownership replay, one durable local dispatch claim, live original replay, one fixed transport exchange and marker equality. The SQL response remains unsigned. |
+| `request_retained_registration_completion(local_digest, *, expected_user_id, expected_session_id)` | `(local_digest, completion raw4)` after ownership replay, live original authorization and genuine returned-original verification. It does not finalize a credential. |
 
-A future public handler must authenticate the **present caller**, ownership of
+The [explicit public handlers](public-registration-handoff.md) authenticate the **present caller**, ownership of
 the registration, current session/roles, CSRF and separate permission for the
 requested action before calling either entrypoint. Possessing a local ID,
 preparation permission, reserve approval or an old successful result is not
-that authorization. These private methods are not safe unauthenticated routes.
-No public execute/completion routes or portal controls are added by this batch.
+that authorization. The private methods repeat genuine ownership replay against
+the authenticated user/session scalars before side effects; they accept no
+successful subject object as permission. Portal controls remain separate work.
 
 Only the actual cold enrollment and custody owners are accepted. The explicit
 [nested-v3 bootstrap](control-plane-registration-execution-handoff-bootstrap.md)
@@ -39,7 +40,7 @@ that those claims remain current at action time. This batch provisions nothing.
 ## SQL ordering and uncertainty
 
 ```text
-present actor and execution-purpose permission [public integration still open]
+present actor, ownership and execution-purpose permission
     -> actual retained signer/grant association + reservation originals
     -> live caller/control admission + genuine complete pending/grant replay
     -> durable local SQL-dispatch claim
@@ -110,8 +111,8 @@ Conflicting first responses cannot overwrite records; future recovery needs a
 separate bounded reconciliation design if an opaque uncertain completion record
 was retained by another caller.
 
-Still required: separate public purpose/ownership admission and status handling,
-historical caller recovery, reconciliation, complete portal workflows, genuine
+Public purpose/ownership admission and bounded status are now wired in source.
+Still required: historical caller recovery, reconciliation, complete portal workflows, genuine
 associated-original replay for credential finalization, action-time currentness
 and atomic one-use authority, deployment/provisioning and all production gates.
 

@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="112" viewBox="0 0 720 112" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="144" viewBox="0 0 720 144" role="img" aria-labelledby="title description">
   <title id="title">Production acceptance: 0 of 6 gates verified; 6 remaining</title>
-  <desc id="description">Six empty segments represent the six production acceptance gates. All six remain unverified. Source-only implementation is in progress; verification has not run. This is not a measure of code completion, effort remaining, or an estimated completion date.</desc>
-  <rect x="1" y="1" width="718" height="110" rx="12" fill="#0f172a" stroke="#475569"/>
+  <desc id="description">Six empty numbered segments represent integration, frozen verification, independent release, Nitro and KMS, witnesses, and live acceptance. All six remain unverified. Source-only implementation is in progress; verification has not run. This is not a measure of code completion, effort remaining, or an estimated completion date.</desc>
+  <rect x="1" y="1" width="718" height="142" rx="12" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="31" fill="#f8fafc" font-size="15" font-weight="600">PRODUCTION ACCEPTANCE</text>
     <text x="696" y="31" fill="#fbbf24" font-size="15" font-weight="600" text-anchor="end">0 OF 6 VERIFIED</text>
@@ -13,7 +13,15 @@
       <rect x="480" y="46" width="102" height="18" rx="4"/>
       <rect x="594" y="46" width="102" height="18" rx="4"/>
     </g>
-    <text x="24" y="91" fill="#cbd5e1" font-size="13">Source-only implementation in progress</text>
-    <text x="696" y="91" fill="#cbd5e1" font-size="13" text-anchor="end">6 gates remaining</text>
+    <g fill="#e2e8f0" font-size="11" text-anchor="middle">
+      <text x="75" y="86">1 · Integration</text>
+      <text x="189" y="86">2 · Verification</text>
+      <text x="303" y="86">3 · Release</text>
+      <text x="417" y="86">4 · Nitro / KMS</text>
+      <text x="531" y="86">5 · Witnesses</text>
+      <text x="645" y="86">6 · Live flows</text>
+    </g>
+    <text x="24" y="122" fill="#cbd5e1" font-size="13">Source-only implementation in progress</text>
+    <text x="696" y="122" fill="#cbd5e1" font-size="13" text-anchor="end">6 gates remaining</text>
   </g>
 </svg>

@@ -18,26 +18,22 @@ long-lived credential.
 
 Checkpoint: **2026-09-26 — pre-production, source-only.**
 
-`Implementation: IN PROGRESS | Verification: NOT RUN | Production: BLOCKED`
-
 [![Production acceptance: 0 of 6 gates verified; 6 remain. Source-only implementation is in progress.](docs/images/production-progress.svg)](docs/production-status.md)
 
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-**Latest landed milestone:** the
-[registration execution-grant journal](docs/control-plane-registration-execution.md#explicit-local-retention)
-now retains exact originals under a separate format, with recovery and
-metadata-only portal inspection, in
-[commit 6aec6b5](https://github.com/example/private-deployment).
-**Next:** join present-caller/new-purpose admission and public workflows to the
-retained originals. Current-root reservation, one-use execution, protected SQL
-and credential finalization remain open; local storage supplies none of them.
+- **Landed:** durable registration-grant storage, recovery and metadata inspection
+  ([6aec6b5](https://github.com/example/private-deployment));
+  this does not execute registration.
+- **Next:** finish caller authorization and public registration workflows, then
+  the remaining workload/native integration. Full verification follows completed
+  implementation and source freeze; current source is unbuilt and unexecuted.
+- **External prerequisites:** an immutable dependency snapshot and independently
+  operated signing, Nitro/KMS and witness services, which are not yet provisioned.
 
-[Open the progress tracker →](docs/production-status.md) for landed milestones,
-all six remaining gates, and their completion criteria. Independent signing,
-Nitro/KMS and witness services are not provisioned. The current source is unbuilt
-and unexecuted; full verification follows integration and source freeze.
+[Open the progress tracker →](docs/production-status.md) for committed milestones,
+all six remaining gates, blockers and their completion criteria.
 **Zero verified gates does not mean zero implementation progress.**
 
 <!-- At each milestone update this summary and docs/production-status.md. Update the SVG, alt text and counts together when exact-release evidence closes a gate. Reopen invalidated gates; never infer readiness from commit/test counts. -->

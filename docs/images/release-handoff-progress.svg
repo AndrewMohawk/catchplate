@@ -1,109 +1,66 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="566" viewBox="0 0 1000 566" role="img" aria-labelledby="release-handoff-title release-handoff-description">
-  <title id="release-handoff-title">Exact release and private handoff: 6 of 11 diagnostics source-landed, 0 active and 5 open. Row 15 is source-landed with all 6 of 6 closed; row 16 has 0 of 5 landed. Root bootstrap and key delivery 16.1 is NEXT/open.</title>
-  <desc id="release-handoff-description">Two lanes explain the remaining token-release rows without adding project milestones. F08.4e.7.d.1 fresh private release authorization is source-landed in c26c9e783b203f14f11505719af80bea2ad7fc8d. F08.4e.7.d.2 committed-original packet, commit and effects verification is source-landed in b7be5cbdf2ef75eda606b025032943dc0812bcb9. F08.4e.7.d.3 completion-to-release proof is source-landed in 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0: distinct enrolled producer, genuine committed originals and independent release-purpose verification, without a second historical replay. F08.4e.7.d.4 durable exact outcome is source-landed in 73a7f82b7aacdb5f4e323715ccde1c264330d81a: separate root storage authorization, independent checkpoint and first-exact outcome retention. F08.4e.7.d.5 guarded token opening is source-landed in 5e5ca4050686f9003ec8fd35c6e189531e9d61a3: same-call original admission, durable retention, live AEAD and a second actual retained readback before a private bytes-only method return. F08.4e.7.d.6 uncertain-outcome recovery is source-landed in e49e14ec3039448af9f84bd0f21b20539046adba: fresh root recovery authority, historical original evidence and unchanged outcome readback around live private token opening. Row 15 exact committed-original release is closed in source with all 6/6 diagnostics landed. Root bootstrap and key delivery 16.1 is NEXT/open, queued and not active. Row 16 cold private handoff has five open diagnostics: F08.4e.7.e.1 root bootstrap and key delivery; e.2 isolated cold service; e.3 bounded private transport; e.4 independent response verifier; e.5 authorized private handoff. Every task has a visible name and written status as well as a colored segment, and links to its ledger criterion. These eleven nested diagnostics are not eleven new project milestones or effort estimates. Parent token release remains 15/16 source-landed, 0 in progress and 1 open; production acceptance remains 0/6 verified. Private method return is not network/public delivery, latest-state witness proof or later public/portal permission. Source only, unbuilt, unexecuted and unprovisioned; no deployed service or current-session claim.</desc>
-  <rect x="1" y="1" width="998" height="564" rx="16" fill="#0f172a" stroke="#475569"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="588" viewBox="0 0 760 588" role="img" aria-labelledby="release-handoff-title release-handoff-description">
+  <title id="release-handoff-title">Exact release and private handoff: 6 of 11 diagnostics source-landed, 1 in progress and 4 other open. Row 15 is landed at 6/6. Row 16 has 0/5 landed: 16.1 root bootstrap and key delivery is in progress and uncommitted; 16.2 isolated cold service is NEXT/open; 16.3–16.5 are TODO/open.</title>
+  <desc id="release-handoff-description">Two lanes explain the remaining token-release rows without adding project milestones. F08.4e.7.d.1 fresh private release authorization is source-landed in c26c9e783b203f14f11505719af80bea2ad7fc8d. F08.4e.7.d.2 committed-original packet, commit and effects verification is source-landed in b7be5cbdf2ef75eda606b025032943dc0812bcb9. F08.4e.7.d.3 completion-to-release proof is source-landed in 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0: distinct enrolled producer, genuine committed originals and independent release-purpose verification, without a second historical replay. F08.4e.7.d.4 durable exact outcome is source-landed in 73a7f82b7aacdb5f4e323715ccde1c264330d81a: separate root storage authorization, independent checkpoint and first-exact outcome retention. F08.4e.7.d.5 guarded token opening is source-landed in 5e5ca4050686f9003ec8fd35c6e189531e9d61a3: same-call original admission, durable retention, live AEAD and a second actual retained readback before a private bytes-only method return. F08.4e.7.d.6 uncertain-outcome recovery is source-landed in e49e14ec3039448af9f84bd0f21b20539046adba: fresh root recovery authority, historical original evidence and unchanged outcome readback around live private token opening. Row 15 exact committed-original release is closed in source with all 6/6 diagnostics landed. Root bootstrap and key delivery 16.1 is IN PROGRESS: authored locally and uncommitted, not landed. Isolated cold service 16.2 is NEXT/open; 16.3 bounded private transport, 16.4 independent response verifier and 16.5 authorized private handoff remain TODO/open. Row 16 cold private handoff has zero landed, one in progress and four other open diagnostics: F08.4e.7.e.1 root bootstrap and key delivery; e.2 isolated cold service; e.3 bounded private transport; e.4 independent response verifier; e.5 authorized private handoff. Every task has a visible ID, name and written status as well as color; no hover or internal SVG link is needed to understand its status. Criteria and complete evidence remain in the linked source ledger. These eleven nested diagnostics are not eleven new project milestones or effort estimates. Parent token release remains 15/16 source-landed, 1 in progress and 0 other open; production acceptance remains 0/6 verified. Private method return is not network/public delivery, latest-state witness proof or later public/portal permission. Source only, unbuilt, unexecuted and unprovisioned; no deployed service or current-session claim.</desc>
+  <rect x="1" y="1" width="758" height="586" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
-    <text x="24" y="35" fill="#f8fafc" font-size="25" font-weight="700">Exact release and private handoff · remaining source work</text>
-    <text x="24" y="60" fill="#94a3b8" font-size="14">6 / 11 source diagnostics landed · 0 active · 5 open · parent row 15 LANDED</text>
+    <text x="24" y="35" fill="#f8fafc" font-size="25" font-weight="700">Exact release and private handoff</text>
+    <text x="24" y="63" fill="#cbd5e1" font-size="17">6 / 11 landed · 1 in progress · 4 other open</text>
 
-    <g aria-label="Row 15: exact committed-original release closed in source, all six diagnostics landed">
-      <rect x="12" y="78" width="976" height="190" rx="10" fill="#172033" stroke="#475569"/>
+    <g aria-label="Row 15 exact committed-original release: all six source components landed">
       <text x="24" y="101" fill="#f8fafc" font-size="19" font-weight="700">15 · Exact committed-original release</text>
-      <text x="976" y="101" text-anchor="end" fill="#cbd5e1" font-size="15">6 / 6 landed · 0 active · 0 open</text>
-      <g font-size="16" font-weight="700" text-anchor="middle">
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="24" y="112" width="152" height="34" rx="5" fill="#064e3b" stroke="#34d399"><title>15.1 · F08.4e.7.d.1 · Fresh private release authorization · LANDED · c26c9e783b203f14f11505719af80bea2ad7fc8d · source only, not commit proof or plaintext release</title></rect>
-          <text x="100" y="135" fill="#d1fae5">✓ 15.1</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="184" y="112" width="152" height="34" rx="5" fill="#064e3b" stroke="#34d399"><title>15.2 · F08.4e.7.d.2 · Committed-original verification · LANDED · b7be5cbdf2ef75eda606b025032943dc0812bcb9 · original replay, real commit reader, completion/ACK and full provenance joins; no release authority</title></rect>
-          <text x="260" y="135" fill="#d1fae5">✓ 15.2</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="344" y="112" width="152" height="34" rx="5" fill="#064e3b" stroke="#34d399"><title>15.3 · F08.4e.7.d.3 · Completion-to-release proof · LANDED · 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0 · distinct producer enrollment and original proof verification; no durable outcome or plaintext release</title></rect>
-          <text x="420" y="135" fill="#d1fae5">✓ 15.3</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="504" y="112" width="152" height="34" rx="5" fill="#064e3b" stroke="#34d399"><title>15.4 · F08.4e.7.d.4 · Durable exact outcome · LANDED · 73a7f82b7aacdb5f4e323715ccde1c264330d81a · root-authorized storage and first-exact retention; no plaintext release or latest-state witness claim</title></rect>
-          <text x="580" y="135" fill="#d1fae5">✓ 15.4</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="664" y="112" width="152" height="34" rx="5" fill="#064e3b" stroke="#34d399"><title>15.5 · F08.4e.7.d.5 · Guarded token opening · LANDED · 5e5ca4050686f9003ec8fd35c6e189531e9d61a3 · private bytes-only return after original admission, live AEAD and actual second retained readback; no network/public delivery or runtime claim</title></rect>
-          <text x="740" y="135" fill="#d1fae5">✓ 15.5</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="824" y="112" width="152" height="34" rx="5" fill="#064e3b" stroke="#34d399"><title>15.6 · F08.4e.7.d.6 · Uncertain-outcome recovery · LANDED · e49e14ec3039448af9f84bd0f21b20539046adba · fresh root authority and unchanged outcome recovery; private bytes only, no network/public delivery or runtime claim</title></rect>
-          <text x="900" y="135" fill="#d1fae5">✓ 15.6</text>
-        </a>
+      <text x="736" y="101" text-anchor="end" fill="#6ee7b7" font-size="17" font-weight="700">6 / 6 LANDED</text>
+      <g fill="#064e3b" stroke="#34d399">
+        <rect x="24" y="112" width="228" height="62" rx="7"/>
+        <rect x="266" y="112" width="228" height="62" rx="7"/>
+        <rect x="508" y="112" width="228" height="62" rx="7"/>
+        <rect x="24" y="182" width="228" height="62" rx="7"/>
+        <rect x="266" y="182" width="228" height="62" rx="7"/>
+        <rect x="508" y="182" width="228" height="62" rx="7"/>
       </g>
-      <a href="../production-status.md#exact-release-and-handoff-detail">
-        <g fill="#f8fafc" font-size="15" font-weight="600">
-          <text x="24" y="174">15.1 Fresh release authorization</text>
-          <text x="344" y="174">15.2 Committed-original verification</text>
-          <text x="664" y="174">15.3 Completion-to-release proof</text>
-          <text x="24" y="228">15.4 Durable exact outcome</text>
-          <text x="344" y="228">15.5 Guarded token opening</text>
-          <text x="664" y="228">15.6 Uncertain-outcome recovery</text>
-        </g>
-        <g fill="#cbd5e1" font-size="12">
-          <text x="24" y="194" fill="#6ee7b7">LANDED · F08.4e.7.d.1 · c26c9e7</text>
-          <text x="344" y="194" fill="#6ee7b7">LANDED · F08.4e.7.d.2 · b7be5cb</text>
-          <text x="664" y="194" fill="#6ee7b7">LANDED · F08.4e.7.d.3 · 8d91551</text>
-          <text x="24" y="248" fill="#6ee7b7">LANDED · F08.4e.7.d.4 · 73a7f82</text>
-          <text x="344" y="248" fill="#6ee7b7">LANDED · F08.4e.7.d.5 · 5e5ca40</text>
-          <text x="664" y="248" fill="#6ee7b7">LANDED · F08.4e.7.d.6 · e49e14e</text>
-        </g>
-      </a>
+      <g fill="#f0fdf4" font-size="16" font-weight="600">
+        <text x="36" y="137">15.1 Fresh release intent</text>
+        <text x="278" y="137">15.2 Committed originals</text>
+        <text x="520" y="137">15.3 Release proof</text>
+        <text x="36" y="207">15.4 Durable outcome</text>
+        <text x="278" y="207">15.5 Guarded opening</text>
+        <text x="520" y="207">15.6 Outcome recovery</text>
+      </g>
+      <g fill="#a7f3d0" font-size="14" font-weight="600">
+        <text x="36" y="160">✓ LANDED · c26c9e7</text>
+        <text x="278" y="160">✓ LANDED · b7be5cb</text>
+        <text x="520" y="160">✓ LANDED · 8d91551</text>
+        <text x="36" y="230">✓ LANDED · 73a7f82</text>
+        <text x="278" y="230">✓ LANDED · 5e5ca40</text>
+        <text x="520" y="230">✓ LANDED · e49e14e</text>
+      </g>
     </g>
 
-    <g aria-label="Row 16: cold private handoff, zero of five landed">
-      <rect x="12" y="280" width="976" height="190" rx="10" fill="#172033" stroke="#475569"/>
-      <text x="24" y="303" fill="#f8fafc" font-size="19" font-weight="700">16 · Cold private handoff</text>
-      <text x="976" y="303" text-anchor="end" fill="#cbd5e1" font-size="15">0 / 5 landed · 0 active · 5 open</text>
-      <g font-size="16" font-weight="700" text-anchor="middle">
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="24" y="314" width="184" height="34" rx="5" fill="#172554" stroke="#60a5fa" stroke-width="2"><title>16.1 · F08.4e.7.e.1 · Root bootstrap and key delivery · NEXT / OPEN, queued and not active</title></rect>
-          <text x="116" y="337" fill="#bfdbfe">N 16.1</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="216" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.2 · F08.4e.7.e.2 · Isolated cold service · OPEN</title></rect>
-          <text x="308" y="337" fill="#e2e8f0">○ 16.2</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="408" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.3 · F08.4e.7.e.3 · Bounded private transport · OPEN</title></rect>
-          <text x="500" y="337" fill="#e2e8f0">○ 16.3</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="600" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.4 · F08.4e.7.e.4 · Independent response verifier · OPEN</title></rect>
-          <text x="692" y="337" fill="#e2e8f0">○ 16.4</text>
-        </a>
-        <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="792" y="314" width="184" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>16.5 · F08.4e.7.e.5 · Authorized private handoff · OPEN</title></rect>
-          <text x="884" y="337" fill="#e2e8f0">○ 16.5</text>
-        </a>
-      </g>
-      <a href="../production-status.md#exact-release-and-handoff-detail">
-        <g fill="#f8fafc" font-size="15" font-weight="600">
-          <text x="24" y="376">16.1 Root bootstrap and key delivery</text>
-          <text x="344" y="376">16.2 Isolated cold service</text>
-          <text x="664" y="376">16.3 Bounded private transport</text>
-          <text x="24" y="430">16.4 Independent response verifier</text>
-          <text x="344" y="430">16.5 Authorized private handoff</text>
-        </g>
-        <g fill="#cbd5e1" font-size="12">
-          <text x="24" y="396" fill="#93c5fd">NEXT / OPEN · F08.4e.7.e.1</text>
-          <text x="344" y="396">OPEN · F08.4e.7.e.2</text>
-          <text x="664" y="396">OPEN · F08.4e.7.e.3</text>
-          <text x="24" y="450">OPEN · F08.4e.7.e.4</text>
-          <text x="344" y="450">OPEN · F08.4e.7.e.5</text>
-        </g>
-      </a>
+    <g aria-label="Row 16 cold private handoff: zero of five landed, one in progress and four other open">
+      <text x="24" y="278" fill="#f8fafc" font-size="19" font-weight="700">16 · Cold private handoff</text>
+      <text x="24" y="301" fill="#cbd5e1" font-size="16">0 / 5 landed · 1 in progress · 4 other open</text>
+      <rect x="24" y="312" width="348" height="58" rx="7" fill="#422006" stroke="#fbbf24" stroke-width="2"/>
+      <text x="36" y="337" fill="#fef3c7" font-size="17" font-weight="600">16.1 Root bootstrap / key delivery</text>
+      <text x="36" y="359" fill="#fde68a" font-size="14" font-weight="600">◐ IN PROGRESS · uncommitted</text>
+
+      <rect x="388" y="312" width="348" height="58" rx="7" fill="#172554" stroke="#60a5fa" stroke-width="2"/>
+      <text x="400" y="337" fill="#eff6ff" font-size="17" font-weight="600">16.2 Isolated cold service</text>
+      <text x="400" y="359" fill="#bfdbfe" font-size="14" font-weight="600">N NEXT / OPEN · queued, not active</text>
+
+      <rect x="24" y="380" width="348" height="58" rx="7" fill="#334155" stroke="#94a3b8"/>
+      <text x="36" y="405" fill="#f8fafc" font-size="17" font-weight="600">16.3 Bounded private transport</text>
+      <text x="36" y="427" fill="#cbd5e1" font-size="14" font-weight="600">○ TODO / OPEN</text>
+
+      <rect x="388" y="380" width="348" height="58" rx="7" fill="#334155" stroke="#94a3b8"/>
+      <text x="400" y="405" fill="#f8fafc" font-size="17" font-weight="600">16.4 Independent response verifier</text>
+      <text x="400" y="427" fill="#cbd5e1" font-size="14" font-weight="600">○ TODO / OPEN</text>
+
+      <rect x="24" y="448" width="712" height="58" rx="7" fill="#334155" stroke="#94a3b8"/>
+      <text x="36" y="473" fill="#f8fafc" font-size="17" font-weight="600">16.5 Authorized private handoff</text>
+      <text x="36" y="495" fill="#cbd5e1" font-size="14" font-weight="600">○ TODO / OPEN</text>
     </g>
 
-    <text x="24" y="497" fill="#6ee7b7" font-size="13">✓ LANDED = committed source</text>
-    <text x="318" y="497" fill="#93c5fd" font-size="13">N NEXT = queued / open</text>
-    <text x="600" y="497" fill="#cbd5e1" font-size="13">○ OPEN = remaining source work</text>
-    <text x="24" y="523" fill="#94a3b8" font-size="13">Nonadditive · token release 15/16 + 0 active + 1 open · production 0/6 verified · criteria linked</text>
-    <text x="24" y="548" fill="#94a3b8" font-size="12">Source only · unbuilt / unexecuted / unprovisioned · private handoff is not public or portal permission</text>
+    <text x="24" y="533" fill="#cbd5e1" font-size="14">Token release 15/16 landed · unit 16 IN PROGRESS · children are nonadditive</text>
+    <text x="24" y="554" fill="#94a3b8" font-size="14">Project 34/46 · activation 19/26 · groups 4/5 · production 0/6 verified</text>
+    <text x="24" y="576" fill="#94a3b8" font-size="13">Source only · unbuilt / unexecuted · private return is not network or public delivery</text>
   </g>
 </svg>

@@ -18,110 +18,77 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-**34 of 46 tracked source checkpoints landed · 12 open, including F08 in progress.**
+**34/46 source checkpoints landed · 1 in progress · 11 todo.**
 **Production acceptance: 0/6 verified.** Current source is unbuilt and unexecuted.
 
-[![Project source checkpoints: evidence handoff 10/10 landed; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 7/8; workloads and native 3/6; providers and operations 0/7. Every segment has a stable ID. Twelve checkpoints remain open, including F08 in progress. Source counts, not product readiness.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Project checkpoints, one segment per task: evidence handoff 10/10 landed; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 7/8; workloads and native 3/6; providers and operations 0/7. F08 session activation is in progress. Twelve checkpoints remain unfinished. Source status, not product readiness.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-**All 12 unfinished project checkpoints:**
+### Current work: token release and private handoff
 
-| ID | Still to finish | Source status |
+**15/16 token-release units landed; the final unit is in progress.**
+The bar below expands units 15 and 16 into their **11 existing substeps**:
+**6 landed · 1 in progress · 4 todo**. Each segment has a name and status.
+
+[![Release and handoff substeps: 15.1 release authorization, 15.2 committed-original verification, 15.3 completion-to-release proof, 15.4 durable outcome, 15.5 guarded token opening and 15.6 unchanged-outcome recovery are source-landed. 16.1 root bootstrap and key delivery is in progress, uncommitted. Next is 16.2 isolated cold service; 16.3 bounded private transport, 16.4 independent response verifier and 16.5 authorized private handoff remain todo. Six of eleven landed; no runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
+
+| Status | Substep | What it delivers |
 | --- | --- | --- |
-| H05 | Historical authority across configuration/key changes | Open |
-| F08 | Protected session activation, token release and portal flow | In progress |
-| N04 | Workload identity provisioning and authenticated channels | Open |
-| N05 | Native enrollment, verified CA installation and proxy setup | Open |
-| N06 | Enclave TLS/proxy execution and credential custody | Open |
-| O01 | OAuth ownership across deployments and applications | Open |
-| O02 | Measured provider issuance and interrupted-exchange recovery | Open |
-| O03 | Public revocation and authenticated recovery | Open |
-| O04 | Protected provider and filesystem side effects | Open |
-| O05 | Interrupted policy-publication recovery | Open |
-| O06 | Independent RBAC rollback witness | Open |
-| O07 | Authenticated, signed and sequenced telemetry | Open |
+| In progress | 16.1 · Root bootstrap and key delivery | Authenticated configuration, dedicated delivery key and isolated startup |
+| Next / todo | 16.2 · Isolated cold service | Packaged, finite release worker with resource cleanup |
+| Todo | 16.3 · Bounded private transport | Peer-checked requests and responses under the original deadline |
+| Todo | 16.4 · Independent response verifier | Receiving-side checks of the exact response and expected authority |
+| Todo | 16.5 · Authorized private handoff | Connect the authorized caller and handle uncertain delivery |
 
-The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
-defines each scope and its dependencies. Open items can already contain partial code.
+**Latest landed:** [15.6 · unchanged-outcome recovery (`e49e14e`)](https://github.com/example/private-deployment).
+16.1 has source work underway but no completion credit. A private token return
+is not network delivery or a confirmed user session.
 
-### Protected token release: remaining source work
+Each substep turns green only when its implementation is committed and linked
+in the [completion-criteria ledger](docs/production-status.md#exact-release-and-handoff-detail).
+These nested counts are **not additive**, effort percentages, or an ETA.
 
-**15/16 units landed · 0 in progress · 1 open. Next: root bootstrap and key delivery (16.1).**
+### Still to finish across the project
 
-[![Protected token release: units 01–15 landed, including all six exact committed-original release components through separately authorized unchanged-outcome recovery. Unit 16 cold release response/handoff remains open; root bootstrap and key delivery 16.1 is next. A private method return is not network delivery or a delivery acknowledgment. Source checkpoints, not runtime or production readiness.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+| ID | Remaining checkpoint | Source status |
+| --- | --- | --- |
+| H05 | Historical authority across configuration/key changes | Todo |
+| F08 | Session activation: finish token handoff, then public permissions, activation/recovery and portal/session flow | In progress |
+| N04 | Workload identity provisioning and authenticated channels | Todo |
+| N05 | Native enrollment, verified CA installation and proxy setup | Todo |
+| N06 | Enclave TLS/proxy execution and credential custody | Todo |
+| O01 | OAuth ownership across deployments and applications | Todo |
+| O02 | Measured provider issuance and interrupted-exchange recovery | Todo |
+| O03 | Public revocation and authenticated recovery | Todo |
+| O04 | Protected provider and filesystem side effects | Todo |
+| O05 | Interrupted policy-publication recovery | Todo |
+| O06 | Independent RBAC rollback witness | Todo |
+| O07 | Authenticated, signed and sequenced telemetry | Todo |
 
-**Exact release source-complete; cold handoff unfinished — 6/11 named substeps landed, 5 open:**
-
-[![Exact release and private handoff: all six row-15 components are source-landed, including separately authorized unchanged-outcome recovery. All five cold private-handoff components remain open, with root bootstrap and key delivery 16.1 NEXT/open. Six of eleven nested source components landed; token-release progress is 15/16. Guarded private return is not network delivery or runtime verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
-
-Each segment has a stable ID and a [specific completion criterion](docs/production-status.md#exact-release-and-handoff-detail).
-As a substep lands, its segment turns green and gains commit evidence; the
-enclosing unit closes only when all its criteria are met. Children are not added
-to their parent counts: token release is **15/16**, not 15/27.
-
-**Most recently completed:** **15.6**, fresh root-authorized recovery of the unchanged
-outcome and token, [committed in e49e14e](https://github.com/example/private-deployment).
-This closes row 15 in source, not network delivery or a delivery acknowledgment.
-Cold handoff remains unfinished; source is unbuilt and unexecuted.
+**Legend:** green/check = landed source; amber = in progress, including uncommitted
+work; gray = todo; blue = next/todo, not yet active. Open checkpoints may contain
+partial code. Landed does not mean tested, deployed, or production-ready.
 
 <details>
-<summary>Completed source detail: completion/recovery 6/6, reservation/SQL 6/6, authorization 12/12 and grant issuance 5/5</summary>
+<summary>Deeper checkpoints and completed-work evidence</summary>
 
-[![Completion and recovery detail: historical original replay, completion-purpose custody, commit observation/durable recovery, cold resources/service, completion state/lookup route and authenticated private response are all source-landed. Six of six substeps landed, closing row 14 in source. Exact release at row 15 is also source-landed; cold release handoff remains open. No runtime or production readiness claim.](docs/images/consume-completion-progress.svg)](docs/production-status.md#consume-completion-and-recovery-detail)
-
-[![Reservation and SQL detail: reserve originals/durable ACK, cold reserver, independent current-pending receiver, protected packet/issuer, one-use SQL/durable attempt, and cold SQL service/response are all source-landed. These six diagnostic components subdivide units 12–13. No runtime or production credit.](docs/images/consume-sql-progress.svg)](docs/production-status.md#consume-reservation-and-sql-detail)
-
-[![Consume authorization and issuance: A01–A03 landed in f6dd3cb, A04–A08 in 0ef6024, A09–A10 in b3c9a58, A11 in 4b421e2 and A12 isolated cold grant service in 8ac2374. Twelve landed, zero in progress, zero open; token-release row 11 is source-landed. No runtime or production verification.](docs/images/consume-authorization-progress.svg)](docs/production-status.md#consume-authorization-substeps)
-
-[![Consume-grant issuance detail inside A11: wire/signature contract, caller/root admission and replay-derived claims, grant production, independent grant verification, and source integration with inventory and consumer joins all landed in 4b421e2. Five landed, zero in progress, zero open. These nested components are not additional parent completions; source only, not tested or running.](docs/images/consume-grant-progress.svg)](docs/production-status.md#consume-grant-issuance-detail)
-
-The [six completion/recovery components](docs/production-status.md#consume-completion-and-recovery-detail),
-[six reservation/SQL components](docs/production-status.md#consume-reservation-and-sql-detail),
-[12-substep checklist](docs/production-status.md#consume-authorization-substeps)
-and [five-part A11 detail](docs/production-status.md#consume-grant-issuance-detail)
-retain stable IDs, closure criteria and commit evidence. These are nested source
-components, not additional parent completions.
+- [All 46 project checkpoints and their evidence](docs/production-status.md#next-source-milestones)
+- [Session activation: 19/26 steps landed](docs/production-status.md#active-workflow-granular-source-steps)
+- [Token release: 15/16 units landed](docs/production-status.md#token-release-implementation-detail)
+- [Release and handoff: 6/11 substeps landed](docs/production-status.md#exact-release-and-handoff-detail)
+- [Completion/recovery: 6/6](docs/production-status.md#consume-completion-and-recovery-detail), [reservation/SQL: 6/6](docs/production-status.md#consume-reservation-and-sql-detail), [consume authorization: 12/12](docs/production-status.md#consume-authorization-substeps), [grant issuance: 5/5](docs/production-status.md#consume-grant-issuance-detail)
 
 </details>
 
-**Green: landed**;
-**amber: in progress** (including uncommitted work); **gray: todo/open**;
-**blue: NEXT/open**, queued rather than active.
-The source is not tested or running. Token release is step 20 of
-**activation (19/26 landed)**, within **F08 (project 34/46 landed)**.
-Nested counts are never added together and are not effort percentages or an ETA.
-
-**After token release:** target-bound permission, public activation and recovery,
-explicit portal actions, fresh portal permission, and truthful session confirmation
-are still open. The full activation workflow remains **19/26 landed**.
-
-<details>
-<summary>Full breakdown: 46 project checkpoints, 26 activation steps and 16 token-release units</summary>
-
-[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 19/26 finer steps shown below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
-
-**OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
-
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 4/5 diagnostic groups landed and 15/16 detail units landed. Exact release and recovery are source-landed; cold handoff remains open. Nested counts do not add to the total. Source-only; no runtime token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
-
-Each segment maps to a
-[named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
-The 26 steps belong to F08; step 20's 16 detail units subdivide its existing five
-diagnostic groups (**4/5 landed**). None is added to the parent counts.
-
-</details>
-
-**Production blockers — 0/6 gates verified:** integration is unfinished;
+**Production gates stay separate: 0/6 verified.** Integration is unfinished;
 immutable dependencies, frozen verification and independent release evidence
-are pending; signing, Nitro/KMS and witness services are not provisioned;
+are pending. Signing, Nitro/KMS and witness services are not provisioned;
 live operator/hardware/provider acceptance awaits deployment.
+Full verification follows source freeze.
 
-Full verification follows source freeze. No runtime consumption execution or plaintext
-release is claimed for the new protected path.
+[Full tracker and remaining-work criteria →](docs/production-status.md#remaining-work-breakdown)
+· [Six production acceptance gates →](docs/production-status.md#remaining-production-gates)
 
-[Open the full tracker →](docs/production-status.md) for checkpoint evidence and
-the [six separate production gates](docs/production-status.md#remaining-production-gates).
-
-<!-- Update README counts/descriptions, production-status.md evidence/checklists and affected progress SVGs together. Keep unfinished work visible and completed detail collapsible. Activation has 26 fixed named F08 steps; token release has 16 units within step 20. Row 11 has authorization substeps A01-A12; A11 has five components. Rows 12/13 have six diagnostics (12.1-12.3, 13.1-13.3); row 14 has six (14.1-14.6). release-handoff-progress.svg exposes eleven inside rows 15/16 (15.1-15.6, 16.1-16.5), not additional units. No children or grouping parents are additive. Every segment needs a visible ID, name, status and linked criterion/evidence; blue NEXT/open is queued, amber is partial work. Green requires the actual implementation commit. Explain denominator changes; keep source and production acceptance separate; reopen invalidated gates. -->
+<!-- Keep README, docs/production-status.md and affected progress SVGs synchronized. Use the existing 46 project / 26 activation / 16 token-release inventories; release-handoff-progress.svg expands units 15/16 into 15.1–15.6 and 16.1–16.5, not new milestones. Every segment needs a visible ID, name, status and linked criterion/evidence. Mark active uncommitted work amber, queued work blue, todo gray; green requires its actual implementation commit. Never add children to parents, infer an ETA from counts, or combine source progress with production acceptance. -->
 
 ## Why Serverware?
 

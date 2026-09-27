@@ -94,12 +94,13 @@ completion originals are reread and genuinely reverified without another socket
 request; no stored success bit is trusted. The lower-level opaque journal can
 retain other carriers, so it independently grants no assurance.
 
-The caller path deliberately still requires **unexpired original caller and
-grant controls**. The separate service can recover historical originals, but
-the existing caller exchange has no historical authorization-admission seam.
-End-to-end historical recovery therefore remains required implementation; this
-live path must not be relabeled as recovery or weaken expiry checks to simulate
-it. There is no automatic request retry, SQL retry or re-signing workflow.
+This live caller path deliberately still requires **unexpired original caller
+and grant controls**. The separate [completion recovery path](registration-completion-recovery.md)
+now composes genuine historical exchange/signer replay, dedicated public
+recovery-purpose and ownership admission, and bounded reconciliation in source.
+It does not weaken this live path's expiry checks, repeat SQL or provide an
+automatic request retry or re-signing workflow. Both paths remain unbuilt and
+unexecuted.
 
 ## Retention and remaining work
 
@@ -107,14 +108,18 @@ The [outcome journal](control-plane-registration-outcomes.md) retains fixed
 bounded records under the actual preparation association and preserves the
 original source token. It does not advance any independent checkpoint. Quota,
 fsync failure, interruption and hostile-host rollback remain explicit limits.
-Conflicting first responses cannot overwrite records; future recovery needs a
-separate bounded reconciliation design if an opaque uncertain completion record
-was retained by another caller.
+Conflicting first responses cannot overwrite records. A separate immutable
+`completion-reconciled` slot can retain genuinely verified acknowledged originals
+after an original uncertain completion; see the
+[journal boundary](control-plane-custody-journal.md#bounded-registration-completion-reconciliation).
+Neither that storage nor its label authenticates the outcome by itself.
 
-Public purpose/ownership admission and bounded status are now wired in source.
-Still required: historical caller recovery, reconciliation, complete portal workflows, genuine
-associated-original replay for credential finalization, action-time currentness
-and atomic one-use authority, deployment/provisioning and all production gates.
+Public purpose/ownership admission and bounded status are wired in source, with
+separate historical recovery and reconciliation integrated in this batch.
+Still separate: complete portal workflows, genuine associated-original replay
+for credential finalization, action-time currentness and atomic one-use
+authority, cross-generation historical authority resolution,
+deployment/provisioning and all production gates.
 
 After prerequisites and source freeze, consolidated verification must cover
 disabled/older profiles, altered pins and retained originals, cross-registration

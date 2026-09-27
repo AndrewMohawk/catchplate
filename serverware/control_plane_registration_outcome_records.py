@@ -19,8 +19,8 @@ from serverware import control_plane_custody_records as records
 
 MAGIC = b"SWCPO001"
 IDENTITY_DOMAIN = "serverware.controlPlaneRegistrationOutcomeRecord/v1"
-KINDS = ("reservation", "sql-claimed", "sql-outcome", "completion-outcome")
-_COUNTS = (3, 0, 4, 4)
+KINDS = ("reservation", "sql-claimed", "sql-outcome", "completion-outcome", "completion-reconciled")
+_COUNTS = (3, 0, 4, 4, 4)
 _PREFIX_BYTES = 11
 _MAX_HEADER_BYTES = _PREFIX_BYTES + records.MAX_SOURCE_REVISION_BYTES + 32 + 4 * 8
 MAX_RECORD_BYTES = max(reservation.MAX_RESPONSE_BYTES, sql.MAX_RESPONSE_BYTES,
@@ -51,6 +51,7 @@ class RegistrationOutcomes:
     sql_attempt: RegistrationOutcomeRecord | None
     sql_outcome: RegistrationOutcomeRecord | None
     completion_outcome: RegistrationOutcomeRecord | None
+    completion_reconciled: RegistrationOutcomeRecord | None = None
 
 
 def _local_digest(value):
@@ -74,7 +75,7 @@ def _lengths(profile, lengths):
             reservation._response_lengths(lengths)
         elif profile == 2:
             sql._response_lengths(lengths)
-        elif profile == 3:
+        elif profile in (3, 4):
             completion._response_lengths(lengths)
     except reservation.AuthorityTransportError as exc:
         raise CustodyRecordError("registration outcome originals exceed their fixed bounds") from exc
@@ -90,10 +91,12 @@ def _originals(profile, originals):
             reservation._originals(originals, response=True)
         elif profile == 2:
             sql._originals(originals, response=True)
-        elif profile == 3:
+        elif profile in (3, 4):
             completion._originals(originals, response=True)
     except reservation.AuthorityTransportError as exc:
         raise CustodyRecordError("registration outcome original carrier differs") from exc
+    if profile == 4 and originals[0] != b"acknowledged":
+        raise CustodyRecordError("registration reconciliation requires acknowledged originals")
     return originals
 
 

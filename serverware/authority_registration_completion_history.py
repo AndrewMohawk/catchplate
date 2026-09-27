@@ -19,9 +19,7 @@ import time
 from serverware import authority_registration_execution_exchange as exchange
 from serverware import authority_registration_reservation_transport as reservation_wire
 from serverware import authority_registration_completion_response as completion
-from serverware import authority_webauthn_evidence_plan_request_history as request_history
-from serverware import authority_webauthn_evidence_plan_response_history as response_history
-from serverware import authority_webauthn_evidence_plan_history as plan_history
+from serverware import authority_registration_history_exchange as history_exchange
 
 
 authorization, grants, evidence, clock = (
@@ -96,70 +94,13 @@ def _verify_on_configuration(*, payload, configuration_digest, generation,
         return now
 
     current()
-    configured = exchange.configuration._capture_on_work(purpose="registration",
+    historical = history_exchange._verify_on_configuration(
         payload=owned_payload, configuration_digest=digest, generation=owned_generation,
-        runtime_role_identities=owned_runtime, work=work)
-    current()
-    request = request_history._verify_on_work(control_bytes=held[1],
-        context_bytes=held[2], inputs_bytes=held[3], pins=configured.pins,
-        generation_sequence=configured.generation_sequence,
-        generation_digest=configured.generation_digest, verifier_public_key=configured.verifier_public_key,
-        maximum_control_age_ns=configured.maximum_control_age_ns,
-        live_window=window, work=work, transport_deadline_ns=bound)
-    current()
-    response = response_history._verify_on_work(control_bytes=held[4],
-        request_control_bytes=held[1], envelope_bytes=held[5], inputs_bytes=held[6],
-        evaluation_context_bytes=held[7], pins=configured.pins,
-        generation_sequence=configured.generation_sequence,
-        generation_digest=configured.generation_digest, verifier_public_key=configured.verifier_public_key,
-        request_issued_at_epoch_ns=request.issued_at_epoch_ns,
-        request_expires_at_epoch_ns=request.expires_at_epoch_ns,
-        maximum_control_age_ns=configured.maximum_control_age_ns,
-        live_window=window, work=work, transport_deadline_ns=bound)
-    work.charge(input_bytes=len(held[3]) + len(held[6]))
-    if held[3] != held[6]:
-        raise RegistrationCompletionHistoryError("historical planning response changed the original inputs")
-    current()
-    history = plan_history._admit_history_on_work(envelope_bytes=held[5],
-        inputs_bytes=held[6], evaluation_context_bytes=held[7], request_context=request.context,
-        request_issued_at_epoch_ns=request.issued_at_epoch_ns,
-        request_expires_at_epoch_ns=request.expires_at_epoch_ns,
-        response_issued_at_epoch_ns=response.issued_at_epoch_ns,
-        response_expires_at_epoch_ns=response.expires_at_epoch_ns,
-        pins=configured.pins, maximum_control_age_ns=configured.maximum_control_age_ns,
-        live_window=window, work=work, transport_deadline_ns=bound)
-    current()
-    authorized = authorization._verify_historical_on_work(authorization_bytes=held[0],
+        runtime_role_identities=owned_runtime, originals=held,
         authorization_enrollment_bytes=caller_enrollment,
         current_root_enrollment_bytes=current_enrollment, grant_enrollment_bytes=grant_enrollment,
-        root_public_key=root, configuration_digest=digest,
-        planner_public_key=configured.pins[1], evidence_public_key=configured.pins[4],
+        root_public_key=root,
         live_window=window, work=work, transport_deadline_ns=bound)
-    current()
-    evidence.plan._same(authorized.generation_digest, configured.generation_digest, work,
-        "historical caller enrollment differs from the independently configured generation")
-    for name, expected in (("operation", authorization.OPERATION),
-            ("requestDigest", authorized.request_digest), ("operationId", authorized.operation_id)):
-        evidence.plan._same(request.context["request"][name], expected, work,
-            "historical planning request differs from original caller authorization")
-    grant, _grant_digest = grants._verify_historical_control_on_work(grant_bytes=held[9],
-        grant_enrollment_bytes=grant_enrollment, current_root_enrollment_bytes=current_enrollment,
-        root_public_key=root, planner_public_key=configured.pins[1], operation_public_key=configured.pins[4],
-        expected_authorization_digest=authorized.authorization_digest, work=work)
-    for name, expected in (("operation", authorization.OPERATION),
-            ("requestDigest", authorized.request_digest), ("operationId", authorized.operation_id),
-            ("databaseId", authorized.database_id), ("generationDigest", configured.generation_digest),
-            ("currentRootEnrollmentDigest", authorized.current_root_enrollment_digest),
-            ("grantEnrollmentDigest", authorized.grant_enrollment_digest)):
-        evidence.plan._same(grant[name], expected, work,
-            "historical completion grant differs from independent caller and planning scope")
-    if (grant["issuedAtEpochNs"] < authorized.issued_at_epoch_ns
-            or grant["expiresAtEpochNs"] > min(authorized.expires_at_epoch_ns,
-                request.expires_at_epoch_ns, response.expires_at_epoch_ns)):
-        raise RegistrationCompletionHistoryError("historical grant escapes its original authority interval")
-    before_digest = current_root.vector._digest_on_work(held[8], work=work)
-    evidence.plan._same(before_digest, grant["beforeVectorDigest"], work,
-        "historical complete before-vector differs from the original grant")
     current()
     # Replays actual original pending/plan/grant state, not any returned
     # successful-verification object; independently expected sequence/head/fence
@@ -168,9 +109,10 @@ def _verify_on_configuration(*, payload, configuration_digest, generation,
         plan_originals=held[5:8], reserve_request_bytes=reserved[0],
         reserve_receipt_bytes=reserved[2], snapshot_bytes=reserved[1],
         enrollment_bytes=current_enrollment, grant_bytes=held[9], grant_enrollment_bytes=grant_enrollment,
-        expectations=history, planner_public_key=configured.pins[1], evidence_public_key=configured.pins[4],
-        root_public_key=root, expected_authorization_digest=authorized.authorization_digest,
-        expected_database_id=authorized.database_id, expected_generation_digest=configured.generation_digest,
+        expectations=historical.expectations, planner_public_key=historical.planner_public_key,
+        evidence_public_key=historical.evidence_public_key,
+        root_public_key=root, expected_authorization_digest=historical.authorization_digest,
+        expected_database_id=historical.database_id, expected_generation_digest=historical.generation_digest,
         expected_pending_sequence=sequence, expected_pending_head_digest=head, expected_fence=fence,
         live_window=window, work=work, transport_deadline_ns=bound)
     current()

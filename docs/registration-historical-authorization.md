@@ -50,14 +50,19 @@ entrypoint accepts that result as authority.
 The now-implemented [historical completion admission](registration-completion-history.md)
 composes original planning-request/response authentication, genuine historical
 plan replay and caller/grant/reservation/completion joins. That original
-verification does not enable recovery: present-caller historical ownership
-admission, separate recovery-purpose authorization, and bounded transport,
-storage and journal reconciliation remain open integration work. The current
+verification alone does not authorize recovery. Separate
+[completion recovery](registration-completion-recovery.md) and
+[public recovery admission](public-registration-recovery.md) now implement
+historical ownership, present recovery-purpose permission and bounded
+transport/retention/reconciliation in source only. They require the same
+independently configured historical cohort and current cold-owner attestation;
+cross-generation independent authority resolution remains open. The current
 [handoff admission](registration-execution-handoff-admission.md) remains
 explicitly live-only. Independently authorized caller/key provisioning and
 root/configuration provenance remain external requirements. A valid historical
 signature does not prove present human approval, current pending state,
 revocation status, database effects, SQL permission or credential finalization.
+Finalization and production verification remain separate, uncompleted gates.
 
 No network, SQL, signing, storage, public route or deployment is added here.
 This source-only implementation has not been executed. Deferred frozen

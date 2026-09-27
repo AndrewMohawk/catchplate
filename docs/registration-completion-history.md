@@ -22,6 +22,13 @@ before verification. No key, expected checkpoint or request identity comes
 from the completion response merely to make it match. An uncertain raw4 returns
 no authenticated result.
 
+Planning, caller and grant admission is shared with the private
+[historical exchange verifier](registration-history-exchange.md). That helper
+needs only the original raw10 and independent scope, so it can support historical
+retained-subject inspection before a reservation or completion exists. This
+completion wrapper still bounds the full raw10/raw3/raw4 inventory together and
+requires the remaining original pending/completion verification.
+
 ## Genuine verification chain
 
 ```text
@@ -30,6 +37,7 @@ independent configured keys + complete original raw10/raw3/raw4
     -> planner-signed historical response and request/raw3 commitments
     -> full plan proof/semantic/root replay and bounded historical observations
     -> original caller signature and dedicated grant authorization
+    -> complete before/after-vector replay and every original grant claim
     -> exact original request, operation, enrollment and interval joins
     -> genuine pending/plan/grant + completion/state-original verification
     -> unchanged completion/state originals and authenticated content IDs
@@ -54,8 +62,12 @@ generation must agree with the genuine planning request and actual configured
 generation. The real historical grant verifier binds the dedicated authorizer,
 original caller-authorization identity, enrollments, database/generation and
 request/operation. Grant issue/expiry must remain inside its original caller
-and planning authority intervals. The complete canonical before-vector must
-match the signed grant.
+and planning authority intervals. The shared exchange verifier also invokes the
+actual complete-vector plan replay, not merely a before-vector hash comparison.
+Every derived grant claim must match: original frame bytes/counts, request and
+operation, retained-record/plan/result identities, complete before/after-vector
+identities, original plan interval and signed snapshot/capability identities.
+Unaffected vector descriptors remain preserved by the existing replay engine.
 
 Finally the actual [completion response verifier](registration-completion-response.md)
 replays the original pending plan/grant and verifies original completion/state
@@ -84,17 +96,19 @@ It carries no mutation, executable grant, packet-ID claim or currentness lease.
 
 ## Remaining integration
 
-This is original-verification composition, not a deployed or public recovery
-workflow. Current public execute/completion actions retain their live ownership
-and original-authorization requirements. Historical present-caller ownership
-admission, separate recovery-purpose permission, bounded journal reconciliation
-and transport/storage integration still need implementation. Credential
-finalization independently requires committed evidence and exact associated
-signer-original replay. No production acceptance gate is closed.
+This verifier alone is not a deployed or public recovery workflow. Public
+execute/completion actions retain their live ownership and original-authorization
+requirements. The separate [completion recovery path](registration-completion-recovery.md)
+integrates historical ownership, dedicated public recovery-purpose admission and
+bounded reconciliation in this same source-only batch; those checks are not
+provided by this verifier. Credential finalization, action-time currentness and
+cross-generation historical authority resolution remain separate. No production
+acceptance gate is closed.
 
 Deferred frozen verification must exercise valid expired originals against live
 rejection; altered signatures, body commitments, generation, keys and scope;
-unrelated authentic exchanges; impossible original timing; exact before-vector
-and pending joins; malformed/uncertain completion; cumulative work exhaustion,
+unrelated authentic exchanges; impossible original timing; changed complete
+before/after-vector descriptors or grant claims; exact pending joins;
+malformed/uncertain completion; cumulative work exhaustion,
 window expiry and clock reversal; and unchanged SQL/live rejection behavior.
 No such tests or runtime verification ran in this source batch.

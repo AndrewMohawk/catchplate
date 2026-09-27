@@ -225,6 +225,17 @@ class _EnrollmentOwner:
                 expected_user_id=expected_user_id, expected_session_id=expected_session_id,
                 deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_ns, work=work)
 
+    def _recover_retained_registration_completion(self, *, local_digest, expected_user_id, expected_session_id,
+            live_window, work, transport_deadline_ns=None):
+        """Separate historical recovery after fresh present-purpose admission."""
+        from serverware import control_plane_registration_recovery as recovery
+
+        _require_pid()
+        with _LOCK:
+            return recovery._recover_on_owner(self, local_digest=local_digest,
+                expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+                live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+
     def _authorize_registration_execution(self, *, request_originals, response_originals,
             deadline_epoch_ns, deadline_ns, work):
         """Private continuation after real present caller/purpose admission.

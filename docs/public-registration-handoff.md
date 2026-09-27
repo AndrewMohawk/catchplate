@@ -103,9 +103,11 @@ Both public actions still require live original signer/caller/grant controls.
 [Historical completion admission](registration-completion-history.md) now
 composes genuine historical planning request/response, full plan/history replay,
 caller/grant and completion-original verification in source. It does not relax
-these routes or renew execution permission. Historical present-caller ownership,
-separate recovery-purpose permission and bounded reconciliation/transport/storage
-integration remain unimplemented.
+these routes or renew execution permission. Separate
+[public historical completion recovery](public-registration-recovery.md) is now
+implemented in source, with genuine historical ownership replay, fresh
+recovery-purpose permission and bounded reconciliation/transport/storage. These
+original execute/complete actions remain live-only; recovery never retries SQL.
 
 Separate credential finalization, complete portal UX, independent currentness,
 provisioning, frozen verification and full production acceptance remain open.

@@ -242,11 +242,12 @@ class CustodyJournal:
         observed = set()
         associated = {}
         registration_outcomes = {}
+        uncertain_completions = set()
         count = 0
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
                 count += 1
-                if count > 6 * self._maximum_records:
+                if count > 7 * self._maximum_records:
                     raise CustodyJournalError("journal physical file limit exceeded")
                 name = entry.name
                 if name.startswith("prepared-"):
@@ -307,6 +308,8 @@ class CustodyJournal:
                         raise CustodyJournalError("registration outcome differs from its fixed filename")
                     # Only bounded metadata is kept across the recovery scan.
                     by_kind[kind] = (outcome.source_revision, outcome.digest)
+                    if kind == "completion-outcome" and outcome.originals[0] == b"uncertain":
+                        uncertain_completions.add(digest)
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
         retention_only = {digest for digest, entry in prepared.items()
@@ -327,6 +330,8 @@ class CustodyJournal:
         self._associations = associated
         for digest, by_kind in registration_outcomes.items():
             self._registration_outcome_scope(digest, by_kind)
+            if "completion-reconciled" in by_kind and digest not in uncertain_completions:
+                raise CustodyJournalError("registration reconciliation lacks original uncertainty")
         self._registration_outcomes = registration_outcomes
         if self._stamp() != before:
             raise CustodyJournalError("journal directory changed during recovery")
@@ -387,8 +392,9 @@ class CustodyJournal:
         if (any(kind not in outcome_records.KINDS or value[0] != association.source_revision
                 for kind, value in by_kind.items())
                 or "sql-claimed" in by_kind and "reservation" not in by_kind
-                or ("sql-outcome" in by_kind or "completion-outcome" in by_kind)
-                    and "sql-claimed" not in by_kind):
+                or any(kind in by_kind for kind in ("sql-outcome", "completion-outcome", "completion-reconciled"))
+                    and "sql-claimed" not in by_kind
+                or "completion-reconciled" in by_kind and "completion-outcome" not in by_kind):
             raise CustodyJournalError("registration outcome lacks its retained original prerequisites")
 
     def _read_registration_outcomes(self, digest):
@@ -411,9 +417,12 @@ class CustodyJournal:
                     or outcome.kind != kind or outcome.local_digest != digest):
                 raise CustodyJournalError("registration outcome changed after admitted recovery")
             loaded[kind] = outcome
+        if ("completion-reconciled" in loaded
+                and loaded["completion-outcome"].originals[0] != b"uncertain"):
+            raise CustodyJournalError("registration reconciliation lacks original uncertainty")
         return outcome_records.RegistrationOutcomes(association.source_revision, digest,
             loaded.get("reservation"), loaded.get("sql-claimed"), loaded.get("sql-outcome"),
-            loaded.get("completion-outcome"))
+            loaded.get("completion-outcome"), loaded.get("completion-reconciled"))
 
     def _publish(self, kind, digest, encoded):
         name = _name(kind, digest)
@@ -440,7 +449,7 @@ class CustodyJournal:
         marker_reserve = (0 if record.family in _RETENTION_ONLY_FAMILIES else
             _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
         if (len(self._entries) >= self._maximum_records
-                or len(self._file_identities) >= 6 * self._maximum_records
+                or len(self._file_identities) >= 7 * self._maximum_records
                 or len(encoded) + marker_reserve
                     > self._quota - self._used_bytes - self._reserved_bytes):
             raise CustodyJournalError("journal preparation capacity is exhausted")
@@ -520,7 +529,7 @@ class CustodyJournal:
                 if digest not in self._entries)
             required_bytes = sum(len(encoded) for _, encoded in missing) + len(association_encoded)
             if (len(self._entries) + len(missing) > self._maximum_records
-                    or len(self._file_identities) + len(missing) + 1 > 6 * self._maximum_records
+                    or len(self._file_identities) + len(missing) + 1 > 7 * self._maximum_records
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete preparation capacity is exhausted")
             try:
@@ -580,19 +589,23 @@ class CustodyJournal:
                 raise
             if kind == "sql-claimed" and current.reservation is None:
                 raise CustodyJournalError("registration SQL dispatch requires retained reservation originals")
-            if kind in ("sql-outcome", "completion-outcome") and current.sql_attempt is None:
+            if kind in ("sql-outcome", "completion-outcome", "completion-reconciled") and current.sql_attempt is None:
                 raise CustodyJournalError("registration outcome requires an irreversible local SQL claim")
+            if (kind == "completion-reconciled" and (current.completion_outcome is None
+                    or current.completion_outcome.originals[0] != b"uncertain")):
+                raise CustodyJournalError("registration reconciliation requires retained original uncertainty")
             record, encoded = outcome_records.encode(kind, digest, held,
                 source_revision=current.source_revision)
             if kind in by_kind:
                 existing = {"reservation": current.reservation, "sql-outcome": current.sql_outcome,
-                    "completion-outcome": current.completion_outcome}[kind]
+                    "completion-outcome": current.completion_outcome,
+                    "completion-reconciled": current.completion_reconciled}[kind]
                 if (existing.originals != record.originals or existing.digest != record.digest):
                     self._io.poison()
                     raise CustodyJournalError("registration outcome cannot replace its first exact originals")
                 self._require_ready()
                 return existing.digest
-            if (len(self._file_identities) >= 6 * self._maximum_records
+            if (len(self._file_identities) >= 7 * self._maximum_records
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal registration outcome capacity is exhausted")
             try:
@@ -629,10 +642,19 @@ class CustodyJournal:
     def append_registration_completion_outcome(self, local_digest, originals):
         """Retain the first raw4, including uncertainty; never upgrade/overwrite.
 
-        A later genuinely acknowledged response requires a separate bounded
-        reconciliation design. This storage cannot replace an earlier response.
+        A later acknowledged response belongs in the separate reconciliation
+        slot. This storage cannot replace an earlier response.
         """
         return self._append_registration_outcome(local_digest, "completion-outcome", originals)
+
+    def append_registration_completion_reconciliation(self, local_digest, originals):
+        """Retain one separate acknowledged raw4 after immutable uncertainty.
+
+        This carrier check is not signature or outcome authentication. The
+        recovery facade must genuinely verify all originals before append.
+        Conflicts poison the journal; no record or SQL claim is overwritten.
+        """
+        return self._append_registration_outcome(local_digest, "completion-reconciled", originals)
 
     def load_registration_outcomes(self, local_digest):
         """Return opaque originals/IDs after rereading the exact associated pair.

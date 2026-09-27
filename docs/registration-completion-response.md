@@ -113,13 +113,18 @@ while original caller/grant authorization remains live. Separate
 ownership admission in source and remain live-only. The separate
 [historical completion admission](registration-completion-history.md) now
 composes genuine original planning/history, caller/grant and completion
-verification even after the original execution controls expire. Historical
-present-caller ownership, separate recovery-purpose permission and bounded
-reconciliation/transport/storage integration remain open. This receiver does
+verification even after the original execution controls expire. Separate
+[completion recovery](registration-completion-recovery.md) and
+[public recovery admission](public-registration-recovery.md) now implement
+historical ownership, present recovery-purpose permission and bounded
+reconciliation/transport/retention in source only. That flow still requires the
+same independently configured historical cohort and current cold-owner
+attestation; cross-generation independent authority resolution remains open.
+This receiver does
 not itself authorize a public action, credential finalization or session/workload
-enrollment. Finalization still
-requires its own genuine committed-evidence and exact signer-original joins.
-No production acceptance gate is closed.
+enrollment. Finalization still requires its own genuine committed-evidence and
+exact signer-original joins. Production verification remains deferred, and no
+production acceptance gate is closed.
 
 After source freeze and prerequisite admission, planned verification covers
 genuine historical registration responses; wrong plan/grant/reserve/key/scope

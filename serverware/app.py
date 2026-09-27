@@ -419,11 +419,14 @@ async def csrf_middleware(request: Request, call_next):
 async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_registration_handoff_routes as handoff_routes
     from serverware import control_plane_registration_handoff_http as handoff_contract
+    from serverware import control_plane_registration_recovery_routes as recovery_routes
+    from serverware import control_plane_registration_recovery_http as recovery_contract
 
     request_path = request.scope.get("path")
     handoff_request = (request.method == "POST" and request_path in (
         handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS))
     handoff_completion = request_path in handoff_routes.COMPLETE_PATHS
+    recovery_request = request.method == "POST" and request_path in recovery_routes.PATHS
     reservation_request = (
         request.method == "POST" and request_path in _REGISTRATION_RESERVATION_PATHS
     )
@@ -432,13 +435,15 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     )
     registration_preparation_request = (
         request.method == "POST" and request_path in _REGISTRATION_PREPARATION_PATHS
-    ) or execution_preparation_request or reservation_request or handoff_request
+    ) or execution_preparation_request or reservation_request or handoff_request or recovery_request
     preparation_error = (_registration_reservation_error if reservation_request
         else _registration_execution_preparation_error if execution_preparation_request
         else _registration_preparation_error)
     if handoff_request:
         preparation_error = lambda status, code: handoff_routes.error(
             status, code, completion=handoff_completion)
+    elif recovery_request:
+        preparation_error = recovery_routes.error
     if registration_preparation_request:
         # This new route family has one exact framing path. Do not change the
         # existing browser /verify parser, defaults or finalization behavior.
@@ -452,7 +457,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             return preparation_error(400, "registration_preparation_framing_invalid")
         if request.headers.getlist("content-type") != ["application/json"]:
             return preparation_error(415, "registration_preparation_json_required")
-        route_limit = handoff_contract.MAX_REQUEST_BYTES if handoff_request else _REGISTRATION_PREPARATION_MAX_BYTES
+        route_limit = (recovery_contract.MAX_REQUEST_BYTES if recovery_request
+            else handoff_contract.MAX_REQUEST_BYTES if handoff_request else _REGISTRATION_PREPARATION_MAX_BYTES)
         if int(lengths[0]) > route_limit:
             return preparation_error(413, "registration_preparation_body_too_large")
     setup_canary_request = (
@@ -503,6 +509,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     request_limit = {
         **{path: handoff_contract.MAX_REQUEST_BYTES for path in (
             handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS)},
+        **{path: recovery_contract.MAX_REQUEST_BYTES for path in recovery_routes.PATHS},
         "/api/authority/control-plane/execute":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/authority/control-plane/custody/reconcile": 256,
@@ -590,7 +597,9 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             if len(body) != content_length:
                 return preparation_error(400, "registration_preparation_framing_invalid")
             try:
-                if handoff_request:
+                if recovery_request:
+                    request.state.registration_recovery_payload = recovery_contract.parse_request(request._body)
+                elif handoff_request:
                     request.state.registration_handoff_payload = handoff_contract.parse_request(
                         request._body, completion=handoff_completion)
                 else:
@@ -604,7 +613,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
                     request.state.registration_execution_preparation_payload = (
                         WebAuthnRegistrationExecutionPrepare.model_validate(_plain_setup_json(document))
                     )
-                elif not handoff_request:
+                elif not handoff_request and not recovery_request:
                     request.state.registration_preparation_payload = (
                         WebAuthnRegistrationPrepare.model_validate(_plain_setup_json(document))
                     )
@@ -4479,6 +4488,7 @@ def _control_plane_requester_roles(action: str) -> set[str]:
         "webauthn.registration.execution.reserve",
         "webauthn.registration.execution.execute",
         "webauthn.registration.execution.complete",
+        "webauthn.registration.execution.recover",
         "webauthn.credential.revoke",
         "break_glass.grant",
     }:
@@ -24676,6 +24686,8 @@ for _portal_placeholder, _portal_fragment in (
 
 
 from serverware import control_plane_registration_handoff_routes as _registration_handoff_routes
+from serverware import control_plane_registration_recovery_routes as _registration_recovery_routes
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
+_fastapi_app.include_router(_registration_recovery_routes.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

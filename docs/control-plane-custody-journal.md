@@ -29,8 +29,9 @@ quotas. It does not choose or create an ambient storage location.
 `quota_bytes` and `maximum_records`. It opens its own directory handle, holds a
 nonblocking exclusive lease and binds the owner to the opening process. The
 directory must have mode 0700; record files must have mode 0400, one link and
-the pinned ownership. Source ceilings remain 8 GiB and 4096 prepared records
-(at most 12288 physical files). Each legacy prepared record reserves its fixed 40-byte
+the pinned ownership. Source ceilings remain 8 GiB and 4096 prepared records;
+the bounded recovery scan allows at most `7 * maximum_records` physical files.
+Each legacy prepared record reserves its fixed 40-byte
 attempt marker and the maximum 370-byte observation frame while those markers
 are missing. Existing prepared/attempted journals recover without rewriting
 their originals, but must have enough configured quota for the missing
@@ -164,6 +165,38 @@ evidence business row was committed. Later finalization still needs all those
 separate gates. No new public original-export, forward, reconcile or attempt
 action or public association-complete flag is added; in-memory preparation
 remains raw10-only with no storage.
+
+## Bounded registration completion reconciliation
+
+The separate [completion recovery path](registration-completion-recovery.md)
+can preserve a later acknowledged response without replacing an original
+uncertain completion. The existing outcome codec appends kind index `4`,
+`completion-reconciled`, using the exact bounded completion raw4 carrier and
+requiring its first original to be `acknowledged`. Existing kind indices,
+original bytes, source revisions and content identities are unchanged.
+
+`CustodyJournal.append_registration_completion_reconciliation(local_digest, originals)`
+and the corresponding custody-client method require the actual complete
+signer/grant preparation, its irreversible local SQL claim and a retained
+original `uncertain` completion outcome. They publish one separate immutable
+slot. Exact duplicate originals are idempotent; a conflicting response fails
+and poisons the journal. No original, association or SQL claim is overwritten
+or cleared, and no additional SQL dispatch is authorized.
+
+The real recovery facade verifies the original signatures and complete
+historical pending/completion scope **before** append. Storage checks only the
+bounded carrier and local prerequisites; `acknowledged`, a local content ID or
+`load_registration_outcomes(...).completion_reconciled` is not authentication,
+currentness or permission. Reuse still requires genuine original verification.
+
+Recovery and load recheck the fixed kind/filename, source and prerequisite
+relationships. The record uses the existing byte quota and protected atomic
+publication/readback/fsync paths; the scan is bounded by
+`7 * maximum_records`, with legacy marker reservations unchanged. Publication
+uncertainty is not retry permission, and local durability is not hostile-host
+anti-rollback protection. This source-only addition provides one reconciliation
+slot, not a mutable latest-result log, credential finalization or a new legacy
+forwarding/reconcile family.
 
 ## Private configured forwarding
 

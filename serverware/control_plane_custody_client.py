@@ -537,7 +537,7 @@ class ControlPlaneCustodyClient:
         if (type(result) is not outcomes.RegistrationOutcomes or result.local_digest != digest):
             raise CustodyClientError("registration outcomes differ from the requested local preparation")
         for kind, record in zip(outcomes.KINDS, (result.reservation, result.sql_attempt,
-                result.sql_outcome, result.completion_outcome)):
+                result.sql_outcome, result.completion_outcome, result.completion_reconciled)):
             if record is not None:
                 if (type(record) is not outcomes.RegistrationOutcomeRecord
                         or record.local_digest != digest or record.kind != kind
@@ -547,6 +547,15 @@ class ControlPlaneCustodyClient:
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed while loading registration outcomes")
         return result
+
+    def append_registration_completion_reconciliation(self, local_digest, originals):
+        """Retain one separate raw4 after uncertainty; caller owns verification."""
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_completion_reconciliation(
+            binding.journal, local_digest, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining registration reconciliation")
+        return journal._digest(digest)
 
     def append_and_forward_evidence(self, purpose, originals, *, deadline_ns=None):
         """Append actual raw6 durably, then attempt its forwarding exactly once.

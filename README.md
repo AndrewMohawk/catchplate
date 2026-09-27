@@ -23,36 +23,56 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: evidence handoff 10/10 landed; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 7/8; workloads and native 3/6; providers and operations 0/7. F08 session activation is in progress. Twelve checkpoints remain unfinished. Source status, not product readiness.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: token release and private handoff
+### Current workflow: session activation
 
-**15/16 token-release units landed; the final unit is in progress.**
-The bar below expands units 15 and 16 into their **11 existing substeps**:
-**10 landed · 0 active · 1 todo**. Each segment has a name and status.
+**20/26 source steps landed · 0 active · 6 todo.** Protected token release and
+private handoff are source-landed in [5719d50](https://github.com/example/private-deployment).
+Next is step 21: fresh permission for the exact activation target.
 
-[![Release and handoff substeps: 15.1 release authorization, 15.2 committed-original verification, 15.3 completion-to-release proof, 15.4 durable outcome, 15.5 guarded token opening, 15.6 unchanged-outcome recovery, 16.1 root bootstrap and key delivery, 16.2 isolated cold service, 16.3 bounded private transport and 16.4 independent response verifier are source-landed. Next is 16.5 authorized private handoff. Ten of eleven landed, zero active and one todo; no runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
+[![Session activation's 26 named source steps: 01–20 landed; 21 target-bound permission NEXT/todo; 22–26 public activation, recovery and portal work todo. Twenty landed, zero active and six todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
-| Status | Substep | What it delivers |
+The six steps after protected release remain individually tracked:
+
+| Step / stable ID | Remaining deliverable | Status |
 | --- | --- | --- |
-| Landed | 16.1 · Root bootstrap and key delivery | Authenticated configuration, dedicated delivery key and isolated startup — [e6fa55c](https://github.com/example/private-deployment) |
-| Landed | 16.2 · Isolated cold service | Packaged, finite release worker with resource cleanup — [4097896](https://github.com/example/private-deployment) |
-| Landed | 16.3 · Bounded private transport | Peer-checked requests and guarded responses under the original deadline — [4097896](https://github.com/example/private-deployment) |
-| Landed | 16.4 · Independent response verifier | Root-authorized checks of original proofs, exact response and token commitment — [abce0bb](https://github.com/example/private-deployment) |
-| Next / todo | 16.5 · Authorized private handoff | Connect the configured authorized caller to transport and verification; handle uncertainty without automatic retry |
+| 21 · F08.5.1 | Authorize the exact user/session/credential target, with fresh approval and dedicated caller-key custody | Next / todo |
+| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | Todo |
+| 23 · F08.5.3 | Connect separately authorized recovery; a missing response never permits automatic activation retry | Todo |
+| 24 · F08.6.1 | Add explicit portal activate/recover controls bound to the exact retained target | Todo |
+| 25 · F08.6.2 | Require fresh action-bound portal approval; discard prompts when actor or target changes | Todo |
+| 26 · F08.6.3 | Confirm the session only after exact delivery and a fresh current-auth check; preserve uncertainty | Todo |
 
-**Latest landed:** [16.4 · independent response verification (`abce0bb`)](https://github.com/example/private-deployment).
-Still to do: connect the authorized private caller to the transport and verifier.
+<details>
+<summary>Completed source: protected release 16/16, release/handoff 11/11</summary>
+
+The existing 11 release/handoff substeps have **11 landed · 0 active · 0 todo**.
+
+[![All eleven release and handoff substeps are source-landed: 15.1–15.6 exact release/recovery and 16.1–16.5 cold construction, service, transport, independent verification and authorized private handoff. Private handoff landed in 5719d50. No active or open components remain inside this detail; public authorization and portal steps 21–26 remain open. No runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
+
+| Status | Handoff substep | Evidence |
+| --- | --- | --- |
+| Landed | 16.1 · Root bootstrap and key delivery | [e6fa55c](https://github.com/example/private-deployment) |
+| Landed | 16.2 · Isolated cold service | [4097896](https://github.com/example/private-deployment) |
+| Landed | 16.3 · Bounded private transport | [4097896](https://github.com/example/private-deployment) |
+| Landed | 16.4 · Independent response verifier | [abce0bb](https://github.com/example/private-deployment) |
+| Landed | 16.5 · Authorized private handoff | [5719d50](https://github.com/example/private-deployment) |
+
+Latest landed: [16.5 · authorized private handoff (`5719d50`)](https://github.com/example/private-deployment).
+It connects the configured caller, transport and verifier with a durable
+token-free dispatch claim and no automatic retry. [Criteria and evidence](docs/production-status.md#exact-release-and-handoff-detail).
 Source verification is not observed delivery, durable storage or a confirmed session.
 
-Each substep turns green only when its implementation is committed and linked
-in the [completion-criteria ledger](docs/production-status.md#exact-release-and-handoff-detail).
-These nested counts are **not additive**, effort percentages, or an ETA.
+</details>
+
+Green requires a linked implementation commit. Nested counts are **not additive**,
+effort percentages, or an ETA.
 
 ### Still to finish across the project
 
 | ID | Remaining checkpoint | Source status |
 | --- | --- | --- |
 | H05 | Historical authority across configuration/key changes | Todo |
-| F08 | Session activation: finish token handoff, then public permissions, activation/recovery and portal/session flow | In progress |
+| F08 | Session activation: public permissions, activation/recovery and portal/session flow (steps 21–26 above) | In progress |
 | N04 | Workload identity provisioning and authenticated channels | Todo |
 | N05 | Native enrollment, verified CA installation and proxy setup | Todo |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
@@ -72,9 +92,9 @@ partial code. Landed does not mean tested, deployed, or production-ready.
 <summary>Deeper checkpoints and completed-work evidence</summary>
 
 - [All 46 project checkpoints and their evidence](docs/production-status.md#next-source-milestones)
-- [Session activation: 19/26 steps landed](docs/production-status.md#active-workflow-granular-source-steps)
-- [Token release: 15/16 units landed](docs/production-status.md#token-release-implementation-detail)
-- [Release and handoff: 10/11 substeps landed](docs/production-status.md#exact-release-and-handoff-detail)
+- [Session activation: 20/26 steps landed](docs/production-status.md#active-workflow-granular-source-steps)
+- [Token release: 16/16 units landed](docs/production-status.md#token-release-implementation-detail)
+- [Release and handoff: 11/11 substeps landed](docs/production-status.md#exact-release-and-handoff-detail)
 - [Completion/recovery: 6/6](docs/production-status.md#consume-completion-and-recovery-detail), [reservation/SQL: 6/6](docs/production-status.md#consume-reservation-and-sql-detail), [consume authorization: 12/12](docs/production-status.md#consume-authorization-substeps), [grant issuance: 5/5](docs/production-status.md#consume-grant-issuance-detail)
 
 </details>

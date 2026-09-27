@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1606" viewBox="0 0 1000 1606" role="img" aria-labelledby="title description">
-  <title id="title">Source implementation: 34 of 46 parents landed; 12 open including F08. F08 has 19/26 leaves landed. Step 20 remains in progress, with a separate 16-unit detail view.</title>
-  <desc id="description">Six cards list all 46 stable parents: evidence 10/10, history 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. Parent total remains 34/46. F08 direct 3/6, protected 4/5, planning 5/5, cold admission 3/3, execution 6/7 and private replay 8/8 remain unchanged. Activation stays 19/26 landed, step 20 in progress and 6 other open. Step 20 has 4/5 diagnostic groups and 15/16 detail units landed, 1 in progress and 0 other open. Row 14 completion/recovery has all six source components landed; group c is 12/12 landed. Row 15 exact committed-original release is source-landed (6/6): fresh private authorization 15.1 landed c26c9e783b203f14f11505719af80bea2ad7fc8d; committed-original verification 15.2 landed b7be5cbdf2ef75eda606b025032943dc0812bcb9; completion-to-release proof 15.3 landed 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0; durable exact outcome 15.4 landed 73a7f82b7aacdb5f4e323715ccde1c264330d81a; guarded token opening 15.5 landed 5e5ca4050686f9003ec8fd35c6e189531e9d61a3; uncertain-outcome recovery 15.6 landed e49e14ec3039448af9f84bd0f21b20539046adba; 16.1 root bootstrap and key delivery is source-landed in e6fa55c4160fe8058b04583e165d3253315419d1; 16.2 isolated cold service and 16.3 bounded private transport are source-landed in 4097896b3d0eabd735a7deb711b5c884b7c98363; 16.4 independent response verifier is source-landed in abce0bb6f70ef9eb87d980ca9f0fd788fb6e3fb0; 16.5 authorized private handoff is NEXT/open; row 16 cold handoff is in progress. Release/handoff diagnostics are 10/11 landed, 0 active and 1 open; row 15 is 6/6 landed and row 16 is 4/5 landed, 0 active and 1 open. Authorization stays 12/12, grant detail 5/5 and SQL diagnostics 6/6. The linked ledger retains criteria and commit evidence. Nested counts are nonadditive. Guarded opening and finite private transport are source-landed; no deployed/public delivery or current-session claim. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
+  <title id="title">Source implementation: 34 of 46 parents landed; 12 open including F08. F08 has 20/26 leaves landed. Step 20 is source-landed, with a separate 16-unit detail view; step 21 is NEXT/open.</title>
+  <desc id="description">Six cards list all 46 stable parents: evidence 10/10, history 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. Parent total remains 34/46. F08 direct 4/6, protected 5/5, planning 5/5, cold admission 3/3, execution 7/7 and private replay 8/8 remain unchanged. Activation stays 20/26 landed, 0 active and 6 open; step 21 NEXT, not active. Step 20 has 5/5 diagnostic groups and 16/16 detail units landed, 0 in progress and 0 open. Row 14 completion/recovery has all six source components landed; group c is 12/12 landed. Row 15 exact committed-original release is source-landed (6/6): fresh private authorization 15.1 landed c26c9e783b203f14f11505719af80bea2ad7fc8d; committed-original verification 15.2 landed b7be5cbdf2ef75eda606b025032943dc0812bcb9; completion-to-release proof 15.3 landed 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0; durable exact outcome 15.4 landed 73a7f82b7aacdb5f4e323715ccde1c264330d81a; guarded token opening 15.5 landed 5e5ca4050686f9003ec8fd35c6e189531e9d61a3; uncertain-outcome recovery 15.6 landed e49e14ec3039448af9f84bd0f21b20539046adba; 16.1 root bootstrap and key delivery is source-landed in e6fa55c4160fe8058b04583e165d3253315419d1; 16.2 isolated cold service and 16.3 bounded private transport are source-landed in 4097896b3d0eabd735a7deb711b5c884b7c98363; 16.4 independent response verifier is source-landed in abce0bb6f70ef9eb87d980ca9f0fd788fb6e3fb0; 16.5 authorized private handoff is source-landed in 5719d50b9d05de6420286ac52a4ac3fc285c83c0; row 16 cold handoff is source-landed. Release/handoff diagnostics are 11/11 landed, 0 active and 0 open; row 15 is 6/6 landed and row 16 is 5/5 landed, 0 active and 0 open. Authorization stays 12/12, grant detail 5/5 and SQL diagnostics 6/6. The linked ledger retains criteria and commit evidence. Nested counts are nonadditive. Guarded opening and finite private transport are source-landed; no deployed/public delivery or current-session claim. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="1604" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="40" fill="#f8fafc" font-size="26" font-weight="700">Implementation, checkpoint by checkpoint</text>
@@ -105,7 +105,7 @@
         <rect x="240" y="48" width="49" height="10" rx="3"><title>F05 landed</title></rect>
         <rect x="295" y="48" width="49" height="10" rx="3"><title>F06 landed</title></rect>
         <rect x="350" y="48" width="49" height="10" rx="3"><title>F07 landed, including all eight child steps</title></rect>
-        <rect x="405" y="48" width="49" height="10" rx="3" fill="#422006" stroke="#fbbf24"><title>F08 in progress and still open; 3 of 6 child steps landed</title></rect>
+        <rect x="405" y="48" width="49" height="10" rx="3" fill="#422006" stroke="#fbbf24"><title>F08 in progress and still open; 4 of 6 child steps landed</title></rect>
       </g>
       <g fill="#d1fae5" font-size="14">
         <text x="20" y="86">✓ F01 · Reserve computation &amp; returned checks</text>
@@ -119,8 +119,8 @@
       <rect x="12" y="214" width="440" height="28" rx="5" fill="#422006" stroke="#fbbf24"/>
       <text x="20" y="233" fill="#fde68a" font-size="14">→ F08 · OIDC session activation</text>
       <text x="438" y="233" text-anchor="end" fill="#fde68a" font-size="12" font-weight="700">IN PROGRESS</text>
-      <text x="20" y="258" fill="#94a3b8" font-size="12">F07: 8/8 child steps landed · F08: 3/6 landed, 3 open.</text>
-      <text x="20" y="275" fill="#94a3b8" font-size="12">Protected activation in progress; six-step bar below.</text>
+      <text x="20" y="258" fill="#94a3b8" font-size="12">F07: 8/8 child steps landed · F08: 4/6 landed, 2 open.</text>
+      <text x="20" y="275" fill="#94a3b8" font-size="12">Protected activation source-landed; public/portal steps open.</text>
     </g>
 
     <g transform="translate(24 745)" aria-labelledby="n-title">
@@ -178,12 +178,12 @@
     <g transform="translate(24 1045)" aria-labelledby="f08-title">
       <rect width="952" height="262" rx="12" fill="#172033" stroke="#fbbf24"/>
       <text id="f08-title" x="20" y="32" fill="#f8fafc" font-size="21" font-weight="700">Current focus · F08 OIDC session activation</text>
-      <text x="932" y="32" text-anchor="end" fill="#6ee7b7" font-size="16" font-weight="700">3 / 6 steps landed</text>
+      <text x="932" y="32" text-anchor="end" fill="#6ee7b7" font-size="16" font-weight="700">4 / 6 steps landed</text>
       <g>
         <rect x="20" y="50" width="142" height="30" rx="5" fill="#34d399"><title>F08.1 landed: retained finalization admission</title></rect>
         <rect x="174" y="50" width="142" height="30" rx="5" fill="#34d399"><title>F08.2 landed: original assertion and intended row changes</title></rect>
         <rect x="328" y="50" width="142" height="30" rx="5" fill="#34d399"><title>F08.3 landed: existing-cookie login hardening</title></rect>
-        <rect x="482" y="50" width="142" height="30" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4 in progress and still open: protected activation and token delivery</title></rect>
+        <rect x="482" y="50" width="142" height="30" rx="5" fill="#34d399"><title>F08.4 landed: protected activation and token delivery; 5719d50</title></rect>
         <rect x="636" y="50" width="142" height="30" rx="5" fill="#334155" stroke="#94a3b8"><title>F08.5 open: public activation and recovery</title></rect>
         <rect x="790" y="50" width="142" height="30" rx="5" fill="#334155" stroke="#94a3b8"><title>F08.6 open: integrated post-finalization portal flow</title></rect>
       </g>
@@ -191,7 +191,7 @@
         <text x="91" y="70" fill="#0f172a">✓ F08.1</text>
         <text x="245" y="70" fill="#0f172a">✓ F08.2</text>
         <text x="399" y="70" fill="#0f172a">✓ F08.3</text>
-        <text x="553" y="70" fill="#fde68a">→ F08.4</text>
+        <text x="553" y="70" fill="#0f172a">✓ F08.4</text>
         <text x="707" y="70" fill="#e2e8f0">— F08.5</text>
         <text x="861" y="70" fill="#e2e8f0">— F08.6</text>
       </g>
@@ -199,31 +199,31 @@
         <text x="20" y="112" fill="#d1fae5">✓ F08.1 · Retained finalization admission</text>
         <text x="20" y="141" fill="#d1fae5">✓ F08.2 · Original assertion &amp; row-change intent</text>
         <text x="20" y="170" fill="#d1fae5">✓ F08.3 · Existing-cookie login hardening</text>
-        <text x="482" y="112" fill="#fde68a">→ F08.4 · Protected activation &amp; token delivery</text>
+        <text x="482" y="112" fill="#d1fae5">✓ F08.4 · Protected activation &amp; token delivery</text>
         <text x="482" y="141" fill="#e2e8f0">— F08.5 · Public activation &amp; recovery</text>
         <text x="482" y="170" fill="#e2e8f0">— F08.6 · Integrated portal &amp; active-login check</text>
       </g>
-      <text x="20" y="209" fill="#cbd5e1" font-size="14">3 landed · 1 in progress · 2 open. The parent stays open until all six source steps land.</text>
-      <text x="20" y="236" fill="#94a3b8" font-size="13">F08.4 has its own drill-down below; landed planning source does not close protected execution.</text>
+      <text x="20" y="209" fill="#cbd5e1" font-size="14">4 landed · 0 active · 2 open. F08 stays open for public activation/recovery and portal flow.</text>
+      <text x="20" y="236" fill="#94a3b8" font-size="13">F08.4 protected execution is source-landed; public/portal work remains separate and open.</text>
     </g>
 
     <g transform="translate(24 1323)" aria-labelledby="f084-title">
       <rect width="952" height="184" rx="12" fill="#172033" stroke="#475569"/>
       <text id="f084-title" x="20" y="29" fill="#f8fafc" font-size="19" font-weight="700">Inside F08.4 · Protected activation</text>
-      <text x="932" y="29" text-anchor="end" fill="#6ee7b7" font-size="15" font-weight="700">4 / 5 pieces landed</text>
+      <text x="932" y="29" text-anchor="end" fill="#6ee7b7" font-size="15" font-weight="700">5 / 5 pieces landed</text>
       <g>
         <rect x="20" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4a landed: read proofs</title></rect>
         <rect x="204" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4b landed: encrypted-original helper, not durable custody</title></rect>
         <rect x="388" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4c landed: business effects</title></rect>
         <rect x="572" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4d landed: protected planning, 5 of 5 source pieces</title></rect>
-        <rect x="756" y="45" width="176" height="28" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4e in progress: 6/7 pieces landed; private replay 8/8. Step 20 groups 4/5; detail 15/16 landed, 1 in progress and 0 other open. Row 14 completion/recovery and its six source components landed; group c 12/12. Row 15 source-landed (6/6) with fresh private authorization 15.1 landed c26c9e7, committed-original verification 15.2 landed b7be5cb, completion-to-release proof 15.3 landed 8d91551, durable exact outcome 15.4 landed 73a7f82 and guarded token opening 15.5 landed 5e5ca40; uncertain-outcome recovery 15.6 landed e49e14e; 16.1 root bootstrap/key delivery LANDED e6fa55c; 16.2 cold service and 16.3 private transport LANDED 4097896; 16.4 response verifier LANDED abce0bb; 16.5 authorized private handoff NEXT/open; row 16 cold handoff in progress. Authorization 12/12, grant detail 5/5 and SQL diagnostics 6/6 unchanged. Private transport source only; no deployed/public delivery or current-session guarantee.</title></rect>
+        <rect x="756" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4e landed: 7/7 pieces landed; private replay 8/8. Step 20 groups 5/5; detail 16/16 landed, 0 in progress and 0 open. Row 14 completion/recovery and its six source components landed; group c 12/12. Row 15 source-landed (6/6) with fresh private authorization 15.1 landed c26c9e7, committed-original verification 15.2 landed b7be5cb, completion-to-release proof 15.3 landed 8d91551, durable exact outcome 15.4 landed 73a7f82 and guarded token opening 15.5 landed 5e5ca40; uncertain-outcome recovery 15.6 landed e49e14e; 16.1 root bootstrap/key delivery LANDED e6fa55c; 16.2 cold service and 16.3 private transport LANDED 4097896; 16.4 response verifier LANDED abce0bb; 16.5 authorized private handoff LANDED 5719d50; row 16 cold handoff source-landed. Authorization 12/12, grant detail 5/5 and SQL diagnostics 6/6 unchanged. Private transport source only; no deployed/public delivery or current-session guarantee.</title></rect>
       </g>
       <g text-anchor="middle" font-size="13" font-weight="700">
         <text x="108" y="64" fill="#0f172a">✓ a · Read proofs</text>
         <text x="292" y="64" fill="#0f172a">✓ b · Encrypted originals</text>
         <text x="476" y="64" fill="#0f172a">✓ c · Business effects</text>
         <text x="660" y="64" fill="#0f172a">✓ d · Protected planning</text>
-        <text x="844" y="64" fill="#fde68a">→ e · Execution 6/7</text>
+        <text x="844" y="64" fill="#0f172a">✓ e · Execution 7/7</text>
       </g>
       <text x="20" y="103" fill="#6ee7b7" font-size="15" font-weight="700">d · Planner detail</text>
       <text x="932" y="103" text-anchor="end" fill="#6ee7b7" font-size="13">5 / 5 landed · cold admission 3 / 3 landed</text>
@@ -241,7 +241,7 @@
         <text x="660" y="136" fill="#0f172a">✓ d.4 · Configured owner</text>
         <text x="844" y="136" fill="#0f172a">✓ d.5 · Cold admission</text>
       </g>
-      <text x="20" y="169" fill="#94a3b8" font-size="13">19/26 · groups 4/5 · detail 15/16 + 1 in progress + 0 other open · LANDED 16.4 abce0bb · NEXT 16.5 handoff</text>
+      <text x="20" y="169" fill="#94a3b8" font-size="13">20/26 · groups 5/5 · detail 16/16 + 0 in progress + 0 open · LANDED 16.5 5719d50 · NEXT 21 permission</text>
     </g>
 
     <text x="24" y="1537" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>

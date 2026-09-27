@@ -10,6 +10,8 @@ An OBSERVED marker records only first successful readback metadata; it is
 neither terminal business state nor authority to bypass fresh verification.
 Registration execution-grant and signer-exchange records are retention-only families;
 they never admit attempted or observed markers or legacy forwarding.
+An ASSOCIATED marker commits only an exact local signer/grant relationship
+after both original records are durable; it supplies no verification or authority.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -28,6 +30,7 @@ from serverware import control_plane_custody_records as records
 from serverware import control_plane_custody_observations as observations
 from serverware import control_plane_registration_execution_records as execution_records
 from serverware import control_plane_registration_signer_records as signer_records
+from serverware import control_plane_registration_associations as associations
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -95,15 +98,31 @@ def _decode_prepared(encoded):
     raise CustodyJournalError("prepared record version is unsupported")
 
 
+def _association_scope(association, entries):
+    execution = entries.get(association.execution_digest)
+    signer = entries.get(association.signer_digest)
+    if (execution is None or signer is None
+            or (execution.family, execution.selector)
+                != (execution_records.FAMILY, execution_records.OPERATION)
+            or (signer.family, signer.selector)
+                != (signer_records.FAMILY, signer_records.OPERATION)
+            or execution.source_revision != association.source_revision
+            or signer.source_revision != association.source_revision
+            or execution.attempted or execution.observed or signer.attempted or signer.observed):
+        raise CustodyJournalError("preparation association differs from its exact retained originals")
+
+
 class CustodyJournal:
     """One PID-bound, explicitly provisioned, append-only local journal.
 
     Construction completes the only recovery scan before making the owner
     available. Quota reserves forty attempt bytes and the maximum observation
     frame for each legacy prepared record still missing those markers.
-    Retention-only execution grants and signer exchanges reserve no marker bytes. Preparation cannot
-    consume another record's marker capacity. At most three times maximum_records
-    published files are admitted; old records are never rewritten or removed.
+    Retention-only execution grants and signer exchanges reserve no delivery
+    marker bytes. Complete preparations preflight both records and their final
+    association without consuming another record's reserved marker capacity.
+    At most three times maximum_records published files are admitted, including
+    associations; old records are never rewritten or removed.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -123,6 +142,7 @@ class CustodyJournal:
         self._quota, self._maximum_records = quota_bytes, maximum_records
         self._closed = False
         self._entries = {}
+        self._associations = {}
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -215,6 +235,7 @@ class CustodyJournal:
         prepared = {}
         attempted = set()
         observed = set()
+        associated = {}
         count = 0
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
@@ -226,8 +247,12 @@ class CustodyJournal:
                     kind = "prepared"
                 elif name.startswith("attempted-"):
                     kind = "attempted"
-                else:
+                elif name.startswith("observed-"):
                     kind = "observed"
+                elif name.startswith("associated-"):
+                    kind = "associated"
+                else:
+                    raise CustodyJournalError("journal contains an unknown or temporary file")
                 prefix = kind + "-"
                 suffix = name[len(prefix):]
                 if (not name.startswith(prefix) or len(suffix) != 64
@@ -235,7 +260,9 @@ class CustodyJournal:
                     raise CustodyJournalError("journal contains an unknown or temporary file")
                 digest = "sha256:" + suffix
                 maximum = (_MAX_RECORD_BYTES if kind == "prepared" else
-                    _ATTEMPT_BYTES if kind == "attempted" else observations.MAX_OBSERVATION_BYTES)
+                    _ATTEMPT_BYTES if kind == "attempted" else
+                    observations.MAX_OBSERVATION_BYTES if kind == "observed" else
+                    associations.MAX_ASSOCIATION_BYTES)
                 encoded, identity = self._read_file(name,
                     maximum_bytes=min(maximum, self._quota - self._used_bytes), synchronize=True)
                 self._used_bytes += len(encoded)
@@ -252,11 +279,16 @@ class CustodyJournal:
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
                     attempted.add(digest)
-                else:
+                elif kind == "observed":
                     observation = observations.decode_observation(encoded)
                     if observation.local_digest != digest or digest in observed:
                         raise CustodyJournalError("journal observation does not match its local record")
                     observed.add(digest)
+                else:
+                    association = associations.decode(encoded)
+                    if association.execution_digest != digest or digest in associated:
+                        raise CustodyJournalError("association filename differs from its execution original")
+                    associated[digest] = association
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
         retention_only = {digest for digest, entry in prepared.items()
@@ -272,6 +304,9 @@ class CustodyJournal:
             raise CustodyJournalError("journal has insufficient reserved marker capacity")
         self._entries = {digest: replace(entry, attempted=digest in attempted, observed=digest in observed)
             for digest, entry in prepared.items()}
+        for association in associated.values():
+            _association_scope(association, self._entries)
+        self._associations = associated
         if self._stamp() != before:
             raise CustodyJournalError("journal directory changed during recovery")
         return before
@@ -308,6 +343,20 @@ class CustodyJournal:
         if identity != self._file_identities[name] or observation.local_digest != digest:
             raise CustodyJournalError("observation changed after admitted recovery")
         return observation, encoded
+
+    def _read_association(self, digest):
+        name = _name("associated", digest)
+        encoded, identity = self._read_file(name,
+            maximum_bytes=associations.MAX_ASSOCIATION_BYTES)
+        association = associations.decode(encoded)
+        held = self._associations[digest]
+        if (identity != self._file_identities[name]
+                or association.execution_digest != digest
+                or (association.source_revision, association.execution_digest, association.signer_digest)
+                    != (held.source_revision, held.execution_digest, held.signer_digest)):
+            raise CustodyJournalError("preparation association changed after admitted recovery")
+        _association_scope(association, self._entries)
+        return association, encoded
 
     def _publish(self, kind, digest, encoded):
         name = _name(kind, digest)
@@ -374,6 +423,85 @@ class CustodyJournal:
         with self._io.ready():
             self._require_ready()
             return self._append(*signer_records.encode(originals))
+
+    def append_registration_preparation(self, execution_originals, *, signer_originals):
+        """Publish both exact original records, then their immutable local association.
+
+        Only the final association marks a complete local preparation. Failure
+        never removes already published originals or chooses another signer.
+        This association supplies neither successful replay nor authority.
+        """
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            execution_digest, execution_encoded = execution_records.encode(execution_originals)
+            signer_digest, signer_encoded = signer_records.encode(signer_originals)
+            association, association_encoded = associations.encode(execution_digest, signer_digest)
+            if execution_digest == signer_digest:
+                raise CustodyJournalError("preparation record families cannot share a local identity")
+            originals = ((signer_digest, signer_encoded), (execution_digest, execution_encoded))
+            # Existing bytes and any previous association are checked before
+            # the first write, including retries of a partially retained pair.
+            try:
+                for digest, encoded in originals:
+                    if digest in self._entries:
+                        _, retained = self._load(digest)
+                        if retained != encoded:
+                            raise CustodyJournalError("preparation changed exact retained originals")
+                if execution_digest in self._associations:
+                    _, retained = self._read_association(execution_digest)
+                    if retained != association_encoded:
+                        raise CustodyJournalError("preparation cannot remap its original signer association")
+                    self._require_ready()
+                    return execution_digest
+                self._require_ready()
+            except BaseException:
+                self._io.poison()
+                raise
+            missing = tuple((digest, encoded) for digest, encoded in originals
+                if digest not in self._entries)
+            required_bytes = sum(len(encoded) for _, encoded in missing) + len(association_encoded)
+            if (len(self._entries) + len(missing) > self._maximum_records
+                    or len(self._file_identities) + len(missing) + 1 > 3 * self._maximum_records
+                    or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal complete preparation capacity is exhausted")
+            try:
+                # Both records are retention-only, so the combined preflight
+                # preserves every legacy attempt/observation reservation.
+                for digest, encoded in originals:
+                    self._append(digest, encoded)
+                _association_scope(association, self._entries)
+                self._require_ready()
+                self._publish("associated", execution_digest, association_encoded)
+                self._used_bytes += len(association_encoded)
+                self._associations[execution_digest] = association
+                self._require_ready()
+                return execution_digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_registration_preparation(self, execution_digest):
+        """Load the exact locally associated pair; absence is never guessed.
+
+        Unassociated historical records remain individually loadable, but are
+        not complete preparations. Returned originals are not replay results.
+        """
+        digest = _digest(execution_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._associations:
+                raise CustodyJournalError("local preparation association is absent")
+            try:
+                association, _ = self._read_association(digest)
+                execution, _ = self._load(digest)
+                signer, _ = self._load(association.signer_digest)
+                self._require_ready()
+                return execution, signer
+            except BaseException:
+                self._io.poison()
+                raise
 
     def load(self, localdigest):
         digest = _digest(localdigest)

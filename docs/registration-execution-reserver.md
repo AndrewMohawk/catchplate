@@ -151,8 +151,11 @@ preparation handlers are not connected to this reserver by this slice.
 Protected SQL issuance/execution, completion and credential finalization still
 require their separate authorities and actual owners.
 
-The separate signer-exchange retention profile now preserves request8/response2
-originals, but is not yet durably associated with the grant or wired into this
-preparation path. Its existence alone does not close the finalization
-prerequisite described in the [reservation guide](registration-execution-reservation.md#remaining-integration).
+Genuine prepare-and-retain now preserves signer request8/response2 and commits
+their [local association with the grant](control-plane-custody-journal.md#associated-registration-preparation)
+only after both original records are durable. The reserver still receives the
+existing grant raw10, not signer originals or an association-based permission.
+Later credential finalization must genuinely authenticate the exact associated
+signer originals and committed evidence under its separate gates; that path is
+not activated here. See the [reservation guide](registration-execution-reservation.md#remaining-integration).
 No production acceptance gate is closed by this source implementation.

@@ -137,8 +137,9 @@ hard termination still requires an external watchdog.
 ## Remaining integration
 
 The existing [public preparation handlers](control-plane-registration-execution.md#public-preparation-endpoints)
-only prepare and retain grants. This slice does not connect those handlers to
-reservation delivery or add permission to execute from a local digest alone.
+only prepare and retain grants with their associated signer originals. This
+slice does not connect those handlers to reservation delivery or add permission
+to execute from a local digest alone.
 
 Before a real execution coordinator can use this path, it still needs:
 
@@ -156,14 +157,14 @@ Before a real execution coordinator can use this path, it still needs:
 - Genuine committed-marker/full-vector observation and the distinct
   [completion producer and delivery](authority-current-root-completion.md).
   Completion after expiry can attest an actual prior commit, not revive execution.
-- The original signer request8/response2 needed by the existing registration
-  finalization preparation. The retained grant raw10 is a different inventory:
-  authorization, planning7, before-vector and grant. It must not be reinterpreted
-  as signer originals. The [standalone signer-retention profile](control-plane-registration-execution.md#standalone-signer-exchange-retention)
-  exists, but preparation still needs to store and durably associate that
-  exchange with its grant. Credential finalization also requires the
-  evidence-admit business row actually committed and its own operation/purpose
-  admission.
+- Genuine finalization replay of the original signer request8/response2.
+  Prepare-and-retain now durably stores and
+  [associates those originals with the grant](control-plane-custody-journal.md#associated-registration-preparation),
+  but storage does not authenticate them for later use. The grant raw10 remains
+  a different inventory—authorization, planning7, before-vector and grant—and
+  must not be reinterpreted as signer originals. Credential finalization still
+  requires the evidence-admit business row actually committed and its separate
+  operation/purpose admission; it is not activated here.
 
 Independent provisioning, currentness/rollback authorities, deployment and
 consolidated frozen-source verification remain outstanding. This source slice

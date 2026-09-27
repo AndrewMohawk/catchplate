@@ -84,7 +84,7 @@ no-store headers and this fixed response shape:
 | `schema` | `serverware.webAuthnRegistrationExecutionPreparation/v1` |
 | `status` | `retained-execution-grant` |
 | `purpose` | `authorize-registration-evidence-execution` |
-| `localDigest` | Canonical local `sha256:` content identity |
+| `localDigest` | Existing grant record's canonical local `sha256:` content identity |
 | `registrationCompleted` | `false` |
 | `executionStarted` | `false` |
 
@@ -206,12 +206,22 @@ retain and genuinely admit the original bytes under their own required gates.
 
 The separate private
 [`prepare_and_retain_registration_execution_grant(originals)`](../serverware/control_plane_registration_preparation.py)
-performs the same genuine preparation, then appends its exact raw10 bundle
-through the actual cold custody client. It returns only the local content ID
-after durable publication, not a grant-verification receipt or execution result.
+performs the same genuine preparation while preserving the exact signer
+request8/response2 that produced it. Through the actual cold custody client it
+publishes the signer record, grant raw10 record and a final small association
+marker binding their source-specific local IDs. Required capacity is preflighted
+before publication. Preparation is not complete before that marker is durable.
+It returns the existing grant content ID, not a new association ID, verification
+receipt or execution result; HTTP 202 keeps its existing `localDigest` contract.
 The existing in-memory preparation API is unchanged. Real present-caller and
 new-purpose admission must precede either composition. The new public
 preparation handlers call this retaining composition only after those checks.
+
+The [three-publication storage sequence](control-plane-custody-journal.md#associated-registration-preparation)
+is not an atomic rollback of its original records. Failure or uncertainty may
+leave signer or grant originals without a completed association; it does not
+authorize automatic retry, new signing or regeneration. No new public route or
+action is added.
 
 `ControlPlaneCustodyClient.append_registration_execution_grant(originals)`
 uses the [journal's separate retention-only format](control-plane-custody-journal.md#registration-execution-grant-retention).
@@ -235,8 +245,10 @@ live permission.
 The existing admin [recovery workspace](control-plane-custody-recovery.md)
 can inspect local metadata for these records, labeled retention-only. It does
 not expose originals or enable reconciliation, forwarding, reservation or
-execution. Journal fsync and recovery guarantees depend on the provisioned
-filesystem and do not establish off-host custody or resistance to rollback.
+execution, and has no association-complete flag. Two visible records are not
+proof that their final marker exists. Journal fsync and recovery guarantees
+depend on the provisioned filesystem and do not establish off-host custody or
+resistance to rollback.
 
 ### Standalone signer-exchange retention
 
@@ -259,11 +271,19 @@ family and fixed `webauthn.registration.evidence.admit` selector. The recovery
 UI admits this family for metadata inspection only, with no forwarding or
 reconciliation contract.
 
-**Existing grant preparation does not call this append method or persist the
-signer exchange.** A genuine preparation-path handoff and durable signer-to-grant
-association remain separate implementation needs before later original replay
-and credential finalization. Retention or loading supplies neither that
-association nor successful replay, current authority or a renewed lifetime.
+The genuine prepare-and-retain composition now uses this profile and commits
+its signer-to-grant association last. The private
+`load_registration_preparation(grantID)` returns the original grant
+`PreparedRecord` followed by the original signer `PreparedRecord` only after
+rereading the actual marker and both original records. Missing or conflicting
+associations, cross-family references and source mismatches fail closed.
+Standalone append/load methods do not establish a completed preparation.
+
+This is a storage association, not successful replay, current authority or a
+renewed lifetime. A later credential-finalization path must genuinely
+authenticate these exact signer originals and the actually committed evidence
+business row under its separate operation/purpose gates; it is not activated
+by this preparation slice.
 
 ## Remaining integration and release boundaries
 

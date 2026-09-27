@@ -37,10 +37,11 @@ their originals, but must have enough configured quota for the missing
 observation reservation. Insufficient quota fails admission; it does not cause
 cleanup, automatic quota expansion or removal of an attempt barrier.
 
-The separate registration execution-grant profile counts toward the same byte
-and record quotas, but reserves no attempt or observation space: it has no
-delivery contract. The following lifecycle applies only to the five legacy
-evidence/transition profiles.
+The separate registration execution-grant and signer-exchange profiles count
+toward the same byte and record quotas, but reserve no attempt or observation
+space: they have no legacy delivery contract. Their completed preparation uses
+a separate bounded association marker, described below. The following lifecycle
+applies only to the five legacy evidence/transition profiles.
 
 ```text
 exact originals -> immutable PREPARED record
@@ -93,10 +94,12 @@ not removed or treated as proof that the operation failed before storage.
 These guarantees depend on the provisioned filesystem honoring fsync, not a
 hard syscall deadline or an independent anti-rollback witness.
 
-Recovery and `load` dispatch only the two fixed formats and preserve the
-record's original source revision. They reject attempt or observation markers
-on a grant record; `claim_attempt` and `record_observation` also reject this
-family. The client rejects it before forwarding or reconciliation. Inventory
+Prepared-record recovery and `load` dispatch only the fixed `SWCPR001`,
+`SWCPG001` and signer-exchange `SWCPS001` formats and preserve each original
+source revision.
+They reject attempt or observation markers on either registration family;
+`claim_attempt` and `record_observation` also reject those families. The client
+rejects them before forwarding or reconciliation. Inventory
 and the existing admin recovery workspace expose retention-only metadata, not
 raw originals or an execution action.
 
@@ -109,6 +112,58 @@ or establish current keys, roots, policy or permission. Older readers reject
 the new magic and fail closed rather than downgrade, migrate or clean it up.
 Old-source originals remain readable by this codec, not automatically replayable
 or authoritative under the current source.
+
+## Associated registration preparation
+
+The [signer-exchange profile](control-plane-registration-execution.md#standalone-signer-exchange-retention)
+retains a different raw10 inventory: exact signer request8/response2, not caller
+authorization/planning/vector/grant. Its source-specific local ID uses
+`serverware.controlPlaneRegistrationSignerExchangeRecord/v1`; a grant record
+cannot be reinterpreted as this signer record.
+
+Genuine prepare-and-retain preserves both inventories from the same call.
+`CustodyJournal.append_registration_preparation(execution_originals, *, signer_originals)`
+and the same private cold-client API preflight every missing record and the
+marker against the configured byte/record capacity, preserving legacy marker
+reserves, before publication:
+
+```text
+1. publish exact signer record
+   -> 2. publish exact grant record
+      -> 3. publish associated-<grant digest hex> marker binding both local IDs
+         -> preparation returns the existing grant ID (HTTP 202 localDigest)
+```
+
+The [association codec](../serverware/control_plane_registration_associations.py)
+uses `SWCPL001`, a two-byte source length, the original ASCII source token, then
+the grant and signer SHA-256 digests as two raw 32-byte fields and exact EOF.
+The marker is at most 330 bytes. The filename uses the grant digest's hex only.
+This design preserves the existing grant ID and both original frame formats,
+without copying both inventories into a new combined payload. The trade-off is
+durable partial originals if publication is interrupted, never automatic cleanup
+or retry.
+An exact existing association is rechecked idempotently; remapping it to another
+signer is rejected. This does not authorize replaying the preparation/signing
+workflow after an uncertain outcome.
+
+Each original is independently immutable and durable. The last small marker
+commits the local association; an original record alone is not complete
+preparation. This is not a multi-file rollback transaction. An uncertain failure
+may leave orphan originals or may follow marker publication. The owner never
+infers absence or automatically retries preparation, signs again, deletes
+published originals or renews a grant.
+
+The private `load_registration_preparation(grantID)` rereads the actual marker
+and both original records before returning `(grant PreparedRecord, signer
+PreparedRecord)`. Absent/conflicting markers or cross-family/source references
+fail closed. Recovery rejects dangling or inconsistent association markers;
+unassociated originals remain individually loadable history, not completed
+preparation. Reading the association does not authenticate signatures, replay
+the original ceremony, prove current roots or permission, or establish the
+evidence business row was committed. Later finalization still needs all those
+separate gates. No new public original-export, forward, reconcile or attempt
+action or public association-complete flag is added; in-memory preparation
+remains raw10-only with no storage.
 
 ## Private configured forwarding
 

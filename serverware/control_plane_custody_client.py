@@ -446,6 +446,49 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while reading signer originals")
         return record
 
+    def append_registration_preparation(self, execution_originals, *, signer_originals):
+        """Retain both inventories and their final immutable local association.
+
+        Only real application preparation supplies the same-call originals.
+        Lower-level storage is opaque: association does not authenticate a
+        grant or signer, consume an operation or permit finalization. Failure
+        can follow publication and must not trigger automatic signing/retry.
+        """
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_registration_preparation(
+            binding.journal, execution_originals, signer_originals=signer_originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while retaining registration preparation")
+        return journal._digest(digest)
+
+    def load_registration_preparation(self, execution_digest):
+        """Read associated (grant, signer) PreparedRecords, never action authority.
+
+        The actual journal rereads the final marker and both original records;
+        absent association is not repaired or inferred from matching metadata.
+        These historical originals still need genuine replay under independently
+        admitted scope. Their lifetimes are not renewed by this read.
+        """
+        from serverware import control_plane_registration_execution_records as grants
+        from serverware import control_plane_registration_signer_records as signer
+
+        digest = journal._digest(execution_digest)
+        binding = _snapshot(self)
+        pair = journal.CustodyJournal.load_registration_preparation(binding.journal, digest)
+        if (type(pair) is not tuple or len(pair) != 2
+                or any(type(item) is not records.PreparedRecord for item in pair)):
+            raise CustodyClientError("registration preparation lacks its exact original record pair")
+        execution_record, signer_record = pair
+        if (execution_record.digest != digest
+                or (execution_record.family, execution_record.selector) != (grants.FAMILY, grants.OPERATION)
+                or (signer_record.family, signer_record.selector) != (signer.FAMILY, signer.OPERATION)
+                or execution_record.source_revision != signer_record.source_revision):
+            raise CustodyClientError("registration preparation original record scope differs")
+        journal._digest(signer_record.digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while loading registration preparation")
+        return pair
+
     def append_and_forward_evidence(self, purpose, originals, *, deadline_ns=None):
         """Append actual raw6 durably, then attempt its forwarding exactly once.
 

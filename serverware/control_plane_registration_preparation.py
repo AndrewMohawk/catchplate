@@ -17,8 +17,9 @@ entrypoint consumes retained signer originals, derives sibling selectors only
 after genuine replay, and durably retains prepared raw7 without signing anew.
 The opt-in execution-grant entrypoints require separate present-caller purpose
 admission; they either return verified original raw10 in memory or retain it
-under its distinct local record format. Storage does not renew the original
-verification window or establish a reservation, delivery attempt or SQL effect.
+under its distinct local record format together with the exact signer exchange
+and a last-published association. Storage does not renew the original verification
+window or establish a reservation, delivery attempt or SQL effect.
 """
 from __future__ import annotations
 
@@ -201,14 +202,15 @@ def prepare_and_forward_registration_custody(originals):
 
 
 def _prepare_registration_execution_grant_on_work(originals, work):
-    """Prepare raw10 and retain its actual cold storage owner and live window.
+    """Prepare grant raw10 and preserve the same-call original signer exchange.
 
     The real operator/OIDC handler must separately admit the present caller and
     new execution-request purpose before this call. Existing public custody-only
     routes do not invoke it. An original-input container is not that permission.
     Order: original caller authorization, planning request3, response4, complete
-    before-vector, original verified grant. This neither journals nor forwards
-    execution, reserves a current root or reports registration success.
+    before-vector, original verified grant. The separate signer request8/response2
+    is returned unchanged, not reconstructed from planning data. This neither
+    journals nor forwards execution, reserves a root or reports registration success.
     """
     from serverware import control_plane_custody_client as custody_client
     from serverware import control_plane_custody_startup as custody_startup
@@ -229,8 +231,9 @@ def _prepare_registration_execution_grant_on_work(originals, work):
         deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
     work.charge(input_bytes=sum(len(raw) for raw in exchange[0])
         + sum(len(raw) for raw in exchange[1]))
+    signer_originals = exchange[0] + exchange[1]
     planning = custody_client.ControlPlaneCustodyClient.prepare_registration_execution_plan(
-        custody, exchange[0] + exchange[1], deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
+        custody, signer_originals, deadline_epoch_ns=window[3], deadline_ns=window[4], work=work)
     clock._check_on_work(window, work=work)
     grant = enrollment_startup._EnrollmentOwner._request_registration_execution_grant(
         enrollment, authorization_bytes=authorization, request_originals=planning[:3],
@@ -245,7 +248,7 @@ def _prepare_registration_execution_grant_on_work(originals, work):
     if total > issuer.authority.MAX_RESULT_BYTES:
         raise RegistrationPreparationError("registration execution originals exceed the source aggregate")
     work.charge(input_bytes=total)
-    return custody, (authorization, *planning, grant), window
+    return custody, (authorization, *planning, grant), signer_originals, window
 
 
 def prepare_registration_execution_grant(originals):
@@ -256,27 +259,30 @@ def prepare_registration_execution_grant(originals):
     """
     from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
-    _custody, prepared, _window = _prepare_registration_execution_grant_on_work(
+    _custody, prepared, _signer_originals, _window = _prepare_registration_execution_grant_on_work(
         originals, _ValidationWork(QueryReadValidationLimits()))
     return prepared
 
 
 def prepare_and_retain_registration_execution_grant(originals):
-    """Durably retain genuine prepared raw10; return only its local content ID.
+    """Retain grant plus exact signer originals; return the existing grant ID.
 
     Real present-caller/new-purpose admission must precede this private call.
     The original verification window is never renewed: append may finish after
     it expires, retaining opaque evidence rather than live execution authority.
-    Later use requires genuine admission of those unchanged originals. This
-    never forwards, marks an attempt, reserves a root or finalizes a credential.
+    The journal publishes the signer record, grant record, then their immutable
+    association; only the final marker completes this local preparation. Failure
+    can leave retained originals, never an implicit complete association or retry
+    permission. Later use requires genuine admission of those unchanged originals.
+    This never forwards, marks an attempt, reserves a root or finalizes a credential.
     """
     from serverware import control_plane_custody_client as custody_client
     from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
-    custody, prepared, _window = _prepare_registration_execution_grant_on_work(
+    custody, prepared, signer_originals, _window = _prepare_registration_execution_grant_on_work(
         originals, _ValidationWork(QueryReadValidationLimits()))
-    return custody_client.ControlPlaneCustodyClient.append_registration_execution_grant(
-        custody, prepared)
+    return custody_client.ControlPlaneCustodyClient.append_registration_preparation(
+        custody, prepared, signer_originals=signer_originals)
 
 
 def prepare_registration_finalization(*, request_originals, response_originals):

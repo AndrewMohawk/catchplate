@@ -1,16 +1,20 @@
 """Fixed PostgreSQL owner for unsigned commit-marker/root observations.
 
-Previously admitted immutable connection configuration selects only the
-dedicated completion reader. Actual PostgreSQL 16 role/TLS and exact read
+Previously admitted immutable eight-field configuration selects only the
+dedicated completion reader and an independent SOURCE-GENERATED complete
+structural-manifest digest. Actual PostgreSQL 16 role/TLS and exact read
 privileges are checked before observing one pending-decision marker and the
-complete root vector in a SERIALIZABLE READ ONLY DEFERRABLE transaction.
+complete root vector in a SERIALIZABLE READ ONLY DEFERRABLE transaction. The
+actual complete catalog, including functions, ACLs and business triggers, must
+match the independent pin both before and after that observation.
 
 The real observer uses the same physical connection and caller-owned work.
 Results return only after normal cursor/connection exits and a closed-handle
 check. The caller must independently join the marker and vector to its genuine
 original execution candidate; these observations do not authenticate config,
 enroll a database, establish latest-root currentness or authorize completion.
-Catalog/driver admission exclusions match the existing configured root reader.
+Catalog production and driver work remain outside H/B/N; this does not enroll
+the observed catalog or supply installation/provisioning authority.
 The caller's original live window and inherited monotonic deadline are never
 reopened. Remaining time bounds libpq's per-host connect timeout and PostgreSQL
 statement/lock/idle waits, with real checks around the outer phases. These are
@@ -20,6 +24,7 @@ No opener override, supplied observation, new allowance, write or retry exists.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import time
 
 from serverware import authority_current_root_vector as vector
@@ -37,16 +42,20 @@ class CurrentRootCommitReaderError(ValueError):
 
 
 _WAIT_TIMEOUTS = ("lock_timeout", "idle_in_transaction_session_timeout", "statement_timeout")
+_SEARCH_PATH = "SET LOCAL search_path TO serverware_metadata, pg_catalog, pg_temp"
 _MILLISECOND = 1_000_000
 _SECOND = 1_000_000_000
 
 
 def _validate_configuration(config):
-    connection_owner._validate_configuration(config)
+    if type(config) is not tuple or len(config) != 8:
+        raise CurrentRootCommitReaderError("commit-reader configuration is not an exact eight-tuple")
+    connection_owner._validate_configuration(config[:7])
     if "\r" in config[0] or "\n" in config[0]:
         raise CurrentRootCommitReaderError("commit-reader DSN is not one descriptor value")
     if config[2] != COMPLETION_READER_ROLE:
         raise CurrentRootCommitReaderError("commit-reader role is not the fixed completion reader")
+    clock.evidence.plan.contract._digest(config[7])
     return config
 
 
@@ -92,6 +101,7 @@ def _read_on_configuration(config, *, pending_decision_digest, live_window, work
         "commit-reader query manifest differs from the actual source")
     import psycopg
     from psycopg.rows import dict_row
+    from serverware import db
 
     available = remaining()
     connect_timeout = min(configured[1], available // _SECOND)
@@ -123,7 +133,7 @@ def _read_on_configuration(config, *, pending_decision_digest, live_window, work
                 set_waits(guarded, remaining() // _MILLISECOND)
                 remaining()
                 connection_owner._admit_identity(
-                    guarded.execute(connection_owner._IDENTITY_SQL).fetchone(), configured)
+                    guarded.execute(connection_owner._IDENTITY_SQL).fetchone(), configured[:7])
                 remaining()
                 set_waits(guarded, remaining() // _MILLISECOND)
                 forbidden = guarded.execute(*completion_read_privilege_check(
@@ -132,29 +142,67 @@ def _read_on_configuration(config, *, pending_decision_digest, live_window, work
                 if forbidden is not None:
                     raise CurrentRootCommitReaderError("completion reader has unexpected privileges")
                 callback(work, connection_owner._require_connection, connection, physical, 2)
+                set_waits(guarded, remaining() // _MILLISECOND)
+                guarded.execute(_SEARCH_PATH)
+                remaining()
+                facade = db.PostgresMetadataConnection(connection)
+
+                def active(call):
+                    def invoke():
+                        connection_owner._require_connection(connection, physical, 2)
+                        if type(facade) is not db.PostgresMetadataConnection or facade.raw_connection is not connection:
+                            raise CurrentRootCommitReaderError("commit-reader catalog facade changed its connection")
+                        result = call()
+                        connection_owner._require_connection(connection, physical, 2)
+                        if type(facade) is not db.PostgresMetadataConnection or facade.raw_connection is not connection:
+                            raise CurrentRootCommitReaderError("commit-reader catalog facade changed its connection")
+                        return result
+                    remaining()
+                    result = callback(work, invoke)
+                    remaining()
+                    return result
+
+                def catalog():
+                    # The complete real producer selects its fixed inventory.
+                    # No supplied checker, narrowed table list, scratch schema
+                    # or DB-derived expected digest can satisfy this check.
+                    set_waits(guarded, remaining() // _MILLISECOND)
+                    manifest = active(lambda: db._policy_candidate_authority_structure_manifest(facade))
+                    _json, actual = active(lambda: db._policy_candidate_authority_manifest_digest(manifest))
+                    vector.framing._same(actual, configured[7], work,
+                        "commit-reader installed schema/functions/triggers differ from independent source catalog")
+                    remaining()
+                    connection_owner._admit_identity(
+                        guarded.execute(connection_owner._IDENTITY_SQL).fetchone(), configured[:7])
+                    remaining()
+
+                catalog()
                 # Seven fixed observer SELECTs have no internal clock. Reserve
-                # one more statement budget for normal outer exit and three
-                # for these setup commands, never a whole window per query.
+                # one spare phase budget and three for these setup commands,
+                # never a whole window per query. The second catalog must fit
+                # the remaining original bound; it receives no new window.
                 observer_timeout = remaining() // _MILLISECOND // 11
                 set_waits(guarded, observer_timeout)
+                if remaining() < 8 * observer_timeout * _MILLISECOND:
+                    raise CurrentRootCommitReaderError("commit-reader observer setup exhausted its fixed budget")
+                result = observation._observe_on_work(connection,
+                    pending_decision_digest=held_pending, work=work)
+                remaining()
+                if type(result) is not tuple or len(result) != 2:
+                    raise CurrentRootCommitReaderError("commit observer did not return its exact pair")
+                marker, after_vector = result
+                fields = vector.authority.CURRENT_ROOT_COMMIT_MARKER_COLUMNS
+                if (type(marker) is not dict or len(marker) != len(fields)
+                        or any(type(name) is not str for name in marker) or set(marker) != set(fields)
+                        or type(after_vector) is not bytes or not 2 <= len(after_vector) <= vector.MAX_BYTES):
+                    raise CurrentRootCommitReaderError("commit observer returned an invalid bounded shape")
+                vector.framing._same(marker["pending_decision_digest"], held_pending, work,
+                    "commit observer returned another pending decision")
+                callback(work, connection_owner._require_connection, connection, physical, 2)
+                remaining()
+                catalog()
             if callback(work, lambda: cursor.closed) is not True:
                 raise CurrentRootCommitReaderError("commit-reader admission cursor did not close normally")
-            callback(work, connection_owner._require_connection, connection, physical, 2)
-            if remaining() < 8 * observer_timeout * _MILLISECOND:
-                raise CurrentRootCommitReaderError("commit-reader observer setup exhausted its fixed budget")
-            result = observation._observe_on_work(connection,
-                pending_decision_digest=held_pending, work=work)
-            remaining()
-            if type(result) is not tuple or len(result) != 2:
-                raise CurrentRootCommitReaderError("commit observer did not return its exact pair")
-            marker, after_vector = result
-            fields = vector.authority.CURRENT_ROOT_COMMIT_MARKER_COLUMNS
-            if (type(marker) is not dict or len(marker) != len(fields)
-                    or any(type(name) is not str for name in marker) or set(marker) != set(fields)
-                    or type(after_vector) is not bytes or not 2 <= len(after_vector) <= vector.MAX_BYTES):
-                raise CurrentRootCommitReaderError("commit observer returned an invalid bounded shape")
-            vector.framing._same(marker["pending_decision_digest"], held_pending, work,
-                "commit observer returned another pending decision")
             callback(work, connection_owner._require_connection, connection, physical, 2)
             remaining()
         if callback(work, lambda: connection.closed) is not True:
@@ -170,19 +218,23 @@ def _read_on_configuration(config, *, pending_decision_digest, live_window, work
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
 class CurrentRootCommitReader:
-    """Hold admitted completion DB scalars without construction-time I/O."""
+    """Process-bound fixed completion reader with independent catalog admission."""
 
     _configuration: tuple
+    _pid: int
 
     def __init__(self, *, dsn, connect_timeout_seconds, database_role, tls_client_dn,
-            tls_client_serial, tls_issuer_dn, query_manifest_digest):
+            tls_client_serial, tls_issuer_dn, query_manifest_digest,
+            expected_structure_manifest_digest):
         configured = _validate_configuration((dsn, connect_timeout_seconds, database_role,
-            tls_client_dn, tls_client_serial, tls_issuer_dn, query_manifest_digest))
+            tls_client_dn, tls_client_serial, tls_issuer_dn, query_manifest_digest,
+            expected_structure_manifest_digest))
         object.__setattr__(self, "_configuration", configured)
+        object.__setattr__(self, "_pid", os.getpid())
 
     def _snapshot_configuration(self):
-        if type(self) is not CurrentRootCommitReader:
-            raise CurrentRootCommitReaderError("commit reader requires its exact configured owner")
+        if type(self) is not CurrentRootCommitReader or os.getpid() != self._pid:
+            raise CurrentRootCommitReaderError("commit reader requires its exact process-bound owner")
         return _validate_configuration(self._configuration)
 
     def read(self, *, pending_decision_digest, live_window, work, transport_deadline_ns=None):

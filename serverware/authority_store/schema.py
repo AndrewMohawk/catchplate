@@ -14,6 +14,7 @@ from serverware.authority_store import counted_installation
 from serverware.authority_store.completion_read_sql import COMPLETION_READ_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store.successor_execution_privileges import SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store import metadata_schema_source
+from serverware.authority_store import postgres_column_manifest
 from serverware.authority_store import postgres_trigger_manifest
 from serverware.authority_store import v9_schema_source
 from serverware.authority_store.planner_writer_sql import PLANNER_WRITER_PRIVILEGE_SQL_DIGEST
@@ -549,13 +550,8 @@ def _policy_candidate_authority_table_manifest(
                 "ordinal": int(row["ordinal_position"]),
             }
             for row in conn.execute(
-                "SELECT column_name, data_type, udt_name, is_nullable, "
-                "column_default, ordinal_position "
-                "FROM information_schema.columns "
-                "WHERE table_schema = pg_catalog.current_schema() "
-                "AND table_name = ? "
-                "ORDER BY ordinal_position",
-                (table,),
+                postgres_column_manifest.COLUMN_MANIFEST_SQL,
+                (actual_namespace, table),
             ).fetchall()
         ]
         constraint_rows = conn.execute(

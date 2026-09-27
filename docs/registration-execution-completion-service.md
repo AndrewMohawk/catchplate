@@ -86,6 +86,12 @@ query/structural pins and same-database provenance must be provisioned, not
 learned from observed data. Read-only mounts and file hashes alone do not supply
 those authorities.
 
+Both reader configurations now require eight fields, including the same
+independently root-signed `structureManifestDigest`. The committed-state reader
+requires `expected_structure_manifest_digest` at construction; there is no
+seven-field or optional-pin fallback. This is a required, breaking source
+contract, not evidence that the new checks have run.
+
 The fixed child environment excludes ambient connection settings. Root delivery
 and cold startup hash the signed TLS originals; ongoing checks retain exact
 path/file metadata continuity rather than repeatedly hashing their contents.
@@ -137,11 +143,13 @@ Returned originals still require historical authentication and replay.
 
 When no completion is retained, genuine replay derives the expected marker and
 full after-vector. The committed-state reader observes both under its existing
-fixed read-only transaction and TLS/role/ACL checks. Exact equality and normal
-database closure precede signing the complete control. **The commit reader's
-existing profile is not full structural-catalog verification.** Its per-host
-libpq and per-statement bounds plus outer lifetime checks are not a hard driver
-or kernel-call watchdog.
+fixed read-only transaction and TLS/role/ACL checks. Its PID-bound owner checks
+the full structural catalog against the independently pinned manifest before
+and after the observer, on the same physical connection and unchanged work
+allowance. Exact equality and normal database closure precede signing the
+complete control. Catalog equality does not establish database provenance or
+latest-root currentness. Per-host libpq and per-statement bounds plus outer
+lifetime checks are not a hard driver or kernel-call watchdog.
 
 The exact signed completion request is durable before its state exchange; the
 authenticated original state acknowledgment is durable before a delivered
@@ -197,6 +205,9 @@ After source freeze and prerequisite admission, planned coverage includes:
 
 - Root/configuration, fixed path, FD, key, TLS and environment rejection before
   resource use; wrong peer, purpose, packet pin, lengths or trailing bytes.
+- Required exact structure-pin admission for both readers: reject seven-field,
+  missing, malformed or mismatched pins and creator-PID drift; reject structural
+  catalog drift before or after the same-connection committed-state observer.
 - Genuine committed marker/full-vector readback, original replay and bounded
   signed completion, with no SQL executor invocation.
 - Request durability before exchange and acknowledgment durability before reply;

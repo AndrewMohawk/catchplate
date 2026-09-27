@@ -13,9 +13,9 @@ belong in this process. Closed DSNs use one literal address and verified server
 name with fixed TLS paths, no supplied DSN/password or credential-file fallback.
 The cold launcher must retain its literal environment without PG* variables;
 independent certificate-only database authentication remains a prerequisite.
-The custody reader has the existing eight-field structural-manifest contract.
-The commit reader retains its actual seven-field contract and its documented
-catalog/driver exclusions; this bootstrap does not add a catalog check there.
+Both readers require exact eight-field configurations carrying the same
+independently signed structural-manifest pin. Neither has a seven-field or
+optional-pin fallback; their distinct roles and TLS identities remain separate.
 
 No descriptor, private key, TLS file, journal, network or database is opened.
 Material is ordinary same-call data, not authority. The original <=300-second
@@ -152,11 +152,8 @@ def _database_configurations(payload, work):
             + " sslkey=" + TLS_PATHS[name + "Key"]
             + " passfile=/dev/null gssencmode=disable")
         selected_configuration = (dsn, selected["connectTimeoutSeconds"], role, selected["clientDn"],
-            selected["clientSerial"], selected["issuerDn"], payload["queryManifestDigest"])
-        # The existing commit reader has no eighth catalog-manifest field.
-        # Do not silently claim that its read path verifies the custody pin.
-        if name == "custody":
-            selected_configuration += (payload["structureManifestDigest"],)
+            selected["clientSerial"], selected["issuerDn"], payload["queryManifestDigest"],
+            payload["structureManifestDigest"])
         result.append(selected_configuration)
     return tuple(result)
 

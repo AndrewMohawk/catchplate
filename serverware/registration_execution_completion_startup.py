@@ -61,10 +61,11 @@ def _process(namespace):
 
 
 def _reader_arguments(configured):
-    dsn, timeout, role, client_dn, client_serial, issuer_dn, query = configured[:7]
+    dsn, timeout, role, client_dn, client_serial, issuer_dn, query, structure = configured
     return {"dsn": dsn, "connect_timeout_seconds": timeout, "database_role": role,
         "tls_client_dn": client_dn, "tls_client_serial": client_serial,
-        "tls_issuer_dn": issuer_dn, "query_manifest_digest": query}
+        "tls_issuer_dn": issuer_dn, "query_manifest_digest": query,
+        "expected_structure_manifest_digest": structure}
 
 
 class _CompletionOwner:
@@ -303,8 +304,7 @@ def initialize_from_environment():
                 expected_local_head_digest=material.completion_checkpoint[1])
             custody_arguments = _reader_arguments(material.custody_configuration)
             del custody_arguments["database_role"]  # Actual custody constructor fixes its role.
-            custody_reader = custody.SuccessorExecutionRecoveryReader(**custody_arguments,
-                expected_structure_manifest_digest=material.custody_configuration[7])
+            custody_reader = custody.SuccessorExecutionRecoveryReader(**custody_arguments)
             commit_reader = committed.CurrentRootCommitReader(**_reader_arguments(material.commit_configuration))
             path, timeout, uid, gid = material.state_endpoint
             client = state_transport.CurrentRootDecisionClient(path=path, timeout_seconds=timeout,

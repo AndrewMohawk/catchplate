@@ -121,6 +121,11 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
         deadline_epoch_ns, transport_deadline_ns)
     # Detach independent mutable history before any clock, key or DB callback.
     expected = pending.replay._expectations(held_operation, expectations, planner_key, operation_key, work)
+    for index in (6, 7):
+        evidence.plan._same(read_config[index], commit_config[index], work,
+            "completion readers differ from the same independent query or catalog pin")
+    # Equal pins constrain both real observations, but cannot establish that
+    # distinct role/TLS connections reach the same independently admitted DB.
     with delivery_store.CurrentRootCompletionDelivery._recovery_scope(delivery):
         window = clock._open_on_work(deadline_epoch_ns=deadline,
             maximum_lifetime_ns=authorization.authority.VERIFIER_RESPONSE_MAX_AGE_NS,

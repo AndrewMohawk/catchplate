@@ -249,6 +249,14 @@ lookup, reading, completion production, retention and exchange. One unchanged
 work ledger and live retrieval window, clipped by the inherited monotonic
 deadline, cover the entire sequence; database or transport steps cannot renew it.
 
+Both readers now require an independently supplied structural-catalog pin.
+Recovery joins their source query and catalog pins before either database read;
+each actual connection checks its complete catalog before and after its own
+observation. Different role/TLS configurations remain separate. Matching pins
+do not establish database provenance or independent latest-state currentness.
+The [catalog-admission note](authority-catalog-admission.md) describes the
+restricted-role metadata projection and deferred verification boundary.
+
 If a completion is already retained for the exact pending checkpoint, the
 composition authenticates that original and joins it to the independently
 pinned custody packet, then reuses the identical bytes without another plan

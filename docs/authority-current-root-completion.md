@@ -37,11 +37,18 @@ monotonic deadline, using the caller's existing work allowance throughout.
 ## Fixed database read owner
 
 [`CurrentRootCommitReader`](../serverware/authority_current_root_commit_reader.py)
-holds the exact seven connection settings: DSN, connection timeout, database
-role, TLS client DN/serial/issuer DN and source query-manifest digest. The role
-must be the independently provisioned
+holds exactly eight settings: DSN, connection timeout, database role, TLS client
+DN/serial/issuer DN, source query-manifest digest and independently admitted
+`expected_structure_manifest_digest`. The creator PID is retained and checked.
+The required eighth field is a breaking source contract: there is no seven-field
+or optional-pin fallback. The role must be the independently provisioned
 `serverware_policy_authority_completion_reader`; there is no environment role
 override or role creation in this slice.
+
+The [cold completion bootstrap](registration-execution-completion-service.md)
+binds both custody and commit reader configurations to the same independently
+root-signed `structureManifestDigest`, preserving their distinct roles and TLS
+identities. A signed pin is not proof of database or release provenance.
 
 `read(*, pending_decision_digest, live_window, work, transport_deadline_ns=None)`
 returns the detached marker and canonical after-vector bytes. The original live
@@ -61,15 +68,18 @@ CREATE/TEMPORARY privileges. Role aliases are rejected. No marker insert
 permission, automatic custody migration or live privilege repair is introduced.
 
 The reader uses actual PostgreSQL 16 role/TLS/ACL admission and a fresh physical
-`SERIALIZABLE READ ONLY DEFERRABLE` transaction. The
+`SERIALIZABLE READ ONLY DEFERRABLE` transaction. It verifies the full structural
+catalog against the required manifest before and after the committed-state
+observer on that same physical connection, using the caller's unchanged work
+allowance and original deadlines. The
 [fixed observation](../serverware/authority_store/current_root_commit_observation.py)
 performs seven observation SELECTs on that same transaction:
 
 `transaction → marker → transaction → all primary roots → transaction → all counted heads → transaction`
 
 All four virtual-XID/settings samples must agree. This count excludes the
-reader's transaction setup and identity/ACL admission queries. The marker lookup
-is bounded and rejects absence or ambiguity; the complete vector comes from the
+reader's transaction setup, identity/ACL admission and catalog queries. The
+marker lookup is bounded and rejects absence or ambiguity; the complete vector comes from the
 source-owned inventory, not caller-selected tables/profiles. The actual marker
 after-vector digest is checked against that canonical full observation.
 
@@ -121,3 +131,10 @@ orchestration are still required.
 The consolidated frozen build/verification phase remains outstanding. See
 [successor execution](authority-successor-execution.md) for the source bridge
 and remaining activation boundaries.
+
+Planned frozen coverage includes rejecting absent, malformed or mismatched
+structure pins, seven-field configurations and creator-PID changes; checking
+catalog drift before and after the same-connection observer; and preserving
+ordinary-close, original-deadline and work-limit failures. These are planned
+checks only: this required source-contract change has not been built, tested,
+imported or run.

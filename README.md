@@ -45,29 +45,28 @@ defines each scope and its dependencies. Open items can already contain partial 
 
 ### Protected token release: remaining source work
 
-**14/16 units landed · 1 in progress · 1 open. Next: uncertain-outcome recovery (15.6).**
+**15/16 units landed · 0 in progress · 1 open. Next: root bootstrap and key delivery (16.1).**
 
-[![Protected token release: units 01–14 landed; 15 exact committed-original token release is in progress with five of six components landed through guarded private token opening. Uncertain-outcome recovery is next; unit 16 cold release response/handoff remains open. A private method return is not network delivery or a delivery acknowledgment. Source checkpoints, not runtime or production readiness.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![Protected token release: units 01–15 landed, including all six exact committed-original release components through separately authorized unchanged-outcome recovery. Unit 16 cold release response/handoff remains open; root bootstrap and key delivery 16.1 is next. A private method return is not network delivery or a delivery acknowledgment. Source checkpoints, not runtime or production readiness.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
-**Zoom into the two unfinished units — 5/11 named substeps landed, 6 still open:**
+**Exact release source-complete; cold handoff unfinished — 6/11 named substeps landed, 5 open:**
 
-[![Exact release and private handoff: 15.1 fresh release authorization, 15.2 committed-original verification, 15.3 completion-to-release proof, 15.4 durable exact outcome and 15.5 guarded token opening are source-landed. 15.6 uncertain-outcome recovery is NEXT/open; all five cold private-handoff components remain open. Five of eleven nested source components landed; parent progress remains 14/16. Guarded private return is not network delivery or runtime verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
+[![Exact release and private handoff: all six row-15 components are source-landed, including separately authorized unchanged-outcome recovery. All five cold private-handoff components remain open, with root bootstrap and key delivery 16.1 NEXT/open. Six of eleven nested source components landed; token-release progress is 15/16. Guarded private return is not network delivery or runtime verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
 
 Each segment has a stable ID and a [specific completion criterion](docs/production-status.md#exact-release-and-handoff-detail).
 As a substep lands, its segment turns green and gains commit evidence; the
-enclosing unit closes only when all its criteria are met. This subdivision adds
-no new scope or completed work: token release stays **14/16**, not 14/27.
+enclosing unit closes only when all its criteria are met. Children are not added
+to their parent counts: token release is **15/16**, not 15/27.
 
-**Most recently completed:** substep **15.5**, guarded private token return after
-original admission, durable retention, authenticated opening and exact readback,
-[committed in 5e5ca40](https://github.com/example/private-deployment).
-This is not network delivery or a delivery acknowledgment. Uncertain-outcome
-recovery and cold handoff remain unfinished; source is unbuilt and unexecuted.
+**Most recently completed:** **15.6**, fresh root-authorized recovery of the unchanged
+outcome and token, [committed in e49e14e](https://github.com/example/private-deployment).
+This closes row 15 in source, not network delivery or a delivery acknowledgment.
+Cold handoff remains unfinished; source is unbuilt and unexecuted.
 
 <details>
 <summary>Completed source detail: completion/recovery 6/6, reservation/SQL 6/6, authorization 12/12 and grant issuance 5/5</summary>
 
-[![Completion and recovery detail: historical original replay, completion-purpose custody, commit observation/durable recovery, cold resources/service, completion state/lookup route and authenticated private response are all source-landed. Six of six substeps landed, closing row 14 in source. Exact token release and cold release handoff remain open. No runtime or production readiness claim.](docs/images/consume-completion-progress.svg)](docs/production-status.md#consume-completion-and-recovery-detail)
+[![Completion and recovery detail: historical original replay, completion-purpose custody, commit observation/durable recovery, cold resources/service, completion state/lookup route and authenticated private response are all source-landed. Six of six substeps landed, closing row 14 in source. Exact release at row 15 is also source-landed; cold release handoff remains open. No runtime or production readiness claim.](docs/images/consume-completion-progress.svg)](docs/production-status.md#consume-completion-and-recovery-detail)
 
 [![Reservation and SQL detail: reserve originals/durable ACK, cold reserver, independent current-pending receiver, protected packet/issuer, one-use SQL/durable attempt, and cold SQL service/response are all source-landed. These six diagnostic components subdivide units 12–13. No runtime or production credit.](docs/images/consume-sql-progress.svg)](docs/production-status.md#consume-reservation-and-sql-detail)
 
@@ -102,12 +101,12 @@ are still open. The full activation workflow remains **19/26 landed**.
 
 **OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 3/5 diagnostic groups landed and 14/16 detail units landed. Consume completion/recovery is source-landed; exact token release and cold handoff remain open. Nested counts do not add to the total. Source-only; no runtime token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 4/5 diagnostic groups landed and 15/16 detail units landed. Exact release and recovery are source-landed; cold handoff remains open. Nested counts do not add to the total. Source-only; no runtime token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
 The 26 steps belong to F08; step 20's 16 detail units subdivide its existing five
-diagnostic groups (**3/5 landed**). None is added to the parent counts.
+diagnostic groups (**4/5 landed**). None is added to the parent counts.
 
 </details>
 

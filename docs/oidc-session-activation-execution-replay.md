@@ -59,12 +59,18 @@ the clock, refreshing an observation or bypassing original freshness. A matching
 journal digest/bundle proves neither durable export nor independent custody.
 The [durable first-exact sender exporter](oidc-session-activation-execution-export.md)
 and [root-authenticated receiving owner](oidc-session-activation-execution-custody.md)
-are now separate implemented source paths. Dedicated receiving key delivery,
-actual role service composition, public permission and end-to-end one-use
-protected execution remain open. Generic dispatch wiring alone does not close
-the full grant/reserve/pending/packet/SQL workflow or its production acceptance.
+are now separate implemented source paths. The **grant** receiver now connects
+its [root-admitted bootstrap](oidc-session-activation-execution-authorizer-bootstrap.md),
+[private key/FD delivery](oidc-session-activation-execution-authorizer-delivery.md)
+and actual service to [genuine caller authorization and grant production](oidc-session-activation-execution-authorization.md).
+This is unbuilt/unexecuted source, not a production grant-delivery result.
+Dedicated **reserve/SQL** receiving delivery and service composition, the public
+caller's purpose/key lifecycle and present permission, and end-to-end one-use
+protected execution remain open. A connected grant role does not close the
+full grant/reserve/pending/packet/SQL workflow or its production acceptance.
 Completion entrypoints explicitly reject activation: recovery needs genuine
-historical admission, not this API relabelled as recovery.
+historical admission, not this API relabelled as recovery. Completion/history,
+public recovery and protected token release remain separate work.
 
 Planned frozen verification, **not run**: reject wrong keys/context/original
 inventory; authenticate the known signature before bundle opening; reject any

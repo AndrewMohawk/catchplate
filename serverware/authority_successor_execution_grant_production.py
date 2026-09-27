@@ -142,6 +142,11 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
     held_deadline, inherited = held.deadline, held.inherited
     owned_expectations = held.expectations
     activation = held_operation == replay.ACTIVATION_OPERATION
+    if activation and request_binding is not None:
+        from serverware import authority_oidc_session_activation_execution_authorization as activation_authorization
+
+        if type(request_binding) is not activation_authorization._VerifiedAuthorization:
+            raise SuccessorExecutionGrantProductionError("activation requires genuine fixed post-plan authorization")
     original_current = None
     if activation:
         from serverware import authority_successor_execution_window as execution_window
@@ -208,12 +213,16 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
 
     def live():
         nonlocal last_epoch, last_monotonic
+        binding_now = binding_monotonic = None
+        if activation and request_binding is not None:
+            binding_now, binding_monotonic = request_binding.live()
         original_now = None if original_current is None else original_current()
         now = clock._check_on_work(window, work=work)
         monotonic = evidence.production._callback(work, time.monotonic_ns)
         shape._integer(monotonic, minimum=1)
         if (now < last_epoch or monotonic < last_monotonic or monotonic >= bound
-                or original_now is not None and now < original_now):
+                or original_now is not None and now < original_now
+                or binding_now is not None and (now < binding_now or monotonic < binding_monotonic)):
             raise SuccessorExecutionGrantProductionError("grant production original clock window expired or reversed")
         if original_interval is not None:
             evidence._fresh(original_interval, now, maximum_age, skew)
@@ -235,8 +244,21 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
         activation_custody=held.activation_custody, live_window=window if activation else None,
         transport_deadline_ns=bound if activation else None)
     issued, original_expires = replayed.original_interval
-    if request_binding is not None and issued < request_binding.issued_at_epoch_ns:
-        raise SuccessorExecutionGrantProductionError("original plan precedes its request authorization")
+    if request_binding is not None:
+        if activation:
+            # Activation's internally generated token/request already exists
+            # when fresh execution permission is signed. This distinct purpose
+            # cannot backdate authorization or renew the original plan window.
+            if not issued <= request_binding.issued_at_epoch_ns < request_binding.expires_at_epoch_ns <= original_expires:
+                raise SuccessorExecutionGrantProductionError("activation post-plan authority escapes its original interval")
+            for actual, expected, label in (
+                    (replayed.plan_digest, request_binding.plan_digest, "plan"),
+                    (replayed.retained_record_digest, request_binding.retained_record_digest, "raw2 originals"),
+                    (replayed.before_vector_digest, request_binding.before_vector_digest, "complete before vector"),
+                    (owned_expectations["journalDigest"], request_binding.journal_digest, "journal original")):
+                plan._same(actual, expected, work, "activation grant differs from authorized " + label)
+        elif issued < request_binding.issued_at_epoch_ns:
+            raise SuccessorExecutionGrantProductionError("original plan precedes its request authorization")
     expires = min(window[3], original_expires, issued + maximum_age, held_deadline)
     # Shortening retains the ORIGINAL actual clock bracket. Do not reopen a
     # window after expensive replay or replace the signed plan's issue instant.

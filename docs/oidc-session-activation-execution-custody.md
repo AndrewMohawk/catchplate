@@ -40,7 +40,7 @@ identity: `sessionIdentityDigest`, `measurementDigest`,
 immutable canonical `_Configuration.receiver_identity_bytes`. It must match the
 genuine outer statement at construction and after every replay reauthentication,
 before key use or private opening. It must not be copied from that statement.
-Future cold delivery must independently bind this pin to its admitted runtime;
+Cold delivery must independently bind this pin to its admitted runtime;
 the comparison is not a measured-runtime proof. Trust remains host-local, with
 all five hardware/native/HSM/TEE/witness flags false.
 
@@ -126,9 +126,16 @@ completion entrypoints explicitly reject activation; there is no backdated
 clock or live-replay-as-history fallback.
 
 The [sender's durable first-exact export](oidc-session-activation-execution-export.md)
-is a separate implemented source path. This receiving owner does not provision
-its dedicated UIDs, load sealed cold descriptors, compose actual grant/reserve/
-SQL role services, deploy database authority, grant public activation permission,
-release a token or complete a one-use activation flow. Generic dispatch wiring
-alone does not close that end-to-end service and acceptance work. Historical
-recovery and completion require their own genuine authority and original replay.
+is a separate implemented source path. The **grant** receiver now has connected
+source for its independent [role bootstrap](oidc-session-activation-execution-authorizer-bootstrap.md),
+sealed [key/FD delivery](oidc-session-activation-execution-authorizer-delivery.md)
+and actual service using [post-plan caller authorization](oidc-session-activation-execution-authorization.md)
+and genuine grant production. This does not provision its UID, keys or listener,
+and the packaged image and service remain unbuilt/unexecuted.
+
+Dedicated **reserve and SQL** receiving delivery/service composition remain
+open. So do the public caller's separate purpose/key lifecycle and present
+permission, completion/history, public recovery and protected token release.
+Neither generic dispatch nor the connected grant role completes a one-use
+activation flow or establishes session currentness. Those remaining steps need
+their own authority and production acceptance.

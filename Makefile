@@ -1055,6 +1055,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_execution_expectations.py \
 	serverware/authority_oidc_session_activation_execution_custody.py \
 	serverware/oidc_session_activation_execution_custody_bootstrap.py \
+	serverware/authority_oidc_session_activation_execution_authorization.py \
+	serverware/authority_oidc_session_activation_execution_grant_production.py \
+	serverware/oidc_session_activation_execution_authorizer_bootstrap.py \
+	serverware/authority_oidc_session_activation_execution_authorizer_transport.py \
+	serverware/oidc_session_activation_execution_authorizer_startup.py \
+	serverware/oidc_session_activation_execution_authorizer_entrypoint.py \
+	serverware/oidc_session_activation_execution_authorizer_launcher.py \
+	serverware/oidc_session_activation_execution_authorizer_runner.py \
 	serverware/authority_successor_execution_window.py \
 	serverware/authority_oidc_session_activation_execution_store.py \
 	serverware/authority_oidc_session_activation_execution_export.py \
@@ -2979,6 +2987,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_execution_expectations.py \
 				serverware/authority_oidc_session_activation_execution_custody.py \
 				serverware/oidc_session_activation_execution_custody_bootstrap.py \
+				serverware/authority_oidc_session_activation_execution_authorization.py \
+				serverware/authority_oidc_session_activation_execution_grant_production.py \
+				serverware/oidc_session_activation_execution_authorizer_bootstrap.py \
+				serverware/authority_oidc_session_activation_execution_authorizer_transport.py \
+				serverware/oidc_session_activation_execution_authorizer_startup.py \
+				serverware/oidc_session_activation_execution_authorizer_entrypoint.py \
+				serverware/oidc_session_activation_execution_authorizer_launcher.py \
+				serverware/oidc_session_activation_execution_authorizer_runner.py \
 				serverware/authority_successor_execution_window.py \
 				serverware/authority_oidc_session_activation_execution_store.py \
 				serverware/authority_oidc_session_activation_execution_export.py \

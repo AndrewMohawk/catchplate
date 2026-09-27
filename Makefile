@@ -1118,6 +1118,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_delivery_execution_grant_admission.py \
 	serverware/authority_oidc_session_activation_delivery_execution_grant_production.py \
 	serverware/authority_oidc_session_activation_delivery_execution_grant_verification.py \
+	serverware/oidc_session_activation_delivery_execution_authorizer_bootstrap.py \
+	serverware/authority_oidc_session_activation_delivery_execution_authorizer_transport.py \
+	serverware/oidc_session_activation_delivery_execution_authorizer_startup.py \
+	serverware/oidc_session_activation_delivery_execution_authorizer_entrypoint.py \
+	serverware/oidc_session_activation_delivery_execution_authorizer_launcher.py \
+	serverware/oidc_session_activation_delivery_execution_authorizer_runner.py \
 	serverware/oidc_session_activation_delivery_planner_bootstrap.py \
 	serverware/oidc_session_activation_delivery_planner_entrypoint.py \
 	serverware/oidc_session_activation_delivery_planner_launcher.py \
@@ -3116,6 +3122,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_delivery_execution_grant_admission.py \
 				serverware/authority_oidc_session_activation_delivery_execution_grant_production.py \
 				serverware/authority_oidc_session_activation_delivery_execution_grant_verification.py \
+				serverware/oidc_session_activation_delivery_execution_authorizer_bootstrap.py \
+				serverware/authority_oidc_session_activation_delivery_execution_authorizer_transport.py \
+				serverware/oidc_session_activation_delivery_execution_authorizer_startup.py \
+				serverware/oidc_session_activation_delivery_execution_authorizer_entrypoint.py \
+				serverware/oidc_session_activation_delivery_execution_authorizer_launcher.py \
+				serverware/oidc_session_activation_delivery_execution_authorizer_runner.py \
 				serverware/oidc_session_activation_delivery_planner_bootstrap.py \
 				serverware/oidc_session_activation_delivery_planner_entrypoint.py \
 				serverware/oidc_session_activation_delivery_planner_launcher.py \

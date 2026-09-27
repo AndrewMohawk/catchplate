@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -18,39 +20,25 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 
 `Implementation: IN PROGRESS | Verification: NOT RUN | Production: BLOCKED`
 
-![Production acceptance: 0 of 6 gates verified; 6 remain. Implementation is in progress.](docs/images/production-progress.svg)
+[![Production acceptance: 0 of 6 gates verified; 6 remain. Source-only implementation is in progress.](docs/images/production-progress.svg)](docs/production-status.md)
 
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-**Latest implementation milestone:** the dedicated
+**Latest landed milestone:** the dedicated
 [registration execution-grant authorizer](docs/registration-execution-authorizer.md)
-now has a protected service entrypoint and original-input transport in source;
-caller-side and public-route integration remain open. The native
-client's [same-TLS attestation and CONNECT](docs/native-proof-client.md#opt-in-ingress-attestation-before-connect),
-[portal workload identities](docs/portal-oauth-agent-guide.md#choose-or-author-the-workload-identity)
-and [signed-handoff Python client](docs/workload-mtls.md) are also implemented in
-source. These paths still need verification against the frozen release.
+has a protected service entrypoint and original-input transport in
+[commit 214cfd6](https://github.com/example/private-deployment).
+**Next:** finish the caller-side authorization, planning and returned-grant
+integration; protected public workflows and finalization remain open.
 
-| Acceptance gate | State | What remains to close it |
-| --- | --- | --- |
-| 1. Application/service and native-path integration | In progress | Complete workload provisioning, native enrollment and remaining authority integrations; verify the complete flows. |
-| 2. Immutable dependencies and frozen build/verification | Blocked on prerequisites | Publish the dependency snapshot, provide the isolated execution prerequisites, then freeze, build once and run consolidated no-build verification. |
-| 3. Independent release, signing and reproducibility | Blocked on independent infrastructure | Supply isolated build provenance/SBOMs, signed artifacts and policy/configuration roots, transparency proofs, and independent source-to-image and image-to-enclave reproducibility. |
-| 4. Real Nitro execution and KMS Recipient custody | Not provisioned | Verify fresh nonce/release/TLS-key-bound Nitro evidence, complete enclave proxy execution and ciphertext-only KMS key release. |
-| 5. Off-host witness, revocation and finalization | Not provisioned | Deploy independent authorities; prove rollback protection and external action-time current-head/revocation checks with one-use consumption. Final verification alone does not authorize actions. |
-| 6. Live operator, hardware and provider acceptance | Pending deployment | Exercise the portal, physical security keys, live providers, policy activation, response proofs and denial cases on the real deployment. |
+[Open the progress tracker →](docs/production-status.md) for landed milestones,
+all six remaining gates, and their completion criteria. Independent signing,
+Nitro/KMS and witness services are not provisioned. The current source is unbuilt
+and unexecuted; full verification follows integration and source freeze.
+**Zero verified gates does not mean zero implementation progress.**
 
-The current source is unbuilt and unexecuted. **Zero verified gates does not mean
-zero implementation progress.** Next: finish the remaining integration work;
-full testing follows source freeze, once its prerequisites are met. These six
-groups are not equal-sized tasks, and the architecture below is not a verified
-production deployment. The bar is maintained at implementation and release
-milestones; a gate advances only with linked evidence for the exact release.
-See the [full backlog](goal.md#immediate-next-engineering-tasks) and
-[production acceptance criteria](docs/security-review.md#production-acceptance-gates).
-
-<!-- Update the checkpoint, SVG, alt text, count, milestone and gate table together. Mark a gate verified only with linked evidence satisfying its entire acceptance scope for the exact release. Reopen gates when source/artifact changes invalidate that evidence; do not infer progress from commit or test counts. -->
+<!-- At each milestone update this summary and docs/production-status.md. Update the SVG, alt text and counts together when exact-release evidence closes a gate. Reopen invalidated gates; never infer readiness from commit/test counts. -->
 
 ## Why Serverware?
 

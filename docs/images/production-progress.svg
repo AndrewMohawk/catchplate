@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="112" viewBox="0 0 720 112" role="img" aria-labelledby="title description">
-  <title id="title">Production acceptance: 0 of 6 gates verified</title>
-  <desc id="description">Six empty segments represent the six production acceptance gates. All six remain open. Implementation is in progress; this is not a measure of code completion or effort remaining.</desc>
+  <title id="title">Production acceptance: 0 of 6 gates verified; 6 remaining</title>
+  <desc id="description">Six empty segments represent the six production acceptance gates. All six remain unverified. Source-only implementation is in progress; verification has not run. This is not a measure of code completion, effort remaining, or an estimated completion date.</desc>
   <rect x="1" y="1" width="718" height="110" rx="12" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="31" fill="#f8fafc" font-size="15" font-weight="600">PRODUCTION ACCEPTANCE</text>
-    <text x="696" y="31" fill="#fbbf24" font-size="15" font-weight="600" text-anchor="end">0 / 6 VERIFIED</text>
+    <text x="696" y="31" fill="#fbbf24" font-size="15" font-weight="600" text-anchor="end">0 OF 6 VERIFIED</text>
     <g fill="#1e293b" stroke="#94a3b8">
       <rect x="24" y="46" width="102" height="18" rx="4"/>
       <rect x="138" y="46" width="102" height="18" rx="4"/>
@@ -13,7 +13,7 @@
       <rect x="480" y="46" width="102" height="18" rx="4"/>
       <rect x="594" y="46" width="102" height="18" rx="4"/>
     </g>
-    <text x="24" y="91" fill="#cbd5e1" font-size="13">Implementation in progress</text>
+    <text x="24" y="91" fill="#cbd5e1" font-size="13">Source-only implementation in progress</text>
     <text x="696" y="91" fill="#cbd5e1" font-size="13" text-anchor="end">6 gates remaining</text>
   </g>
 </svg>

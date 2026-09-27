@@ -18,18 +18,19 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Tracked source implementation: 31 of 46 checkpoints landed, 15 open including next checkpoint F05. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 4/8; workloads and native 3/6; providers and operations 0/7. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Tracked source implementation: 31 of 46 checkpoints landed, 15 open including F05 in progress. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 4/8; workloads and native 3/6; providers and operations 0/7. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 **31 of 46 tracked source checkpoints landed · 15 open.** Each tile maps to a
 [named checklist item](docs/production-status.md#next-source-milestones): ✓ landed,
-→ next, — open. Counts describe implementation checkpoints, not percentage of
+→ in progress, — open. Counts describe implementation checkpoints, not percentage of
 code, equal amounts of work, or an ETA. Current source is unbuilt and unexecuted.
 
-- **Just landed:** separately authorized finalization reservation, durable
-  returned originals and the sixth portal action
-  ([af9ba66](https://github.com/example/private-deployment)).
-- **Next (F05):** independent pending-state admission, followed by protected
-  finalization execution, completion and separate OIDC activation.
+- **Just landed:** finalization pending-original admission, protected SQL
+  composition, dedicated transport and the cold-profile delivery fix
+  ([f28a7c9](https://github.com/example/private-deployment)).
+- **In progress (F05):** connect the independent pending scope through the cold
+  SQL worker and actual caller. F06 remains partial; completion and separate
+  OIDC activation follow. These checkpoints are not checked off yet.
 - **Production acceptance: 0/6 verified.** Full verification follows source
   freeze. Immutable dependencies and independently operated signing, Nitro/KMS
   and witness services remain prerequisites; the services are not provisioned.

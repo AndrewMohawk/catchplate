@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="602" viewBox="0 0 1000 602" role="img" aria-labelledby="release-title release-description">
-  <title id="release-title">Protected token release: 6 of 16 implementation-detail units landed, 3 in progress, 7 other open.</title>
-  <desc id="release-description">Detail inside activation step 20. Units 01 current proofs and effects, 02 metadata-only key custody, 03 read acquisition, 04 completed-activation provenance, 05 fresh state observation and 06 signed plan with stateless owner are committed source. Units 07 consume-history custody, 08 durable plan retention and 09 cold planner construction are in progress with uncommitted source and integration remaining. Units 10 cold planner service, 11 private authorization and issuance, 12 reservation, 13 one-use SQL, 14 durable completion and recovery, 15 exact token release and 16 cold release handoff are open; 10 is next queued. Stable IDs and closure criteria are in the linked ledger. This subdivides group c without closing it: diagnostic groups remain 2/5, activation 19/26 and parents 34/46. No extra completed work, effort percentage, runtime or production claim. Source is unbuilt and unexecuted; production gates remain 0/6 verified.</desc>
+  <title id="release-title">Protected token release: 9 of 16 implementation-detail units landed, 0 in progress, 7 open. Planner OS service is NEXT.</title>
+  <desc id="release-description">Detail inside activation step 20. Units 01 current proofs and effects, 02 metadata-only key custody, 03 read acquisition, 04 completed-activation provenance, 05 fresh state observation and 06 signed plan with stateless owner are committed source. Units 07 consume-history custody, 08 durable plan retention and 09 root-admitted cold planner construction are source-landed in 658c59eabfffb8ed7f17525c9efbe16f527cfd34. Units 10 planner OS launcher/service, 11 private authorization and issuance, 12 reservation, 13 one-use SQL, 14 durable completion and recovery, 15 exact token release and 16 cold release handoff are open; 10 is NEXT. Stable IDs and closure criteria are in the linked ledger. Group c has 7/12 pieces landed but is unfinished: diagnostic groups remain 2/5, activation 19/26 and parents 34/46. Nested counts are not additive or an effort percentage. No runtime or production claim. Source is unbuilt and unexecuted; production gates remain 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="600" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">Protected token release · inside step 20</text>
-    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">6 / 16 landed</text>
-    <text x="228" y="71" fill="#cbd5e1" font-size="18">3 in progress · 7 other open</text>
+    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">9 / 16 landed</text>
+    <text x="228" y="71" fill="#cbd5e1" font-size="18">0 in progress · 7 open</text>
     <text x="24" y="98" fill="#94a3b8" font-size="14">One segment per named implementation unit · source status, not an effort percentage</text>
 
     <g fill="#34d399">
@@ -14,12 +14,12 @@
       <rect x="144" y="112" width="52" height="38" rx="5"><title>03 · F08.4e.7.c.1 · Read acquisition · LANDED</title></rect>
       <rect x="204" y="112" width="52" height="38" rx="5"><title>04 · F08.4e.7.c.2 · Completed-activation provenance · LANDED</title></rect>
       <rect x="264" y="112" width="52" height="38" rx="5"><title>05 · F08.4e.7.c.3 · Fresh current-state observation · LANDED</title></rect>
-      <rect x="324" y="112" width="52" height="38" rx="5"><title>06 · F08.4e.7.c.4 · Signed plan and stateless owner · LANDED, not retained or cold integration</title></rect>
+      <rect x="324" y="112" width="52" height="38" rx="5"><title>06 · F08.4e.7.c.4 · Signed plan and stateless owner · LANDED · 7713e4c stateless checkpoint</title></rect>
     </g>
-    <g fill="#422006" stroke="#fbbf24" stroke-width="2">
-      <rect x="384" y="112" width="52" height="38" rx="5"><title>07 · F08.4e.7.c.5 · Consume-history custody · IN PROGRESS, uncommitted</title></rect>
-      <rect x="444" y="112" width="52" height="38" rx="5"><title>08 · F08.4e.7.c.6 · Durable plan retention · IN PROGRESS, owner integration remaining</title></rect>
-      <rect x="504" y="112" width="52" height="38" rx="5"><title>09 · F08.4e.7.c.7 · Cold planner construction · IN PROGRESS, owner integration remaining</title></rect>
+    <g fill="#34d399">
+      <rect x="384" y="112" width="52" height="38" rx="5"><title>07 · F08.4e.7.c.5 · Consume-history custody · LANDED · 658c59e</title></rect>
+      <rect x="444" y="112" width="52" height="38" rx="5"><title>08 · F08.4e.7.c.6 · Durable plan retention and genuine replay · LANDED · 658c59e</title></rect>
+      <rect x="504" y="112" width="52" height="38" rx="5"><title>09 · F08.4e.7.c.7 · Root-admitted cold planner construction · LANDED · 658c59e; OS service remains row 10</title></rect>
     </g>
     <g fill="#334155" stroke="#94a3b8">
       <rect x="564" y="112" width="52" height="38" rx="5"><title>10 · F08.4e.7.c.8 · Cold planner launcher and service · OPEN, next queued</title></rect>
@@ -36,7 +36,7 @@
         <text x="170" y="137">03</text><text x="230" y="137">04</text>
         <text x="290" y="137">05</text><text x="350" y="137">06</text>
       </g>
-      <g fill="#fde68a">
+      <g fill="#052e26">
         <text x="410" y="137">07</text><text x="470" y="137">08</text>
         <text x="530" y="137">09</text>
       </g>
@@ -76,12 +76,12 @@
         <text x="24" y="316">✓ LANDED · 7713e4c · actual read-only snapshot</text>
         <text x="24" y="360">✓ LANDED · 7713e4c · authentic original replay</text>
         <text x="24" y="404">✓ LANDED · 7713e4c · observation, not authority</text>
-        <text x="24" y="448">✓ LANDED · 7713e4c · no retained/cold integration</text>
+        <text x="24" y="448">✓ LANDED · 7713e4c · stateless source checkpoint</text>
       </g>
-      <g fill="#fde68a">
-        <text x="24" y="492">→ IN PROGRESS · authored / uncommitted</text>
-        <text x="24" y="536">→ IN PROGRESS · retained-owner integration remains</text>
-        <text x="512" y="228">→ IN PROGRESS · owner integration remains</text>
+      <g fill="#6ee7b7">
+        <text x="24" y="492">✓ LANDED · 658c59e · request-bound v2 purpose</text>
+        <text x="24" y="536">✓ LANDED · 658c59e · durable originals / replay</text>
+        <text x="512" y="228">✓ LANDED · 658c59e · actual retained construction</text>
       </g>
       <g fill="#cbd5e1">
         <text x="512" y="272">— OPEN · NEXT queued source step</text>

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="418" viewBox="0 0 1000 418" role="img" aria-labelledby="project-title project-description">
   <title id="project-title">Whole-project source checkpoints: 34 of 46 landed; 12 open, including one in progress. Production acceptance: 0 of 6 verified.</title>
-  <desc id="project-description">Six rows show every stable parent ID once: evidence 10/10, historical 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. Total 34/46 landed and 12 open including F08 in progress. F08 has 19/26 leaves landed, step 20 in progress and 6 other open. Step 20 has 2/5 diagnostic groups landed. Its separate 16-unit detail bar shows 6 landed, 3 in progress and 7 open: consume custody, retention and cold construction are underway but uncommitted; planner service is next queued. Diagnostic counts are not additive. Execution stays 6/7 and private replay 8/8. No consume SQL, plaintext release or public handoff is claimed. Source is unbuilt and unexecuted; counts are not effort or readiness percentages. Production acceptance stays 0/6 verified.</desc>
+  <desc id="project-description">Six rows show every stable parent ID once: evidence 10/10, historical 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. Total 34/46 landed and 12 open including F08 in progress. F08 has 19/26 leaves landed, step 20 in progress and 6 other open. Step 20 has 2/5 diagnostic groups landed. Its separate 16-unit detail bar shows 9 landed, 0 in progress and 7 open: consume custody, retention and cold construction are source-landed in 658c59eabfffb8ed7f17525c9efbe16f527cfd34; planner OS service is NEXT. Group c stays in progress at 7/12 pieces. Diagnostic counts are not additive. Execution stays 6/7 and private replay 8/8. No consume SQL, plaintext release or public handoff is claimed. Source is unbuilt and unexecuted; counts are not effort or readiness percentages. Production acceptance stays 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="416" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="34" fill="#f8fafc" font-size="25" font-weight="700">Whole-project source checkpoints</text>
@@ -89,7 +89,7 @@
         <rect x="713" y="234" width="77" height="32" rx="5"><title>F06 · Protected finalization SQL &amp; outcomes · LANDED</title></rect>
         <rect x="798" y="234" width="77" height="32" rx="5"><title>F07 · Completion/recovery &amp; public portal · LANDED</title></rect>
       </g>
-      <rect x="883" y="234" width="77" height="32" rx="5" fill="#422006" stroke="#fbbf24"><title>F08 · OIDC session activation · GROUPING PARENT IN PROGRESS. 19/26 leaves landed, step 20 in progress, 6 other open. Execution 6/7; private replay 8/8. Release has 2/5 groups landed; its 16-unit detail has 6 landed, 3 in progress and 7 open. No plaintext release or current-session claim.</title></rect>
+      <rect x="883" y="234" width="77" height="32" rx="5" fill="#422006" stroke="#fbbf24"><title>F08 · OIDC session activation · GROUPING PARENT IN PROGRESS. 19/26 leaves landed, step 20 in progress, 6 other open. Execution 6/7; private replay 8/8. Release has 2/5 groups landed; its 16-unit detail has 9 landed, 0 in progress and 7 open. No plaintext release or current-session claim.</title></rect>
       <g fill="#052e26" font-size="12" font-weight="700" text-anchor="middle">
         <text x="326.5" y="255">✓ F01</text><text x="411.5" y="255">✓ F02</text>
         <text x="496.5" y="255">✓ F03</text><text x="581.5" y="255">✓ F04</text>
@@ -139,6 +139,6 @@
     </g>
 
     <text x="24" y="377" fill="#cbd5e1" font-size="13">Source-only · unbuilt, unexecuted, unprovisioned · landed source is not verified production readiness</text>
-    <text x="24" y="400" fill="#94a3b8" font-size="12">F08: 19/26 landed · step 20 detail: 6/16 landed, 3 in progress, 7 open · five groups still 2/5 · see detail ledger.</text>
+    <text x="24" y="400" fill="#94a3b8" font-size="12">F08: 19/26 landed · step 20 detail: 9/16 landed, 7 open · five groups still 2/5 · planner OS service NEXT.</text>
   </g>
 </svg>

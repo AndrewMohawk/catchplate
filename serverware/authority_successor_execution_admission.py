@@ -45,7 +45,7 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         grant_bytes, grant_enrollment_bytes, expected_authorization_digest,
         expected_database_id, expected_generation_digest, expected_pending_sequence,
         expected_pending_head_digest, expected_fence, live_window, work,
-        transport_deadline_ns=None):
+        transport_deadline_ns=None, activation_custody=None):
     """Derive an execution candidate from all genuine originals on one work.
 
     Request authorization and the exact pending head/fence are independent
@@ -54,6 +54,9 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
     Later scalar/digest joins do not rerun that heavy proof computation.
     """
     evidence.capture._SharedLedger(work)
+    held_custody = activation_custody
+    if type(operation) is str and operation == pending.replay.ACTIVATION_OPERATION:
+        authorization.shape._integer(transport_deadline_ns, minimum=1)
     held_grant = authorization._original(grant_bytes, grants.MAX_GRANT_BYTES,
         "successor execution grant")
     held_grant_enrollment = authorization._original(grant_enrollment_bytes,
@@ -84,7 +87,8 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         expected_database_id=expected_database_id, expected_generation_digest=expected_generation_digest,
         expected_pending_sequence=expected_pending_sequence,
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
-        live_window=window, work=work, transport_deadline_ns=inherited)
+        live_window=window, work=work, transport_deadline_ns=inherited,
+        activation_custody=held_custody)
 
     def live():
         now = clock._check_on_work(window, work=work)

@@ -145,9 +145,12 @@ def _prepare_on_work(*, operation, originals, expectations, planner_public_key,
         grant_bytes, grant_enrollment_bytes, expected_authorization_digest,
         expected_database_id, expected_generation_digest, expected_pending_sequence,
         expected_pending_head_digest, expected_fence, live_window, work,
-        transport_deadline_ns=None):
+        transport_deadline_ns=None, activation_custody=None):
     """Admit genuine originals once, then encode their closed custody packet."""
     vector.capture._SharedLedger(work)
+    held_custody = activation_custody
+    if type(operation) is str and operation == pending.replay.ACTIVATION_OPERATION:
+        authorization.shape._integer(transport_deadline_ns, minimum=1)
     held = pending._originals(operation, originals, enrollment_bytes,
         reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes)
     plan_originals, enrollment, reserve, receipt, snapshot = held
@@ -177,5 +180,6 @@ def _prepare_on_work(*, operation, originals, expectations, planner_public_key,
         grant_enrollment_bytes=grant_enrollment, expected_authorization_digest=held_authorization,
         expected_database_id=scope[0], expected_generation_digest=scope[1],
         expected_pending_sequence=scope[2], expected_pending_head_digest=scope[3],
-        expected_fence=scope[4], live_window=scope[5], transport_deadline_ns=scope[6], work=work)
+        expected_fence=scope[4], live_window=scope[5], transport_deadline_ns=scope[6], work=work,
+        activation_custody=held_custody)
     return _encode_candidate_on_work(candidate, held_authorization, plan_originals, controls, work)

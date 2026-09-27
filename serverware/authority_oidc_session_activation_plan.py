@@ -119,9 +119,9 @@ def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_t
     registration._integer(expected["maximumClockSkewNs"], "activation plan skew", 0,
         contract.authority.VERIFIER_MAX_CLOCK_SKEW_NS)
     registration._integer(expected["deadlineEpochNs"], "activation plan original deadline", 1)
-    if (window[5] != expected["maximumPlanAgeNs"] or window[6] != expected["maximumClockSkewNs"]
+    if (window[5] > expected["maximumPlanAgeNs"] or window[6] > expected["maximumClockSkewNs"]
             or window[3] > expected["deadlineEpochNs"]):
-        _fail("activation plan window differs from independent policy")
+        _fail("activation plan processing window exceeds independent policy")
     actual = owned["request"]
     if type(actual) is not dict or actual.get("operation") != contract.OPERATION:
         _fail("activation plan request has the wrong operation")

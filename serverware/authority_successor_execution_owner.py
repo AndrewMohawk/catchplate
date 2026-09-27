@@ -312,7 +312,10 @@ class SuccessorExecutionIssuer:
             grant_bytes, grant_enrollment_bytes, expected_authorization_digest,
             expected_database_id, expected_generation_digest, expected_pending_sequence,
             expected_pending_head_digest, expected_fence, live_window, work,
-            transport_deadline_ns=None):
+            transport_deadline_ns=None, activation_custody=None):
+        held_custody = activation_custody
+        if type(operation) is str and operation == packet.pending.replay.ACTIVATION_OPERATION:
+            authorization.shape._integer(transport_deadline_ns, minimum=1)
         configured = SuccessorExecutionIssuer._snapshot_configuration(self)
         window, bound = _window(live_window, transport_deadline_ns)
         prepared = packet._prepare_on_work(operation=operation, originals=originals, expectations=expectations,
@@ -323,7 +326,8 @@ class SuccessorExecutionIssuer:
             expected_authorization_digest=expected_authorization_digest, expected_database_id=expected_database_id,
             expected_generation_digest=expected_generation_digest, expected_pending_sequence=expected_pending_sequence,
             expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
-            live_window=window, work=work, transport_deadline_ns=bound)
+            live_window=window, work=work, transport_deadline_ns=bound,
+            activation_custody=held_custody)
         work.charge(input_bytes=len(prepared.packet_bytes))
         text = prepared.packet_bytes.decode("ascii")
         work.prepare_utf8(prepared.packet_digest)

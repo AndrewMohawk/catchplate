@@ -1,7 +1,9 @@
 """Genuine successor plan replay lifted into complete source root vectors.
 
-Only original raw2 revocation, raw3 evidence-admission or raw4 transition plans
-are accepted, alongside independently admitted keys and historical expectations.
+Only original raw2 revocation, raw3 evidence-admission, raw4 transition or
+ciphertext-only raw2 activation plans are accepted. Activation additionally
+requires the actual independently configured private custody owner and original
+live window; it has no historical-expiry fallback.
 The actual family verifier authenticates originals and recomputes semantics,
 memberships, complete queries, mutations and every required index projection.
 Operation-local before roots must match the supplied complete vector exactly;
@@ -9,8 +11,9 @@ only genuine replay outputs replace descriptors, with all others unchanged.
 
 The full vector is data, not current-root authority. Neither a returned record
 nor a signed planner assertion substitutes for root enrollment/latest-head
-admission. The original plan interval is preserved without a clock sample or
-renewal. Revocation's signed capability ID and Snapshot/v4 remain distinct from
+admission. The existing families preserve their original interval without a
+clock sample or renewal; activation retains its supplied original live bound.
+Revocation's signed capability ID and Snapshot/v4 remain distinct from
 an original capability digest or any new computation-snapshot commitment.
 No execution-capability admission, SQL, key enrollment, new work or successful
 proof-token input is provided here.
@@ -24,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_contract as authority
 from serverware import authority_current_root_delta as delta
 from serverware import authority_current_root_vector as vector
+from serverware import authority_oidc_session_activation_plan_contract as activation_contract
 from serverware import authority_primary_contract as primary
 from serverware import authority_revocation_retention as revocation
 from serverware import authority_webauthn_evidence_plan_retention as evidence
@@ -36,6 +40,7 @@ OPERATIONS = delta.OPERATIONS
 REVOCATION_OPERATION = revocation.plan.contract.OPERATION
 EVIDENCE_OPERATIONS = evidence.plan.contract.OPERATIONS
 TRANSITION_OPERATIONS = transition.plan.contract.OPERATIONS
+ACTIVATION_OPERATION = activation_contract.OPERATION
 MAX_ORIGINAL_BYTES = authority.MAX_RESULT_BYTES
 _REVOCATION_EXPECTATIONS = revocation.wire._EXPECTATIONS - {
     "planner_public_key", "verifier_public_key"}
@@ -69,20 +74,33 @@ class _ReplayedPlan:
     work_units: int
 
 
-def _originals(operation, originals, before_vector_bytes):
+def _frame_maxima(operation):
+    """Return fixed original-frame caps only for the complete disjoint families."""
     delta._source(operation)
-    if (OPERATIONS != frozenset({REVOCATION_OPERATION}) | EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS
+    if (OPERATIONS != frozenset({REVOCATION_OPERATION, ACTIVATION_OPERATION})
+            | EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS
             or EVIDENCE_OPERATIONS & TRANSITION_OPERATIONS
-            or REVOCATION_OPERATION in EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS):
+            or REVOCATION_OPERATION == ACTIVATION_OPERATION
+            or REVOCATION_OPERATION in EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS
+            or ACTIVATION_OPERATION in EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS):
         raise CurrentRootPlanReplayError("successor replay families differ from the complete source inventory")
     if operation == REVOCATION_OPERATION:
-        maxima = (revocation.plan.contract.MAX_PAYLOAD_BYTES, revocation.MAX_CONTEXT_BYTES)
-    elif operation in EVIDENCE_OPERATIONS:
-        maxima = (evidence.plan.contract.MAX_BYTES, evidence.plan.inputs_wire.MAX_BYTES,
+        return (revocation.plan.contract.MAX_PAYLOAD_BYTES, revocation.MAX_CONTEXT_BYTES)
+    if operation in EVIDENCE_OPERATIONS:
+        return (evidence.plan.contract.MAX_BYTES, evidence.plan.inputs_wire.MAX_BYTES,
             evidence.context_wire.MAX_BYTES)
-    else:
-        maxima = (transition.plan.contract.MAX_BYTES, transition.plan.proof.contract.MAX_BYTES,
+    if operation in TRANSITION_OPERATIONS:
+        return (transition.plan.contract.MAX_BYTES, transition.plan.proof.contract.MAX_BYTES,
             transition.plan.proof.wire.MAX_BYTES, transition.plan.context.MAX_BYTES)
+    if operation == ACTIVATION_OPERATION:
+        from serverware import authority_oidc_session_activation_execution_bundle as activation_bundle
+
+        return (activation_contract.MAX_BYTES, activation_bundle.MAX_BYTES)
+    raise CurrentRootPlanReplayError("successor replay operation has no explicit original family")
+
+
+def _originals(operation, originals, before_vector_bytes):
+    maxima = _frame_maxima(operation)
     if (type(originals) is not tuple or len(originals) != len(maxima)
             or any(type(raw) is not bytes or not 2 <= len(raw) <= maximum
                 for raw, maximum in zip(originals, maxima))
@@ -91,6 +109,13 @@ def _originals(operation, originals, before_vector_bytes):
         raise CurrentRootPlanReplayError("successor replay requires its fixed bounded original tuple and vector")
     if sum(len(raw) for raw in originals) + len(before_vector_bytes) > MAX_ORIGINAL_BYTES:
         raise CurrentRootPlanReplayError("successor replay originals exceed the existing aggregate byte bound")
+    if operation == ACTIVATION_OPERATION:
+        from serverware import authority_oidc_session_activation_execution_bundle as activation_bundle
+
+        try:
+            activation_bundle._bounded_frame(originals[1])
+        except activation_bundle.ActivationExecutionBundleError as exc:
+            raise CurrentRootPlanReplayError("activation replay requires its original ciphertext frame") from exc
     return originals, before_vector_bytes
 
 
@@ -98,6 +123,10 @@ def _expectations(operation, expectations, planner_key, operation_key, work):
     ledger = capture._SharedLedger(work)
     if not isinstance(planner_key, Ed25519PublicKey) or not isinstance(operation_key, Ed25519PublicKey):
         raise CurrentRootPlanReplayError("successor replay needs independently admitted actual Ed25519 keys")
+    if operation == ACTIVATION_OPERATION:
+        from serverware import authority_oidc_session_activation_execution_expectations as activation_expectations
+
+        return activation_expectations._capture_on_work(expectations, work=work)
     if operation == REVOCATION_OPERATION:
         shape._object(expectations, _REVOCATION_EXPECTATIONS, "independent revocation replay expectations")
         database_now = expectations["database_now"]
@@ -113,10 +142,27 @@ def _expectations(operation, expectations, planner_key, operation_key, work):
     owned = capture._JSONCapture(ledger).visit(expectations)
     if operation in EVIDENCE_OPERATIONS:
         evidence.plan._validate_expectations(owned, operation)
-    else:
+    elif operation in TRANSITION_OPERATIONS:
         actual = transition.plan.contract._validate_expectations(owned)
         framing._same(actual, operation, work, "successor replay independent operation")
+    else:
+        raise CurrentRootPlanReplayError("successor replay expectations have no explicit source family")
     return owned
+
+
+def _activation_context_on_work(operation, activation_custody, *, root_public_key,
+        current_root_enrollment_bytes, work):
+    """Join the actual generic caller's root/enrollment, never a context DTO."""
+    if operation == ACTIVATION_OPERATION:
+        from serverware import authority_oidc_session_activation_execution_custody as activation_owner
+
+        if type(activation_custody) is not activation_owner.OidcSessionActivationExecutionCustody:
+            raise CurrentRootPlanReplayError("activation context requires the actual private custody owner")
+        return activation_owner.OidcSessionActivationExecutionCustody.bind_context_on_work(activation_custody,
+            root_public_key=root_public_key, current_root_enrollment_bytes=current_root_enrollment_bytes,
+            work=work)
+    if activation_custody is not None:
+        raise CurrentRootPlanReplayError("activation custody cannot bind another replay family")
 
 
 def _primary_documents(values, work):
@@ -304,29 +350,51 @@ def _transition(originals, expected, planner_key, operation_key, work):
 
 
 def _replay_on_work(*, operation, originals, expectations, planner_public_key,
-        operation_public_key, before_vector_bytes, work):
+        operation_public_key, before_vector_bytes, work, activation_custody=None,
+        live_window=None, transport_deadline_ns=None):
     """Reconstruct complete effects from original plans on one existing work.
 
     Revocation expectations are the existing closed verifier expectations minus
     the two explicit keys; their exact UTC database_now is retained unchanged.
     Evidence and transition use their unchanged independent18/independent5.
+    Activation uses its closed data-only expectations and the actual private
+    custody owner, which reauthenticates original cold authority and performs
+    genuine live original replay. No incoming successful result is accepted.
     The returned interval is revocation's signed authorization creation/expiry,
-    or the other families' signed plan issue/expiry. It is neither renewed nor
-    asserted live now. Revocation plan_digest is the retained original-envelope
+    or the other families' signed plan issue/expiry. None is renewed. The three
+    existing families retain historical semantics; activation requires its
+    actual original live guard. Revocation plan_digest is the retained original-envelope
     raw SHA identity; the other families retain their dedicated plan identity.
     """
     capture._SharedLedger(work)
     held_operation = operation
     held_originals, held_before = _originals(held_operation, originals, before_vector_bytes)
     planner_key, operation_key = planner_public_key, operation_public_key
+    if held_operation == ACTIVATION_OPERATION:
+        from serverware import authority_oidc_session_activation_execution_custody as activation_owner
+        from serverware import authority_webauthn_evidence_plan_clock as activation_clock
+
+        if type(activation_custody) is not activation_owner.OidcSessionActivationExecutionCustody:
+            raise CurrentRootPlanReplayError("activation replay requires the actual private custody owner")
+        window = activation_clock._validate(live_window)
+        shape._integer(transport_deadline_ns, minimum=1)
+        owned = _expectations(held_operation, expectations, planner_key, operation_key, work)
+        return activation_owner.OidcSessionActivationExecutionCustody.replay_on_work(activation_custody,
+            originals=held_originals, expectations=owned, planner_public_key=planner_key,
+            operation_public_key=operation_key, before_vector_bytes=held_before,
+            live_window=window, transport_deadline_ns=transport_deadline_ns, work=work)
+    if activation_custody is not None:
+        raise CurrentRootPlanReplayError("activation custody cannot be supplied to another replay family")
     owned = _expectations(held_operation, expectations, planner_key, operation_key, work)
     before = vector._decode_on_work(held_before, work=work)
     if held_operation == REVOCATION_OPERATION:
         values = _revocation(held_originals, owned, planner_key, operation_key, work)
     elif held_operation in EVIDENCE_OPERATIONS:
         values = _evidence(held_originals, owned, planner_key, operation_key, work)
-    else:
+    elif held_operation in TRANSITION_OPERATIONS:
         values = _transition(held_originals, owned, planner_key, operation_key, work)
+    else:
+        raise CurrentRootPlanReplayError("successor replay has no explicit source algorithm")
     (request, record_digest, plan_digest, result, interval, snapshot, capability_id,
         business_before, authorization_before, business_after, authorization_after,
         heads_before, heads_after, selected_rows, mutations, work_units) = values

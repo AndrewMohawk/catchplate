@@ -144,13 +144,9 @@ def _effects_digest_on_work(*, selected_rows, mutations, result, work_units, wor
 
 
 def _plan_maxima(operation):
-    if operation == replay.REVOCATION_OPERATION:
-        return (replay.revocation.plan.contract.MAX_PAYLOAD_BYTES, replay.revocation.MAX_CONTEXT_BYTES)
-    if operation in replay.EVIDENCE_OPERATIONS:
-        return (replay.evidence.plan.contract.MAX_BYTES, replay.evidence.plan.inputs_wire.MAX_BYTES,
-            replay.evidence.context_wire.MAX_BYTES)
-    return (replay.transition.plan.contract.MAX_BYTES, replay.transition.plan.proof.contract.MAX_BYTES,
-        replay.transition.plan.proof.wire.MAX_BYTES, replay.transition.plan.context.MAX_BYTES)
+    # Storage decoding names the real source family; it grants no historical
+    # replay or completion authority for the activation ciphertext originals.
+    return replay._frame_maxima(operation)
 
 
 def _frame_shape(frame, maximum):

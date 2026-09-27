@@ -7,8 +7,9 @@ claims. No successful replay carrier or caller-selected signing payload is
 accepted. This does not provide a cold owner, user authorization, reservation,
 SQL permission, one-use custody, transport or a replacement work allowance.
 
-The original plan issue instant is never changed. One actual dual-clock window
-is opened under the enrolled policy and only shortened after genuine replay;
+The original plan issue instant is never changed. Existing families open one
+actual dual-clock window under the enrolled policy; activation must instead
+retain its supplied original opening. Windows only narrow after genuine replay;
 old expired originals cannot acquire a fresh execution interval.
 """
 from __future__ import annotations
@@ -46,12 +47,15 @@ class _HeldInputs:
     deadline: int
     inherited: int | None
     original_bytes: int
+    activation_custody: object | None
+    live_window: tuple | None
 
 
 def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, before_vector_bytes, grant_enrollment_bytes,
         current_root_enrollment_bytes, root_public_key, authorizer_private_key,
-        expected_authorization_digest, deadline_epoch_ns, work, transport_deadline_ns=None):
+        expected_authorization_digest, deadline_epoch_ns, work, transport_deadline_ns=None,
+        activation_custody=None, live_window=None):
     """Sign original-plan-derived claims once on the supplied cumulative work.
 
     ``expected_authorization_digest`` must come from independently admitted
@@ -67,14 +71,15 @@ def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         current_root_enrollment_bytes=current_root_enrollment_bytes,
         root_public_key=root_public_key, authorizer_private_key=authorizer_private_key,
         deadline_epoch_ns=deadline_epoch_ns, work=work,
-        transport_deadline_ns=transport_deadline_ns)
+        transport_deadline_ns=transport_deadline_ns, activation_custody=activation_custody,
+        live_window=live_window)
     return _produce_held_on_work(held, expected_authorization_digest, work=work)
 
 
 def _hold_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, before_vector_bytes, grant_enrollment_bytes,
         current_root_enrollment_bytes, root_public_key, authorizer_private_key,
-        deadline_epoch_ns, work, transport_deadline_ns=None):
+        deadline_epoch_ns, work, transport_deadline_ns=None, activation_custody=None, live_window=None):
     """Capture the caller graph before the dedicated authorization callback."""
     capture._SharedLedger(work)
     held_operation = operation
@@ -97,14 +102,26 @@ def _hold_on_work(*, operation, originals, expectations, planner_public_key,
     if transport_deadline_ns is not None:
         shape._integer(transport_deadline_ns, minimum=1)
     held_deadline, inherited = deadline_epoch_ns, transport_deadline_ns
+    held_custody, held_window = activation_custody, None
+    if held_operation == replay.ACTIVATION_OPERATION:
+        from serverware import authority_oidc_session_activation_execution_custody as activation_owner
+
+        if type(held_custody) is not activation_owner.OidcSessionActivationExecutionCustody:
+            raise SuccessorExecutionGrantProductionError("activation grant production requires actual private custody")
+        held_window = clock._validate(live_window)
+        shape._integer(inherited, minimum=1)
+    elif held_custody is not None:
+        raise SuccessorExecutionGrantProductionError("activation custody cannot authorize another grant family")
     # The actual family capture owns all caller graphs (and preserves the
     # exact revocation UTC instant) before any enrollment/key/clock callback.
     owned_expectations = replay._expectations(held_operation, expectations,
         held_planner, held_operation_key, work)
+    replay._activation_context_on_work(held_operation, held_custody,
+        root_public_key=held_root, current_root_enrollment_bytes=held_current_enrollment, work=work)
     return _HeldInputs(held_operation, held_originals, held_before,
         held_grant_enrollment, held_current_enrollment, held_root, held_signer,
         held_planner, held_operation_key, owned_expectations, held_deadline,
-        inherited, original_bytes)
+        inherited, original_bytes, held_custody, held_window)
 
 
 def _produce_held_on_work(held, held_authorization, *, work, request_binding=None):
@@ -124,16 +141,48 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
     held_planner, held_operation_key = held.planner, held.operation_key
     held_deadline, inherited = held.deadline, held.inherited
     owned_expectations = held.expectations
+    activation = held_operation == replay.ACTIVATION_OPERATION
+    original_current = None
+    if activation:
+        from serverware import authority_successor_execution_window as execution_window
+        from serverware import oidc_session_activation_delivery as activation_delivery
+
+        original_window = clock._validate(held.live_window)
+        shape._integer(inherited, minimum=1)
+        _window, original_current = activation_delivery._window(original_window, inherited, work)
+        original_current()
 
     material = grants._admit_enrollment_on_work(grant_enrollment_bytes=held_grant_enrollment,
         current_root_enrollment_bytes=held_current_enrollment, root_public_key=held_root, work=work)
+    if original_current is not None:
+        original_current()
     policy = material.payload
     policy_pins = (material.enrollment_digest, policy["currentRootEnrollmentDigest"],
         policy["databaseId"], policy["generationDigest"], policy["authorizer"]["measurementDigest"],
         policy["maximumGrantAgeNs"], policy["maximumClockSkewNs"])
     authorizer_key = material.authorizer_public_key
     maximum_age, skew = policy_pins[5:]
-    if request_binding is None:
+    if activation:
+        window = execution_window._narrow(original_window, deadline_epoch_ns=held_deadline,
+            maximum_lifetime_ns=maximum_age, maximum_clock_skew_ns=skew)
+        bound = min(window[4], inherited)
+        last_epoch, last_monotonic = window[0], window[2]
+        if request_binding is not None:
+            binding_window = clock._validate(request_binding.window)
+            plan._same(binding_window[:3], original_window[:3], work,
+                "activation grant authorization replaced the original clock bracket")
+            shape._integer(request_binding.deadline_ns, minimum=1)
+            window = execution_window._narrow(window,
+                deadline_epoch_ns=min(binding_window[3], request_binding.expires_at_epoch_ns, held_deadline),
+                maximum_lifetime_ns=min(window[5], binding_window[5]),
+                maximum_clock_skew_ns=min(window[6], binding_window[6]))
+            bound = min(bound, window[4], binding_window[4], request_binding.deadline_ns)
+            last_epoch = max(last_epoch, request_binding.last_epoch_ns)
+            last_monotonic = max(last_monotonic, request_binding.last_monotonic_ns)
+            plan._same(held_authorization, request_binding.authorization_digest, work,
+                "grant authorization differs from the genuine original authorization")
+        maximum_age, skew = window[5:]
+    elif request_binding is None:
         window = clock._open_on_work(deadline_epoch_ns=held_deadline,
             maximum_lifetime_ns=maximum_age, maximum_clock_skew_ns=skew, work=work)
         bound = window[4] if inherited is None else min(window[4], inherited)
@@ -159,10 +208,12 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
 
     def live():
         nonlocal last_epoch, last_monotonic
+        original_now = None if original_current is None else original_current()
         now = clock._check_on_work(window, work=work)
         monotonic = evidence.production._callback(work, time.monotonic_ns)
         shape._integer(monotonic, minimum=1)
-        if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
+        if (now < last_epoch or monotonic < last_monotonic or monotonic >= bound
+                or original_now is not None and now < original_now):
             raise SuccessorExecutionGrantProductionError("grant production original clock window expired or reversed")
         if original_interval is not None:
             evidence._fresh(original_interval, now, maximum_age, skew)
@@ -180,7 +231,9 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
     live()
     replayed = replay._replay_on_work(operation=held_operation, originals=held_originals,
         expectations=owned_expectations, planner_public_key=held_planner,
-        operation_public_key=held_operation_key, before_vector_bytes=held_before, work=work)
+        operation_public_key=held_operation_key, before_vector_bytes=held_before, work=work,
+        activation_custody=held.activation_custody, live_window=window if activation else None,
+        transport_deadline_ns=bound if activation else None)
     issued, original_expires = replayed.original_interval
     if request_binding is not None and issued < request_binding.issued_at_epoch_ns:
         raise SuccessorExecutionGrantProductionError("original plan precedes its request authorization")

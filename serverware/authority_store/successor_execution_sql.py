@@ -166,15 +166,11 @@ def _originals(namespace):
         "reserveRequest": authorization.REQUEST_IDENTITY_DOMAIN,
         "reserveReceipt": authorization.RECEIPT_IDENTITY_DOMAIN,
         "computationSnapshot": computation.SNAPSHOT_DOMAIN}
-    maxima = {replay.REVOCATION_OPERATION: [replay.revocation.plan.contract.MAX_PAYLOAD_BYTES,
-        replay.revocation.MAX_CONTEXT_BYTES]}
-    for operation in replay.EVIDENCE_OPERATIONS:
-        maxima[operation] = [replay.evidence.plan.contract.MAX_BYTES,
-            replay.evidence.plan.inputs_wire.MAX_BYTES, replay.evidence.context_wire.MAX_BYTES]
-    for operation in replay.TRANSITION_OPERATIONS:
-        maxima[operation] = [replay.transition.plan.contract.MAX_BYTES,
-            replay.transition.plan.proof.contract.MAX_BYTES, replay.transition.plan.proof.wire.MAX_BYTES,
-            replay.transition.plan.context.MAX_BYTES]
+    # The same closed source inventory bounds live admission, snapshots,
+    # grants and retained packets. Activation's second original is ciphertext;
+    # this SQL loop hashes opaque bytes and never opens or JSON-decodes it.
+    maxima = {operation: list(replay._frame_maxima(operation))
+        for operation in sorted(replay.OPERATIONS)}
     cases = "\n".join(f"WHEN {_literal(name)} THEN {_literal(domain)}" for name, domain in domains.items())
     return f"""
         IF NOT {_closed("sxe_packet->'originals'", packet.ORIGINAL_FIELDS)}

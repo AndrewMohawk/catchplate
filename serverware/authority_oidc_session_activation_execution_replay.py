@@ -52,7 +52,7 @@ def _expectations(request, scope, window, work):
     registration._integer(scope["maximumClockSkewNs"], "activation plan skew", 0,
         contract.authority.VERIFIER_MAX_CLOCK_SKEW_NS)
     registration._integer(scope["deadlineEpochNs"], "activation original deadline", 1)
-    if (window[5:] != (scope["maximumPlanAgeNs"], scope["maximumClockSkewNs"])
+    if (window[5] > scope["maximumPlanAgeNs"] or window[6] > scope["maximumClockSkewNs"]
             or window[3] > scope["deadlineEpochNs"]):
         _fail("activation execution processing exceeds its independent original policy or deadline")
     digest = plan.commitment._typed_request_digest(request, work=work)

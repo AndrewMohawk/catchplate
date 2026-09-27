@@ -89,11 +89,10 @@ class _PendingCompletion:
 def _originals(operation, originals, enrollment_bytes, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes):
     authorization.delta._source(operation)
-    count = (2 if operation == replay.REVOCATION_OPERATION else
-        3 if operation in replay.EVIDENCE_OPERATIONS else 4)
-    if (type(originals) is not tuple or len(originals) != count
-            or any(type(raw) is not bytes or not 2 <= len(raw) <= replay.MAX_ORIGINAL_BYTES
-                for raw in originals)):
+    maxima = replay._frame_maxima(operation)
+    if (type(originals) is not tuple or len(originals) != len(maxima)
+            or any(type(raw) is not bytes or not 2 <= len(raw) <= maximum
+                for raw, maximum in zip(originals, maxima))):
         raise CurrentRootExecutionAdmissionError("execution admission needs the fixed original plan tuple")
     enrollment = authorization._original(enrollment_bytes,
         authorization.MAX_ENROLLMENT_BYTES, "execution enrollment")
@@ -176,7 +175,8 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        live_window, work, transport_deadline_ns, historical_controls, custody_effects=False):
+        live_window, work, transport_deadline_ns, historical_controls, custody_effects=False,
+        activation_custody=None):
     """Fixed replay shared by separate live-execution/historical-completion paths.
 
     ``original_interval`` in the candidate is the effective ORIGINAL RESERVE
@@ -189,8 +189,13 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
         raise CurrentRootExecutionAdmissionError("pending admission purpose is not source-selected")
     if type(custody_effects) is not bool or custody_effects and not historical_controls:
         raise CurrentRootExecutionAdmissionError("custody effects identity is historical-completion only")
+    if historical_controls and type(operation) is str and operation == replay.ACTIVATION_OPERATION:
+        raise CurrentRootExecutionAdmissionError("activation historical completion is not implemented")
     evidence.capture._SharedLedger(work)
     held_operation = operation
+    held_custody = activation_custody
+    if type(held_operation) is str and held_operation == replay.ACTIVATION_OPERATION:
+        authorization.shape._integer(transport_deadline_ns, minimum=1)
     held = _originals(held_operation, originals, enrollment_bytes,
         reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes)
     plan_originals, enrollment, reserve, receipt_original, snapshot_original = held
@@ -207,6 +212,8 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
     expected = replay._expectations(held_operation, expectations, planner_key, operation_key, work)
     window, inherited = scope[5:]
     initial_now = _live(window, inherited, work)
+    replay._activation_context_on_work(held_operation, held_custody,
+        root_public_key=held_root, current_root_enrollment_bytes=enrollment, work=work)
     if historical_controls:
         material, request, request_digest = authorization._verify_historical_request_on_work(
             request_bytes=reserve, enrollment_bytes=enrollment, root_public_key=held_root, work=work)
@@ -227,7 +234,8 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
     before_bytes = vector._encode_on_work(request["beforeVector"], work=work)
     replayed = replay._replay_on_work(operation=held_operation, originals=plan_originals,
         expectations=expected, planner_public_key=planner_key, operation_public_key=operation_key,
-        before_vector_bytes=before_bytes, work=work)
+        before_vector_bytes=before_bytes, work=work, activation_custody=held_custody,
+        live_window=window, transport_deadline_ns=inherited)
     for field in ("operation", "requestDigest", "operationId"):
         evidence.plan._same(request[field], replayed.request[field], work,
             "execution reserve differs from actual typed plan request")
@@ -281,7 +289,7 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        live_window, work, transport_deadline_ns=None):
+        live_window, work, transport_deadline_ns=None, activation_custody=None):
     """Live original controls plus genuine replay; no execution authority alone."""
     return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
@@ -292,14 +300,14 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         expected_pending_sequence=expected_pending_sequence,
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
-        historical_controls=False)
+        historical_controls=False, activation_custody=activation_custody)
 
 
 def _admit_for_completion_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        live_window, work, transport_deadline_ns=None):
+        live_window, work, transport_deadline_ns=None, activation_custody=None):
     """Historical pending scope for actual postcommit observation, never execution.
 
     This still verifies every original signature, original interval, exact
@@ -307,6 +315,8 @@ def _admit_for_completion_on_work(*, operation, originals, expectations, planner
     caller's fresh completion window is checked throughout; expired execution
     authority is not renewed. No selected rows or mutations are returned.
     """
+    if type(operation) is str and operation == replay.ACTIVATION_OPERATION:
+        raise CurrentRootExecutionAdmissionError("activation historical completion is not implemented")
     return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
         enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
@@ -316,20 +326,22 @@ def _admit_for_completion_on_work(*, operation, originals, expectations, planner
         expected_pending_sequence=expected_pending_sequence,
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
-        historical_controls=True)
+        historical_controls=True, activation_custody=activation_custody)
 
 
 def _admit_for_custody_completion_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        live_window, work, transport_deadline_ns=None):
+        live_window, work, transport_deadline_ns=None, activation_custody=None):
     """Return historical pending scope plus its genuinely replayed effects ID.
 
     The independent scope/keys/history and genuine originals are mandatory.
     Exactly one plan replay occurs; only (_PendingCompletion, effects_digest)
     is returned, never executable selected rows, mutations or a result object.
     """
+    if type(operation) is str and operation == replay.ACTIVATION_OPERATION:
+        raise CurrentRootExecutionAdmissionError("activation historical custody completion is not implemented")
     return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
         enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
@@ -339,4 +351,4 @@ def _admit_for_custody_completion_on_work(*, operation, originals, expectations,
         expected_pending_sequence=expected_pending_sequence,
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
-        historical_controls=True, custody_effects=True)
+        historical_controls=True, custody_effects=True, activation_custody=activation_custody)

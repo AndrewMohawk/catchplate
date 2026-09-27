@@ -16,7 +16,10 @@ originals; this verifier offers no signing API accepting a scope DTO. The
 existing revocation database issuer has no independent all-operation authorizer key.
 A trusted caller-authorization/signing owner, cold enrollment, key provisioning,
 durable reservation and executor admission remain separate prerequisites.
-There is no clock, SQL, I/O, new work allowance, retry or execution here.
+Existing families retain their supplied-instant behavior. Activation full
+verification requires actual private custody and the supplied original live
+window, sampling current clocks before and after grant-control verification.
+There is no SQL, new work allowance, retry or execution here.
 The separate historical control entrypoint authenticates original commitments
 for completion without claiming that an expired grant is executable again.
 """
@@ -134,7 +137,8 @@ def _grant_shape(payload):
             shape._digest(payload[name])
         elif payload[name] is not None:
             raise SuccessorExecutionGrantError("grant invents another family's signed capability or snapshot")
-    count = 2 if revocation else 3 if operation in replay.EVIDENCE_OPERATIONS else 4
+    maxima = replay._frame_maxima(operation)
+    count = len(maxima)
     frames = payload["originalFrames"]
     if type(frames) is not list or len(frames) != count:
         raise SuccessorExecutionGrantError("grant original inventory differs from its source family")
@@ -145,7 +149,7 @@ def _grant_shape(payload):
         if frame["position"] != position:
             raise SuccessorExecutionGrantError("grant original frame order changed")
         shape._digest(frame["bytesDigest"])
-        shape._integer(frame["byteCount"], authority.MAX_RESULT_BYTES, minimum=2)
+        shape._integer(frame["byteCount"], maxima[position], minimum=2)
         total += frame["byteCount"]
     if total > authority.MAX_RESULT_BYTES:
         raise SuccessorExecutionGrantError("grant original inventory exceeds the source aggregate")
@@ -316,8 +320,14 @@ def _replay_claims(replayed, work):
 
 def _verify_on_work(*, grant_bytes, grant_enrollment_bytes, current_root_enrollment_bytes,
         root_public_key, operation, originals, expectations, planner_public_key, operation_public_key,
-        before_vector_bytes, expected_authorization_digest, now_epoch_ns, work):
-    """Verify original grant and genuine original plan once on the same work."""
+        before_vector_bytes, expected_authorization_digest, now_epoch_ns, work,
+        activation_custody=None, live_window=None, transport_deadline_ns=None):
+    """Verify original grant and genuine original plan once on the same work.
+
+    Activation retains a real supplied window and inherited bound: its live
+    control checks use actual current samples, never the supplied historical
+    now scalar. Other families keep their existing supplied-instant behavior.
+    """
     capture._SharedLedger(work)
     raw = authorization._original(grant_bytes, MAX_GRANT_BYTES, "execution grant")
     enrollment_raw = authorization._original(grant_enrollment_bytes, MAX_ENROLLMENT_BYTES, "grant enrollment")
@@ -332,15 +342,40 @@ def _verify_on_work(*, grant_bytes, grant_enrollment_bytes, current_root_enrollm
     shape._digest(expected_authorization_digest)
     shape._integer(now_epoch_ns, minimum=1)
     expected_scope, now = expected_authorization_digest, now_epoch_ns
+    held_custody, window, current = activation_custody, None, None
+    if original_operation == replay.ACTIVATION_OPERATION:
+        from serverware import authority_oidc_session_activation_execution_custody as activation_owner
+        from serverware import oidc_session_activation_delivery as activation_delivery
+
+        if type(held_custody) is not activation_owner.OidcSessionActivationExecutionCustody:
+            raise SuccessorExecutionGrantError("activation grant verification requires actual private custody")
+        shape._integer(transport_deadline_ns, minimum=1)
+        window, current = activation_delivery._window(live_window, transport_deadline_ns, work)
+    elif held_custody is not None:
+        raise SuccessorExecutionGrantError("activation custody cannot verify another grant family")
     owned = replay._expectations(original_operation, expectations, planner_key, operation_key, work)
+    if current is not None:
+        current()
+    replay._activation_context_on_work(original_operation, held_custody,
+        root_public_key=root_key, current_root_enrollment_bytes=current_raw, work=work)
+    if current is not None:
+        current()
     replayed = replay._replay_on_work(operation=original_operation, originals=held_originals,
         expectations=owned, planner_public_key=planner_key, operation_public_key=operation_key,
-        before_vector_bytes=held_before, work=work)
+        before_vector_bytes=held_before, work=work, activation_custody=held_custody,
+        live_window=window, transport_deadline_ns=transport_deadline_ns)
     expected = _replay_claims(replayed, work)
+    if current is not None:
+        now = current()
     payload, digest = _verify_control_on_work(grant_bytes=raw, grant_enrollment_bytes=enrollment_raw,
         current_root_enrollment_bytes=current_raw, root_public_key=root_key,
         planner_public_key=planner_key, operation_public_key=operation_key,
         expected_authorization_digest=expected_scope, now_epoch_ns=now, work=work)
+    if current is not None and current() >= payload["expiresAtEpochNs"]:
+        raise SuccessorExecutionGrantError("activation grant expired during original control verification")
     for name, value in expected.items():
         plan._same(payload[name], value, work, "execution grant genuine replay " + name)
-    return _VerifiedGrant(digest, payload, replayed)
+    result = _VerifiedGrant(digest, payload, replayed)
+    if current is not None and current() >= payload["expiresAtEpochNs"]:
+        raise SuccessorExecutionGrantError("activation grant expired before verified return")
+    return result

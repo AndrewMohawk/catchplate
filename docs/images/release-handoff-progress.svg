@@ -1,15 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="566" viewBox="0 0 1000 566" role="img" aria-labelledby="release-handoff-title release-handoff-description">
-  <title id="release-handoff-title">Exact release and private handoff: 2 of 11 diagnostics source-landed, 0 active and 9 open. Row 15 is in progress with 2 of 6 landed; row 16 has 0 of 5 landed. Completion-to-release proof 15.3 is NEXT/open.</title>
-  <desc id="release-handoff-description">Two lanes explain the remaining token-release rows without adding project milestones. F08.4e.7.d.1 fresh private release authorization is source-landed in c26c9e783b203f14f11505719af80bea2ad7fc8d. F08.4e.7.d.2 committed-original packet, commit and effects verification is source-landed in b7be5cbdf2ef75eda606b025032943dc0812bcb9. Row 15 exact committed-original release remains in progress: d.3 exact completion/state target and ciphertext proof into the distinct release purpose is NEXT/open, queued and not active, not a second required replay; d.4 durable exact outcome; d.5 guarded token opening; d.6 uncertain-outcome recovery remain open. Row 16 cold private handoff has five open diagnostics: F08.4e.7.e.1 root bootstrap and key delivery; e.2 isolated cold service; e.3 bounded private transport; e.4 independent response verifier; e.5 authorized private handoff. Every task has a visible name and written status as well as a colored segment, and links to its ledger criterion. These eleven nested diagnostics are not eleven new project milestones or effort estimates. Parent token release remains 14/16 source-landed, 1 in progress and 1 open; production acceptance remains 0/6 verified. Committed-consumption verification is not release-purpose authority or later public/portal permission. Source only, unbuilt, unexecuted and unprovisioned; no plaintext release, deployed service or current-session claim.</desc>
+  <title id="release-handoff-title">Exact release and private handoff: 3 of 11 diagnostics source-landed, 0 active and 8 open. Row 15 is in progress with 3 of 6 landed; row 16 has 0 of 5 landed. Durable exact outcome 15.4 is NEXT/open.</title>
+  <desc id="release-handoff-description">Two lanes explain the remaining token-release rows without adding project milestones. F08.4e.7.d.1 fresh private release authorization is source-landed in c26c9e783b203f14f11505719af80bea2ad7fc8d. F08.4e.7.d.2 committed-original packet, commit and effects verification is source-landed in b7be5cbdf2ef75eda606b025032943dc0812bcb9. F08.4e.7.d.3 completion-to-release proof is source-landed in 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0: distinct enrolled producer, genuine committed originals and independent release-purpose verification, without a second historical replay. Row 15 exact committed-original release remains in progress: d.4 durable exact outcome is NEXT/open, queued and not active; d.5 guarded token opening and d.6 uncertain-outcome recovery remain open. Row 16 cold private handoff has five open diagnostics: F08.4e.7.e.1 root bootstrap and key delivery; e.2 isolated cold service; e.3 bounded private transport; e.4 independent response verifier; e.5 authorized private handoff. Every task has a visible name and written status as well as a colored segment, and links to its ledger criterion. These eleven nested diagnostics are not eleven new project milestones or effort estimates. Parent token release remains 14/16 source-landed, 1 in progress and 1 open; production acceptance remains 0/6 verified. A committed-release proof is not a durable release outcome, token disclosure or later public/portal permission. Source only, unbuilt, unexecuted and unprovisioned; no plaintext release, deployed service or current-session claim.</desc>
   <rect x="1" y="1" width="998" height="564" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="35" fill="#f8fafc" font-size="25" font-weight="700">Exact release and private handoff · remaining source work</text>
-    <text x="24" y="60" fill="#94a3b8" font-size="14">2 / 11 source diagnostics landed · 0 active · 9 open · parent row 15 IN PROGRESS</text>
+    <text x="24" y="60" fill="#94a3b8" font-size="14">3 / 11 source diagnostics landed · 0 active · 8 open · parent row 15 IN PROGRESS</text>
 
-    <g aria-label="Row 15: exact committed-original release in progress, two of six diagnostics landed">
+    <g aria-label="Row 15: exact committed-original release in progress, three of six diagnostics landed">
       <rect x="12" y="78" width="976" height="190" rx="10" fill="#172033" stroke="#475569"/>
       <text x="24" y="101" fill="#f8fafc" font-size="19" font-weight="700">15 · Exact committed-original release</text>
-      <text x="976" y="101" text-anchor="end" fill="#cbd5e1" font-size="15">2 / 6 landed · 0 active · 4 open</text>
+      <text x="976" y="101" text-anchor="end" fill="#cbd5e1" font-size="15">3 / 6 landed · 0 active · 3 open</text>
       <g font-size="16" font-weight="700" text-anchor="middle">
         <a href="../production-status.md#exact-release-and-handoff-detail">
           <rect x="24" y="112" width="152" height="34" rx="5" fill="#064e3b" stroke="#34d399"><title>15.1 · F08.4e.7.d.1 · Fresh private release authorization · LANDED · c26c9e783b203f14f11505719af80bea2ad7fc8d · source only, not commit proof or plaintext release</title></rect>
@@ -20,12 +20,12 @@
           <text x="260" y="135" fill="#d1fae5">✓ 15.2</text>
         </a>
         <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="344" y="112" width="152" height="34" rx="5" fill="#172554" stroke="#60a5fa" stroke-width="2"><title>15.3 · F08.4e.7.d.3 · Completion-to-release proof · NEXT / OPEN, queued and not active</title></rect>
-          <text x="420" y="135" fill="#bfdbfe">N 15.3</text>
+          <rect x="344" y="112" width="152" height="34" rx="5" fill="#064e3b" stroke="#34d399"><title>15.3 · F08.4e.7.d.3 · Completion-to-release proof · LANDED · 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0 · distinct producer enrollment and original proof verification; no durable outcome or plaintext release</title></rect>
+          <text x="420" y="135" fill="#d1fae5">✓ 15.3</text>
         </a>
         <a href="../production-status.md#exact-release-and-handoff-detail">
-          <rect x="504" y="112" width="152" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>15.4 · F08.4e.7.d.4 · Durable exact outcome · OPEN</title></rect>
-          <text x="580" y="135" fill="#e2e8f0">○ 15.4</text>
+          <rect x="504" y="112" width="152" height="34" rx="5" fill="#172554" stroke="#60a5fa" stroke-width="2"><title>15.4 · F08.4e.7.d.4 · Durable exact outcome · NEXT / OPEN, queued and not active</title></rect>
+          <text x="580" y="135" fill="#bfdbfe">N 15.4</text>
         </a>
         <a href="../production-status.md#exact-release-and-handoff-detail">
           <rect x="664" y="112" width="152" height="34" rx="5" fill="#334155" stroke="#94a3b8"><title>15.5 · F08.4e.7.d.5 · Guarded token opening · OPEN</title></rect>
@@ -48,8 +48,8 @@
         <g fill="#cbd5e1" font-size="12">
           <text x="24" y="194" fill="#6ee7b7">LANDED · F08.4e.7.d.1 · c26c9e7</text>
           <text x="344" y="194" fill="#6ee7b7">LANDED · F08.4e.7.d.2 · b7be5cb</text>
-          <text x="664" y="194" fill="#93c5fd">NEXT / OPEN · F08.4e.7.d.3</text>
-          <text x="24" y="248">OPEN · F08.4e.7.d.4</text>
+          <text x="664" y="194" fill="#6ee7b7">LANDED · F08.4e.7.d.3 · 8d91551</text>
+          <text x="24" y="248" fill="#93c5fd">NEXT / OPEN · F08.4e.7.d.4</text>
           <text x="344" y="248">OPEN · F08.4e.7.d.5</text>
           <text x="664" y="248">OPEN · F08.4e.7.d.6</text>
         </g>

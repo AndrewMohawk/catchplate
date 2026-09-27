@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="518" viewBox="0 0 1000 518" role="img" aria-labelledby="consume-title consume-description">
-  <title id="consume-title">Consume authorization and issuance: 11 of 12 substeps landed, 0 in progress, 1 open.</title>
-  <desc id="consume-description">A01 authorizer enrollment, A02 post-plan caller control and A03 encrypted-original format are committed in f6dd3cba33fc64670fa78c5dc1bd225b3bb54ef8. A04 durable ciphertext storage, A05 verified retained export, A06 root-controlled key and storage delivery, A07 cold planner connection and A08 private export service are committed in 0ef6024f5d0cf56e865fa39ee767ac57739055e0. A09 independent receiving-purpose custody and A10 independent original-proof replay are committed in b3c9a58472b788b8f06e3824cd57b6f345ecf6c2. A11 actual consume-grant issuance and verification and all five detail steps are source-landed in 4b421e2d26777b904ebe807fcd9dce367a8826f6: wire/signature contract, caller/root admission and derived claims, producer, independent verifier, source integration and consumer join. A12 cold consume-grant service is NEXT/OPEN; cold signer/key/FD delivery and private serving remain unfinished. Eleven substeps are landed, none are in progress and one is open. Each numbered segment has a visible name and written status. These twelve substeps and the five-part A11 detail are nested inside token-release row 11, which remains in progress, not new project milestones. Token release remains 10/16, activation 19/26 and project 34/46 source-landed. Counts are nonadditive, not effort percentages. Source is unbuilt and unexecuted; source completion is not test or runtime credit. Production acceptance remains 0/6 verified.</desc>
+  <title id="consume-title">Consume authorization and issuance: all 12 source substeps landed, 0 in progress, 0 open.</title>
+  <desc id="consume-description">A01 authorizer enrollment, A02 post-plan caller control and A03 encrypted-original format are committed in f6dd3cba33fc64670fa78c5dc1bd225b3bb54ef8. A04 durable ciphertext storage, A05 verified retained export, A06 root-controlled key and storage delivery, A07 cold planner connection and A08 private export service are committed in 0ef6024f5d0cf56e865fa39ee767ac57739055e0. A09 independent receiving-purpose custody and A10 independent original-proof replay are committed in b3c9a58472b788b8f06e3824cd57b6f345ecf6c2. A11 actual consume-grant issuance and verification and all five detail steps are source-landed in 4b421e2d26777b904ebe807fcd9dce367a8826f6: wire/signature contract, caller/root admission and derived claims, producer, independent verifier, source integration and consumer join. A12 cold consume-grant service, isolated signer and root-controlled key/FD delivery are source-landed in 8ac2374000de874efb1ededa1a65037d5460b18d. All twelve substeps are landed, none are in progress and none are open. Each numbered segment has a visible name and written status. These twelve substeps and the five-part A11 detail are nested inside now-landed token-release row 11, not new project milestones. Token release is 11/16 landed, 0 in progress and 5 open; reservation/pending row 12 is NEXT/OPEN, not active work. Activation remains 19/26 and project 34/46 source-landed. Counts are nonadditive, not effort percentages. Source is unbuilt and unexecuted; source completion is not test or runtime credit. Production acceptance remains 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="516" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">Consume authorization and issuance · row 11</text>
-    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">11 / 12 landed</text>
-    <text x="228" y="71" fill="#cbd5e1" font-size="18">0 in progress · 1 open</text>
+    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">12 / 12 landed</text>
+    <text x="228" y="71" fill="#cbd5e1" font-size="18">0 in progress · 0 open</text>
     <text x="24" y="98" fill="#94a3b8" font-size="14">One segment per named substep · committed source, not an estimate of remaining effort</text>
 
     <g fill="#34d399">
@@ -20,18 +20,16 @@
       <rect x="664" y="112" width="72" height="38" rx="5"><title>A09 · Independent receiving-purpose key custody · LANDED · b3c9a58</title></rect>
       <rect x="744" y="112" width="72" height="38" rx="5"><title>A10 · Independent original-proof replay · LANDED · b3c9a58</title></rect>
       <rect x="824" y="112" width="72" height="38" rx="5"><title>A11 · Consume-grant issuance and verification · LANDED · 4b421e2 · all five source-detail steps landed</title></rect>
-    </g>
-    <g fill="#334155" stroke="#94a3b8">
-      <rect x="904" y="112" width="72" height="38" rx="5" stroke="#fbbf24" stroke-width="2"><title>A12 · Cold consume-grant service · NEXT / OPEN · signer, key/FD delivery and private serving unfinished</title></rect>
+      <rect x="904" y="112" width="72" height="38" rx="5"><title>A12 · Cold consume-grant service · LANDED · 8ac2374 · signer, key/FD delivery and private serving source</title></rect>
     </g>
     <g font-size="15" font-weight="700" text-anchor="middle">
       <g fill="#052e26"><text x="60" y="137">A01</text><text x="140" y="137">A02</text><text x="220" y="137">A03</text></g>
       <g fill="#052e26"><text x="300" y="137">A04</text><text x="380" y="137">A05</text><text x="460" y="137">A06</text><text x="540" y="137">A07</text><text x="620" y="137">A08</text></g>
       <g fill="#052e26"><text x="700" y="137">A09</text><text x="780" y="137">A10</text></g>
-      <text x="860" y="137" fill="#052e26">A11</text><text x="940" y="137" fill="#e2e8f0">A12</text>
+      <text x="860" y="137" fill="#052e26">A11</text><text x="940" y="137" fill="#052e26">A12</text>
     </g>
     <text x="24" y="177" fill="#6ee7b7" font-size="13">✓ LANDED = committed source</text>
-    <text x="330" y="177" fill="#fde68a" font-size="13">→ NEXT = open, not yet landed</text>
+    <text x="330" y="177" fill="#93c5fd" font-size="13">→ NEXT = open, queued</text>
     <text x="675" y="177" fill="#cbd5e1" font-size="13">— OPEN = still to finish</text>
 
     <g fill="#f8fafc" font-size="16" font-weight="600">
@@ -62,9 +60,9 @@
         <text x="512" y="360">✓ LANDED · b3c9a58 · actual original-proof replay</text>
         <text x="512" y="404">✓ LANDED · 4b421e2 · issuance / verification · 5/5 detail</text>
       </g>
-      <text x="512" y="448" fill="#fde68a">→ NEXT / OPEN · cold signer / key-FD delivery / service</text>
+      <text x="512" y="448" fill="#6ee7b7">✓ LANDED · 8ac2374 · cold signer / key-FD / service</text>
     </g>
-    <text x="24" y="482" fill="#fde68a" font-size="13">A11 detail: 5/5 source-landed · NEXT A12 cold grant service · row 11 still in progress · no runtime credit</text>
-    <text x="24" y="505" fill="#94a3b8" font-size="13">Inside row 11 · token release 10/16 · activation 19/26 · project 34/46 · production 0/6 verified</text>
+    <text x="24" y="482" fill="#93c5fd" font-size="13">Row 11 LANDED · A11 detail 5/5 · NEXT / OPEN: row 12 reservation / pending · unbuilt / unexecuted</text>
+    <text x="24" y="505" fill="#94a3b8" font-size="13">Nonadditive · token release 11/16 (0 in progress, 5 open) · activation 19/26 · project 34/46 · production 0/6 verified</text>
   </g>
 </svg>

@@ -43,29 +43,36 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
 defines each scope and its dependencies. Open items can already contain partial code.
 
-### Consume authorization and issuance
+### Protected token release: remaining source work
 
-**11/12 substeps landed · 0 in progress · 1 open.** This zooms into the active
-token-release task so smaller source milestones are visible before that task closes.
+**11/16 units landed · 0 in progress · 5 open.**
 
-[![Consume authorization and issuance: 01–03 landed in f6dd3cb, 04–08 in 0ef6024, 09–10 in b3c9a58 and 11 grant issuance and verification in 4b421e2. 12 isolated cold grant service is next and open. Eleven landed, zero in progress, one open; enclosing token-release row 11 remains in progress. Source only, not production verification.](docs/images/consume-authorization-progress.svg)](docs/production-status.md#consume-authorization-substeps)
+[![Protected token release: units 01–11 landed, zero in progress and five open. Row 12 reservation and pending admission is NEXT/open, not active; rows 13 one-use protected consume SQL, 14 durable completion and recovery, 15 exact committed-original token release and 16 cold release response and handoff are open. Row 11's authorization substeps are 12/12 landed and its A11 issuance detail is 5/5 landed. Source counts only; no runtime token release or production claim.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
-**A11 source detail — 5/5 landed · 0 in progress · 0 open.**
+Five remain: **reservation/pending admission (NEXT/open)**, one-use consume SQL,
+durable completion/recovery, exact committed-original release, and cold response/handoff.
+The [cold grant service](https://github.com/example/private-deployment)
+closes row 11 in source; no runtime grant or service is demonstrated.
+
+<details>
+<summary>Completed source detail: authorization 12/12 and grant issuance 5/5</summary>
+
+[![Consume authorization and issuance: A01–A03 landed in f6dd3cb, A04–A08 in 0ef6024, A09–A10 in b3c9a58, A11 in 4b421e2 and A12 isolated cold grant service in 8ac2374. Twelve landed, zero in progress, zero open; token-release row 11 is source-landed. No runtime or production verification.](docs/images/consume-authorization-progress.svg)](docs/production-status.md#consume-authorization-substeps)
 
 [![Consume-grant issuance detail inside A11: wire/signature contract, caller/root admission and replay-derived claims, grant production, independent grant verification, and source integration with inventory and consumer joins all landed in 4b421e2. Five landed, zero in progress, zero open. These nested components are not additional parent completions; source only, not tested or running.](docs/images/consume-grant-progress.svg)](docs/production-status.md#consume-grant-issuance-detail)
 
-**Landed:** genuine grant production and independent verification in
-[4b421e2](https://github.com/example/private-deployment).
-**Next:** A12 isolated grant key/FD delivery and cold service. No runtime grant or service is demonstrated.
-
 The [12-substep checklist](docs/production-status.md#consume-authorization-substeps)
 and [five-part A11 detail](docs/production-status.md#consume-grant-issuance-detail)
-link stable IDs, closure criteria and commits for landed source. **Green: landed**;
-**amber: in progress** (including uncommitted work); **gray: todo/open**.
-The source is not tested or running. Subdivision adds no completed work.
-These 12 substeps sit **inside row 11 of token release (10/16 landed)**.
-Token release is step 20 of **activation (19/26 landed)**, within **F08
-(project 34/46 landed)**.
+retain stable IDs, closure criteria and commit evidence. These are nested source
+components, not additional parent completions.
+
+</details>
+
+**Green: landed**;
+**amber: in progress** (including uncommitted work); **gray: todo/open**;
+**blue: NEXT/open**, queued rather than active.
+The source is not tested or running. Token release is step 20 of
+**activation (19/26 landed)**, within **F08 (project 34/46 landed)**.
 Nested counts are never added together and are not effort percentages or an ETA.
 
 **After token release:** target-bound permission, public activation and recovery,
@@ -79,11 +86,7 @@ are still open. The full activation workflow remains **19/26 landed**.
 
 **OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 10 landed, 1 in progress and 5 other open. Row 11 has eleven of twelve substeps landed, including genuine grant production and independent verification; cold grant service remains open. A11 has five of five source components landed. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
-
-**Protected token release — 10/16 landed; 1 in progress and 5 other open.**
-
-[![Protected token release: units 01–10 landed, 11 consume authorization and issuance in progress, 12–16 open. Unit 11 is expanded above into 12 substeps: 11 landed, zero in progress and one open. A11 has five of five components landed; A12 cold grant service is next and open. Source counts only.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 11 landed, zero in progress and five open. Row 11's authorization substeps are 12/12 landed and A11 issuance is 5/5 landed. Row 12 consume reservation/pending admission is next and open, not active. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
@@ -103,7 +106,7 @@ release is claimed for the new protected path.
 [Open the full tracker →](docs/production-status.md) for checkpoint evidence and
 the [six separate production gates](docs/production-status.md#remaining-production-gates).
 
-<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg, implementation-progress.svg, token-release-progress.svg, consume-authorization-progress.svg and consume-grant-progress.svg together. Activation has 26 fixed named F08 steps; token release has 16 detail units inside step 20, replacing c with twelve parts within the existing five diagnostic groups (5 - 1 + 12 = 16). Row 11 has twelve authorization substeps A01-A12; A11 alone has five fixed components A11.1-A11.5. No children or grouping parents are additive. Every segment needs a visible number, name, status and linked criterion/evidence; keep NEXT distinct from active work. Green means commit-backed landed source, amber unfinished active work, gray open scope. Uncommitted work cannot be landed. Make denominator changes explicit and keep source progress separate from exact-release evidence; reopen invalidated gates. -->
+<!-- Update README counts/descriptions, production-status.md evidence/checklists, project-progress.svg, activation-progress.svg, implementation-progress.svg, token-release-progress.svg, consume-authorization-progress.svg and consume-grant-progress.svg together. Keep the unfinished workflow visible and completed nested detail collapsible. Activation has 26 fixed named F08 steps; token release has 16 detail units inside step 20, replacing c with twelve parts within the existing five diagnostic groups (5 - 1 + 12 = 16). Row 11 has twelve authorization substeps A01-A12; A11 alone has five fixed components A11.1-A11.5. No children or grouping parents are additive. Every segment needs a visible number, name, status and linked criterion/evidence; keep blue NEXT/open distinct from amber active work. Green means commit-backed landed source; gray means other open scope. Uncommitted work cannot be landed. Make denominator changes explicit and keep source progress separate from exact-release evidence; reopen invalidated gates. -->
 
 ## Why Serverware?
 

@@ -380,80 +380,23 @@ class OidcSessionActivationDeliveryPlanOwner:
             business_before_roots, authorization_before_roots, expected_counted_heads,
             expected_journal_digest, live_window, transport_deadline_ns, work):
         """Read only exact retained originals; never reacquire, re-sign or renew."""
+        envelope = state._original(envelope_bytes, contract.MAX_BYTES, "known consume plan")
+        journal_digest = registration._digest(expected_journal_digest)
         configured = self._snapshot_configuration()
         lock = self._lock
         if not lock.acquire(blocking=False):
             _fail("consume plan owner is already in use")
         try:
-            envelope = state._original(envelope_bytes, contract.MAX_BYTES, "known consume plan")
-            owned = planning._capture(request=expected_request,
-                business_before_roots=business_before_roots,
-                authorization_before_roots=authorization_before_roots,
-                expected_counted_heads=expected_counted_heads,
-                transition_inputs={"scope": expected_scope, "journalDigest": expected_journal_digest},
-                live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
-            request, expected = owned["request"], owned["transitionInputs"]
-            scope, journal_digest = expected["scope"], registration._digest(expected["journalDigest"])
-            registration._closed(scope, state.SCOPE_FIELDS, "independently expected retained consume scope")
-            fixed = _fixed_scope(configured, work)
-            registration._same({name: scope[name] for name in fixed}, fixed, work, "configured retained consume scope")
-            for argument, name in (("delivery_id", "deliveryId"), ("user_id", "userId"),
-                    ("session_id", "sessionId"), ("credential_id", "credentialId"),
-                    ("credential_record_id", "credentialRecordId"), ("challenge_id", "challengeId")):
-                registration._same(scope[name], request["arguments"][argument], work, "retained consume subject")
-            window, bound = _window(configured, owned["liveWindow"], owned["transportDeadlineNs"])
-            window = plan.windows._narrow(window, deadline_epoch_ns=scope["deadlineEpochNs"],
-                maximum_lifetime_ns=configured.maximum_plan_age_ns,
-                maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
-            bound = min(bound, window[4])
-            current = self._guard(configured, window, bound, work)
-            current()
-            history.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(
-                configured.historical_custody, expected_consume_request=request, work=work)
-            window, bound = history.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
-                configured.historical_custody, live_window=window, transport_deadline_ns=bound, work=work)
-            current()
-            current = self._guard(configured, window, bound, work)
-            signed = _authenticate_known(envelope, request, scope, configured, current, work)
-            window = plan.windows._narrow(window, deadline_epoch_ns=signed["expiresAtEpochNs"],
-                maximum_lifetime_ns=configured.maximum_plan_age_ns,
-                maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
-            bound = min(bound, window[4])
-            current = self._guard(configured, window, bound, work)
-            journal_scope = _journal_scope(configured, request, envelope, work)
-            current()
-            original = custody.DeliveryOriginalJournal.read_bound(configured.journal,
-                scope=journal_scope, expected_journal_digest=journal_digest,
-                live_window=window, transport_deadline_ns=bound, work=work)
-            if original is None:
-                _fail("exact retained consume original is absent; no regeneration is authorized")
-            current()
-            context, originals = retained._restore_on_work(original, scope=journal_scope, work=work)
-            for name, value in (("request", request), ("scope", scope),
-                    ("activation_expectations", _json(configured.activation_expectations_bytes, work)),
-                    ("activation_scope", _json(configured.activation_scope_bytes, work))):
-                registration._same(originals[name], value, work, "independent retained consume " + name)
-            planning.semantics._canonical_equal(
-                (originals["business_before_roots"], originals["authorization_before_roots"],
-                    originals["expected_counted_heads"]),
-                (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"], owned["expectedCountedHeads"]),
-                work=work, label="retained consume independent primary roots and counted heads differ")
-            for name, value in (("envelope_bytes", envelope),
-                    ("state_enrollment_bytes", configured.state_enrollment_bytes),
-                    ("complete_root_vector_bytes", configured.complete_root_vector_bytes)):
-                _bytes_equal(originals[name], value, work, name)
-            current()
-            # Keys, custody and the original current allowance never come from storage.
-            full = plan._verify_full_on_work(context, **originals,
-                state_root_public_key=configured.state_root_public_key,
-                activation_planner_public_key=configured.activation_planner_public_key,
-                operation_public_key=configured.operation_public_key,
-                historical_custody=configured.historical_custody,
-                planner_public_key=configured.planner_public_key,
-                live_window=window, transport_deadline_ns=bound, work=work)
-            registration._same(full.plan_digest, journal_scope["planDigest"], work, "retained consume plan identity")
+            _original, _scope, _window_value, _bound, current, full = (
+                OidcSessionActivationDeliveryPlanOwner._verify_retained_locked(self,
+                    configured=configured, envelope_bytes=envelope, expected_request=expected_request,
+                    expected_scope=expected_scope, business_before_roots=business_before_roots,
+                    authorization_before_roots=authorization_before_roots,
+                    expected_counted_heads=expected_counted_heads, expected_journal_digest=journal_digest,
+                    live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work))
             full.live()
-            result = PreparedDeliveryPlan(registration._wire(request, work), registration._wire(scope, work),
+            result = PreparedDeliveryPlan(registration._wire(full.invocation.request, work),
+                registration._wire(full.invocation.scope, work),
                 envelope, full.plan_digest, journal_digest)
             full.live()
             if current() >= full.valid_until_epoch_ns:
@@ -461,6 +404,92 @@ class OidcSessionActivationDeliveryPlanOwner:
             return result
         finally:
             lock.release()
+
+    def _verify_retained_locked(self, *, configured, envelope_bytes, expected_request, expected_scope,
+            business_before_roots, authorization_before_roots, expected_counted_heads,
+            expected_journal_digest, live_window, transport_deadline_ns, work):
+        """Actual same-call originals/full replay; the caller holds this owner lock."""
+        if (type(self._lock) is not _LOCK_TYPE or not self._lock.locked()
+                or self._snapshot_configuration() is not configured):
+            _fail("consume retained replay requires the held actual owner lock/configuration")
+        envelope = state._original(envelope_bytes, contract.MAX_BYTES, "known consume plan")
+        owned = planning._capture(request=expected_request,
+            business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots,
+            expected_counted_heads=expected_counted_heads,
+            transition_inputs={"scope": expected_scope, "journalDigest": expected_journal_digest},
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+        request, expected = owned["request"], owned["transitionInputs"]
+        scope, journal_digest = expected["scope"], registration._digest(expected["journalDigest"])
+        registration._closed(scope, state.SCOPE_FIELDS, "independently expected retained consume scope")
+        fixed = _fixed_scope(configured, work)
+        registration._same({name: scope[name] for name in fixed}, fixed, work, "configured retained consume scope")
+        for argument, name in (("delivery_id", "deliveryId"), ("user_id", "userId"),
+                ("session_id", "sessionId"), ("credential_id", "credentialId"),
+                ("credential_record_id", "credentialRecordId"), ("challenge_id", "challengeId")):
+            registration._same(scope[name], request["arguments"][argument], work, "retained consume subject")
+        window, bound = _window(configured, owned["liveWindow"], owned["transportDeadlineNs"])
+        window = plan.windows._narrow(window, deadline_epoch_ns=scope["deadlineEpochNs"],
+            maximum_lifetime_ns=configured.maximum_plan_age_ns,
+            maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
+        bound = min(bound, window[4])
+        current = self._guard(configured, window, bound, work)
+        current()
+        history.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(
+            configured.historical_custody, expected_consume_request=request, work=work)
+        window, bound = history.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
+            configured.historical_custody, live_window=window, transport_deadline_ns=bound, work=work)
+        current()
+        current = self._guard(configured, window, bound, work)
+        signed = _authenticate_known(envelope, request, scope, configured, current, work)
+        window = plan.windows._narrow(window, deadline_epoch_ns=signed["expiresAtEpochNs"],
+            maximum_lifetime_ns=configured.maximum_plan_age_ns,
+            maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
+        bound = min(bound, window[4])
+        current = self._guard(configured, window, bound, work)
+        journal_scope = _journal_scope(configured, request, envelope, work)
+        current()
+        original = custody.DeliveryOriginalJournal.read_bound(configured.journal,
+            scope=journal_scope, expected_journal_digest=journal_digest,
+            live_window=window, transport_deadline_ns=bound, work=work)
+        if original is None:
+            _fail("exact retained consume original is absent; no regeneration is authorized")
+        current()
+        context, originals = retained._restore_on_work(original, scope=journal_scope, work=work)
+        for name, value in (("request", request), ("scope", scope),
+                ("activation_expectations", _json(configured.activation_expectations_bytes, work)),
+                ("activation_scope", _json(configured.activation_scope_bytes, work))):
+            registration._same(originals[name], value, work, "independent retained consume " + name)
+        planning.semantics._canonical_equal(
+            (originals["business_before_roots"], originals["authorization_before_roots"],
+                originals["expected_counted_heads"]),
+            (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"], owned["expectedCountedHeads"]),
+            work=work, label="retained consume independent primary roots and counted heads differ")
+        for name, value in (("envelope_bytes", envelope),
+                ("state_enrollment_bytes", configured.state_enrollment_bytes),
+                ("complete_root_vector_bytes", configured.complete_root_vector_bytes)):
+            _bytes_equal(originals[name], value, work, name)
+        current()
+        # Keys, custody and the original current allowance never come from storage.
+        full = plan._verify_full_on_work(context, **originals,
+            state_root_public_key=configured.state_root_public_key,
+            activation_planner_public_key=configured.activation_planner_public_key,
+            operation_public_key=configured.operation_public_key,
+            historical_custody=configured.historical_custody,
+            planner_public_key=configured.planner_public_key,
+            live_window=window, transport_deadline_ns=bound, work=work)
+        registration._same(full.plan_digest, journal_scope["planDigest"], work, "retained consume plan identity")
+        full.live()
+        current()
+        window = plan.windows._narrow(full.invocation.window, deadline_epoch_ns=full.valid_until_epoch_ns,
+            maximum_lifetime_ns=configured.maximum_plan_age_ns,
+            maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
+        bound = min(bound, full.invocation.monotonic_deadline, window[4])
+        current = self._guard(configured, window, bound, work)
+        full.live()
+        if current() >= full.valid_until_epoch_ns:
+            _fail("retained consume plan expired before its private same-call return")
+        return original, journal_scope, window, bound, current, full
 
     def close(self):
         if type(self) is not OidcSessionActivationDeliveryPlanOwner or self._pid != os.getpid():

@@ -1,9 +1,10 @@
 """Root-original consume-planner admission; no launch or execution capability.
 
 This fixed profile independently binds the current consume request/configuration,
-fresh history purpose, state snapshot, keys and resources. Descriptor numbers
-declare a future cold delivery profile; this module neither delivers descriptors
-nor opens a listener. No received material is accepted as authority.
+fresh history purpose, state snapshot, keys and resources. The closed v2 profile
+also pins separate execution-export custody; it has no v1 fallback. This module
+neither delivers descriptors nor opens a listener. No received material is
+accepted as authority.
 """
 from __future__ import annotations
 
@@ -27,9 +28,12 @@ ROLE = PROCESS_MODE = "oidc-session-activation-delivery-planner"
 SERVICE_UID = SERVICE_GID = 65501
 PEER_UID = PEER_GID = 65532
 ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, HISTORY_FD, BUNDLE_KEY_FD, DELIVERY_KEY_FD, KEY_FD, JOURNAL_KEY_FD, JOURNAL_FD = range(198, 207)
-INHERITED_DESCRIPTORS = tuple(range(198, 207))
+EXECUTION_BUNDLE_KEY_FD, EXECUTION_STORE_FD = 207, 208
+INHERITED_DESCRIPTORS = tuple(range(198, 209))
 LISTENER_PATH = "/run/serverware/oidc-session-activation/delivery-planner.sock"
 JOURNAL_PATH = "/var/lib/serverware/oidc-session-activation-delivery-planner"
+EXECUTION_STORE_PATH = "/var/lib/serverware/oidc-session-activation-delivery-execution"
+EXECUTION_BUNDLE_KEY_PATH = "/run/secrets/serverware-oidc-session-activation-delivery-execution-bundle-key"
 TLS_PATHS = {
     "ca": "/run/serverware/oidc-session-activation-delivery-planner-tls/ca.pem",
     "clientCertificate": "/run/serverware/oidc-session-activation-delivery-planner-tls/client.crt",
@@ -37,14 +41,14 @@ TLS_PATHS = {
 }
 TLS_LIMITS, MIN_TLS_BYTES = shared.TLS_LIMITS, shared.MIN_TLS_BYTES
 MAX_BYTES = 4 * 1024 * 1024
-SCHEMA = "serverware.signedOidcSessionActivationDeliveryPlannerBootstrap/v1"
-PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryPlannerBootstrap/v1"
-LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryPlannerLaunch/v1"
+SCHEMA = "serverware.signedOidcSessionActivationDeliveryPlannerBootstrap/v2"
+PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryPlannerBootstrap/v2"
+LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryPlannerLaunch/v2"
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "role", "operation", "configurationPayload",
     "configurationDigest", "generation", "runtimeRoleIdentities", "runtimeClosureDigest", "planner",
     "authenticationPolicy", "trustPolicy", "maximumPlanAgeNs", "maximumClockSkewNs", "consumeRequest",
     "activationExpectations", "activationScope", "historyCustody", "historyReceiverIdentity",
-    "databaseEndpoint", "readRole", "queryManifestDigest", "tlsFiles", "journalKeyDigest",
+    "databaseEndpoint", "readRole", "queryManifestDigest", "tlsFiles", "journalKeyDigest", "executionBundleKeyDigest",
     "completeRootVector", "databaseId", "stateEnrollment", "stateEndpoint", "issuedAtEpochNs",
     "expiresAtEpochNs", "trustMode", "launch", *shared._FALSE_FIELDS})
 _LAUNCH_FIELDS = frozenset({"schema", "processMode", "serviceUid", "serviceGid", "peerUid", "peerGid",
@@ -52,7 +56,9 @@ _LAUNCH_FIELDS = frozenset({"schema", "processMode", "serviceUid", "serviceGid",
     "signingKeyFd", "journalKeyFd", "journalDirectoryFd", "inheritedFileDescriptors", "listenerPath",
     "requestTimeoutSeconds", "journalDirectoryPath", "journalDirectoryDevice", "journalDirectoryInode",
     "journalMaximumRecords", "journalQuotaBytes", "listenerSocketDevice", "listenerSocketInode",
-    "listenerPathDevice", "listenerPathInode"})
+    "listenerPathDevice", "listenerPathInode", "executionBundleKeyFd", "executionStoreDirectoryFd",
+    "executionStoreDirectoryPath", "executionStoreDirectoryDevice", "executionStoreDirectoryInode",
+    "executionStoreMaximumRecords", "executionStoreQuotaBytes"})
 _SCOPE_FIELDS = frozenset({"authorizationDigest", "databaseId", "generationDigest", "pendingSequence",
     "pendingHeadDigest", "fence"})
 
@@ -77,6 +83,7 @@ class _PlannerMaterial:
     state_endpoint: tuple
     attestation_interval: tuple
     opening_sample: tuple
+    execution_bundle_key_digest: str
 
 
 def _fail(message):
@@ -97,28 +104,32 @@ def _same_bytes(left, right, work, label):
 def _launch(value, work):
     shape._object(value, _LAUNCH_FIELDS, "consume planner launch")
     for name, expected in (("schema", LAUNCH_SCHEMA), ("processMode", PROCESS_MODE),
-            ("listenerPath", LISTENER_PATH), ("journalDirectoryPath", JOURNAL_PATH)):
+            ("listenerPath", LISTENER_PATH), ("journalDirectoryPath", JOURNAL_PATH),
+            ("executionStoreDirectoryPath", EXECUTION_STORE_PATH)):
         shape._literal(value[name], expected)
     for name, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID),
             ("peerUid", PEER_UID), ("peerGid", PEER_GID), ("rootPublicKeyFd", ROOT_FD),
             ("bootstrapFd", BOOTSTRAP_FD), ("listenerFd", LISTENER_FD), ("historyCustodyFd", HISTORY_FD),
             ("bundleKeyFd", BUNDLE_KEY_FD), ("deliveryKeyFd", DELIVERY_KEY_FD), ("signingKeyFd", KEY_FD),
-            ("journalKeyFd", JOURNAL_KEY_FD), ("journalDirectoryFd", JOURNAL_FD)):
+            ("journalKeyFd", JOURNAL_KEY_FD), ("journalDirectoryFd", JOURNAL_FD),
+            ("executionBundleKeyFd", EXECUTION_BUNDLE_KEY_FD), ("executionStoreDirectoryFd", EXECUTION_STORE_FD)):
         shape._integer(value[name], 2**32 - 2, minimum=1)
         if value[name] != expected:
             _fail("consume launch fixed resource differs")
-    shape._array(value["inheritedFileDescriptors"], 9, "consume descriptor inventory")
+    shape._array(value["inheritedFileDescriptors"], 11, "consume descriptor inventory")
     for descriptor in value["inheritedFileDescriptors"]:
         shape._integer(descriptor, 1023, minimum=3)
     plan._same(value["inheritedFileDescriptors"], list(INHERITED_DESCRIPTORS), work,
         "consume descriptor inventory differs")
     shape._integer(value["requestTimeoutSeconds"], 30, minimum=1)
-    for name in ("journalDirectoryDevice", "listenerSocketDevice", "listenerPathDevice"):
+    for name in ("journalDirectoryDevice", "executionStoreDirectoryDevice", "listenerSocketDevice", "listenerPathDevice"):
         shape._integer(value[name], 2**64 - 1)
-    for name in ("journalDirectoryInode", "listenerSocketInode", "listenerPathInode"):
+    for name in ("journalDirectoryInode", "executionStoreDirectoryInode", "listenerSocketInode", "listenerPathInode"):
         shape._integer(value[name], 2**64 - 1, minimum=1)
     shape._integer(value["journalMaximumRecords"], journal.MAX_RECORDS, minimum=1)
     shape._integer(value["journalQuotaBytes"], journal.MAX_QUOTA_BYTES, minimum=1)
+    shape._integer(value["executionStoreMaximumRecords"], journal.MAX_RECORDS, minimum=1)
+    shape._integer(value["executionStoreQuotaBytes"], journal.MAX_QUOTA_BYTES, minimum=1)
 
 
 def _payload(value, work):
@@ -126,7 +137,7 @@ def _payload(value, work):
     for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("role", ROLE), ("operation", OPERATION), ("trustMode", "trusted-host-local")):
         shape._literal(value[name], expected)
-    for name in ("configurationDigest", "runtimeClosureDigest", "queryManifestDigest", "journalKeyDigest"):
+    for name in ("configurationDigest", "runtimeClosureDigest", "queryManifestDigest", "journalKeyDigest", "executionBundleKeyDigest"):
         shape._digest(value[name])
     authorization._token(value["databaseId"])
     shape._object(value["generation"], frozenset(configuration._GENERATION_FIELDS), "consume generation")
@@ -251,11 +262,21 @@ def _material(payload, original, custody, root, window, bound, opening, current,
     if payload["journalKeyDigest"] in (nested.bundle_key_digest, nested.delivery_key_digest,
             nested.planner.journal_key_digest):
         _fail("consume journal key reuses an activation custody purpose")
+    for forbidden in (payload["journalKeyDigest"], nested.bundle_key_digest,
+            nested.delivery_key_digest, nested.planner.journal_key_digest):
+        work.prepare_comparison(payload["executionBundleKeyDigest"], forbidden)
+        if payload["executionBundleKeyDigest"] == forbidden:
+            _fail("consume execution-export key reuses a historical or journal purpose")
     launch, old_launch = payload["launch"], nested.planner.launch
     directory = (launch["journalDirectoryDevice"], launch["journalDirectoryInode"])
     if directory in ((old_launch["journalDirectoryDevice"], old_launch["journalDirectoryInode"]),
             (old_launch["executionStoreDirectoryDevice"], old_launch["executionStoreDirectoryInode"])):
         _fail("consume journal reuses an activation original or export directory")
+    export_directory = (launch["executionStoreDirectoryDevice"], launch["executionStoreDirectoryInode"])
+    if export_directory in (directory,
+            (old_launch["journalDirectoryDevice"], old_launch["journalDirectoryInode"]),
+            (old_launch["executionStoreDirectoryDevice"], old_launch["executionStoreDirectoryInode"])):
+        _fail("consume execution store reuses a consume or historical originals directory")
     request = history._consume_request_on_work(payload["consumeRequest"], work)
     _same_bytes(request, nested.consume_request_bytes, work, "independent consume request differs from history purpose")
     old = expectations._capture_on_work(payload["activationExpectations"], work=work)
@@ -286,7 +307,7 @@ def _material(payload, original, custody, root, window, bound, opening, current,
     return _PlannerMaterial(payload, original, custody, nested, request, planner,
         (dsn, selected["connectTimeoutSeconds"], read_identity, payload["maximumClockSkewNs"]),
         state_original, state_digest, vector, identity, shared._state_endpoint(payload["stateEndpoint"]),
-        (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening)
+        (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening, payload["executionBundleKeyDigest"])
 
 
 def _verify_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,

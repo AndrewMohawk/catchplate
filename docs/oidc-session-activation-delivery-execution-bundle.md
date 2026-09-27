@@ -87,11 +87,18 @@ serialization.
 
 This module neither reads nor changes the private journal, and authenticating
 the context does not prove that `journalDigest` names a retained record.
-It does not implement durable first-exact ciphertext publication, export,
-receiving key custody, original consume-plan replay, authorization/issuance,
-reservation, SQL, completion/recovery or a public handoff. Repeated explicit
-seals may produce different ciphertext; no retry or automatic reseal path is
-provided. Those distinct integrations must preserve actual original evidence,
-independent scope and remaining lifetime before this codec can participate in
-protected consumption. Step 20 and the authorization/issuance detail remain
-partial; no production gate closes.
+The separate [verified first-exact exporter](oidc-session-activation-delivery-execution-export.md)
+now connects durable ciphertext custody and retained original replay to the
+[cold planner](oidc-session-activation-delivery-cold-planning.md),
+[private service](oidc-session-activation-delivery-planner-service.md) and
+[export transport](oidc-session-activation-delivery-planner-transport.md).
+These are source connections, not custody or replay properties of the codec.
+The transport reserves a whole exchange and may reject ciphertext that fits
+the store; an uncertain response does not undo durable publication.
+
+Independent receiving-purpose custody/full replay, actual grant issuance,
+reservation, SQL, completion/recovery and public handoff remain unfinished.
+Repeated explicit seals may produce different ciphertext; this codec supplies
+no retry or automatic reseal path. Its owning integrations must preserve actual
+original evidence, independent scope and remaining lifetime. Step 20 and the
+authorization/issuance detail remain partial; no production gate closes.

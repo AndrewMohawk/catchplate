@@ -1,6 +1,6 @@
 """Fixed root-original consume planning lifecycle; not a cold service launcher.
 
-The private wrapper owns genuine read/history/journal/retained-plan owners. It
+The private wrapper owns genuine read/history/journal/retained-plan/export owners. It
 reauthenticates root originals, resource continuity and original current bounds
 around each fixed call. No bare configured owner, arbitrary callback, plaintext
 token result, execution capability or automatic retry is exported.
@@ -13,6 +13,8 @@ import stat
 import threading
 
 from serverware import authority_current_root_transport as transport
+from serverware import authority_oidc_session_activation_delivery_execution_export as export_module
+from serverware import authority_oidc_session_activation_delivery_execution_store as store_module
 from serverware import authority_oidc_session_activation_delivery_journal as journal_module
 from serverware import authority_oidc_session_activation_delivery_plan_owner as owner_module
 from serverware import authority_oidc_session_activation_history_custody as history_module
@@ -124,30 +126,34 @@ def _tls_snapshot(material, work, current, expected=None):
     return tuple(result)
 
 
-def _journal_path(material, work, current, supplied_descriptor=None):
-    """Join the signed directory identity to its fixed protected pathname."""
-    path, launch = bootstrap.JOURNAL_PATH, material.payload["launch"]
+def _directory_path(material, work, current, supplied_descriptor=None, *, execution=False):
+    """Join one of two source-fixed directory purposes; no supplied path/profile."""
+    if type(execution) is not bool:
+        _fail("consume directory purpose must select an exact source-fixed role")
+    path = bootstrap.EXECUTION_STORE_PATH if execution else bootstrap.JOURNAL_PATH
+    prefix = "executionStoreDirectory" if execution else "journalDirectory"
+    launch = material.payload["launch"]
     parent = _parent(path, work, current)
     descriptor = None
     try:
         descriptor = production._callback(work, lambda: os.open(path.rsplit("/", 1)[1],
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=parent))
         info = production._callback(work, lambda: os.fstat(descriptor))
-        expected = (launch["journalDirectoryDevice"], launch["journalDirectoryInode"],
+        expected = (launch[prefix + "Device"], launch[prefix + "Inode"],
             bootstrap.SERVICE_UID, bootstrap.SERVICE_GID, 0o700)
         actual = (info.st_dev, info.st_ino, info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode))
         if not stat.S_ISDIR(info.st_mode) or actual != expected:
-            _fail("consume journal path differs from its root-admitted directory")
+            _fail("consume storage path differs from its root-admitted directory")
         if supplied_descriptor is not None:
             held = production._callback(work, lambda: os.fstat(supplied_descriptor))
             if (not stat.S_ISDIR(held.st_mode) or
                     (held.st_dev, held.st_ino, held.st_uid, held.st_gid, stat.S_IMODE(held.st_mode)) != expected):
-                _fail("consume journal descriptor and fixed path differ")
+                _fail("consume storage descriptor and fixed path differ")
         named = production._callback(work, lambda: os.stat(path.rsplit("/", 1)[1],
             dir_fd=parent, follow_symlinks=False))
         if not stat.S_ISDIR(named.st_mode) or (named.st_dev, named.st_ino, named.st_uid,
                 named.st_gid, stat.S_IMODE(named.st_mode)) != expected:
-            _fail("consume journal directory changed during its path join")
+            _fail("consume storage directory changed during its path join")
         current()
     finally:
         if descriptor is not None:
@@ -184,6 +190,18 @@ def _bounds(material, historical, window, bound, work):
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
+class ExportedDeliveryPlan:
+    """Ciphertext-only handoff data, never receiving proof or execution authority."""
+
+    request_bytes: bytes
+    scope_bytes: bytes
+    envelope_bytes: bytes
+    bundle_bytes: bytes
+    plan_digest: str
+    journal_digest: str
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
 class _Configuration:
     material: object
     root_public_key: object
@@ -193,6 +211,8 @@ class _Configuration:
     historical_configuration: object
     journal: object
     journal_configuration: tuple
+    execution_store: object
+    execution_store_configuration: tuple
     tls_identity: tuple
 
 
@@ -200,9 +220,11 @@ def _join(configured, material, work):
     actual = owner_module.OidcSessionActivationDeliveryPlanOwner._snapshot_configuration(configured.owner)
     history = history_module.OidcSessionActivationHistoryCustody._snapshot_configuration(configured.historical)
     journal = journal_module.DeliveryOriginalJournal._snapshot_configuration(configured.journal)
+    store = store_module.DeliveryExecutionBundleStore._snapshot_configuration(configured.execution_store)
     if (actual is not configured.owner_configuration or history is not configured.historical_configuration
-            or journal is not configured.journal_configuration):
-        _fail("consume held owner, history or journal configuration changed")
+            or journal is not configured.journal_configuration
+            or store is not configured.execution_store_configuration):
+        _fail("consume held owner, history, journal or export store configuration changed")
     payload, launch = material.payload, material.payload["launch"]
     expected_scope = _scope(material, material.attestation_interval[1], work)
     work.prepare_copy(expected_scope)
@@ -225,8 +247,17 @@ def _join(configured, material, work):
         (bootstrap.authority.SOURCE_REVISION, payload["configurationDigest"],
         (launch["journalDirectoryDevice"], launch["journalDirectoryInode"], bootstrap.SERVICE_UID, bootstrap.SERVICE_GID),
         launch["journalMaximumRecords"], launch["journalQuotaBytes"]), work, "consume journal root pins differ")
+    registration._same((store[0], store[1], store[3], store[4], store[5]),
+        (bootstrap.authority.SOURCE_REVISION, payload["configurationDigest"],
+        (launch["executionStoreDirectoryDevice"], launch["executionStoreDirectoryInode"],
+            bootstrap.SERVICE_UID, bootstrap.SERVICE_GID),
+        launch["executionStoreMaximumRecords"], launch["executionStoreQuotaBytes"]), work,
+        "consume execution store root pins differ")
+    work.charge(input_bytes=6 * export_module.bundle.KEY_BYTES)
+    if store[2] in (journal[2], journal[3], journal[4]) or store[3][:2] == journal[5][:2]:
+        _fail("consume execution key or directory overlaps another held custody purpose")
     for key, digest in ((journal[2], payload["journalKeyDigest"]), (journal[3], material.history_material.bundle_key_digest),
-            (journal[4], material.history_material.delivery_key_digest)):
+            (journal[4], material.history_material.delivery_key_digest), (store[2], material.execution_bundle_key_digest)):
         registration._same(bootstrap._sha(key, work), digest, work, "consume held AES key pin differs")
     history_module.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(configured.historical,
         expected_consume_request=payload["consumeRequest"], work=work)
@@ -274,7 +305,8 @@ class _ColdPlanner:
 
         live()
         _tls_snapshot(material, work, live, expected=configured.tls_identity)
-        _journal_path(material, work, live)
+        _directory_path(material, work, live)
+        _directory_path(material, work, live, execution=True)
         live()
         return material, narrowed, bound, live
 
@@ -333,6 +365,22 @@ class _ColdPlanner:
 
     def verify_retained(self, *, envelope_bytes, expected_deadline_epoch_ns, expected_journal_digest,
             live_window, transport_deadline_ns, work):
+        return self._retained_on_work(envelope_bytes=envelope_bytes,
+            expected_deadline_epoch_ns=expected_deadline_epoch_ns,
+            expected_journal_digest=expected_journal_digest, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, export=False)
+
+    def export_retained(self, *, envelope_bytes, expected_deadline_epoch_ns, expected_journal_digest,
+            live_window, transport_deadline_ns, work):
+        return self._retained_on_work(envelope_bytes=envelope_bytes,
+            expected_deadline_epoch_ns=expected_deadline_epoch_ns,
+            expected_journal_digest=expected_journal_digest, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, export=True)
+
+    def _retained_on_work(self, *, envelope_bytes, expected_deadline_epoch_ns, expected_journal_digest,
+            live_window, transport_deadline_ns, work, export):
+        if type(export) is not bool:
+            _fail("consume retained operation requires a fixed source purpose")
         configured = self._snapshot()
         if not self._lock.acquire(blocking=False):
             _fail("consume cold planner is already in use")
@@ -348,12 +396,27 @@ class _ColdPlanner:
             scope = _scope(material, original_deadline, work)
             projected = state._project_on_work(vector_bytes=material.complete_root_vector_bytes,
                 expected_vector_digest=material.complete_root_vector_digest, work=work)
-            result = owner_module.OidcSessionActivationDeliveryPlanOwner.verify_retained(configured.owner,
-                envelope_bytes=original, expected_request=material.payload["consumeRequest"], expected_scope=scope,
-                business_before_roots=projected.business_before_roots,
-                authorization_before_roots=projected.authorization_before_roots,
-                expected_counted_heads=projected.expected_counted_heads, expected_journal_digest=expected_digest,
-                live_window=window, transport_deadline_ns=bound, work=work)
+            if export:
+                cipher = export_module._export_on_work(configured.owner, configured.execution_store,
+                    envelope_bytes=original, expected_request=material.payload["consumeRequest"], expected_scope=scope,
+                    business_before_roots=projected.business_before_roots,
+                    authorization_before_roots=projected.authorization_before_roots,
+                    expected_counted_heads=projected.expected_counted_heads, expected_journal_digest=expected_digest,
+                    bundle_key=configured.execution_store_configuration[2],
+                    live_window=window, transport_deadline_ns=bound, work=work)
+                live()
+                # This output is ordinary data. Genuine replay happened inside
+                # the exporter; no successful carrier can be fed back as proof.
+                result = ExportedDeliveryPlan(registration._wire(material.payload["consumeRequest"], work),
+                    registration._wire(scope, work), original, cipher,
+                    evidence.plan._frame(plan.contract.IDENTITY_DOMAIN, (original,), work), expected_digest)
+            else:
+                result = owner_module.OidcSessionActivationDeliveryPlanOwner.verify_retained(configured.owner,
+                    envelope_bytes=original, expected_request=material.payload["consumeRequest"], expected_scope=scope,
+                    business_before_roots=projected.business_before_roots,
+                    authorization_before_roots=projected.authorization_before_roots,
+                    expected_counted_heads=projected.expected_counted_heads, expected_journal_digest=expected_digest,
+                    live_window=window, transport_deadline_ns=bound, work=work)
             live()
             self._admit(configured, window, bound, work)
             signed = plan.contract._decode_on_work(original, envelope=True, work=work)["payload"]
@@ -374,28 +437,35 @@ class _ColdPlanner:
             try:
                 owner_module.OidcSessionActivationDeliveryPlanOwner.close(configured.owner)
             finally:
-                history_module.OidcSessionActivationHistoryCustody.close(configured.historical)
+                try:
+                    store_module.DeliveryExecutionBundleStore.close(configured.execution_store)
+                finally:
+                    history_module.OidcSessionActivationHistoryCustody.close(configured.historical)
         finally:
             self._lock.release()
 
 
 def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, planner_private_key,
         bundle_key, delivery_custody_key, journal_key, journal_directory_fd,
-        live_window, transport_deadline_ns, work):
+        execution_bundle_key, execution_store_directory_fd, live_window, transport_deadline_ns, work):
     """Construct real owners only after authenticating the original root scope."""
     original, custody, root, private = bootstrap_bytes, history_custody_bytes, root_public_key, planner_private_key
     bundle, delivery, journal_key_original, descriptor = bundle_key, delivery_custody_key, journal_key, journal_directory_fd
+    execution_key, execution_descriptor = execution_bundle_key, execution_store_directory_fd
     window = clock._validate(live_window)
     registration._integer(transport_deadline_ns, "consume construction deadline", 1)
     bound = min(window[4], transport_deadline_ns)
-    for key in (bundle, delivery, journal_key_original):
+    for key in (bundle, delivery, journal_key_original, execution_key):
         if type(key) is not bytes or len(key) != 32:
             _fail("consume cold custody keys must be exact immutable originals")
-    work.charge(input_bytes=192)
-    if bundle == delivery or journal_key_original in (bundle, delivery):
+    work.charge(input_bytes=384)
+    if (bundle == delivery or journal_key_original in (bundle, delivery)
+            or execution_key in (bundle, delivery, journal_key_original)):
         _fail("consume cold AES custody purposes are not separate")
     if type(descriptor) is not int or descriptor != bootstrap.JOURNAL_FD:
         _fail("consume journal must use its fixed independently delivered descriptor")
+    if type(execution_descriptor) is not int or execution_descriptor != bootstrap.EXECUTION_STORE_FD:
+        _fail("consume execution store must use its fixed independently delivered descriptor")
     if not isinstance(private, evidence.Ed25519PrivateKey):
         _fail("consume cold signing requires an actual Ed25519 private key")
     bootstrap.authorization._public(root)
@@ -406,14 +476,16 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
     current = bootstrap.shared._launch_guard(material.attestation_interval, material.opening_sample,
         bootstrap.shared._processing(window, bound, work), work)
     for raw, digest in ((bundle, material.history_material.bundle_key_digest),
-            (delivery, material.history_material.delivery_key_digest), (journal_key_original, payload["journalKeyDigest"])):
+            (delivery, material.history_material.delivery_key_digest), (journal_key_original, payload["journalKeyDigest"]),
+            (execution_key, material.execution_bundle_key_digest)):
         registration._same(bootstrap._sha(raw, work), digest, work, "consume actual AES key differs from root pin")
         current()
     evidence.keys._pair_on_work(private, material.planner_public_key, work)
     current()
     tls = _tls_snapshot(material, work, current)
-    _journal_path(material, work, current, supplied_descriptor=descriptor)
-    historical = storage = owner = None
+    _directory_path(material, work, current, supplied_descriptor=descriptor)
+    _directory_path(material, work, current, supplied_descriptor=execution_descriptor, execution=True)
+    historical = storage = owner = execution_store = None
     try:
         historical = history_module.OidcSessionActivationHistoryCustody.for_consume_planning(
             custody_bytes=custody, root_public_key=root, expected_receiver_identity=payload["historyReceiverIdentity"],
@@ -434,6 +506,13 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
             configuration_digest=payload["configurationDigest"], journal_key=journal_key_original,
             bundle_key=bundle, delivery_key=delivery, live_window=window, transport_deadline_ns=bound, work=work)
         current()
+        execution_store = store_module.DeliveryExecutionBundleStore(directory_fd=execution_descriptor,
+            expected_device=launch["executionStoreDirectoryDevice"], expected_inode=launch["executionStoreDirectoryInode"],
+            expected_uid=bootstrap.SERVICE_UID, expected_gid=bootstrap.SERVICE_GID,
+            maximum_records=launch["executionStoreMaximumRecords"], quota_bytes=launch["executionStoreQuotaBytes"],
+            configuration_digest=payload["configurationDigest"], bundle_key=execution_key,
+            live_window=window, transport_deadline_ns=bound, work=work)
+        current()
         owner = owner_module.OidcSessionActivationDeliveryPlanOwner(read_planner=reader, journal=storage,
             planner_private_key=private, planner_public_key=material.planner_public_key,
             expected_planner_identity=payload["planner"]["identity"], expected_planner_spki_digest=payload["planner"]["spkiDigest"],
@@ -448,7 +527,8 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
         configured = _Configuration(material, root, owner,
             owner_module.OidcSessionActivationDeliveryPlanOwner._snapshot_configuration(owner), historical,
             history_module.OidcSessionActivationHistoryCustody._snapshot_configuration(historical), storage,
-            journal_module.DeliveryOriginalJournal._snapshot_configuration(storage), tls)
+            journal_module.DeliveryOriginalJournal._snapshot_configuration(storage), execution_store,
+            store_module.DeliveryExecutionBundleStore._snapshot_configuration(execution_store), tls)
         result = object.__new__(_ColdPlanner)
         object.__setattr__(result, "_configured", configured)
         object.__setattr__(result, "_seal", configured)
@@ -465,6 +545,10 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
             elif storage is not None:
                 journal_module.DeliveryOriginalJournal.close(storage)
         finally:
-            if historical is not None:
-                history_module.OidcSessionActivationHistoryCustody.close(historical)
+            try:
+                if execution_store is not None:
+                    store_module.DeliveryExecutionBundleStore.close(execution_store)
+            finally:
+                if historical is not None:
+                    history_module.OidcSessionActivationHistoryCustody.close(historical)
         raise

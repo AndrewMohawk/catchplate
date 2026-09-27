@@ -1,6 +1,6 @@
 """Fixed root delivery for request-bound consume planning, not provisioning.
 
-Original role/history admission precedes private keys and resources. Nine exact
+Original role/history admission precedes private keys and resources. Eleven exact
 descriptors survive the permanent identity drop; neither an old role's material
 nor an environment-selected path can select this purpose. Trusted-host-local
 checks do not establish hardware custody or independent rollback protection.
@@ -26,13 +26,16 @@ DELIVERY_KEY_PATH = "/run/secrets/serverware-oidc-session-activation-delivery-ke
 KEY_PATH = "/run/secrets/serverware-oidc-session-activation-delivery-planner-key"
 JOURNAL_KEY_PATH = "/run/secrets/serverware-oidc-session-activation-delivery-journal-key"
 JOURNAL_PATH = "/var/lib/serverware/oidc-session-activation-delivery-planner"
+EXECUTION_BUNDLE_KEY_PATH = "/run/secrets/serverware-oidc-session-activation-delivery-execution-bundle-key"
+EXECUTION_STORE_PATH = "/var/lib/serverware/oidc-session-activation-delivery-execution"
 LISTENER_PATH = "/run/serverware/oidc-session-activation/delivery-planner.sock"
 LISTENER_NAME = "serverware-oidc-session-activation-delivery-planner"
 PROCESS_MODE = "oidc-session-activation-delivery-planner"
 SERVICE_UID = SERVICE_GID = 65501
 PEER_UID = PEER_GID = 65532
 ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, HISTORY_FD, BUNDLE_KEY_FD, DELIVERY_KEY_FD, KEY_FD, JOURNAL_KEY_FD, JOURNAL_FD = range(198, 207)
-INHERITED_DESCRIPTORS = tuple(range(198, 207))
+EXECUTION_BUNDLE_KEY_FD, EXECUTION_STORE_FD = 207, 208
+INHERITED_DESCRIPTORS = tuple(range(198, 209))
 PREFIX = "SERVERWARE_OIDC_SESSION_ACTIVATION_DELIVERY_PLANNER_"
 ROOT_ENV, BOOTSTRAP_ENV = PREFIX + "ROOT_PUBLIC_KEY_FD", PREFIX + "BOOTSTRAP_FD"
 PYTHON = "/runtime/python/bin/python3"
@@ -46,7 +49,8 @@ _TRUST_FILES = ((ROOT_PATH, ROOT_FD, MAX_ROOT_BYTES),
     (BOOTSTRAP_PATH, BOOTSTRAP_FD, MAX_BOOTSTRAP_BYTES), (HISTORY_PATH, HISTORY_FD, MAX_HISTORY_BYTES))
 _KEY_FILES = ((KEY_PATH, KEY_FD, MAX_KEY_BYTES), (BUNDLE_KEY_PATH, BUNDLE_KEY_FD, MAX_RAW_KEY_BYTES),
     (DELIVERY_KEY_PATH, DELIVERY_KEY_FD, MAX_RAW_KEY_BYTES),
-    (JOURNAL_KEY_PATH, JOURNAL_KEY_FD, MAX_RAW_KEY_BYTES))
+    (JOURNAL_KEY_PATH, JOURNAL_KEY_FD, MAX_RAW_KEY_BYTES),
+    (EXECUTION_BUNDLE_KEY_PATH, EXECUTION_BUNDLE_KEY_FD, MAX_RAW_KEY_BYTES))
 _MATERIAL = {path: (maximum, private) for private, inventory in
     ((False, _TRUST_FILES), (True, _KEY_FILES)) for path, _descriptor, maximum in inventory}
 _TLS_FILES = (
@@ -76,7 +80,7 @@ def _construction_on_work(work):
 
 
 def _parent(path):
-    if path not in (*_MATERIAL, JOURNAL_PATH, LISTENER_PATH, *(item[1] for item in _TLS_FILES)):
+    if path not in (*_MATERIAL, JOURNAL_PATH, EXECUTION_STORE_PATH, LISTENER_PATH, *(item[1] for item in _TLS_FILES)):
         raise RuntimeError("consume planner delivery path is not source fixed")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     descriptor = os.open("/", flags)
@@ -108,7 +112,7 @@ def _open_material(path, maximum, *, private=False):
                 or before.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
                 or not 2 <= before.st_size <= maximum
                 or private and stat.S_IMODE(before.st_mode) != 0o400
-                or path in (BUNDLE_KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH)
+                or path in (BUNDLE_KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH, EXECUTION_BUNDLE_KEY_PATH)
                     and before.st_size != MAX_RAW_KEY_BYTES):
             raise RuntimeError("consume planner original is not protected bounded material")
         original = delivery._read_exact_source(source, before.st_size)
@@ -137,25 +141,28 @@ def _keys_on_work(material, work):
     public = material.planner_public_key
     spki = material.payload["planner"]["spkiDigest"]
     expected = (material.history_material.bundle_key_digest,
-        material.history_material.delivery_key_digest, material.payload["journalKeyDigest"])
-    work.charge(input_bytes=MAX_KEY_BYTES + 3 * MAX_RAW_KEY_BYTES)
+        material.history_material.delivery_key_digest, material.payload["journalKeyDigest"],
+        material.execution_bundle_key_digest)
+    work.charge(input_bytes=MAX_KEY_BYTES + 4 * MAX_RAW_KEY_BYTES)
     originals = []
     for _path, descriptor, maximum in _KEY_FILES:
         raw, _identity = evidence.production._callback(work,
             lambda descriptor=descriptor, maximum=maximum:
                 _read_original(descriptor, maximum, private=True))
         originals.append(raw)
-    signing_bytes, bundle, delivery_key, journal = originals
-    raw_keys = bundle, delivery_key, journal
+    signing_bytes, bundle, delivery_key, journal, execution_bundle = originals
+    raw_keys = bundle, delivery_key, journal, execution_bundle
     if any(type(key) is not bytes or len(key) != MAX_RAW_KEY_BYTES for key in raw_keys):
         raise RuntimeError("consume planner requires exact raw32 custody keys")
-    work.charge(input_bytes=3 * sum(map(len, raw_keys)))
-    if bundle == delivery_key or bundle == journal or delivery_key == journal:
-        raise RuntimeError("consume planner encryption key purposes coincide")
+    work.charge(input_bytes=len(raw_keys) * sum(map(len, raw_keys)))
+    for index, raw in enumerate(raw_keys):
+        if any(raw == other for other in raw_keys[index + 1:]):
+            raise RuntimeError("consume planner encryption key purposes coincide")
     for raw, pin in zip(raw_keys, expected):
         work.charge(hashes=1)
         digest = evidence.production._callback(work,
             lambda raw=raw: "sha256:" + hashlib.sha256(raw).hexdigest())
+        work.prepare_comparison(digest, pin)
         if digest != pin:
             raise RuntimeError("consume planner encryption key differs from root admission")
     private = evidence.production._callback(work,
@@ -167,7 +174,7 @@ def _keys_on_work(material, work):
     for _path, descriptor, maximum in _KEY_FILES:
         evidence.production._callback(work,
             lambda descriptor=descriptor, maximum=maximum: _sealed_identity(descriptor, maximum, private=True))
-    return private, bundle, delivery_key, journal
+    return private, bundle, delivery_key, journal, execution_bundle
 
 
 def _listener(descriptor):
@@ -193,30 +200,42 @@ def _listener(descriptor):
         os.close(parent)
 
 
-def _journal(descriptor):
+def _directory(descriptor, path):
+    if path not in (JOURNAL_PATH, EXECUTION_STORE_PATH):
+        raise RuntimeError("consume planner directory purpose is not source fixed")
     value = os.fstat(descriptor)
     if (not stat.S_ISDIR(value.st_mode) or value.st_nlink < 1
             or (value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)) != (SERVICE_UID, SERVICE_GID, 0o700)):
-        raise RuntimeError("consume planner journal protection differs")
-    parent = _parent(JOURNAL_PATH)
+        raise RuntimeError("consume planner private directory protection differs")
+    parent = _parent(path)
     try:
-        named = os.stat(os.path.basename(JOURNAL_PATH), dir_fd=parent, follow_symlinks=False)
+        named = os.stat(os.path.basename(path), dir_fd=parent, follow_symlinks=False)
         if (not stat.S_ISDIR(named.st_mode)
                 or (named.st_dev, named.st_ino, named.st_uid, named.st_gid, stat.S_IMODE(named.st_mode))
                     != (value.st_dev, value.st_ino, SERVICE_UID, SERVICE_GID, 0o700)):
-            raise RuntimeError("consume planner journal pathname differs from descriptor")
+            raise RuntimeError("consume planner private directory pathname differs from descriptor")
         return value.st_dev, value.st_ino
     finally:
         os.close(parent)
 
 
-def _journal_directory(device, inode):
-    parent, descriptor = _parent(JOURNAL_PATH), None
+def _journal(descriptor):
+    return _directory(descriptor, JOURNAL_PATH)
+
+
+def _execution_store(descriptor):
+    return _directory(descriptor, EXECUTION_STORE_PATH)
+
+
+def _directory_open(path, device, inode):
+    if path not in (JOURNAL_PATH, EXECUTION_STORE_PATH):
+        raise RuntimeError("consume planner directory purpose is not source fixed")
+    parent, descriptor = _parent(path), None
     try:
-        descriptor = os.open(os.path.basename(JOURNAL_PATH), os.O_RDONLY | os.O_DIRECTORY
+        descriptor = os.open(os.path.basename(path), os.O_RDONLY | os.O_DIRECTORY
             | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=parent)
-        if _journal(descriptor) != (device, inode):
-            raise RuntimeError("consume planner journal differs from signed identity")
+        if _directory(descriptor, path) != (device, inode):
+            raise RuntimeError("consume planner private directory differs from signed identity")
         return descriptor
     except BaseException:
         if descriptor is not None:
@@ -224,6 +243,14 @@ def _journal_directory(device, inode):
         raise
     finally:
         os.close(parent)
+
+
+def _journal_directory(device, inode):
+    return _directory_open(JOURNAL_PATH, device, inode)
+
+
+def _execution_store_directory(device, inode):
+    return _directory_open(EXECUTION_STORE_PATH, device, inode)
 
 
 def _tls_identity(tls_files):
@@ -371,6 +398,7 @@ def main():
         listener_pins = tuple(launch[name] for name in ("listenerSocketDevice", "listenerSocketInode",
             "listenerPathDevice", "listenerPathInode"))
         journal_pins = launch["journalDirectoryDevice"], launch["journalDirectoryInode"]
+        execution_store_pins = launch["executionStoreDirectoryDevice"], launch["executionStoreDirectoryInode"]
         if _listener(3) != listener_pins:
             raise RuntimeError("consume planner listener differs from signed launch")
         for descriptor, identity in retained.items():
@@ -400,14 +428,25 @@ def main():
         retained[JOURNAL_FD] = delivery._material_identity(os.fstat(JOURNAL_FD))
         owned.remove(source)
         os.close(source)
+        current()
+        source = bootstrap.configuration.production._callback(work,
+            lambda: _execution_store_directory(*execution_store_pins))
+        owned.add(source)
+        _retain(source, EXECUTION_STORE_FD, reservations, owned)
+        retained[EXECUTION_STORE_FD] = delivery._material_identity(os.fstat(EXECUTION_STORE_FD))
+        owned.remove(source)
+        os.close(source)
+        current()
         _retain(3, LISTENER_FD, reservations, owned)
         retained[LISTENER_FD] = delivery._material_identity(os.fstat(LISTENER_FD))
         owned.remove(3)
         os.close(3)
-        if reservations or _listener(LISTENER_FD) != listener_pins or _journal(JOURNAL_FD) != journal_pins:
+        if (reservations or _listener(LISTENER_FD) != listener_pins
+                or _journal(JOURNAL_FD) != journal_pins
+                or _execution_store(EXECUTION_STORE_FD) != execution_store_pins):
             raise RuntimeError("consume planner delivery inventory changed")
         for _path, descriptor, maximum in (*_TRUST_FILES, *_KEY_FILES):
-            private = descriptor in (KEY_FD, BUNDLE_KEY_FD, DELIVERY_KEY_FD, JOURNAL_KEY_FD)
+            private = descriptor in (KEY_FD, BUNDLE_KEY_FD, DELIVERY_KEY_FD, JOURNAL_KEY_FD, EXECUTION_BUNDLE_KEY_FD)
             _sealed_identity(descriptor, maximum, private=private)
         for descriptor in INHERITED_DESCRIPTORS:
             os.set_inheritable(descriptor, True)
@@ -425,7 +464,8 @@ def main():
             if delivery._material_identity(os.fstat(descriptor)) != identity:
                 owned.discard(descriptor)
                 raise RuntimeError("consume planner descriptor changed before exec")
-        if _listener(LISTENER_FD) != listener_pins or _journal(JOURNAL_FD) != journal_pins:
+        if (_listener(LISTENER_FD) != listener_pins or _journal(JOURNAL_FD) != journal_pins
+                or _execution_store(EXECUTION_STORE_FD) != execution_store_pins):
             raise RuntimeError("consume planner resource binding changed before exec")
         _tls_unchanged(tls_identity)
         _require_inventory(INHERITED_DESCRIPTORS)

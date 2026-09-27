@@ -38,7 +38,15 @@ narrows the original processing allowance before append. Only a durable exact
 append permits return; expiry or publication uncertainty is not permission to
 re-sign, regenerate, overwrite or execute again.
 
-`verify_retained` requires a known envelope, independent typed request/full scope,
+The public retained-verification signature is unchanged:
+
+```python
+verify_retained(*, envelope_bytes, expected_request, expected_scope,
+    business_before_roots, authorization_before_roots, expected_counted_heads,
+    expected_journal_digest, live_window, transport_deadline_ns, work)
+```
+
+It requires a known envelope, independent typed request/full scope,
 primary roots/seven heads and the exact expected journal-ciphertext digest. It
 owns those inputs, binds the genuine consume-history request and authenticates
 the known planner signature and lifetime **before protected lookup**. Bound read
@@ -54,11 +62,22 @@ state, completed-activation provenance, possession and indexed effects. The
 method never queries the database, signs a replacement, refreshes expired
 authority or interprets missing retention as permission to regenerate.
 
+Public verification and the [private consume exporter](../serverware/authority_oidc_session_activation_delivery_execution_export.py)
+now share `_verify_retained_locked`, under the actual owner's nonblocking lock
+and unchanged configuration. This private path returns the exact retained bytes
+and same-call full replay only to the ongoing owner operation; no caller-supplied
+successful carrier is admitted as authority. The exporter keeps that lock,
+reads before sealing, and genuinely opens any first retained ciphertext to
+compare it with those exact replayed originals. It returns ciphertext only.
+The public method still returns `PreparedDeliveryPlan`, not this private result.
+
 The same supplied work, original clock samples and inherited deadline cover the
 whole composition. Historical custody can only narrow current processing bounds;
 an old plan's expiry never becomes the processing clock. Exact class/PID/configuration
 and nonblocking locks remain checked, and final serialization/plan-digest creation
-must finish within the actual signed plan and head-observation expiry.
+must finish within the actual signed plan and head-observation expiry. Export
+likewise retains the replay's original validity limit through lookup, sealing,
+durable publication or exact-ciphertext reuse and return; storage cannot renew it.
 
 `PreparedDeliveryPlan` contains only immutable `request_bytes`, `scope_bytes`,
 `envelope_bytes`, `plan_digest` and `journal_digest`. No token, AES key,

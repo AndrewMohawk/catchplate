@@ -1,7 +1,7 @@
 """One private consume-planning exchange under genuinely admitted cold custody.
 
 Root/history originals precede private keys and resources. The actual cold owner
-acquires/replays/signs/retains or verifies exact retained originals; the service
+acquires/replays/signs/retains, verifies, or exports exact retained originals; the service
 never accepts a successful material as authority. Peer admission precedes frames,
 one accepted connection is terminal, and uncertainty grants no retry. This is
 neither consumption SQL, token release nor independently measured custody.
@@ -51,11 +51,12 @@ def _launch(material):
     launch = material.payload["launch"]
     names = ("processMode", "serviceUid", "serviceGid", "peerUid", "peerGid",
         "rootPublicKeyFd", "bootstrapFd", "listenerFd", "historyCustodyFd", "bundleKeyFd",
-        "deliveryKeyFd", "signingKeyFd", "journalKeyFd", "journalDirectoryFd", "listenerPath",
-        "journalDirectoryPath")
+        "deliveryKeyFd", "signingKeyFd", "journalKeyFd", "journalDirectoryFd",
+        "executionBundleKeyFd", "executionStoreDirectoryFd", "listenerPath",
+        "journalDirectoryPath", "executionStoreDirectoryPath")
     expected = (delivery.PROCESS_MODE, delivery.SERVICE_UID, delivery.SERVICE_GID,
         delivery.PEER_UID, delivery.PEER_GID, *delivery.INHERITED_DESCRIPTORS,
-        delivery.LISTENER_PATH, delivery.JOURNAL_PATH)
+        delivery.LISTENER_PATH, delivery.JOURNAL_PATH, delivery.EXECUTION_STORE_PATH)
     if (tuple(launch[name] for name in names) != expected
             or tuple(launch["inheritedFileDescriptors"]) != delivery.INHERITED_DESCRIPTORS):
         raise DeliveryPlannerStartupError("consume bootstrap differs from its fixed descriptor delivery")
@@ -64,7 +65,8 @@ def _launch(material):
 
 class _PlannerOwner:
     __slots__ = ("_planner", "_configuration", "_listener", "_listener_pins", "_journal_fd",
-        "_journal_pins", "_sealed", "_tls", "_opening", "_interval", "_deadline", "_age", "_skew",
+        "_journal_pins", "_execution_store_fd", "_execution_store_pins", "_sealed", "_tls",
+        "_opening", "_interval", "_deadline", "_age", "_skew",
         "_request_timeout", "_last_epoch", "_last_monotonic", "_closed", "_failed", "_accepted",
         "_spent", "_connection")
 
@@ -85,10 +87,13 @@ class _PlannerOwner:
             if (delivery._listener(delivery.LISTENER_FD) != self._listener_pins
                     or delivery._listener(self._listener.fileno()) != self._listener_pins
                     or delivery._journal(delivery.JOURNAL_FD) != self._journal_pins
-                    or delivery._journal(self._journal_fd) != self._journal_pins):
+                    or delivery._journal(self._journal_fd) != self._journal_pins
+                    or delivery._execution_store(delivery.EXECUTION_STORE_FD) != self._execution_store_pins
+                    or delivery._execution_store(self._execution_store_fd) != self._execution_store_pins):
                 raise DeliveryPlannerStartupError("consume listener or private directory changed")
             delivery._tls_unchanged(self._tls)
             from serverware import authority_oidc_session_activation_delivery_cold_planning as cold
+            from serverware import authority_oidc_session_activation_delivery_execution_store as stores
 
             held = self._configuration
             if (type(self._planner) is not cold._ColdPlanner
@@ -99,9 +104,16 @@ class _PlannerOwner:
                         held.historical) is not held.historical_configuration
                     or cold.journal_module.DeliveryOriginalJournal._snapshot_configuration(
                         held.journal) is not held.journal_configuration
-                    or held.journal._directory_fd != self._journal_fd):
+                    or type(held.execution_store) is not stores.DeliveryExecutionBundleStore
+                    or stores.DeliveryExecutionBundleStore._snapshot_configuration(
+                        held.execution_store) is not held.execution_store_configuration
+                    or held.journal._directory_fd != self._journal_fd
+                    or held.execution_store._directory_fd != self._execution_store_fd
+                    or self._execution_store_fd == self._journal_fd
+                    or self._execution_store_pins == self._journal_pins):
                 raise DeliveryPlannerStartupError("consume actual cold owner configuration changed")
-            descriptors = (*delivery.INHERITED_DESCRIPTORS, self._listener.fileno(), self._journal_fd)
+            descriptors = (*delivery.INHERITED_DESCRIPTORS, self._listener.fileno(),
+                self._journal_fd, self._execution_store_fd)
             if self._connection is not None:
                 descriptors += (self._connection.fileno(),)
             delivery._require_inventory(descriptors)
@@ -124,6 +136,7 @@ class _PlannerOwner:
         from serverware import authority_oidc_session_activation_delivery_cold_planning as cold
         from serverware import authority_oidc_session_activation_delivery_planner_transport as transport
 
+        exporting = originals[0] == transport.EXPORT_PURPOSE
         try:
             if originals[0] == transport.PREPARE_PURPOSE:
                 prepared = cold._ColdPlanner.prepare(self._planner, old_token_bytes=originals[1],
@@ -136,14 +149,24 @@ class _PlannerOwner:
                     expected_deadline_epoch_ns=original_deadline, expected_journal_digest=journal_digest,
                     live_window=live_window, transport_deadline_ns=deadline, work=work)
                 status = b"verified"
+            elif exporting:
+                original_deadline, journal_digest = transport._retained_scope(originals, work)
+                prepared = cold._ColdPlanner.export_retained(self._planner, envelope_bytes=originals[1],
+                    expected_deadline_epoch_ns=original_deadline, expected_journal_digest=journal_digest,
+                    live_window=live_window, transport_deadline_ns=deadline, work=work)
+                status = b"exported"
             else:
                 raise DeliveryPlannerRequestError("consume planner has no requested private purpose")
-            if type(prepared) is not cold.owner_module.PreparedDeliveryPlan:
+            expected_type = cold.ExportedDeliveryPlan if exporting else cold.owner_module.PreparedDeliveryPlan
+            if type(prepared) is not expected_type:
                 raise DeliveryPlannerRequestError("consume planner returned no actual prepared originals")
             work.charge(input_bytes=len(prepared.plan_digest) + len(prepared.journal_digest))
-            response = (status, prepared.request_bytes, prepared.scope_bytes, prepared.envelope_bytes,
+            response = (status, prepared.request_bytes, prepared.scope_bytes, prepared.envelope_bytes)
+            if exporting:
+                response += (prepared.bundle_bytes,)
+            response += (
                 prepared.plan_digest.encode("ascii"), prepared.journal_digest.encode("ascii"))
-            transport._originals(response, response=True)
+            transport._originals(response, response=True, export=exporting)
             payload = cold.plan.contract._decode_on_work(prepared.envelope_bytes, envelope=True, work=work)["payload"]
             response_window = cold.processing._narrow(live_window,
                 deadline_epoch_ns=payload["expiresAtEpochNs"],
@@ -154,7 +177,8 @@ class _PlannerOwner:
         except Exception:
             # A durable append may already exist. This branch never means
             # absence, noncommit, safe retry or permission to re-sign.
-            return (b"uncertain", b"", b"", b"", b"", b""), live_window, deadline
+            response = (b"uncertain",) + (b"",) * (6 if exporting else 5)
+            return response, live_window, deadline
 
     def _serve_connection(self, connection):
         from serverware import authority_oidc_session_activation_delivery_planner_transport as transport
@@ -180,7 +204,7 @@ class _PlannerOwner:
         self._live()
         clock._check_on_work(response_window, work=work)
         transport._send_response(connection, response, live_window=response_window,
-            deadline_ns=response_deadline, work=work)
+            deadline_ns=response_deadline, work=work, export=originals[0] == transport.EXPORT_PURPOSE)
         self._live()
         clock._check_on_work(response_window, work=work)
         transport._check_deadline(response_deadline)
@@ -273,16 +297,20 @@ def initialize_from_environment():
             listener_pins = tuple(launch[name] for name in ("listenerSocketDevice", "listenerSocketInode",
                 "listenerPathDevice", "listenerPathInode"))
             journal_pins = launch["journalDirectoryDevice"], launch["journalDirectoryInode"]
+            execution_store_pins = launch["executionStoreDirectoryDevice"], launch["executionStoreDirectoryInode"]
             if (delivery._listener(delivery.LISTENER_FD) != listener_pins
-                    or delivery._journal(delivery.JOURNAL_FD) != journal_pins):
+                    or delivery._journal(delivery.JOURNAL_FD) != journal_pins
+                    or delivery._execution_store(delivery.EXECUTION_STORE_FD) != execution_store_pins
+                    or execution_store_pins == journal_pins):
                 raise DeliveryPlannerStartupError("consume resources differ from original root pins")
             for descriptor, maximum in ((delivery.KEY_FD, delivery.MAX_KEY_BYTES),
                     (delivery.BUNDLE_KEY_FD, delivery.MAX_RAW_KEY_BYTES),
                     (delivery.DELIVERY_KEY_FD, delivery.MAX_RAW_KEY_BYTES),
-                    (delivery.JOURNAL_KEY_FD, delivery.MAX_RAW_KEY_BYTES)):
+                    (delivery.JOURNAL_KEY_FD, delivery.MAX_RAW_KEY_BYTES),
+                    (delivery.EXECUTION_BUNDLE_KEY_FD, delivery.MAX_RAW_KEY_BYTES)):
                 sealed.append((descriptor, maximum, True, delivery._sealed_identity(descriptor, maximum, private=True)))
             current()
-            private, bundle_key, delivery_key, journal_key = delivery._keys_on_work(material, work)
+            private, bundle_key, delivery_key, journal_key, execution_bundle_key = delivery._keys_on_work(material, work)
             current()
             work.charge(input_bytes=sum(item["byteCount"] for item in payload["tlsFiles"].values()), hashes=3)
             tls = cold.production._callback(work, lambda: delivery._tls_identity(payload["tlsFiles"]))
@@ -291,6 +319,7 @@ def initialize_from_environment():
             planner = cold._create_on_work(bootstrap_bytes=bootstrap_raw, history_custody_bytes=history_raw,
                 root_public_key=root, planner_private_key=private, bundle_key=bundle_key,
                 delivery_custody_key=delivery_key, journal_key=journal_key, journal_directory_fd=delivery.JOURNAL_FD,
+                execution_bundle_key=execution_bundle_key, execution_store_directory_fd=delivery.EXECUTION_STORE_FD,
                 live_window=window, transport_deadline_ns=bound, work=work)
             current()
             if type(planner) is not cold._ColdPlanner:
@@ -307,6 +336,8 @@ def initialize_from_environment():
             owner._planner, owner._configuration = planner, configured
             owner._listener, owner._listener_pins = listener, listener_pins
             owner._journal_fd, owner._journal_pins = configured.journal._directory_fd, journal_pins
+            owner._execution_store_fd = configured.execution_store._directory_fd
+            owner._execution_store_pins = execution_store_pins
             owner._sealed, owner._tls = tuple(sealed), tls
             owner._opening = (initial_window[1], initial_window[0], initial_window[2])
             owner._interval, owner._deadline = interval, bound
@@ -340,7 +371,7 @@ def require_started():
 
 
 def close():
-    """Close actual custody/journal/listener; dropping references is not erasure."""
+    """Close actual custody/journal/export store/listener, not a memory erasure claim."""
     global _owner, _state
     _require_pid()
     with _LOCK:

@@ -6,6 +6,23 @@ provisioned private directory. This is source-only implementation: unbuilt,
 unexecuted and unprovisioned. Storage integrity is not plan authentication,
 currentness, permission, protected SQL execution or session activation.
 
+## Shared mechanics, fixed formats
+
+The neutral private [storage engine](../serverware/authority_oidc_execution_store_core.py)
+now serves exactly two fixed wrapper classes: `ActivationExecutionBundleStore`
+and [consume-specific `DeliveryExecutionBundleStore`](oidc-session-activation-delivery-execution-store.md).
+The activation constructor, read/append/close and private snapshot signatures,
+record format, bounds and first-exact recovery behavior are unchanged. Its
+`SWOAS001` records still use the activation plan, bundle and journal codecs.
+
+The consume wrapper instead fixes `SWODS001`, its separate slot domain and
+`consume-execution-` prefix, and the actual consume plan/bundle/sixteen-field
+journal codecs. Both wrappers reuse the same lease, bounded I/O, fsync,
+no-replace publication and uncertainty-poisoning mechanics. Exact-class guards
+reject subclasses and cross-wrapper calls; there is no caller-selected profile,
+codec or trust callback. Sharing storage mechanics does not make either format
+or authority interchangeable.
+
 ## Independent owner and record
 
 The constructor requires the existing directory descriptor and its exact device,

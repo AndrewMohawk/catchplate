@@ -1,7 +1,8 @@
 # Unrendered, uninstalled deployment input. Independent admission/provisioning
 # must supply accounts, exact release, fresh root bootstrap/history custody,
 # TLS identities, catalog, separate signing/journal keys, existing historical
-# bundle/delivery keys, private journal and the current-root state-v7 owner.
+# bundle/delivery keys, separate execution-export key/store, private journal
+# and the current-root state-v7 owner. The v2 profile has no v1 fallback.
 # Provision only the UID 65501 state-socket ACL separately; no state group.
 # Planning/retention is not consume issuance, SQL execution or token release.
 # Public TLS files: root-owned 0444; private TLS key: root:65501 mode 0440.
@@ -11,22 +12,24 @@ Description=Serverware dedicated OIDC activation delivery-consume planner (trust
 BindsTo=serverware-oidc-session-activation-delivery-planner.socket
 Requires=serverware-current-root-state.socket
 After=local-fs.target serverware-oidc-session-activation-delivery-planner.socket serverware-current-root-state.socket
-RequiresMountsFor=@ACTIVATION_DELIVERY_PLANNER_RELEASE_ROOT@ @ACTIVATION_DELIVERY_PLANNER_TRUST_DIR@ @ACTIVATION_DELIVERY_PLANNER_TLS_DIR@ @ACTIVATION_DELIVERY_PLANNER_JOURNAL_DIR@
+RequiresMountsFor=@ACTIVATION_DELIVERY_PLANNER_RELEASE_ROOT@ @ACTIVATION_DELIVERY_PLANNER_TRUST_DIR@ @ACTIVATION_DELIVERY_PLANNER_TLS_DIR@ @ACTIVATION_DELIVERY_PLANNER_JOURNAL_DIR@ @ACTIVATION_DELIVERY_PLANNER_EXECUTION_STORE_DIR@
 AssertPathIsDirectory=@ACTIVATION_DELIVERY_PLANNER_RELEASE_ROOT@
 AssertPathIsDirectory=@ACTIVATION_DELIVERY_PLANNER_TRUST_DIR@
 AssertPathIsDirectory=@ACTIVATION_DELIVERY_PLANNER_TLS_DIR@
 AssertPathIsDirectory=@ACTIVATION_DELIVERY_PLANNER_JOURNAL_DIR@
+AssertPathIsDirectory=@ACTIVATION_DELIVERY_PLANNER_EXECUTION_STORE_DIR@
 AssertPathExists=@ACTIVATION_DELIVERY_PLANNER_KEY@
 AssertPathExists=@ACTIVATION_DELIVERY_PLANNER_JOURNAL_KEY@
 AssertPathExists=@ACTIVATION_DELIVERY_PLANNER_BUNDLE_KEY@
 AssertPathExists=@ACTIVATION_DELIVERY_PLANNER_DELIVERY_KEY@
+AssertPathExists=@ACTIVATION_DELIVERY_PLANNER_EXECUTION_BUNDLE_KEY@
 StartLimitIntervalSec=infinity
 StartLimitBurst=1
 
 [Service]
 Type=exec
 # Root delivery permanently drops to 65501:65501, with no supplementary groups.
-# Nine inherited FDs 198..206; one signer and three pairwise-distinct raw32 keys.
+# Eleven inherited FDs 198..208; one signer and four pairwise-distinct raw32 keys.
 # One accepted connection per cold launch, including rejection or uncertainty.
 # Type=exec is not cryptographic readiness proof.
 User=root
@@ -40,10 +43,13 @@ BindReadOnlyPaths=@ACTIVATION_DELIVERY_PLANNER_KEY@:/run/secrets/serverware-oidc
 BindReadOnlyPaths=@ACTIVATION_DELIVERY_PLANNER_JOURNAL_KEY@:/run/secrets/serverware-oidc-session-activation-delivery-journal-key
 BindReadOnlyPaths=@ACTIVATION_DELIVERY_PLANNER_BUNDLE_KEY@:/run/secrets/serverware-oidc-session-activation-bundle-key
 BindReadOnlyPaths=@ACTIVATION_DELIVERY_PLANNER_DELIVERY_KEY@:/run/secrets/serverware-oidc-session-activation-delivery-key
+BindReadOnlyPaths=@ACTIVATION_DELIVERY_PLANNER_EXECUTION_BUNDLE_KEY@:/run/secrets/serverware-oidc-session-activation-delivery-execution-bundle-key
 BindReadOnlyPaths=/run/serverware/oidc-session-activation:/run/serverware/oidc-session-activation
 BindReadOnlyPaths=/run/serverware/current-root:/run/serverware/current-root
 BindPaths=@ACTIVATION_DELIVERY_PLANNER_JOURNAL_DIR@:/var/lib/serverware/oidc-session-activation-delivery-planner
+BindPaths=@ACTIVATION_DELIVERY_PLANNER_EXECUTION_STORE_DIR@:/var/lib/serverware/oidc-session-activation-delivery-execution
 ReadWritePaths=/var/lib/serverware/oidc-session-activation-delivery-planner
+ReadWritePaths=/var/lib/serverware/oidc-session-activation-delivery-execution
 Sockets=serverware-oidc-session-activation-delivery-planner.socket
 NonBlocking=yes
 Environment=LD_LIBRARY_PATH=/runtime/python/lib

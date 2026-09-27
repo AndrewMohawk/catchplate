@@ -1106,6 +1106,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_delivery_journal.py \
 	serverware/authority_oidc_session_activation_delivery_retained.py \
 	serverware/authority_oidc_session_activation_delivery_execution_bundle.py \
+	serverware/authority_oidc_session_activation_delivery_execution_store.py \
+	serverware/authority_oidc_session_activation_delivery_execution_export.py \
 	serverware/authority_oidc_session_activation_delivery_execution_enrollment.py \
 	serverware/authority_oidc_session_activation_delivery_execution_expectations.py \
 	serverware/authority_oidc_session_activation_delivery_execution_authorization.py \
@@ -1121,6 +1123,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_current_root_delivery_head.py \
 	serverware/authority_successor_execution_window.py \
 	serverware/authority_oidc_session_activation_execution_store.py \
+	serverware/authority_oidc_execution_store_core.py \
 	serverware/authority_oidc_session_activation_execution_export.py \
 	serverware/authority_oidc_session_activation_cold_planning.py \
 	serverware/authority_oidc_session_activation_planner_transport.py \
@@ -3094,6 +3097,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_delivery_journal.py \
 				serverware/authority_oidc_session_activation_delivery_retained.py \
 				serverware/authority_oidc_session_activation_delivery_execution_bundle.py \
+				serverware/authority_oidc_session_activation_delivery_execution_store.py \
+				serverware/authority_oidc_session_activation_delivery_execution_export.py \
 				serverware/authority_oidc_session_activation_delivery_execution_enrollment.py \
 				serverware/authority_oidc_session_activation_delivery_execution_expectations.py \
 				serverware/authority_oidc_session_activation_delivery_execution_authorization.py \
@@ -3109,6 +3114,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_current_root_delivery_head.py \
 				serverware/authority_successor_execution_window.py \
 				serverware/authority_oidc_session_activation_execution_store.py \
+				serverware/authority_oidc_execution_store_core.py \
 				serverware/authority_oidc_session_activation_execution_export.py \
 				serverware/authority_oidc_session_activation_cold_planning.py \
 				serverware/authority_oidc_session_activation_planner_transport.py \

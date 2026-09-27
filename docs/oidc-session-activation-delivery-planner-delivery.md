@@ -3,15 +3,17 @@
 This is source-only, unbuilt and unexecuted delivery for the separate
 `oidc.session.activation-delivery.consume` planner. It connects the
 [root-admitted cold construction](oidc-session-activation-delivery-planner-bootstrap.md)
-to a fixed operating-system launch; it does not issue a consume execution grant,
+to a fixed operating-system launch and separate encrypted-export resources;
+it does not issue a consume execution grant,
 reserve or execute SQL, release a token, or provide a public permission route.
 
 ## Originals before private keys
 
 The fixed root entrypoint reads the independent root public key, the original
-consume-planner bootstrap and the separate consume-history-v2 custody original.
+consume-planner-v2 bootstrap and the separate consume-history-v2 custody original.
 Actual canonical/signature, configuration, purpose and original-byte joins run
-before opening private keys, TLS originals or the journal directory. Completion
+before opening private keys, TLS originals or either private directory. There is
+no consume-planner-v1 fallback. Completion
 history v1 is not relabeled as consume-planning custody. A verifier result from
 another caller is never accepted instead of these originals.
 
@@ -43,17 +45,23 @@ root-owned memfds; all private source files are single-link, root-owned mode
 | 204 | Dedicated consume-planner Ed25519 signing key |
 | 205 | Separate consume-original-journal AES key |
 | 206 | Independently pinned private journal directory |
+| 207 | Separate consume-execution bundle AES key |
+| 208 | Independently pinned first-exact encrypted execution store directory |
 
-The three AES originals are exactly 32 raw bytes and must differ pairwise.
-Their actual SHA-256 digests join the independently signed custody/journal pins.
+The four AES originals are exactly 32 raw bytes and must differ pairwise.
+Their actual SHA-256 digests join independently signed custody/journal/export pins.
+The export key also cannot reuse the root-pinned historical activation journal key,
+which is not delivered to this process.
 The actual signing key pair and SPKI join the dedicated planner identity.
 `_keys_on_work(material, work)` returns the private local tuple
-`(planner_private_key, bundle_key, delivery_key, journal_key)` only after these
+`(planner_private_key, bundle_key, delivery_key, journal_key, execution_bundle_key)` only after these
 checks. No key is serialized into a request, plan, environment value or response.
 
 The fixed key paths are `/run/secrets/serverware-oidc-session-activation-` plus
 `bundle-key`, `delivery-key`, `delivery-planner-key` and
-`delivery-journal-key`. Shared historical bundle/delivery keys do not transfer
+`delivery-journal-key`, with the additional export key at
+`/run/secrets/serverware-oidc-session-activation-delivery-execution-bundle-key`.
+Shared historical bundle/delivery keys do not transfer
 completion or token-release authority to this role.
 
 ## Fixed process and resources
@@ -65,6 +73,13 @@ owner `65501:65532`, mode `0660`; kernel and filesystem socket identities are
 separate signed pins. The journal is exactly
 `/var/lib/serverware/oidc-session-activation-delivery-planner`, owned by
 `65501:65501`, mode `0700`, with signed device/inode and bounded count/quota.
+The separate execution store is exactly
+`/var/lib/serverware/oidc-session-activation-delivery-execution`, with the same
+UID/GID/mode requirements, independent device/inode and signed limits of at most
+1,024 records / 8 GiB. Its identity must differ from the consume journal and the
+historical activation journal/export store. `_execution_store(fd)` rechecks both
+descriptor and fixed-path identity; both directories are retained and rechecked
+before and after the permanent identity drop.
 No resource is created, repaired or provisioned by the launcher.
 
 PostgreSQL uses only the admitted fixed TLS files below
@@ -77,7 +92,7 @@ defeat a malicious host administrator.
 
 After checking originals and resources, root delivery permanently drops all
 three UID/GID identities to `65501`, clears supplementary groups, and retains
-exactly the nine nonstandard descriptors above. The child environment contains
+exactly the eleven nonstandard descriptors above. The child environment contains
 only `PATH`, `LANG`, `TZ`, `LD_LIBRARY_PATH`, `PYTHONDONTWRITEBYTECODE`,
 `SERVERWARE_PROCESS_MODE`, and the two fixed root/bootstrap FD variables.
 There are no ambient libpq credentials, caller-selected module paths or secret
@@ -89,25 +104,32 @@ installed runtime/source directories.
 
 The [private service](oidc-session-activation-delivery-planner-service.md)
 reauthenticates the sealed originals and constructs the actual reader,
-consume-history owner, encrypted journal and retained plan owner. Its original
+consume-history owner, encrypted journal, separate execution store and retained
+plan owner. Its original
 construction bracket/deadline also bounds idle polling and request processing.
 The runner calls `initialize_from_environment()`, then
 `require_started().serve_once()`, and always calls `close()` on exit. Only an
 idle poll may return `False`; the first accepted connection is terminal,
 including malformed input, rejection or uncertain retention/response outcome.
-There is no automatic replay, re-signing, token rotation or retry.
+There is no automatic replay, re-signing, resealing, token rotation or retry.
 
 The [socket](../ops/systemd/serverware-oidc-session-activation-delivery-planner.socket)
 and [service template](../ops/systemd/serverware-oidc-session-activation-delivery-planner.service.in)
 are uninstalled deployment inputs. They require independently admitted accounts,
-release, originals, keys, TLS/database identity, journal and the state-v7 socket
+release, originals, keys, TLS/database identity, separate journal/export directories
+and the state-v7 socket
 ACL for UID `65501`. No supplementary state group, state signing key, state
-journal or general mutation privilege is granted. The image recipe includes the
+journal or general mutation privilege is granted. The service template adds only
+the fixed export-key read-only mount and private export-store writable mount;
+launcher modes, peer 65532, environment eight-field inventory and single-accepted
+runner remain unchanged. The image recipe includes the
 fixed standalone launcher; no image was built or service started.
 
 Trusted-host-local custody is not TEE custody, an off-host rollback witness or
 atomic action-time authorization. Deadline checks do not preempt a blocked
 native/kernel call. A lost response may follow successful encrypted retention.
-Consume issuance, reservation, protected SQL, historical recovery, committed
+Encrypted export is not independently admitted receiving custody or full private
+receiving replay. Consume grant production/cold receiving service, reservation,
+protected SQL, historical recovery, committed
 one-use release and the public/portal handoff remain separate work. This source
 delivery does not close a production-verification gate.

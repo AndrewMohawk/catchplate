@@ -1,7 +1,7 @@
-"""Fixed consume prepare/retained wire originals, not planning authority.
+"""Fixed consume prepare/retained/export wire originals, not planning authority.
 
-Two distinct request magics carry raw15 prepare or raw4 known-plan replay. The
-shared raw6 response is token-free originals/locators or closed uncertainty.
+Distinct request magics carry raw15 prepare or raw4 known-plan replay/export.
+Prepare/replay retain raw6; export has a distinct ciphertext-only raw7 response.
 Every exchange uses the supplied work/window/deadline; no allowance, endpoint,
 retry, policy, key, successful proof carrier or operation is selected by input.
 """
@@ -13,6 +13,7 @@ from serverware import authority_contract as authority
 from serverware import authority_transport
 from serverware import authority_revocation_writer_transport as io
 from serverware import authority_oidc_session_activation_delivery_plan as consume
+from serverware import authority_oidc_session_activation_delivery_execution_bundle as execution_bundle
 from serverware import oidc_session_activation_delivery as lifetime
 from serverware import oidc_session_activation_history_custody_bootstrap as history
 
@@ -22,8 +23,10 @@ completion, bundle = consume.provenance.response, consume.bundle
 OPERATION = consume.contract.OPERATION
 PREPARE_PURPOSE = b"prepare-oidc-session-activation-delivery-plan"
 RETAINED_PURPOSE = b"verify-retained-oidc-session-activation-delivery-plan"
+EXPORT_PURPOSE = b"export-oidc-session-activation-delivery-plan"
 PREPARE_REQUEST_MAGIC, RETAINED_REQUEST_MAGIC = b"SWODPQ01", b"SWODVQ01"
 RESPONSE_MAGIC = b"SWODPR01"
+EXPORT_REQUEST_MAGIC, EXPORT_RESPONSE_MAGIC = b"SWODXQ01", b"SWODXR01"
 LISTENER_PATH = "/run/serverware/oidc-session-activation/delivery-planner.sock"
 SERVICE_UID = SERVICE_GID = 65501
 REQUEST_PEER_UID = REQUEST_PEER_GID = 65532
@@ -36,11 +39,14 @@ ACTIVATION_LIMITS = (*completion.transport.RESPONSE_LIMITS, consume.activation_p
     completion.grants.MAX_ENROLLMENT_BYTES)
 PREPARE_REQUEST_LIMITS = (len(PREPARE_PURPOSE), 64, *ACTIVATION_LIMITS)
 RETAINED_REQUEST_LIMITS = (len(RETAINED_PURPOSE), consume.contract.MAX_BYTES, 20, 71)
+EXPORT_REQUEST_LIMITS = (len(EXPORT_PURPOSE), consume.contract.MAX_BYTES, 20, 71)
 RESPONSE_LIMITS = (len(b"uncertain"), history.MAX_CONSUME_REQUEST_BYTES,
     assertion.MAX_CONTEXT_BYTES, consume.contract.MAX_BYTES, 71, 71)
 PREPARE_REQUEST_HEADER_BYTES = len(PREPARE_REQUEST_MAGIC) + 8 * len(PREPARE_REQUEST_LIMITS)
 RETAINED_REQUEST_HEADER_BYTES = len(RETAINED_REQUEST_MAGIC) + 8 * len(RETAINED_REQUEST_LIMITS)
 RESPONSE_HEADER_BYTES = len(RESPONSE_MAGIC) + 8 * len(RESPONSE_LIMITS)
+EXPORT_REQUEST_HEADER_BYTES = len(EXPORT_REQUEST_MAGIC) + 8 * len(EXPORT_REQUEST_LIMITS)
+EXPORT_RESPONSE_HEADER_BYTES = len(EXPORT_RESPONSE_MAGIC) + 8 * 7
 MAX_BYTES = authority.MAX_RESULT_BYTES
 MAX_RESPONSE_BYTES = sum(RESPONSE_LIMITS)
 # Reserve the entire maximum response and both headers before reading a body.
@@ -48,6 +54,15 @@ MAX_RESPONSE_BYTES = sum(RESPONSE_LIMITS)
 MAX_PREPARE_REQUEST_BYTES = MAX_BYTES - PREPARE_REQUEST_HEADER_BYTES - RESPONSE_HEADER_BYTES - MAX_RESPONSE_BYTES
 MAX_RETAINED_REQUEST_BYTES = min(sum(RETAINED_REQUEST_LIMITS),
     MAX_BYTES - RETAINED_REQUEST_HEADER_BYTES - RESPONSE_HEADER_BYTES - MAX_RESPONSE_BYTES)
+MAX_EXPORT_REQUEST_BYTES = sum(EXPORT_REQUEST_LIMITS)
+# The raw7 has exactly the old six bounded fields plus its ciphertext frame.
+# Reserve the worst-case request, both headers and every other response field
+# before accepting any body; the codec ceiling cannot enlarge this exchange.
+MAX_EXPORT_BUNDLE_BYTES = min(execution_bundle.MAX_BYTES,
+    MAX_BYTES - MAX_EXPORT_REQUEST_BYTES - EXPORT_REQUEST_HEADER_BYTES
+    - EXPORT_RESPONSE_HEADER_BYTES - MAX_RESPONSE_BYTES)
+EXPORT_RESPONSE_LIMITS = (*RESPONSE_LIMITS[:4], MAX_EXPORT_BUNDLE_BYTES, *RESPONSE_LIMITS[4:])
+MAX_EXPORT_RESPONSE_BYTES = sum(EXPORT_RESPONSE_LIMITS)
 AuthorityTransportError = authority_transport.AuthorityTransportError
 _URLSAFE = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 _check_deadline = io._check_deadline
@@ -60,8 +75,12 @@ def _fail(message):
 def _source_bounds():
     if (len(ACTIVATION_LIMITS) != 13 or len(PREPARE_REQUEST_LIMITS) != 15
             or len(RETAINED_REQUEST_LIMITS) != 4 or len(RESPONSE_LIMITS) != 6
+            or len(EXPORT_REQUEST_LIMITS) != 4 or len(EXPORT_RESPONSE_LIMITS) != 7
             or MAX_BYTES != 64 * 1024 * 1024 or MAX_BYTES > io.MAX_REQUEST_BYTES
             or MAX_PREPARE_REQUEST_BYTES <= 0 or MAX_RETAINED_REQUEST_BYTES <= 0
+            or not execution_bundle.OVERHEAD_BYTES + 2 <= MAX_EXPORT_BUNDLE_BYTES <= execution_bundle.MAX_BYTES
+            or (MAX_EXPORT_REQUEST_BYTES + MAX_EXPORT_RESPONSE_BYTES
+                + EXPORT_REQUEST_HEADER_BYTES + EXPORT_RESPONSE_HEADER_BYTES > MAX_BYTES)
             or MAX_RESPONSE_BYTES + PREPARE_REQUEST_HEADER_BYTES + RESPONSE_HEADER_BYTES >= MAX_BYTES):
         _fail("consume planner fixed frame inventory exceeds its source exchange")
 
@@ -90,6 +109,8 @@ def _profile(purpose):
         return PREPARE_REQUEST_MAGIC, PREPARE_REQUEST_LIMITS, MAX_PREPARE_REQUEST_BYTES, PREPARE_REQUEST_HEADER_BYTES
     if purpose == RETAINED_PURPOSE:
         return RETAINED_REQUEST_MAGIC, RETAINED_REQUEST_LIMITS, MAX_RETAINED_REQUEST_BYTES, RETAINED_REQUEST_HEADER_BYTES
+    if purpose == EXPORT_PURPOSE:
+        return EXPORT_REQUEST_MAGIC, EXPORT_REQUEST_LIMITS, MAX_EXPORT_REQUEST_BYTES, EXPORT_REQUEST_HEADER_BYTES
     _fail("consume planner purpose is not source admitted")
 
 
@@ -109,12 +130,24 @@ def _request_lengths(lengths, purpose):
         _fail("consume retained selector lengths differ")
 
 
-def _response_lengths(lengths):
+def _response_lengths(lengths, *, export=False):
     _source_bounds()
-    if (type(lengths) is not tuple or len(lengths) != 6
-            or any(type(size) is not int or not 0 <= size <= cap for size, cap in zip(lengths, RESPONSE_LIMITS))
-            or sum(lengths) > MAX_RESPONSE_BYTES):
+    if type(export) is not bool:
+        _fail("consume planner response branch is not source fixed")
+    limits = EXPORT_RESPONSE_LIMITS if export else RESPONSE_LIMITS
+    maximum = MAX_EXPORT_RESPONSE_BYTES if export else MAX_RESPONSE_BYTES
+    if (type(lengths) is not tuple or len(lengths) != len(limits)
+            or any(type(size) is not int or not 0 <= size <= cap for size, cap in zip(lengths, limits))
+            or sum(lengths) > maximum):
         _fail("consume planner response exceeds its fixed bounds")
+    if export:
+        status, request, scope, envelope, ciphertext, plan_digest, journal_digest = lengths
+        if not ((status == len(b"exported") and request >= 2 and scope >= 2 and envelope >= 2
+                and ciphertext >= execution_bundle.OVERHEAD_BYTES + 2 and plan_digest == journal_digest == 71)
+                or (status == len(b"uncertain")
+                    and request == scope == envelope == ciphertext == plan_digest == journal_digest == 0)):
+            _fail("consume planner export response branch differs")
+        return
     status, request, scope, envelope, plan_digest, journal_digest = lengths
     if not ((status == len(b"prepared") and request >= 2 and scope >= 2 and envelope >= 2
             and plan_digest == journal_digest == 71)
@@ -131,18 +164,26 @@ def _deadline_original(raw):
     return 1 <= len(raw) <= 20 and raw[0] in b"123456789" and all(item in b"0123456789" for item in raw)
 
 
-def _originals(values, *, response):
+def _originals(values, *, response, export=False):
     """Closed byte shape only; no request, plan or completion proof is admitted."""
-    if type(response) is not bool or type(values) is not tuple:
+    if (type(response) is not bool or type(export) is not bool or type(values) is not tuple
+            or (export and not response)):
         _fail("consume planner requires source-fixed immutable originals")
-    if len(values) not in ((6,) if response else (15, 4)) or any(type(raw) is not bytes for raw in values):
+    counts = ((7,) if export else (6,)) if response else (15, 4)
+    if len(values) not in counts or any(type(raw) is not bytes for raw in values):
         _fail("consume planner original frame inventory differs")
     lengths = tuple(len(raw) for raw in values)
     if response:
-        _response_lengths(lengths)
-        if not ((values[0] in (b"prepared", b"verified") and _digest(values[4]) and _digest(values[5]))
+        _response_lengths(lengths, export=export)
+        statuses = (b"exported",) if export else (b"prepared", b"verified")
+        if not ((values[0] in statuses and _digest(values[-2]) and _digest(values[-1]))
                 or (values[0] == b"uncertain" and all(raw == b"" for raw in values[1:]))):
             _fail("consume planner response values differ")
+        if export and values[0] == b"exported":
+            try:
+                execution_bundle._bounded_frame(values[4])
+            except execution_bundle.DeliveryExecutionBundleError as exc:
+                raise AuthorityTransportError("consume export encrypted original frame differs") from exc
     else:
         purpose = values[0]
         _request_lengths(lengths, purpose)
@@ -163,7 +204,7 @@ def _retained_scope(originals, work):
     """Decode only caller-retained ordinary expectations, never signed facts."""
     evidence.capture._SharedLedger(work)
     held = _originals(originals, response=False)
-    if held[0] != RETAINED_PURPOSE:
+    if len(held) != 4 or held[0] not in (RETAINED_PURPOSE, EXPORT_PURPOSE):
         _fail("consume retained decoding requires its fixed request branch")
     work.charge(input_bytes=2 * (len(held[2]) + len(held[3])))
     return int(held[2].decode("ascii")), held[3].decode("ascii")
@@ -190,11 +231,12 @@ def _recv_exact(connection, size, bound, work, live):
 
 
 def _recv_bodies(connection, *, purpose, response, bound, work, live):
-    limits = RESPONSE_LIMITS if response else _profile(purpose)[1]
+    export = response and purpose == EXPORT_PURPOSE
+    limits = (EXPORT_RESPONSE_LIMITS if export else RESPONSE_LIMITS) if response else _profile(purpose)[1]
     header = _recv_exact(connection, 8 * len(limits), bound, work, live)
     lengths = tuple(int.from_bytes(header[index:index + 8], "big") for index in range(0, len(header), 8))
     if response:
-        _response_lengths(lengths)
+        _response_lengths(lengths, export=export)
     else:
         _request_lengths(lengths, purpose)
     # Lengths AND the request+maximum-response aggregate were admitted above.
@@ -203,7 +245,7 @@ def _recv_bodies(connection, *, purpose, response, bound, work, live):
     live()
     evidence.production._callback(work, lambda: io._require_eof(connection, bound))
     live()
-    held = _originals(originals, response=response)
+    held = _originals(originals, response=response, export=export)
     if not response and held[0] != purpose:
         _fail("consume planner magic and original purpose differ")
     return held
@@ -222,6 +264,8 @@ def _recv_request(connection, *, live_window, deadline_ns, work):
         purpose = PREPARE_PURPOSE
     elif magic == RETAINED_REQUEST_MAGIC:
         purpose = RETAINED_PURPOSE
+    elif magic == EXPORT_REQUEST_MAGIC:
+        purpose = EXPORT_PURPOSE
     else:
         _fail("consume planner request magic differs")
     result = _recv_bodies(connection, purpose=purpose, response=False, bound=bound, work=work, live=live)
@@ -229,8 +273,8 @@ def _recv_request(connection, *, live_window, deadline_ns, work):
     return result
 
 
-def _send(connection, held, *, response, bound, work, live):
-    magic = RESPONSE_MAGIC if response else _profile(held[0])[0]
+def _send(connection, held, *, response, bound, work, live, export=False):
+    magic = (EXPORT_RESPONSE_MAGIC if export else RESPONSE_MAGIC) if response else _profile(held[0])[0]
     work.charge(input_bytes=2 * (len(magic) + 8 * len(held)))
     header = magic + b"".join(len(raw).to_bytes(8, "big") for raw in held)
     for raw in (header, *held):
@@ -242,11 +286,11 @@ def _send(connection, held, *, response, bound, work, live):
             live()
 
 
-def _send_response(connection, originals, *, live_window, deadline_ns, work):
+def _send_response(connection, originals, *, live_window, deadline_ns, work, export=False):
     """The actual service supplies originals and closes the connection for EOF."""
-    held = _originals(originals, response=True)
+    held = _originals(originals, response=True, export=export)
     _window, bound, live = _guard(live_window, deadline_ns, work)
-    _send(connection, held, response=True, bound=bound, work=work, live=live)
+    _send(connection, held, response=True, bound=bound, work=work, live=live, export=export)
     live()
 
 
@@ -254,6 +298,9 @@ def _socket_request(endpoint, *, originals, live_window, deadline_ns, work):
     # All originals, endpoint scalars and the original window are held before
     # the first native/clock callback. No callback or received proof is input.
     held = _originals(originals, response=False)
+    exporting = held[0] == EXPORT_PURPOSE
+    response_magic = EXPORT_RESPONSE_MAGIC if exporting else RESPONSE_MAGIC
+    response_header = EXPORT_RESPONSE_HEADER_BYTES if exporting else RESPONSE_HEADER_BYTES
     path, timeout, uid, gid = _endpoint(endpoint)
     window, bound, live = _guard(live_window, deadline_ns, work)
     timeout_bound = evidence.production._callback(work, lambda: io._deadline_ns(timeout))
@@ -282,14 +329,14 @@ def _socket_request(endpoint, *, originals, live_window, deadline_ns, work):
         evidence.production._callback(work, lambda: io._call_until(connection, bound,
             lambda: connection.shutdown(socket.SHUT_WR)))
         live()
-        if _recv_exact(connection, 8, bound, work, live) != RESPONSE_MAGIC:
+        if _recv_exact(connection, 8, bound, work, live) != response_magic:
             _fail("consume planner response magic differs")
         result = _recv_bodies(connection, purpose=held[0], response=True, bound=bound, work=work, live=live)
-        expected_status = b"prepared" if held[0] == PREPARE_PURPOSE else b"verified"
+        expected_status = b"exported" if exporting else (b"prepared" if held[0] == PREPARE_PURPOSE else b"verified")
         if result[0] not in (expected_status, b"uncertain"):
             _fail("consume planner response belongs to another request branch")
         if (sum(map(len, held)) + sum(map(len, result)) + _profile(held[0])[3]
-                + RESPONSE_HEADER_BYTES > MAX_BYTES):
+                + response_header > MAX_BYTES):
             _fail("consume planner aggregate exchange exceeds its source ceiling")
         live()
     except BaseException:
@@ -312,9 +359,10 @@ def _socket_prepare(endpoint, *, old_token_bytes, activation_originals, live_win
         live_window=live_window, deadline_ns=deadline_ns, work=work)
 
 
-def _socket_verify_retained(endpoint, *, envelope_bytes, expected_deadline_epoch_ns,
+def _socket_retained(endpoint, *, purpose, envelope_bytes, expected_deadline_epoch_ns,
         expected_journal_digest, live_window, deadline_ns, work):
-    """Known original replay only; deadline/journal identity must be held independently."""
+    if type(purpose) is not bytes or purpose not in (RETAINED_PURPOSE, EXPORT_PURPOSE):
+        _fail("consume retained client purpose differs")
     evidence.capture._SharedLedger(work)
     deadline, digest = expected_deadline_epoch_ns, expected_journal_digest
     if type(deadline) is not int or not 1 <= deadline < 10**20:
@@ -326,6 +374,22 @@ def _socket_verify_retained(endpoint, *, envelope_bytes, expected_deadline_epoch
         original_deadline, original_digest = str(deadline).encode("ascii"), digest.encode("ascii")
     except UnicodeError as exc:
         raise AuthorityTransportError("consume retained selector is not ASCII") from exc
-    originals = (RETAINED_PURPOSE, envelope_bytes, original_deadline, original_digest)
+    originals = (purpose, envelope_bytes, original_deadline, original_digest)
     return _socket_request(endpoint, originals=originals,
+        live_window=live_window, deadline_ns=deadline_ns, work=work)
+
+
+def _socket_verify_retained(endpoint, *, envelope_bytes, expected_deadline_epoch_ns,
+        expected_journal_digest, live_window, deadline_ns, work):
+    """Known original replay only; deadline/journal identity must be held independently."""
+    return _socket_retained(endpoint, purpose=RETAINED_PURPOSE, envelope_bytes=envelope_bytes,
+        expected_deadline_epoch_ns=expected_deadline_epoch_ns, expected_journal_digest=expected_journal_digest,
+        live_window=live_window, deadline_ns=deadline_ns, work=work)
+
+
+def _socket_export_retained(endpoint, *, envelope_bytes, expected_deadline_epoch_ns,
+        expected_journal_digest, live_window, deadline_ns, work):
+    """One retained export attempt returns unverified raw7, never execution authority."""
+    return _socket_retained(endpoint, purpose=EXPORT_PURPOSE, envelope_bytes=envelope_bytes,
+        expected_deadline_epoch_ns=expected_deadline_epoch_ns, expected_journal_digest=expected_journal_digest,
         live_window=live_window, deadline_ns=deadline_ns, work=work)

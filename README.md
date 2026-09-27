@@ -18,19 +18,19 @@ long-lived credential.
 
 Checkpoint: **2026-09-27 — pre-production, source-only.**
 
-[![Tracked source implementation: 33 of 46 checkpoints landed, 13 open; F07 is next. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 6/8; workloads and native 3/6; providers and operations 0/7. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Tracked source implementation: 33 of 46 checkpoints landed, 13 open including F07 in progress. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 6/8; workloads and native 3/6; providers and operations 0/7. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 **33 of 46 tracked source checkpoints landed · 13 open.** Each tile maps to a
 [named checklist item](docs/production-status.md#next-source-milestones): ✓ landed,
 → in progress, — open. Counts describe implementation checkpoints, not percentage of
 code, equal amounts of work, or an ETA. Current source is unbuilt and unexecuted.
 
-- **Just landed (F06):** separate public finalization-execution permission,
-  repeated retained ownership checks, durable dispatch/outcome records, and a
-  seventh explicit portal action
-  ([fa92cb4](https://github.com/example/private-deployment)).
-- **Next (F07):** separately admitted finalization completion/recovery and its
-  portal workflow. Separate OIDC session activation (F08) follows; both remain open.
+- **Just landed (partial F07):** isolated finalization completion service,
+  original-signature receiving checks and explicit state-service peer admission
+  ([d472bdb](https://github.com/example/private-deployment)).
+- **In progress (F07):** connect the completion caller, retained authenticated
+  outcomes/recovery, separate public permission and portal controls. Separate
+  OIDC session activation (F08) follows; neither checkpoint is closed yet.
 - **Production acceptance: 0/6 verified.** Full verification follows source
   freeze. Immutable dependencies and independently operated signing, Nitro/KMS
   and witness services remain prerequisites; the services are not provisioned.

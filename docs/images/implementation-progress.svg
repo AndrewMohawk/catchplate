@@ -204,7 +204,7 @@
         <text x="482" y="170" fill="#e2e8f0">— F08.6 · Integrated portal &amp; active-login check</text>
       </g>
       <text x="20" y="209" fill="#cbd5e1" font-size="14">3 landed · 1 in progress · 2 open. The parent stays open until all six source steps land.</text>
-      <text x="20" y="236" fill="#94a3b8" font-size="13">These steps live inside F08; they are not extra checkpoints or equal units of work.</text>
+      <text x="20" y="236" fill="#94a3b8" font-size="13">Partial F08.4: read acquisition, capacity and signed-plan replay; execution is still open.</text>
     </g>
 
     <text x="24" y="1337" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>

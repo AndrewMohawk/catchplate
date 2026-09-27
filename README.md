@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -48,8 +50,9 @@ tracks each step, so partial progress stays visible before the parent closes:
 The [step-by-step evidence and remaining work](docs/production-status.md#f08-detail-oidc-session-activation)
 distinguish source prerequisites from the finished flow. These six steps belong
 to F08; they do not add to the 46 parent checkpoints.
-Within F08.4, proof checks, encrypted-original helpers and row-effect derivation
-have landed; protected planning, custody and execution remain open.
+Within F08.4, the [latest source](https://github.com/example/private-deployment)
+adds read acquisition, full mutation/capacity accounting and signed-plan replay.
+Indexed write evidence, configured custody and execution remain open.
 
 **Production acceptance: 0/6 verified.** Full verification follows source freeze.
 Immutable dependencies and independently operated signing, Nitro/KMS and witness

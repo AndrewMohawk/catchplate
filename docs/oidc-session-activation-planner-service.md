@@ -1,7 +1,7 @@
 # Private activation planner exchange
 
 This is source-only cold planning, not session activation. The fixed service
-authenticates original root bootstrap bytes, constructs the actual read planner,
+authenticates original v2 root bootstrap bytes, constructs the actual read planner,
 encrypted original journal and configured plan owner, and handles one accepted
 connection. It does not accept an already-verified material or transition object.
 The [cold delivery guide](oidc-session-activation-planner-delivery.md) describes
@@ -66,9 +66,18 @@ owners, listener/journal paths and TLS continuity are rechecked through response
 
 The actual [cold composition](oidc-session-activation-cold-planning.md)
 reauthenticates the original bootstrap and projects its complete root vector.
-It joins the held owners and calls the [configured plan owner](oidc-session-activation-plan-owner.md),
+The actual owner's mandatory configuration retains the original state enrollment,
+independent root key and complete-vector bytes. Before planning, a fresh random
+challenge and exact subject/input/vector context are sent to the fixed state
+endpoint. Genuine original verification requires a live signed matching vector
+and no pending action. The original work/window remains unchanged; the signed
+plan is additionally clipped to the observation's original expiry.
+
+The composition joins the held owners and calls the [configured plan owner](oidc-session-activation-plan-owner.md),
 which genuinely acquires/replays/signs and durably encrypts exact originals
 before returning immutable token-free request/scope/plan bytes and locators.
+Original enrollment/vector/query/observation bytes are retained privately, not
+accepted as proof objects or added to the public response.
 The journal digest is a storage locator, not proof of currentness or execution.
 
 Ordinary planning failures can return only empty uncertainty. Publication may
@@ -80,15 +89,25 @@ memory zeroization.
 
 ## Remaining boundary and deferred verification
 
-The root-signed vector is independently provisioned input, not fresh latest-head
-or off-host action-time authority. Present-caller permission, genuine retained
+The root-signed vector is independently provisioned input; the separate fresh
+head is a signed sampled observation, not an atomic reservation or action-time
+authority. Present-caller permission, genuine retained
 finalization admission, protected execution, token delivery and session
 activation remain separate. Packaging is uninstalled; key/TLS/DB/journal
 provisioning, socket DAC and restricted database egress are still external.
 There is no public route or automatic recovery/retry in this service.
 
+State-service v4 admits UID 65507 only for the head exchange; previous reserve,
+completion and lookup peers are unchanged. The root-created listener is pinned
+to kernel peer `0:0`. Its pathname is owned by `65516:65516` with mode `0660`, so
+separate provisioned ACL/DAC access for planner UID 65507 is required; these
+sources do not grant it.
+
 Planned frozen verification, **not run**: reject altered root/FD/key/path/env
 before resource use; reject wrong peers, subject encodings, lengths and trailing
 bytes; verify genuine planning plus durable original retention; preserve one
 accepted connection and original bounds across errors/late expiry; confirm
-token-free responses, uncertain durable outcomes and no automatic retry.
+token-free responses, uncertain durable outcomes and no automatic retry. New
+head cases include altered enrollment/generation/database association, wrong
+challenge/context/vector, non-null pending state, stale observations, reversed
+clocks and observation expiry after retention. No verification was executed.

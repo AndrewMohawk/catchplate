@@ -1,20 +1,20 @@
-"""Root-original-bound activation planning, not action-time currentness.
+"""Root-original-bound activation planning with fresh no-pending head admission.
 
-The complete vector is an authenticated launch snapshot only. Its fixed
-projection supplies independent expectations to the real read-only planner;
-observed database roots must match before any plan can be signed. No incoming
-request selects roots, policy or keys, and no material/result carrier replaces
-the original root-signed bootstrap. No state-service peer or SQL is added.
+The complete vector is an authenticated launch snapshot. A fresh nonce-bound
+signed state observation must independently match it with no pending action;
+observed database roots must also match before a plan can be signed. No request
+selects roots, policy or keys, and no result carrier replaces original bootstrap,
+query or observation bytes. This is not atomic action-time admission or SQL.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
+import os
 
-from serverware import authority_current_root_vector as vector
-from serverware import authority_index_heads as index_heads
+from serverware import authority_current_root_head as head
+from serverware import authority_current_root_transport as state_transport
 from serverware import authority_oidc_session_activation_plan_owner as owner_module
-from serverware import authority_primary_contract as primary
+from serverware import authority_oidc_session_activation_state as activation_state
 
 
 plan, registration, evidence = owner_module.plan, owner_module.registration, owner_module.evidence
@@ -26,52 +26,14 @@ class OidcSessionActivationColdPlanningError(ValueError):
     pass
 
 
-@dataclass(frozen=True, slots=True, repr=False)
-class _ProjectedRoots:
-    """Ordinary original-derived data; no API admits this as authority."""
-
-    vector_bytes: bytes
-    vector_digest: str
-    business_before_roots: tuple
-    authorization_before_roots: tuple
-    expected_counted_heads: tuple
-
-
 def _fail(message):
     raise OidcSessionActivationColdPlanningError(message)
 
 
 def _project_on_work(*, vector_bytes, expected_vector_digest, work):
     """Validate the full original vector before deriving this operation's roots."""
-    evidence.capture._SharedLedger(work)
-    if type(vector_bytes) is not bytes or not 2 <= len(vector_bytes) <= vector.MAX_BYTES:
-        _fail("activation launch vector is not a bounded immutable original")
-    registration._digest(expected_vector_digest)
-    original = vector_bytes
-    document = vector._decode_on_work(original, work=work)
-    actual_digest = vector.framing._frame(vector.IDENTITY_DOMAIN, (original,), work)
-    registration._same(actual_digest, expected_vector_digest, work,
-        "root-signed activation complete-vector identity")
-    contracts = primary.primary_table_contracts(OPERATION)
-    business = tuple(item.table for item in contracts if item.root_class == "business")
-    authorization = tuple(item.table for item in contracts if item.root_class == "authorization")
-    identities = index_heads._activation_ids(include_write_heads=True)
-    if len(identities) != plan.writes.HEAD_COUNT:
-        _fail("activation launch vector projection is not the fixed thirteen-head union")
-    work.prepare_scan(document)
-    primary_rows = {item["table"]: item for item in document["primaryRoots"]}
-    counted_rows = {item["indexId"]: item for item in document["countedRoots"]}
-    selected = {
-        "business": [primary_rows[table] for table in business],
-        "authorization": [primary_rows[table] for table in authorization],
-        "heads": [{name: counted_rows[identity][name] for name in
-            ("indexId", "indexRevision", "rootDigest", "leafCount")} for identity in identities],
-    }
-    owned = evidence.capture._JSONCapture(evidence.capture._SharedLedger(work),
-        maximum_bytes=vector.MAX_BYTES).visit(selected)
-    plan.writes._heads(owned["heads"])
-    return _ProjectedRoots(original, actual_digest, tuple(owned["business"]),
-        tuple(owned["authorization"]), tuple(owned["heads"]))
+    return activation_state._project_on_work(vector_bytes=vector_bytes,
+        expected_vector_digest=expected_vector_digest, work=work)
 
 
 def _snapshot(owner, expected, work):
@@ -90,7 +52,7 @@ def _key_digest(original, work):
         lambda: "sha256:" + hashlib.sha256(original).hexdigest())
 
 
-def _join_owner(configured, material, work):
+def _join_owner(configured, material, root_public_key, work):
     """Join the actual held owners to this call's genuinely verified original."""
     fixed = owner_module._fixed_scope(configured, work)
     expected = {"rpId": material.rp_id, "origin": material.origin,
@@ -120,13 +82,20 @@ def _join_owner(configured, material, work):
         work, "root-signed activation delivery key")
     registration._same(_key_digest(journal[2], work), material.journal_key_digest,
         work, "root-signed activation journal key")
+    for actual, expected, label in ((configured[18], material.state_enrollment_bytes, "state enrollment"),
+            (configured[20], material.complete_root_vector_bytes, "complete vector")):
+        work.charge(input_bytes=len(actual) + len(expected))
+        if actual != expected:
+            _fail("activation cold owner " + label + " differs from the root-signed original")
+    registration._same(evidence.keys._spki_on_work(configured[19], work),
+        evidence.keys._spki_on_work(root_public_key, work), work, "independent activation state root key")
 
 
 def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes,
         old_token_bytes, expected_user_id, expected_session_id, expected_credential_id,
         expected_credential_record_id, expected_challenge_id, live_window,
         transport_deadline_ns, work):
-    """Reauthenticate the launch original and use only its projected root pins.
+    """Reauthenticate launch originals and a fresh matching no-pending head.
 
     The cold service constructs the actual owner once and retains the original
     bootstrap/root key. This function accepts no bootstrap material or proof
@@ -136,7 +105,7 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
 
     ledger = evidence.capture._SharedLedger(work)
     if (type(owner) is not owner_module.OidcSessionActivationPlanOwner
-            or type(owner._configured) is not tuple or len(owner._configured) != 18
+            or type(owner._configured) is not tuple or len(owner._configured) != 21
             or type(bootstrap_bytes) is not bytes or not 2 <= len(bootstrap_bytes) <= bootstrap.MAX_BYTES
             or type(assertion_bytes) is not bytes
             or not 2 <= len(assertion_bytes) <= assertion.MAX_ASSERTION_BYTES):
@@ -160,7 +129,7 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
         root_public_key=root_public_key, live_window=window,
         work=work, transport_deadline_ns=bound)
     _snapshot(owner, configured, work)
-    _join_owner(configured, material, work)
+    _join_owner(configured, material, root_public_key, work)
     issued, expires = material.attestation_interval
     opening = material.opening_sample
     if (window[5:] != (material.maximum_plan_age_ns, material.maximum_clock_skew_ns)
@@ -186,8 +155,35 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
     projected = _project_on_work(vector_bytes=material.complete_root_vector_bytes,
         expected_vector_digest=material.complete_root_vector_digest, work=work)
     current()
+    scope = {**subject, **owner_module._fixed_scope(configured, work), "deadlineEpochNs": window[3]}
+    context_digest = activation_state._context_digest_on_work(scope=scope,
+        assertion_bytes=original_assertion, old_token_bytes=old,
+        complete_root_vector_bytes=material.complete_root_vector_bytes, work=work)
+    work.charge(input_bytes=96)
+    nonce = evidence.production._callback(work, lambda: os.urandom(32))
+    if type(nonce) is not bytes or len(nonce) != 32:
+        _fail("activation state query has no genuine fixed-size challenge")
+    query_bytes = head._encode_query_on_work(enrollment_digest=material.state_enrollment_digest,
+        context_digest=context_digest, expected_vector_digest=projected.vector_digest,
+        challenge=nonce.hex(), work=work)
+    current()
+    work.charge(input_bytes=len(query_bytes))
+    observation_bytes = evidence.production._callback(work, lambda: state_transport._head_on_configuration(
+        material.state_endpoint, query_bytes=query_bytes, deadline_ns=bound))
+    if type(observation_bytes) is not bytes or not 2 <= len(observation_bytes) <= head.MAX_BYTES:
+        _fail("activation state exchange returned no bounded original")
+    work.charge(input_bytes=len(observation_bytes))
+    observed = activation_state._verify_on_work(scope=scope,
+        assertion_bytes=original_assertion, old_token_bytes=old,
+        complete_root_vector_bytes=material.complete_root_vector_bytes,
+        query_bytes=query_bytes, observation_bytes=observation_bytes,
+        enrollment_bytes=material.state_enrollment_bytes, root_public_key=root_public_key,
+        now_epoch_ns=current(), work=work)
+    if current() >= observed["expiresAtEpochNs"]:
+        _fail("activation fresh state observation expired before preparation")
     result = owner_module.OidcSessionActivationPlanOwner.prepare(owner,
         assertion_bytes=original_assertion, old_token_bytes=old,
+        head_query_bytes=query_bytes, head_observation_bytes=observation_bytes,
         expected_user_id=subject["userId"], expected_session_id=subject["sessionId"],
         expected_credential_id=subject["credentialId"],
         expected_credential_record_id=subject["credentialRecordId"],
@@ -199,6 +195,7 @@ def _prepare_on_work(owner, *, bootstrap_bytes, root_public_key, assertion_bytes
     if type(result) is not owner_module.PreparedActivationPlan:
         _fail("activation cold preparation did not return its actual owner result")
     payload = plan.contract._decode_on_work(result.envelope_bytes, envelope=True, work=work)["payload"]
-    if current() >= payload["expiresAtEpochNs"]:
+    if (payload["expiresAtEpochNs"] > observed["expiresAtEpochNs"]
+            or current() >= min(payload["expiresAtEpochNs"], observed["expiresAtEpochNs"])):
         _fail("activation plan expired after original retention")
     return result

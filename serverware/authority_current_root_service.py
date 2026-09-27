@@ -10,8 +10,9 @@ admitted before any prefix, and its purpose-specific peer before any body.
 The complete bounded original and EOF reach the fixed owner's sole work
 allowance. That owner joins the authenticated action before replay/publication
 and returns only a durably published receipt (or an exact historical receipt).
-Separate bounded queries are restricted to admitted completion peers and reach the
-actual owner's lookup/signing path without a service parser or allowance.
+Legacy bounded queries are restricted to admitted completion peers. The explicit
+v4 activation-planner peer has a distinct head-only query, never those legacy
+purposes. Both reach genuine owner paths without a service parser or allowance.
 No independent signer, SQL, success substitute or automatic retry exists here.
 Failure after publication or send is not evidence of rollback/absence.
 """
@@ -33,7 +34,7 @@ class CurrentRootServiceError(RuntimeError):
 
 
 def _validate_configuration(config):
-    if type(config) is not tuple or len(config) not in (6, 7, 8):
+    if type(config) is not tuple or len(config) not in (6, 7, 8, 9):
         raise CurrentRootServiceError("current-root service configuration is not a fixed profile")
     owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = config[:6]
     if type(owner) is not decisions.CurrentRootDecisionOwner:
@@ -49,9 +50,12 @@ def _validate_configuration(config):
             or config[6] != (65510, 65510)
             or (reserve_uid, reserve_gid, complete_uid, complete_gid) != (65514, 65514, 65515, 65515)):
         raise CurrentRootServiceError("current-root finalization peer profile differs from fixed source")
-    if len(config) == 8 and (type(config[7]) is not tuple or len(config[7]) != 2
+    if len(config) >= 8 and (type(config[7]) is not tuple or len(config[7]) != 2
             or any(type(value) is not int for value in config[7]) or config[7] != (65508, 65508)):
         raise CurrentRootServiceError("current-root finalization completion peer differs from fixed source")
+    if len(config) == 9 and (type(config[8]) is not tuple or len(config[8]) != 2
+            or any(type(value) is not int for value in config[8]) or config[8] != (65507, 65507)):
+        raise CurrentRootServiceError("current-root activation planner peer differs from fixed source")
     return config
 
 
@@ -118,6 +122,18 @@ class CurrentRootDecisionService:
         object.__setattr__(result, "_pid", os.getpid())
         return result
 
+    @classmethod
+    def _with_activation_planner(cls, *, owner, timeout_seconds):
+        """Cold v4 only: fixed head-observation peer, no decision/lookup access."""
+        if cls is not CurrentRootDecisionService:
+            raise CurrentRootServiceError("current-root activation profile requires the exact service")
+        configured = _validate_configuration((owner, 65514, 65514, 65515, 65515,
+            timeout_seconds, (65510, 65510), (65508, 65508), (65507, 65507)))
+        result = object.__new__(CurrentRootDecisionService)
+        object.__setattr__(result, "_configuration", configured)
+        object.__setattr__(result, "_pid", os.getpid())
+        return result
+
     def serve_connection(self, connection, *, transport_deadline_ns=None):
         """Own one accepted socket, serve at most one request, then close it."""
         if type(connection) is not socket.socket:
@@ -127,7 +143,8 @@ class CurrentRootDecisionService:
             owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = configured[:6]
             reserve_peer, complete_peer = (reserve_uid, reserve_gid), (complete_uid, complete_gid)
             finalization_peer = configured[6] if len(configured) >= 7 else None
-            finalization_complete_peer = configured[7] if len(configured) == 8 else None
+            finalization_complete_peer = configured[7] if len(configured) >= 8 else None
+            activation_planner_peer = configured[8] if len(configured) == 9 else None
             deadline_ns = io._deadline_ns(timeout)
             if transport_deadline_ns is not None:
                 if type(transport_deadline_ns) is not int or transport_deadline_ns < 1:
@@ -137,7 +154,8 @@ class CurrentRootDecisionService:
             uid, gid, _pid = io._call_until(connection, deadline_ns,
                 lambda: _accepted_peer(connection))
             peer = (uid, gid)
-            if peer not in (reserve_peer, complete_peer, finalization_peer, finalization_complete_peer):
+            if peer not in (reserve_peer, complete_peer, finalization_peer,
+                    finalization_complete_peer, activation_planner_peer):
                 raise CurrentRootServiceError("current-root socket peer is not admitted")
             prefix = transport._recv_prefix(connection, deadline_ns=deadline_ns)
             expected_operation = None
@@ -161,13 +179,22 @@ class CurrentRootDecisionService:
                 action, required_peer = "query", complete_peer
                 if finalization_complete_peer is not None and peer == finalization_complete_peer:
                     required_peer = finalization_complete_peer
+            elif prefix == transport.HEAD_QUERY_REQUEST_MAGIC and activation_planner_peer is not None:
+                action, required_peer = "head", activation_planner_peer
             else:
                 raise CurrentRootServiceError("current-root socket purpose is not source fixed")
             if peer != required_peer:
                 raise CurrentRootServiceError("current-root socket peer is not admitted for this purpose")
-            # Exact class dispatch excludes instance method overrides. Neither
+            # Exact class dispatch excludes instance method overrides. No
             # branch parses signed data or creates a second work allowance.
-            if action == "query":
+            if action == "head":
+                original = transport._recv_head_query(connection, prefix=prefix, deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                observation = decisions.CurrentRootDecisionOwner.observe_head(owner, original,
+                    transport_deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                transport._send_head_observation(connection, observation, deadline_ns=deadline_ns)
+            elif action == "query":
                 original = transport._recv_lookup(connection, prefix=prefix, deadline_ns=deadline_ns)
                 transport._check_deadline(deadline_ns)
                 observation = decisions.CurrentRootDecisionOwner.lookup(owner, original,

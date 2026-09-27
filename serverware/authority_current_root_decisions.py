@@ -29,6 +29,7 @@ import threading
 import time
 
 from serverware import authority_current_root_authorization as authorization
+from serverware import authority_current_root_head as head_wire
 from serverware import authority_current_root_journal as storage
 from serverware import authority_current_root_lookup as lookup_wire
 from serverware import authority_current_root_vector as vector
@@ -423,6 +424,85 @@ class CurrentRootDecisionOwner:
             live()
             if history.get(queried) is not prior:
                 raise CurrentRootDecisionError("current-root queried history changed during observation")
+            return encoded
+
+    def observe_head(self, query_bytes, *, transport_deadline_ns=None):
+        """Sign this locked owner's head for activation planning, not a receipt.
+
+        This separate protocol never consults request history or publishes a
+        journal record. Pending state is reported, not accepted for planning.
+        The caller must retain the fresh nonce/window and independently reject
+        pending state; this is not off-host antirollback or execution authority.
+        """
+        if type(self) is not CurrentRootDecisionOwner:
+            raise CurrentRootDecisionError("head observation requires the actual decision owner")
+        if type(query_bytes) is not bytes or not 2 <= len(query_bytes) <= head_wire.MAX_QUERY_BYTES:
+            raise CurrentRootDecisionError("current-root head query exceeds its original-byte bound")
+        if os.getpid() != self._pid:
+            raise CurrentRootDecisionError("forked process cannot observe current-root head")
+        original, inherited = query_bytes, transport_deadline_ns
+        work = _work()
+        if inherited is not None:
+            evidence.plan.contract._integer(inherited, minimum=1)
+        with self._lock:
+            CurrentRootDecisionOwner._require_ready(self)
+            material, pending, journal = self._material, self._pending, self._journal
+            enrollment, root_key, state_key = (
+                self._enrollment_bytes, self._root_public_key, self._state_private_key)
+            policy = material.payload
+            pins = (material.enrollment_digest, policy["databaseId"], policy["generationDigest"],
+                policy["state"]["measurementDigest"], policy["maxControlAgeNs"], policy["maxClockSkewNs"])
+            state = (self._sequence, self._head_digest, self._vector_digest, self._fence)
+            pending_request = None if pending is None else pending[1]
+            pending_decision = None if pending is None else pending[2]
+            # Capture actual owner state/key/policy before clock or crypto;
+            # the same lock excludes apply throughout this observation.
+            now = evidence.production._callback(work, time.time_ns)
+            window = clock._open_on_work(deadline_epoch_ns=now + pins[4],
+                maximum_lifetime_ns=pins[4], maximum_clock_skew_ns=pins[5], work=work)
+            if inherited is not None and inherited < window[4]:
+                expires = window[0] + inherited - window[1]
+                window = clock._validate((window[0], window[1], window[2], expires,
+                    inherited, window[5], window[6]))
+            last_epoch, last_monotonic = window[0], window[2]
+
+            def live():
+                nonlocal last_epoch, last_monotonic
+                instant = clock._check_on_work(window, work=work)
+                monotonic = evidence.production._callback(work, time.monotonic_ns)
+                evidence.plan.contract._integer(monotonic, minimum=1)
+                if (instant < last_epoch or monotonic < last_monotonic or monotonic >= window[4]):
+                    raise CurrentRootDecisionError("current-root head window expired or clock reversed")
+                last_epoch, last_monotonic = instant, monotonic
+                CurrentRootDecisionOwner._require_ready(self)
+                if (self._material is not material or self._pending is not pending
+                        or self._journal is not journal or self._enrollment_bytes is not enrollment
+                        or self._root_public_key is not root_key or self._state_private_key is not state_key
+                        or (self._sequence, self._head_digest, self._vector_digest, self._fence) != state
+                        or (None if self._pending is None else self._pending[1]) != pending_request
+                        or (None if self._pending is None else self._pending[2]) != pending_decision):
+                    raise CurrentRootDecisionError("current-root head owner state changed during observation")
+                return instant
+
+            live()
+            query = head_wire._decode_query_on_work(original, work=work)
+            evidence.plan._same(query["enrollmentDigest"], pins[0], work,
+                "current-root head query names another enrollment")
+            evidence.plan._same(query["expectedVectorDigest"], state[2], work,
+                "current-root head differs from the independently expected planning vector")
+            query_digest = head_wire._query_digest_on_work(original, work)
+            payload = {"schema": head_wire.PAYLOAD_SCHEMA,
+                "sourceRevision": vector.authority.SOURCE_REVISION,
+                "enrollmentDigest": pins[0], "databaseId": pins[1], "generationDigest": pins[2],
+                "producerMeasurementDigest": pins[3], "operation": head_wire.OPERATION,
+                "queryDigest": query_digest, "challenge": query["challenge"],
+                "contextDigest": query["contextDigest"],
+                "issuedAtEpochNs": window[0], "expiresAtEpochNs": window[3],
+                "sequence": state[0], "headDigest": state[1], "vectorDigest": state[2], "fence": state[3],
+                "pendingRequestDigest": pending_request, "pendingDecisionDigest": pending_decision}
+            encoded = head_wire._sign_on_work(payload=payload, enrollment_bytes=enrollment,
+                root_public_key=root_key, state_private_key=state_key, now_epoch_ns=live(), work=work)
+            live()
             return encoded
 
     def inspect(self):

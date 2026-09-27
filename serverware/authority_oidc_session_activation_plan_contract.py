@@ -15,14 +15,14 @@ from serverware import authority_webauthn_evidence as evidence
 
 
 OPERATION = "oidc.session.activate"
-SCHEMA = "serverware.policyAuthorityOidcSessionActivationPlan/v1"
+SCHEMA = "serverware.policyAuthorityOidcSessionActivationPlan/v2"
 PAYLOAD_SCHEMA = SCHEMA
-ENVELOPE_SCHEMA = "serverware.signedPolicyAuthorityOidcSessionActivationPlan/v1"
-SIGNATURE_DOMAIN = "serverware.policyAuthorityOidcSessionActivationPlanSignature/v1"
-IDENTITY_DOMAIN = "serverware.policyAuthorityOidcSessionActivationPlanIdentity/v1"
+ENVELOPE_SCHEMA = "serverware.signedPolicyAuthorityOidcSessionActivationPlan/v2"
+SIGNATURE_DOMAIN = "serverware.policyAuthorityOidcSessionActivationPlanSignature/v2"
+IDENTITY_DOMAIN = "serverware.policyAuthorityOidcSessionActivationPlanIdentity/v2"
 PROOF_DOMAIN = "serverware.policyAuthorityOidcSessionActivationProof/v1"
 CONTEXT_DOMAIN = "serverware.policyAuthorityOidcSessionActivationContext/v1"
-INPUTS_DOMAIN = "serverware.policyAuthorityOidcSessionActivationPrivateInputs/v1"
+INPUTS_DOMAIN = "serverware.policyAuthorityOidcSessionActivationPrivateInputs/v2"
 TRANSITION_DOMAIN = "serverware.policyAuthorityOidcSessionActivationTransition/v1"
 MAX_BYTES = 16 * 1024
 MAX_NODES = 128

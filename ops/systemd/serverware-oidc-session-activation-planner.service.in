@@ -1,13 +1,15 @@
 # Unrendered, uninstalled deployment input. Independent admission/provisioning
 # must supply accounts, exact release, root bootstrap, TLS identities, catalog,
-# separate signing/encryption keys, journal and root-pinned planning snapshot.
+# separate signing/encryption keys, journal, planning snapshot and state-v4 owner.
+# Independently provision only the UID65507 state-socket ACL; no state group.
 # This service has no execution, action-time currentness or token-release authority.
 # Public TLS files: root-owned 0444; private TLS keys: root:65507 mode 0440.
 # Restrict PostgreSQL egress independently to the exact admitted endpoint.
 [Unit]
 Description=Serverware dedicated OIDC activation planner owner (trusted-host-local)
 BindsTo=serverware-oidc-session-activation-planner.socket
-After=local-fs.target serverware-oidc-session-activation-planner.socket
+Requires=serverware-current-root-state.socket
+After=local-fs.target serverware-oidc-session-activation-planner.socket serverware-current-root-state.socket
 RequiresMountsFor=@ACTIVATION_PLANNER_RELEASE_ROOT@ @ACTIVATION_PLANNER_TRUST_DIR@ @ACTIVATION_PLANNER_TLS_DIR@ @ACTIVATION_PLANNER_JOURNAL_DIR@
 AssertPathIsDirectory=@ACTIVATION_PLANNER_RELEASE_ROOT@
 AssertPathIsDirectory=@ACTIVATION_PLANNER_TRUST_DIR@
@@ -36,6 +38,7 @@ BindReadOnlyPaths=@ACTIVATION_PLANNER_SIGNING_KEY@:/run/secrets/serverware-oidc-
 BindReadOnlyPaths=@ACTIVATION_PLANNER_DELIVERY_KEY@:/run/secrets/serverware-oidc-session-activation-delivery-key
 BindReadOnlyPaths=@ACTIVATION_PLANNER_JOURNAL_KEY@:/run/secrets/serverware-oidc-session-activation-journal-key
 BindReadOnlyPaths=/run/serverware/oidc-session-activation:/run/serverware/oidc-session-activation
+BindReadOnlyPaths=/run/serverware/current-root:/run/serverware/current-root
 BindPaths=@ACTIVATION_PLANNER_JOURNAL_DIR@:/var/lib/serverware/oidc-session-activation-planner
 ReadWritePaths=/var/lib/serverware/oidc-session-activation-planner
 Sockets=serverware-oidc-session-activation-planner.socket

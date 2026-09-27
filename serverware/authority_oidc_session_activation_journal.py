@@ -18,15 +18,17 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from serverware import authority_oidc_session_activation_plan_contract as contract
+from serverware import authority_current_root_head as head
+from serverware import authority_current_root_vector as vector
 from serverware import oidc_session_activation_delivery as delivery
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
 authority, shape, evidence = contract.authority, contract.shape, contract.evidence
 registration = delivery.registration
-SCHEMA = "serverware.oidcSessionActivationPrivateOriginals/v1"
-DOMAIN = b"serverware.oidcSessionActivationJournal/v1\x00"
-MAGIC = b"SWOAJ001"
+SCHEMA = "serverware.oidcSessionActivationPrivateOriginals/v2"
+DOMAIN = b"serverware.oidcSessionActivationJournal/v2\x00"
+MAGIC = b"SWOAJ002"
 MAX_ORIGINAL_BYTES = authority.MAX_RESULT_BYTES
 MAX_SCOPE_BYTES = 4096
 MAX_RECORD_BYTES = MAX_ORIGINAL_BYTES + MAX_SCOPE_BYTES + 46
@@ -39,7 +41,8 @@ _HEX = frozenset("0123456789abcdef")
 SCOPE_FIELDS = frozenset({"sourceRevision", "configurationDigest", "requestDigest", "planDigest"})
 ORIGINAL_FIELDS = frozenset({"schema", "sourceRevision", "request", "scope", "databaseNow",
     "assertionBase64Url", "oldTokenBase64Url", "newTokenBase64Url", "deliveryEnvelopeBase64Url",
-    "readInputs", "writeProofBase64Url", "planEnvelopeBase64Url"})
+    "readInputs", "writeProofBase64Url", "planEnvelopeBase64Url", "stateEnrollmentBase64Url",
+    "completeRootVectorBase64Url", "headQueryBase64Url", "headObservationBase64Url"})
 READ_INPUT_FIELDS = frozenset({"schema", "selectedRows", "beforeProofs", "readHeads",
     "queryFrontiers", "queryReads", "businessBeforeRoots", "authorizationBeforeRoots", "countedBeforeHeads"})
 # This is the closed private plan scope, not a new caller-selected authority.
@@ -115,6 +118,10 @@ def _original(value, scope, work):
     # Opaque proof originals and bounded graphs require the actual downstream
     # verifier; neither this codec nor AEAD authenticates their alleged meaning.
     registration._encoded_original(owned["writeProofBase64Url"], MAX_ORIGINAL_BYTES, work)
+    for field, maximum in (("stateEnrollmentBase64Url", head.authorization.MAX_ENROLLMENT_BYTES),
+            ("completeRootVectorBase64Url", vector.MAX_BYTES),
+            ("headQueryBase64Url", head.MAX_QUERY_BYTES), ("headObservationBase64Url", head.MAX_BYTES)):
+        registration._encoded_original(owned[field], maximum, work)
     plan_bytes = registration._encoded_original(owned["planEnvelopeBase64Url"], contract.MAX_BYTES, work)
     plan = contract._decode_on_work(plan_bytes, envelope=True, work=work)
     shape._literal(plan["payload"]["requestDigest"], scope["requestDigest"])

@@ -12,6 +12,11 @@ Construction requires the actual `OidcSessionActivationReadPlanner`, actual
 `ActivationOriginalJournal`, independent planner key pair/identity/SPKI and
 configuration digest, the matching delivery custody key, fixed RP/origin and
 authentication/trust policy, plan-age/skew policy and a 5–60 second delivery TTL.
+It also requires original state enrollment, its independently admitted root key
+and the complete root-vector original. Its held configuration is exactly 21
+elements: the prior 18 plus those three independent pins, never learned from
+the incoming observation. Construction authenticates the actual enrollment and
+rejects a planner key shared with an enrolled state/computation/completion role.
 It uses supplied work/window/deadline, checks the real key pair and read/journal
 configuration, and retains private fixed inputs. Journal/delivery keys remain
 private configuration only; neither enters a stored original or public result.
@@ -25,6 +30,10 @@ references; Python memory zeroization is not claimed.
 `prepare` accepts original assertion/old-token bytes, five independently admitted
 user/session/credential/credential-record/challenge IDs, independent primary
 roots and all 13 before-head expectations, plus the original work/window/deadline.
+Required `head_query_bytes` and `head_observation_bytes` retain the actual fresh
+cold exchange. Genuine state admission precedes token generation and is repeated
+by the signed-plan producer against the exact scope/input/vector context. A
+pending, mismatched or expired observation cannot reach signed planning.
 It generates the new token internally and derives the exact typed request from
 those originals and its fixed TTL. No successful assertion, transition or proof
 result can replace original inputs.
@@ -72,11 +81,16 @@ This is **live-only** retained verification. The caller's current processing
 window cannot renew the original plan, assertion, challenge, session or delivery
 interval; an expired original remains rejected. A historical admission and
 delivery/reconciliation protocol, present permission, retained-finalization
-admission, fresh latest-state admission and protected one-use execution remain
-separate integration. The [cold service](oidc-session-activation-planner-delivery.md)
-now composes genuine root-bootstrap admission and a root-pinned complete-vector
-snapshot around this owner; it does not turn that launch snapshot into an
-off-host currentness check. No public activation route is enabled by this owner.
+admission and protected one-use execution remain separate integration. The
+[cold service](oidc-session-activation-planner-delivery.md) now composes genuine
+v2 root-bootstrap admission, fixed independent state enrollment and a fresh
+nonce-bound head observation. The v2 journal retains all four state originals;
+receiving replay compares stored enrollment/vector bytes to the independently
+configured originals before repeating observation signatures and complete-root
+joins. The plan is clipped to observation expiry, not renewed on readback.
+This observes the admitted local owner; off-host rollback protection and
+action-time one-use currentness remain separate. No public activation route is
+enabled by this owner.
 Source-only; builds/tests/runtime verification remain deferred.
 
 Frozen verification should cover genuine acquisition/sign/append/readback,

@@ -200,6 +200,7 @@ def _activation_plan(*, read_planner, planner_private_key, planner_public_key,
         expected_planner_identity, expected_planner_spki_digest, configuration_digest,
         delivery_custody_key, journal, rp_id, origin, authn_policy, trust_policy,
         maximum_plan_age_ns, maximum_clock_skew_ns, delivery_ttl_seconds,
+        state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
         live_window, work, transport_deadline_ns=None):
     from serverware.authority_oidc_session_activation_plan_owner import OidcSessionActivationPlanOwner
 
@@ -211,6 +212,8 @@ def _activation_plan(*, read_planner, planner_private_key, planner_public_key,
         journal=journal, rp_id=rp_id, origin=origin, authn_policy=authn_policy, trust_policy=trust_policy,
         maximum_plan_age_ns=maximum_plan_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns,
         delivery_ttl_seconds=delivery_ttl_seconds, live_window=live_window, work=work,
+        state_enrollment_bytes=state_enrollment_bytes, state_root_public_key=state_root_public_key,
+        complete_root_vector_bytes=complete_root_vector_bytes,
         transport_deadline_ns=transport_deadline_ns)
 
 

@@ -1045,6 +1045,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_planning.py \
 	serverware/authority_oidc_session_activation_plan_contract.py \
 	serverware/authority_oidc_session_activation_plan.py \
+	serverware/authority_oidc_session_activation_state.py \
+	serverware/authority_current_root_head.py \
 	serverware/authority_oidc_session_activation_writes.py \
 	serverware/authority_oidc_session_activation_journal.py \
 	serverware/authority_oidc_session_activation_plan_owner.py \
@@ -2959,6 +2961,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_planning.py \
 				serverware/authority_oidc_session_activation_plan_contract.py \
 				serverware/authority_oidc_session_activation_plan.py \
+				serverware/authority_oidc_session_activation_state.py \
+				serverware/authority_current_root_head.py \
 				serverware/authority_oidc_session_activation_writes.py \
 				serverware/authority_oidc_session_activation_journal.py \
 				serverware/authority_oidc_session_activation_plan_owner.py \

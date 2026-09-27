@@ -1,7 +1,8 @@
 """Root-authenticated cold activation planning scope, not current-state authority.
 
 The independent root signs the actual configuration/runtime originals, fixed
-planner purpose and resource pins, policy, and complete root-vector original.
+planner purpose and resource pins, policy, complete root-vector original and
+independently enrolled current-state observation endpoint/key scope.
 The original vector is a root assertion about a planning snapshot: it is not
 an action-time latest-head witness, execution grant or permission to consume a
 session/token. No caller-produced successful material is an admission input.
@@ -54,22 +55,24 @@ MIN_TLS_BYTES = 2
 KEY_BYTES = 32
 MAX_BYTES = 4 * 1024 * 1024
 MAX_RECEIPT_AGE_NS = 300 * 1_000_000_000
-SCHEMA = "serverware.signedOidcSessionActivationPlannerBootstrap/v1"
-PAYLOAD_SCHEMA = "serverware.oidcSessionActivationPlannerBootstrap/v1"
-LAUNCH_SCHEMA = "serverware.oidcSessionActivationPlannerLaunch/v1"
+SCHEMA = "serverware.signedOidcSessionActivationPlannerBootstrap/v2"
+PAYLOAD_SCHEMA = "serverware.oidcSessionActivationPlannerBootstrap/v2"
+LAUNCH_SCHEMA = "serverware.oidcSessionActivationPlannerLaunch/v2"
 _FALSE_FIELDS = ("hardwareBacked", "nativeStageZero", "hsmBackedKeys", "teeVerified", "externalWitnessVerified")
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _PLANNER_FIELDS = frozenset({"publicKeyBase64Url", "spkiDigest", "identity"})
 _IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount", "bytesDigest", "identityDigest"})
 _READ_ROLE_FIELDS = frozenset({"databaseRole", "connectTimeoutSeconds", "clientDn", "clientSerial", "issuerDn"})
+_STATE_ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _AUTHN_FIELDS = frozenset({"userVerification", "allowedAuthenticatorClasses", "requireHardwareAttestation"})
 _TRUST_FIELDS = frozenset({"roots", "currentBundleDigest", "currentBundleSequence"})
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "role", "operation", "configurationPayload",
     "configurationDigest", "generation", "runtimeRoleIdentities", "runtimeClosureDigest", "planner",
     "rpId", "origin", "authenticationPolicy", "trustPolicy", "maximumPlanAgeNs", "maximumClockSkewNs",
     "deliveryTtlSeconds", "databaseEndpoint", "readRole", "queryManifestDigest", "tlsFiles",
-    "deliveryKeyDigest", "journalKeyDigest", "completeRootVector", "issuedAtEpochNs", "expiresAtEpochNs",
+    "deliveryKeyDigest", "journalKeyDigest", "completeRootVector", "databaseId", "stateEnrollment",
+    "stateEndpoint", "issuedAtEpochNs", "expiresAtEpochNs",
     "trustMode", "launch", *_FALSE_FIELDS})
 _LAUNCH_FIELDS = frozenset({"schema", "processMode", "serviceUid", "serviceGid", "peerUid", "peerGid",
     "rootPublicKeyFd", "bootstrapFd", "listenerFd", "signingKeyFd", "deliveryKeyFd", "journalKeyFd",
@@ -112,6 +115,9 @@ class _PlannerMaterial:
     opening_sample: tuple
     launch: dict
     bootstrap_bytes: bytes
+    state_enrollment_bytes: bytes
+    state_enrollment_digest: str
+    state_endpoint: tuple
 
 
 def _fail(message):
@@ -120,6 +126,17 @@ def _fail(message):
 
 def _text(value, label, maximum, work):
     return registration._text(value, label, maximum, work)
+
+
+def _state_endpoint(value):
+    shape._object(value, _STATE_ENDPOINT_FIELDS, "activation state endpoint")
+    shape._literal(value["socketPath"], state.LISTENER_PATH)
+    shape._integer(value["requestTimeoutSeconds"], 30, minimum=1)
+    for field in ("listenerUid", "listenerGid"):
+        shape._integer(value[field], 0)
+    # The root socket-activation manager creates the listening kernel socket;
+    # pathname ownership by the state UID is a separate filesystem check.
+    return (value["socketPath"], value["requestTimeoutSeconds"], 0, 0)
 
 
 def _launch_shape(value, work):
@@ -158,6 +175,7 @@ def _payload_shape(value, work):
         shape._digest(value[field])
     if value["deliveryKeyDigest"] == value["journalKeyDigest"]:
         _fail("activation delivery and journal key pins are not independent")
+    authorization._token(value["databaseId"])
     shape._object(value["generation"], frozenset(configuration._GENERATION_FIELDS), "activation generation")
     if type(value["configurationPayload"]) is not dict or type(value["runtimeRoleIdentities"]) is not dict:
         _fail("activation configuration/runtime originals are not exact objects")
@@ -188,11 +206,14 @@ def _payload_shape(value, work):
         shape._object(record, frozenset({"byteCount", "bytesDigest"}), "activation TLS original")
         shape._integer(record["byteCount"], maximum, minimum=MIN_TLS_BYTES)
         shape._digest(record["bytesDigest"])
-    original = value["completeRootVector"]
-    shape._object(original, _ORIGINAL_FIELDS, "activation complete vector original")
-    authorization.transport._transport_shape(original["base64Url"], original["byteCount"], vector.MAX_BYTES)
-    for field in ("bytesDigest", "identityDigest"):
-        shape._digest(original[field])
+    for field, maximum in (("completeRootVector", vector.MAX_BYTES),
+            ("stateEnrollment", authorization.MAX_ENROLLMENT_BYTES)):
+        original = value[field]
+        shape._object(original, _ORIGINAL_FIELDS, "activation " + field + " original")
+        authorization.transport._transport_shape(original["base64Url"], original["byteCount"], maximum)
+        for digest_field in ("bytesDigest", "identityDigest"):
+            shape._digest(original[digest_field])
+    _state_endpoint(value["stateEndpoint"])
     for field in ("issuedAtEpochNs", "expiresAtEpochNs"):
         shape._integer(value[field], minimum=1)
     if not 0 < value["expiresAtEpochNs"] - value["issuedAtEpochNs"] <= MAX_RECEIPT_AGE_NS:
@@ -348,6 +369,31 @@ def _reader_configuration(payload, configured, work):
     return (dsn, selected["connectTimeoutSeconds"], identity, payload["maximumClockSkewNs"])
 
 
+def _state_enrollment(payload, generation, root, work):
+    record = payload["stateEnrollment"]
+    original = authorization.transport._decode(record["base64Url"], record["byteCount"],
+        authorization.MAX_ENROLLMENT_BYTES, work)
+    work.charge(hashes=1, input_bytes=len(original))
+    digest = configuration.production._callback(work, lambda: "sha256:" + hashlib.sha256(original).hexdigest())
+    plan._same(digest, record["bytesDigest"], work, "activation state enrollment raw digest differs")
+    admitted = authorization._admit_enrollment_on_work(enrollment_bytes=original,
+        root_public_key=root, work=work)
+    plan._same(admitted.enrollment_digest, record["identityDigest"], work,
+        "activation state enrollment identity differs")
+    plan._same(admitted.payload["generationDigest"], generation["digest"], work,
+        "activation state enrollment differs from the genuine configured generation")
+    # No source configuration field maps databaseId to a DSN. The independent
+    # provisioner explicitly signs that association; do not equate it with the
+    # unrelated databaseName spelling or claim a signature proves DB provenance.
+    plan._same(admitted.payload["databaseId"], payload["databaseId"], work,
+        "activation state enrollment differs from the root-pinned database identity")
+    forbidden = tuple(admitted.payload[role]["spkiDigest"] for role in ("state", "computation", "completion"))
+    work.prepare_scan(forbidden)
+    if payload["planner"]["spkiDigest"] in forbidden:
+        _fail("activation planner key reuses an enrolled state, computation or completion key")
+    return original, admitted.enrollment_digest
+
+
 def _material(payload, root, opening, original, work, current):
     configured, generation = configuration._capture_configuration_on_work(payload=payload["configurationPayload"],
         configuration_digest=payload["configurationDigest"], generation=payload["generation"], work=work)
@@ -362,6 +408,8 @@ def _material(payload, root, opening, original, work, current):
     _policies(payload, configured, work)
     current()
     planner = _planner_key(payload, configured, root, work)
+    current()
+    state_original, state_digest = _state_enrollment(payload, generation, root, work)
     current()
     reader = _reader_configuration(payload, configured, work)
     record = payload["completeRootVector"]
@@ -380,7 +428,8 @@ def _material(payload, root, opening, original, work, current):
         payload["rpId"], payload["origin"], payload["authenticationPolicy"], payload["trustPolicy"],
         payload["maximumPlanAgeNs"], payload["maximumClockSkewNs"], payload["deliveryTtlSeconds"], reader,
         payload["deliveryKeyDigest"], payload["journalKeyDigest"], raw, identity, payload["tlsFiles"],
-        (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening, payload["launch"], original)
+        (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening, payload["launch"], original,
+        state_original, state_digest, _state_endpoint(payload["stateEndpoint"]))
 
 
 def _launch_guard(interval, opening, inherited, work):

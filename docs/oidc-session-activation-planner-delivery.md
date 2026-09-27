@@ -69,7 +69,10 @@ The unrendered
 [service](../ops/systemd/serverware-oidc-session-activation-planner.service.in)
 and [socket](../ops/systemd/serverware-oidc-session-activation-planner.socket)
 templates require independent accounts, exact release, keys, signed bootstrap,
-TLS identity, database privileges, journal and resource identities. They are not
+TLS identity, database privileges, journal and resource identities. The planner
+template requires the separately admitted state socket and makes only its
+socket directory visible inside the release root via a read-only bind; it does
+not mount the state journal, trust directory or signing key. They are not
 installed or started by this work. The service has no automatic restart and
 limits starts to one; the operator must deliberately admit any later launch.
 `Type=exec`, a socket connection or a process exit is not a readiness or durability
@@ -81,9 +84,14 @@ planning helper, transport, service and delivery modules. No image was built.
 
 ## Remaining authority
 
-The root-signed complete vector authenticates the supplied planning snapshot.
-It is not a freshly queried off-host latest-head observation, a rollback witness
-or atomic action authorization. Dynamic current-state admission, separate public
-permission and retained-finalization ownership, one-use protected SQL, committed
-delivery/recovery and the integrated portal remain open. No production gate is
+The v2 root bootstrap authenticates the supplied planning snapshot and exact
+state enrollment/endpoint. The cold request now makes a fresh nonce-bound
+[head observation](authority-current-root-head.md) through the explicit state-v4
+planner-only purpose, rejects pending or mismatched state, and retains those
+originals in the v2 plan/journal. This observes the independently admitted local
+owner; it is not an off-host rollback witness or atomic action authorization.
+The state socket still needs an independently provisioned narrowly scoped ACL
+for UID65507; no supplemental state group or broad mutation access is added.
+Separate public permission and retained-finalization ownership, one-use protected
+SQL, committed delivery/recovery and the integrated portal remain open. No production gate is
 closed by this source packaging.

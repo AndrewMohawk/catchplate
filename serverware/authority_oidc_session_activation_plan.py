@@ -5,8 +5,9 @@ policy, subject, key and time provenance. Only a bounded signed commitment
 envelope leaves the producer. Verification requires those original inputs
 again and returns the actual recomputed transition, never an execution grant.
 Indexed after-roots and all thirteen after-heads are genuinely replayed and
-committed, not accepted from a result carrier. No SQL, current-root authority,
-durable retention, historical replay or public activation occurs here.
+committed, not accepted from a result carrier. The enrolled state observation
+and its exact nonce/context-bound query are reverified and committed as well.
+No SQL, action-time authority, historical replay or public activation occurs.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import time
 
 from serverware import authority_oidc_session_activation_plan_contract as contract
 from serverware import authority_oidc_session_activation_reads as reads
+from serverware import authority_oidc_session_activation_state as state
 from serverware import authority_oidc_session_activation_writes as writes
 from serverware import authority_request_commitment as commitment
 from serverware import authority_transition_oidc_session_activation as transition
@@ -24,9 +26,7 @@ from serverware import authority_transition_oidc_session_activation as transitio
 
 assertion, registration, core = transition.assertion, transition.registration, transition.core
 evidence, clock = registration.evidence, assertion.clock
-_SCOPE_FIELDS = frozenset({"userId", "sessionId", "credentialId", "credentialRecordId", "challengeId",
-    "rpId", "origin", "authenticationPolicy", "trustPolicy", "configurationDigest",
-    "plannerIdentity", "plannerSpkiDigest", "maximumPlanAgeNs", "maximumClockSkewNs", "deadlineEpochNs"})
+_SCOPE_FIELDS = state.SCOPE_FIELDS
 
 
 class OidcSessionActivationPlanError(ValueError):
@@ -44,6 +44,8 @@ class _Invocation:
     query_frontiers: tuple
     expected_counted_heads: tuple
     write_proof_bytes: bytes
+    state_originals: tuple
+    state_expires_at_epoch_ns: int
     window: tuple
     monotonic_deadline: int
 
@@ -55,6 +57,8 @@ def _fail(message):
 def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_token_bytes,
         delivery_envelope_bytes, delivery_custody_key, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
+        state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
+        head_query_bytes, head_observation_bytes,
         live_window, transport_deadline_ns, work):
     """Own every caller graph before clock, hash, signature or crypto callbacks."""
     ledger = evidence.capture._SharedLedger(work)
@@ -74,6 +78,13 @@ def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_t
         _fail("activation plan originals are outside their exact bounds")
     originals = (assertion_bytes, assertion._token(old_token_bytes, work),
         assertion._token(new_token_bytes, work), delivery_envelope_bytes, delivery_custody_key)
+    state_originals = (
+        state._original(state_enrollment_bytes, state.head.authorization.MAX_ENROLLMENT_BYTES, "enrollment"),
+        state._original(complete_root_vector_bytes, state.vector.MAX_BYTES, "complete vector"),
+        state._original(head_query_bytes, state.head.MAX_QUERY_BYTES, "query"),
+        state._original(head_observation_bytes, state.head.MAX_BYTES, "observation"))
+    root_key = state_root_public_key
+    state.head.authorization._public(root_key)
     window = clock._validate(live_window)
     bound = window[4]
     if transport_deadline_ns is not None:
@@ -119,8 +130,21 @@ def _capture(context, *, request, scope, assertion_bytes, old_token_bytes, new_t
         registration._text(expected[name], name, maximum, work)
     held = core.KernelContext(contract.OPERATION, raw["arguments"], raw["selected_rows"],
         database_now, digest, query_reads=records)
+    observed = state._verify_on_work(scope=expected, assertion_bytes=originals[0],
+        old_token_bytes=originals[1], complete_root_vector_bytes=state_originals[1],
+        query_bytes=state_originals[2], observation_bytes=state_originals[3],
+        enrollment_bytes=state_originals[0], root_public_key=root_key,
+        now_epoch_ns=clock._check_on_work(window, work=work), work=work)
+    projected = state._project_on_work(vector_bytes=state_originals[1],
+        expected_vector_digest=observed["vectorDigest"], work=work)
+    for actual_roots, expected_roots, label in (
+            (raw["business_before_roots"], projected.business_before_roots, "business roots"),
+            (raw["authorization_before_roots"], projected.authorization_before_roots, "authorization roots"),
+            (owned["countedBeforeHeads"], projected.expected_counted_heads, "thirteen counted heads")):
+        registration._same(tuple(actual_roots), expected_roots, work, "observed activation " + label)
     return _Invocation(actual, expected, held, originals, raw, heads, frontiers,
-        tuple(owned["countedBeforeHeads"]), write_proof_bytes, window, bound)
+        tuple(owned["countedBeforeHeads"]), write_proof_bytes, state_originals,
+        observed["expiresAtEpochNs"], window, bound)
 
 
 def _live(invocation, work):
@@ -132,7 +156,8 @@ def _live(invocation, work):
         now = clock._check_on_work(invocation.window, work=work)
         observed = evidence.production._callback(work, lambda: time.monotonic_ns())
         registration._integer(observed, "activation plan monotonic sample", 1)
-        if now < epoch or observed < monotonic or observed >= invocation.monotonic_deadline:
+        if (now < epoch or observed < monotonic or observed >= invocation.monotonic_deadline
+                or now >= invocation.state_expires_at_epoch_ns):
             _fail("activation plan deadline expired or clock reversed")
         epoch, monotonic = now, observed
         return now
@@ -226,6 +251,10 @@ def _bodies(invocation, work):
             invocation.originals[:4]):
         inputs[name] = {"digest": evidence.plan._frame(contract.INPUTS_DOMAIN + "/" + name,
             (original,), work), "byteCount": len(original)}
+    for name, original in zip(("stateEnrollment", "completeRootVector", "headQuery", "headObservation"),
+            invocation.state_originals):
+        inputs[name] = {"digest": evidence.plan._frame(contract.INPUTS_DOMAIN + "/" + name,
+            (original,), work), "byteCount": len(original)}
     return _wire(proof, work), _wire(evaluation, work), _wire(inputs, work)
 
 
@@ -249,7 +278,8 @@ def _expiry(invocation, work, issued):
     arguments, context = invocation.request["arguments"], invocation.context
     session = context._exact("oidc_browser_sessions", {"id": arguments["session_id"]}, work=work)["row"]
     challenge = context._exact("webauthn_challenges", {"id": arguments["challenge_id"]}, work=work)["row"]
-    limits = [invocation.scope["deadlineEpochNs"], issued + invocation.scope["maximumPlanAgeNs"],
+    limits = [invocation.scope["deadlineEpochNs"], invocation.state_expires_at_epoch_ns,
+        issued + invocation.scope["maximumPlanAgeNs"],
         registration._now(context.database_now) + arguments["delivery_ttl_seconds"] * 1_000_000_000]
     for row, fields in ((session, ("expires_at", "pending_expires_at", "provider_expires_at")),
             (challenge, ("expires_at",))):
@@ -279,6 +309,8 @@ def _fresh_replayed(payload, invocation, actual, live, work):
 def _produce_on_work(context, *, request, scope, assertion_bytes, old_token_bytes, new_token_bytes,
         delivery_envelope_bytes, delivery_custody_key, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
+        state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
+        head_query_bytes, head_observation_bytes,
         planner_private_key, planner_public_key,
         live_window, work, transport_deadline_ns=None):
     """Genuinely replay all originals, then return only a signed token-free envelope."""
@@ -291,6 +323,9 @@ def _produce_on_work(context, *, request, scope, assertion_bytes, old_token_byte
         business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
         before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
         expected_counted_heads=expected_counted_heads, write_proof_bytes=write_proof_bytes,
+        state_enrollment_bytes=state_enrollment_bytes, state_root_public_key=state_root_public_key,
+        complete_root_vector_bytes=complete_root_vector_bytes,
+        head_query_bytes=head_query_bytes, head_observation_bytes=head_observation_bytes,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
     live = _live(invocation, work)
     live()
@@ -339,6 +374,8 @@ def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes,
         new_token_bytes, delivery_envelope_bytes, delivery_custody_key, business_before_roots,
         authorization_before_roots, before_proofs, read_heads, query_frontiers,
         expected_counted_heads, write_proof_bytes, planner_public_key,
+        state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
+        head_query_bytes, head_observation_bytes,
         live_window, work, transport_deadline_ns=None):
     """Verify the signature, repeat original replay and compare every commitment.
 
@@ -356,6 +393,9 @@ def _verify_on_work(context, *, envelope_bytes, request, scope, assertion_bytes,
         business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
         before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
         expected_counted_heads=expected_counted_heads, write_proof_bytes=write_proof_bytes,
+        state_enrollment_bytes=state_enrollment_bytes, state_root_public_key=state_root_public_key,
+        complete_root_vector_bytes=complete_root_vector_bytes,
+        head_query_bytes=head_query_bytes, head_observation_bytes=head_observation_bytes,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
     live = _live(invocation, work)
     live()

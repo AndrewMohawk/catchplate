@@ -4,7 +4,8 @@ This is source-only cold configuration and snapshot admission for
 `oidc.session.activate`, not permission to activate a browser session. The
 [bootstrap module](../serverware/oidc_session_activation_planner_bootstrap.py)
 authenticates an independent root's original signed configuration, dedicated
-planner identity, policy, resources and complete-root-vector bytes. It reads no
+planner identity, policy, resources, complete-root-vector bytes and enrolled
+current-state observation scope. It reads no
 key or TLS file, opens no database or journal, and creates no work allowance.
 Nothing here has been built, executed, provisioned or accepted for production.
 
@@ -19,10 +20,11 @@ verification token.
 
 The exact three-field envelope is `schema`, `payload`, `signatureBase64Url`.
 Its schema and root-signature domain are
-`serverware.signedOidcSessionActivationPlannerBootstrap/v1`; the closed payload
-uses `serverware.oidcSessionActivationPlannerBootstrap/v1`. The original is at
+`serverware.signedOidcSessionActivationPlannerBootstrap/v2`; the closed payload
+uses `serverware.oidcSessionActivationPlannerBootstrap/v2`. The original is at
 most 4 MiB. Admission verifies the actual Ed25519 root signature and canonical
-original bytes before selecting private resources.
+original bytes before selecting private resources. V2 is mandatory: v1 lacks
+the required state pins and is not accepted as a fallback.
 
 The closed payload binds:
 
@@ -32,7 +34,8 @@ The closed payload binds:
 - Dedicated planner public key/SPKI and exact three-field identity
   (`sessionIdentityDigest`, `measurementDigest`, `attestationReceiptDigest`).
   The signing key must differ from the root and configured generic,
-  evidence, transition and enrollment-issuer signing purposes. Purpose/key
+  evidence, transition and enrollment-issuer signing purposes, and the genuinely
+  enrolled state, computation and completion keys. Purpose/key
   separation does not require different measured release bytes.
 - Actual configured RP/origin, required user verification, a non-widening
   authenticator-class/attestation policy, and bounded original trust-root
@@ -42,12 +45,30 @@ The closed payload binds:
   three fixed TLS-file byte counts/digests.
 - Plain SHA-256 pins for two distinct exact-32-byte delivery/journal keys,
   never their values; complete-root-vector original; launch interval/resources.
+- A `databaseId`, the original `stateEnrollment`, and fixed `stateEndpoint`.
 
 `completeRootVector` is exactly
 `{base64Url, byteCount, bytesDigest, identityDigest}`. Its original is at most
 64 KiB. Admission checks the raw-byte digest and invokes the real complete-vector
 decoder/digest, including canonical form, full source inventory, manifests and
 count relationships. This is not a caller-supplied selected-root subset.
+
+`stateEnrollment` uses the same exact four descriptor fields, with a 128 KiB
+original cap. Admission checks its raw SHA-256 digest, genuinely verifies the
+root-signed current-root enrollment under the independent bootstrap root, and
+joins its actual framed identity digest. Its generation digest must equal the
+genuinely admitted configuration generation; its database ID must equal the
+explicit signed `databaseId`. The latter binds the enrolled database to the
+signed database endpoint by a trusted provisioner assertion. The signature
+alone does not establish database provenance or equate unrelated digest domains.
+
+`stateEndpoint` is exactly `socketPath`, `requestTimeoutSeconds`, `listenerUid`
+and `listenerGid`: `/run/serverware/current-root/state.sock`, integer 1–30
+seconds, and root-created kernel listener peer `0:0`. It enables only the
+separate [head observation](authority-current-root-head.md) exchange. The state
+service's v4 profile admits planner UID 65507 for this purpose; independent
+socket access is still required. The socket pathname's `65516:65516`, mode
+`0660` ownership is not the kernel peer identity or an access grant to 65507.
 
 The read configuration is the actual reader's four-tuple: generated DSN,
 connection timeout, seven-field database/TLS/planner identity, and clock skew.
@@ -62,7 +83,7 @@ manifest parameter, so this bootstrap does not claim an extra catalog-pin gate.
 
 ## Fixed cold resources
 
-`serverware.oidcSessionActivationPlannerLaunch/v1` fixes process mode
+`serverware.oidcSessionActivationPlannerLaunch/v2` fixes process mode
 `oidc-session-activation-planner`, service UID/GID 65507 and request-peer UID/GID
 65532. The inherited descriptor inventory is exactly:
 
@@ -103,16 +124,18 @@ clock bracket.
 The signed interval lasts at most 300 seconds. An inherited processing window
 and absolute transport deadline remain in force, with rollback checks and no
 new work budget, fresh opening allowance or launch renewal. Material retains
-the actual bootstrap/vector originals, original opening/interval, owned
+the actual bootstrap/vector/state-enrollment originals, actual enrollment
+identity, fixed state endpoint, original opening/interval, owned
 configuration/policy, key pins and fixed resource scope. It cannot be posted
 back as authority.
 
 `trustMode` is `trusted-host-local`; `hardwareBacked`, `nativeStageZero`,
 `hsmBackedKeys`, `teeVerified` and `externalWitnessVerified` must all be false.
 The root-signed vector supplies independently authenticated *snapshot
-expectations*, not independently fresh latest-head admission. Consequently
-F08.4d.5 remains in progress: the cold configuration/snapshot/service portion
-does not finish its fresh-current-root/head requirement. Action-time one-use
+expectations*. The cold path additionally requires a fresh challenge-bound,
+signed no-pending head matching that vector before planning; the original
+observation also limits the signed plan's expiry. A sampled head is not an
+atomic reservation or an action-time execution guarantee. Action-time one-use
 custody, protected execution, token delivery/recovery and public activation
-remain separate work. No state-service reserve/complete/query peer or existing
-bootstrap profile is widened here.
+remain separate work. Existing state-service reserve/complete/lookup peers are
+unchanged; the new v4 head-only peer does not acquire those permissions.

@@ -31,11 +31,15 @@ COMPLETE_REQUEST_MAGIC = b"SWCDCP01"
 RESPONSE_MAGIC = b"SWCDOK01"
 QUERY_REQUEST_MAGIC = b"SWCDQR01"
 OBSERVATION_RESPONSE_MAGIC = b"SWCDST01"
+HEAD_QUERY_REQUEST_MAGIC = b"SWCHQR01"
+HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWCHST01"
 REQUEST_MAGICS = (RESERVE_REQUEST_MAGIC, COMPLETE_REQUEST_MAGIC)
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 16 * 1024
 MAX_QUERY_BYTES = 4 * 1024
 MAX_OBSERVATION_BYTES = 32 * 1024
+MAX_HEAD_QUERY_BYTES = 4 * 1024
+MAX_HEAD_OBSERVATION_BYTES = 8 * 1024
 _ACTIONS = ("reserve", "complete")
 _NANOSECONDS = 1_000_000_000
 
@@ -118,11 +122,34 @@ def _send_observation(connection, observation_bytes, *, deadline_ns):
     _check_deadline(deadline_ns)
 
 
+def _recv_head_query(connection, *, prefix, deadline_ns):
+    """Receive only after the fixed activation-planner peer was admitted."""
+    if type(prefix) is not bytes or prefix != HEAD_QUERY_REQUEST_MAGIC:
+        raise AuthorityTransportError("current-root head query magic is invalid")
+    length = int.from_bytes(io._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big")
+    if not 2 <= length <= MAX_HEAD_QUERY_BYTES:
+        raise AuthorityTransportError("current-root head query length exceeds its source bound")
+    query = io._recv_exact_until(connection, length, deadline_ns=deadline_ns)
+    io._require_eof(connection, deadline_ns)
+    return query
+
+
+def _send_head_observation(connection, observation_bytes, *, deadline_ns):
+    observation = _original(observation_bytes, MAX_HEAD_OBSERVATION_BYTES, "head observation")
+    header = HEAD_OBSERVATION_RESPONSE_MAGIC + len(observation).to_bytes(8, "big")
+    io._send_exact_until(connection, header, deadline_ns=deadline_ns)
+    io._send_exact_until(connection, observation, deadline_ns=deadline_ns)
+    _check_deadline(deadline_ns)
+
+
 def _socket_exchange(config, *, purpose, original_bytes, deadline_ns):
     configured = _validate_configuration(config)
     if type(purpose) is str and purpose == "query":
         magic, maximum = QUERY_REQUEST_MAGIC, MAX_QUERY_BYTES
         response_magic, response_maximum = OBSERVATION_RESPONSE_MAGIC, MAX_OBSERVATION_BYTES
+    elif type(purpose) is str and purpose == "head":
+        magic, maximum = HEAD_QUERY_REQUEST_MAGIC, MAX_HEAD_QUERY_BYTES
+        response_magic, response_maximum = HEAD_OBSERVATION_RESPONSE_MAGIC, MAX_HEAD_OBSERVATION_BYTES
     else:
         magic, maximum = _action(purpose), MAX_REQUEST_BYTES
         response_magic, response_maximum = RESPONSE_MAGIC, MAX_RECEIPT_BYTES
@@ -177,6 +204,12 @@ def _exchange_on_configuration(config, *, action, request_bytes, deadline_ns):
 
 def _lookup_on_configuration(config, *, query_bytes, deadline_ns):
     return _socket_exchange(config, purpose="query",
+        original_bytes=query_bytes, deadline_ns=deadline_ns)
+
+
+def _head_on_configuration(config, *, query_bytes, deadline_ns):
+    """Return only unverified head originals, never a decision or legacy lookup."""
+    return _socket_exchange(config, purpose="head",
         original_bytes=query_bytes, deadline_ns=deadline_ns)
 
 

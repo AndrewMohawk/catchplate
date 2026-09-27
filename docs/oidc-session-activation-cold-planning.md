@@ -1,15 +1,16 @@
 # Root-original-bound activation planning
 
 [`authority_oidc_session_activation_cold_planning.py`](../serverware/authority_oidc_session_activation_cold_planning.py)
-connects an independently root-authenticated launch snapshot to the actual
-[activation plan owner](oidc-session-activation-plan.md). This is source-only,
-unbuilt and unexecuted. A signed launch vector is **not** an off-host latest-state
-observation, and no root-state service peer or currentness bypass is added.
+connects independently root-authenticated launch originals and a fresh signed
+no-pending head to the actual [activation plan owner](oidc-session-activation-plan.md).
+This is source-only, unbuilt and unexecuted. A launch vector alone is **not** a
+latest-state observation; the separate head exchange is mandatory.
 
 ## Complete-vector projection
 
 `_project_on_work(*, vector_bytes, expected_vector_digest, work)` accepts exact
-original bytes, not an alleged validated vector. The real complete-vector
+original bytes, not an alleged validated vector. It delegates to the fixed
+`authority_oidc_session_activation_state` projection. The real complete-vector
 decoder checks canonical encoding, schema/source revision, every source
 manifest, the complete primary/counted inventory, projection identities, and
 revision/count/empty-root relationships. The actual domain-framed digest must
@@ -60,16 +61,40 @@ the actual journal's directory device/inode/UID/GID, record limit and byte
 quota must match the launch. The actual owner performs the private/public
 planner key-pair check during genuine plan production.
 
+The owner's mandatory 21-field configuration also retains the exact enrolled
+state original, independent state root key and complete-vector original. These
+must match this invocation's genuine v2 bootstrap admission. No v1 bootstrap,
+material object or 18-field owner is a fallback.
+
 The complete original vector and digest come only from that authenticated
 bootstrap. The request supplies neither roots, keys nor policy. Its subject
 selectors and original pending token/assertion still undergo the real row,
 fresh-key, trust and RBAC proof replay; selection alone is not permission.
 
-The helper calls the real class `prepare` with the projected expectations.
+Before planning, the helper constructs the same exact fifteen-field subject,
+policy and deadline scope as the owner. A domain-framed context binds that scope,
+original assertion, pending token and complete vector. A charged callback obtains
+a new 32-byte random challenge; the fixed query also binds the actual enrollment
+identity and expected vector digest. One exchange with the root-pinned state
+endpoint uses the inherited monotonic deadline, peer admission, half-close and
+exact EOF; query and observation caps are 4 KiB and 8 KiB.
+
+The actual [head verifier](authority-current-root-head.md) authenticates the
+original state signature and query joins. Activation admission additionally
+requires the exact vector, live original interval and null pending request/
+decision pair. No response field supplies an independent expected head or vector.
+State v4 grants planner UID 65507 only this head-observation operation, not reserve,
+completion or historical lookup. Access to the state socket still needs separately
+provisioned DAC/ACL permission.
+
+The helper calls the real class `prepare` with the projected expectations and
+unchanged `head_query_bytes`/`head_observation_bytes` originals.
 It returns only the actual token-free `PreparedActivationPlan`: request,
 scope and signed-envelope originals plus plan and local journal locators.
 The genuine owner performs same-snapshot acquisition, indexed replay,
-signing and [encrypted private-original retention](oidc-session-activation-journal.md).
+signing and [encrypted private-original retention](oidc-session-activation-journal.md),
+including the enrolled state/vector/query/observation originals. Producer and
+retained-original verification repeat genuine head admission.
 No successful transition carrier is accepted in place of any original.
 
 ## Lifetime and remaining boundaries
@@ -78,18 +103,21 @@ The request window must fit the original signed launch interval and configured
 plan policy. The inherited monotonic deadline can only narrow; the helper
 opens no replacement work allowance or live window. Original bootstrap
 brackets, sticky epoch/monotonic checks, owner-configuration continuity and
-the actual signed plan expiry remain enforced through the final return.
+the actual signed plan expiry remain enforced through the final return. The
+plan expiry cannot exceed the original observation expiry, which is rechecked
+after durable retention; neither a query nor a signature renews the window.
 Failure after retention does not prove that no record exists and never grants
 automatic retry permission.
 
 The cold owner must retain the actual bootstrap/root-key originals; bootstrap
-material also preserves the complete-vector bytes and digest. Projected roots
+material also preserves complete-vector and state-enrollment bytes and digests. Projected roots
 and encrypted plan storage are not substitutes for those launch originals or
 automatic archival of independent historical authority.
 
-Root-provisioned launch authority is local-snapshot authority only. Independent
-latest-state/currentness and index-population admission, provisioning and host
-isolation, activation reservation/protected execution, completion, token
+The fresh signed head is a bounded sampled observation, not a linearizable
+reservation, malicious-host rollback defense or action-time execution guarantee.
+Actual database proof acquisition must still match the independent complete
+vector. Provisioning and host isolation, activation reservation/protected execution, completion, token
 delivery/recovery and public/portal orchestration remain distinct requirements.
 Sampled local clocks and successful cleanup are not watchdog or malicious-host
 guarantees. No build, test, database call or runtime verification was performed.

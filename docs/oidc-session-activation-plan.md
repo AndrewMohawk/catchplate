@@ -10,8 +10,8 @@ activation. No build, cryptographic execution or runtime verification is claimed
 
 [`authority_oidc_session_activation_plan_contract.py`](../serverware/authority_oidc_session_activation_plan_contract.py)
 defines the closed payload
-`serverware.policyAuthorityOidcSessionActivationPlan/v1` and the three-field
-envelope `serverware.signedPolicyAuthorityOidcSessionActivationPlan/v1`:
+`serverware.policyAuthorityOidcSessionActivationPlan/v2` and the three-field
+envelope `serverware.signedPolicyAuthorityOidcSessionActivationPlan/v2`:
 `schema`, `payload`, `signatureBase64Url`.
 
 The exact 22 payload fields contain only fixed source metadata, bounded
@@ -47,7 +47,7 @@ parse or admit the detached bodies.
 The domain-separated body identities are
 `serverware.policyAuthorityOidcSessionActivationProof/v1`,
 `serverware.policyAuthorityOidcSessionActivationContext/v1`,
-`serverware.policyAuthorityOidcSessionActivationPrivateInputs/v1` and
+`serverware.policyAuthorityOidcSessionActivationPrivateInputs/v2` and
 `serverware.policyAuthorityOidcSessionActivationTransition/v1`. The last commits
 the exact canonical indexed-transition original from the genuine
 [write replay](oidc-session-activation-writes.md): fixed source/request identity,
@@ -58,8 +58,8 @@ the real audit-capacity query/mutation work, not a separate duplicated allowance
 ## Signing, privacy and same-call replay boundary
 
 The distinct signing domain is
-`serverware.policyAuthorityOidcSessionActivationPlanSignature/v1`; the envelope
-identity domain is `serverware.policyAuthorityOidcSessionActivationPlanIdentity/v1`.
+`serverware.policyAuthorityOidcSessionActivationPlanSignature/v2`; the envelope
+identity domain is `serverware.policyAuthorityOidcSessionActivationPlanIdentity/v2`.
 The actual producer must bind the real independently enrolled planner public
 key/SPKI and private-key pair, perform genuine original replay, then use the
 existing metered Ed25519 sign-and-verify primitive over the domain-framed
@@ -102,6 +102,8 @@ implements `_produce_on_work` and `_verify_on_work`. Both take the exact
 old/new token bytes, ciphertext and private custody key, primary/range proofs
 and independent roots, required `write_proof_bytes` and
 `expected_counted_heads`, actual planner key, and existing work/window/deadline.
+V2 also requires `state_enrollment_bytes`, `state_root_public_key`,
+`complete_root_vector_bytes`, `head_query_bytes` and `head_observation_bytes`.
 The head input is an exact tuple of thirteen closed dictionaries with
 `indexId`, `indexRevision`, `rootDigest` and `leafCount` in source-fixed order.
 Neither call accepts a successful replay carrier or caller-computed transition.
@@ -113,6 +115,40 @@ The independent scope is exactly `userId`, `sessionId`, `credentialId`,
 operation digests are genuinely recomputed and joined to the owned context.
 All raw graphs and exact immutable originals are held before native callbacks.
 This captures independently supplied expectations; it does not enroll them.
+
+## Original planning-state admission
+
+V2 requires the separate [nonce-bound head observation](authority-current-root-head.md),
+not a completion-recovery lookup or a root-signed launch snapshot alone.
+[`authority_oidc_session_activation_state.py`](../serverware/authority_oidc_session_activation_state.py)
+binds the exact fifteen-field scope, assertion, old token and complete vector to
+the query's context digest. The actual cold caller generates a fresh 32-byte
+challenge; neither a supplied nonce nor a successful observation object can
+replace that exchange. Root enrollment, state signature, query commitment and
+vector identity are genuinely reverified by both plan production and receiving
+verification. Either pending-state field being non-null prevents planning.
+
+The full source/manifests/vector inventory is decoded before projecting roots.
+The actual semantic replay inputs must equal its business/authorization roots
+and all thirteen counted heads. A signed unrelated vector or a copied head
+subset cannot supply these expectations. The four exact originals—enrollment,
+complete vector, head query and signed observation—each contribute a distinct
+digest/count entry in the v2 private-input body, alongside assertion, old/new
+tokens and delivery envelope. The independent state root key is never serialized.
+
+Plan expiry and its live guard are bounded by the original observation expiry,
+in addition to the request window, inherited deadline and selected row lifetimes.
+Retained verification repeats the same original observation within that interval;
+it neither generates another challenge nor claims a newly observed head. V1 plans
+lacking these commitments are not admitted as v2. Source/configuration migration
+and expired-history authority remain separate work.
+
+This is an observation of the enrolled, independently admitted local state owner.
+It does not reserve that head, make the host rollback-resistant or authorize SQL.
+State may change after observation: action-time rechecking and atomic one-use
+execution remain mandatory, as do independently operated production witnesses.
+
+## Retained read inputs
 
 `_capture` holds the exact immutable write bytes and detaches the independent
 head dictionaries alongside every other caller graph before native callbacks.
@@ -132,9 +168,9 @@ proof originals and independent scope. `writeProofBase64Url` binds the exact
 write original into the proof body; the context body binds the independent
 thirteen before-heads. Base64 allocation is bounded first, and both producer
 and verifier enforce the four detached bodies' aggregate 64 MiB ceiling.
-The input body contains only four domain-separated digest/count pairs derived
-from the assertion, old token, new
-token and ciphertext; it has no token or key serialization. The actual
+The input body contains eight domain-separated digest/count pairs derived
+from the assertion, old token, new token, ciphertext and four state originals;
+it has no token or key serialization. The actual
 `authority_oidc_session_activation_writes._replay_on_work` derives the full
 six-mutation transition, reconstructs twelve indexed write frontiers and all
 primary after-roots, and preserves the read-only publication head in the full
@@ -154,7 +190,7 @@ cannot substitute for this replay. No caller can supply derived after-roots.
 
 Both calls keep the supplied work and original dual-clock window, including
 the inherited earlier monotonic deadline. The plan expiry is clipped to the
-original invocation, configured age, provider/session/pending-session,
+original observation, invocation, configured age, provider/session/pending-session,
 challenge and delivery intervals. Sticky liveness checks bracket signing and
 verification and run again before return. After genuine write replay, both
 paths retain that same call's `live` closure and `valid_until_epoch_ns`; signing

@@ -210,6 +210,7 @@ class OidcSessionActivationPlanOwner:
             expected_planner_identity, expected_planner_spki_digest, configuration_digest,
             delivery_custody_key, journal, rp_id, origin, authn_policy, trust_policy,
             maximum_plan_age_ns, maximum_clock_skew_ns, delivery_ttl_seconds,
+            state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
             live_window, work, transport_deadline_ns=None):
         ledger = evidence.capture._SharedLedger(work)
         if (type(read_planner) is not planning.OidcSessionActivationReadPlanner
@@ -218,6 +219,11 @@ class OidcSessionActivationPlanOwner:
                 or not isinstance(planner_public_key, evidence.keys.Ed25519PublicKey)
                 or type(delivery_custody_key) is not bytes or len(delivery_custody_key) != 32):
             _fail("activation plan owner requires actual configured owners and independent keys")
+        enrolled = plan.state._original(state_enrollment_bytes,
+            plan.state.head.authorization.MAX_ENROLLMENT_BYTES, "enrollment")
+        root_key = state_root_public_key
+        plan.state.head.authorization._public(root_key)
+        vector_bytes = plan.state._original(complete_root_vector_bytes, plan.state.vector.MAX_BYTES, "complete vector")
         owned = assertion._Capture(ledger, maximum_bytes=assertion.MAX_CONTEXT_BYTES).visit({
             "identity": expected_planner_identity, "spki": expected_planner_spki_digest,
             "configuration": configuration_digest, "rpId": rp_id, "origin": origin,
@@ -251,11 +257,19 @@ class OidcSessionActivationPlanOwner:
             _fail("activation owner/journal/read configuration does not join")
         evidence.keys._public_binding(planner_public_key, owned["spki"], work)
         evidence.keys._pair_on_work(planner_private_key, planner_public_key, work)
+        material = plan.state.head.authorization._admit_enrollment_on_work(
+            enrollment_bytes=enrolled, root_public_key=root_key, work=work)
+        plan.state.vector._decode_on_work(vector_bytes, work=work)
+        # Cold bootstrap joins these independent pins to configuration/database.
+        # This constructor cannot learn or replace them from an observation.
+        for role in ("state", "computation", "completion"):
+            if material.payload[role]["spkiDigest"] == owned["spki"]:
+                _fail("activation planner key overlaps an enrolled state-purpose key")
         configured = (contract.authority.SOURCE_REVISION, read_planner, read_config, journal, journal_config,
             planner_private_key, planner_public_key, tuple(owned["identity"][name] for name in _IDENTITY_FIELDS),
             owned["spki"], owned["configuration"], delivery_custody_key, owned["rpId"], owned["origin"],
             registration._wire(owned["policy"], work), registration._wire(owned["trust"], work),
-            owned["age"], owned["skew"], owned["ttl"])
+            owned["age"], owned["skew"], owned["ttl"], enrolled, root_key, vector_bytes)
         object.__setattr__(self, "_configured", configured)
         object.__setattr__(self, "_seal", configured)
         object.__setattr__(self, "_pid", os.getpid())
@@ -267,7 +281,7 @@ class OidcSessionActivationPlanOwner:
     def _snapshot_configuration(self):
         if (type(self) is not OidcSessionActivationPlanOwner or self._closed or self._pid != os.getpid()
                 or type(self._lock) is not _LOCK_TYPE or type(self._configured) is not tuple
-                or self._configured is not self._seal or len(self._configured) != 18):
+                or self._configured is not self._seal or len(self._configured) != 21):
             _fail("activation plan owner is closed, changed or belongs to another process")
         configured = self._configured
         if (configured[0] != contract.authority.SOURCE_REVISION
@@ -290,6 +304,7 @@ class OidcSessionActivationPlanOwner:
     def prepare(self, *, assertion_bytes, old_token_bytes, expected_user_id, expected_session_id,
             expected_credential_id, expected_credential_record_id, expected_challenge_id,
             business_before_roots, authorization_before_roots, expected_counted_heads,
+            head_query_bytes, head_observation_bytes,
             live_window, work, transport_deadline_ns):
         configured = OidcSessionActivationPlanOwner._snapshot_configuration(self)
         lock = self._lock
@@ -298,6 +313,8 @@ class OidcSessionActivationPlanOwner:
         try:
             if type(assertion_bytes) is not bytes or not 2 <= len(assertion_bytes) <= assertion.MAX_ASSERTION_BYTES:
                 _fail("activation preparation requires a bounded original assertion")
+            query_bytes = plan.state._original(head_query_bytes, plan.state.head.MAX_QUERY_BYTES, "head query")
+            observation_bytes = plan.state._original(head_observation_bytes, plan.state.head.MAX_BYTES, "head observation")
             old = assertion._token(old_token_bytes, work)
             subject = dict(zip(_SUBJECT_FIELDS, (expected_user_id, expected_session_id, expected_credential_id,
                 expected_credential_record_id, expected_challenge_id)))
@@ -308,6 +325,13 @@ class OidcSessionActivationPlanOwner:
             check()
             subject = owned["values"]
             scope = {**subject, **_fixed_scope(configured, work), "deadlineEpochNs": window[3]}
+            state_payload = plan.state._verify_on_work(scope=scope, assertion_bytes=assertion_bytes,
+                old_token_bytes=old, complete_root_vector_bytes=configured[20],
+                query_bytes=query_bytes, observation_bytes=observation_bytes,
+                enrollment_bytes=configured[18], root_public_key=configured[19],
+                now_epoch_ns=check(), work=work)
+            if check() >= state_payload["expiresAtEpochNs"]:
+                _fail("activation observation expired before plan acquisition")
             new = delivery._new_token_on_work(live_window=window, work=work, transport_deadline_ns=bound)
             request = _request(subject, assertion_bytes, old, new, configured[17], work)
             acquired = planning.OidcSessionActivationReadPlanner.acquire_transition(configured[1], request=request,
@@ -329,6 +353,9 @@ class OidcSessionActivationPlanOwner:
                 "authorization_before_roots": owned["authorization"], "before_proofs": acquired.before_proofs,
                 "read_heads": acquired.read_heads, "query_frontiers": acquired.query_frontiers,
                 "expected_counted_heads": owned["heads"], "write_proof_bytes": write_bytes,
+                "state_enrollment_bytes": configured[18], "state_root_public_key": configured[19],
+                "complete_root_vector_bytes": configured[20], "head_query_bytes": query_bytes,
+                "head_observation_bytes": observation_bytes,
                 "live_window": window, "work": work, "transport_deadline_ns": bound}
             envelope = plan._produce_on_work(context, **arguments,
                 planner_private_key=configured[5], planner_public_key=configured[6])
@@ -342,6 +369,10 @@ class OidcSessionActivationPlanOwner:
                 "assertionBase64Url": _b64(assertion_bytes, work), "oldTokenBase64Url": _b64(old, work),
                 "newTokenBase64Url": _b64(new, work), "deliveryEnvelopeBase64Url": _b64(acquired.delivery_envelope_bytes, work),
                 "readInputs": plan._read_inputs(invocation, work), "writeProofBase64Url": _b64(write_bytes, work),
+                "headQueryBase64Url": _b64(query_bytes, work),
+                "headObservationBase64Url": _b64(observation_bytes, work),
+                "stateEnrollmentBase64Url": _b64(configured[18], work),
+                "completeRootVectorBase64Url": _b64(configured[20], work),
                 "planEnvelopeBase64Url": _b64(envelope, work)}
             original = custody._encode_original_on_work(document, scope=journal_scope, work=work)
             if check() >= payload["expiresAtEpochNs"]:
@@ -403,6 +434,13 @@ class OidcSessionActivationPlanOwner:
             delivery_bytes = registration._encoded_original(stored["deliveryEnvelopeBase64Url"], delivery.ENVELOPE_BYTES,
                 work, minimum=delivery.ENVELOPE_BYTES)
             write_bytes = registration._encoded_original(stored["writeProofBase64Url"], writes.MAX_WRITE_PROOF_BYTES, work)
+            query_bytes = registration._encoded_original(stored["headQueryBase64Url"], plan.state.head.MAX_QUERY_BYTES, work)
+            observation_bytes = registration._encoded_original(stored["headObservationBase64Url"], plan.state.head.MAX_BYTES, work)
+            enrolled = registration._encoded_original(stored["stateEnrollmentBase64Url"],
+                plan.state.head.authorization.MAX_ENROLLMENT_BYTES, work)
+            vector_bytes = registration._encoded_original(stored["completeRootVectorBase64Url"], plan.state.vector.MAX_BYTES, work)
+            _bytes_equal(enrolled, configured[18], work, "independently configured state enrollment")
+            _bytes_equal(vector_bytes, configured[20], work, "independently configured complete vector")
             check()
             actual = plan._verify_on_work(context, envelope_bytes=envelope_bytes, request=request, scope=scope,
                 assertion_bytes=original_assertion, old_token_bytes=old, new_token_bytes=new,
@@ -410,6 +448,9 @@ class OidcSessionActivationPlanOwner:
                 business_before_roots=owned["business"], authorization_before_roots=owned["authorization"],
                 before_proofs=proofs, read_heads=heads, query_frontiers=frontiers, expected_counted_heads=owned["heads"],
                 write_proof_bytes=write_bytes, planner_public_key=configured[6], live_window=window,
+                state_enrollment_bytes=configured[18], state_root_public_key=configured[19],
+                complete_root_vector_bytes=configured[20], head_query_bytes=query_bytes,
+                head_observation_bytes=observation_bytes,
                 work=work, transport_deadline_ns=bound)
             if check() >= payload["expiresAtEpochNs"]:
                 _fail("activation retained plan expired before return")

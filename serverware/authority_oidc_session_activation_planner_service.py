@@ -295,7 +295,10 @@ def initialize_from_environment():
                 delivery_custody_key=delivery_key, journal=journal, rp_id=material.rp_id, origin=material.origin,
                 authn_policy=material.authn_policy, trust_policy=material.trust_policy,
                 maximum_plan_age_ns=material.maximum_plan_age_ns, maximum_clock_skew_ns=material.maximum_clock_skew_ns,
-                delivery_ttl_seconds=material.delivery_ttl_seconds, live_window=window, work=work, transport_deadline_ns=bound)
+                delivery_ttl_seconds=material.delivery_ttl_seconds,
+                state_enrollment_bytes=material.state_enrollment_bytes, state_root_public_key=root,
+                complete_root_vector_bytes=material.complete_root_vector_bytes,
+                live_window=window, work=work, transport_deadline_ns=bound)
             final_sample = bootstrap._fresh(material.attestation_interval, work, opening=material.opening_sample)
             owner = object.__new__(_PlannerOwner)
             owner._material, owner._root, owner._bootstrap_bytes = material, root, bootstrap_raw

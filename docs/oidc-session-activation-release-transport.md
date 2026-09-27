@@ -36,7 +36,10 @@ The only response is raw2 under `SWORRS01`: a canonical 71-byte ASCII
 entire exact ordered request, including its purpose, under
 `serverware.oidcSessionActivationReleaseTransportRequestIdentity/v1`.
 The client checks the echo, but echo, framing and local peer credentials are
-**not independent response authentication**. Component 16.4 remains separate.
+**not independent response authentication**. The separate
+[original-consuming response verifier](oidc-session-activation-release-response.md)
+checks the returned token against fresh client authority and independently pinned
+originals; this framing helper does not perform those checks.
 
 Both headers and the maximum response are reserved in the whole-exchange
 calculation before request bodies: live is at most 164,263 bytes and recovery
@@ -106,5 +109,7 @@ The old token and successful response are secret bytes on this private local
 exchange; they must not enter logs, exception messages or public response
 wrappers. The store's existing exact outcome survives late uncertainty. This
 transport supplies no signer, history key, AES key, SQL authority, fresh
-allowance, recovery permission or public/portal handoff. Independent receiving
-verification and the authorized private caller composition remain later work.
+allowance, recovery permission or public/portal handoff. Receiving verification
+is a separate original-consuming component. The authorized private caller must
+still connect it to actual admission, transport and uncertainty handling (16.5);
+having a verifier does not establish that handoff.

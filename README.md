@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -41,19 +43,20 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
 defines each scope and its dependencies. Open items can already contain partial code.
 
-### Now building: consume authorization and issuance
+### Consume authorization and issuance
 
-**10/12 substeps landed · 1 in progress · 1 open.** This zooms into the active
+**11/12 substeps landed · 0 in progress · 1 open.** This zooms into the active
 token-release task so smaller source milestones are visible before that task closes.
 
-[![Consume authorization and issuance: 01 dedicated authorizer enrollment, 02 post-plan caller control and 03 encrypted-original format landed in f6dd3cb. 04 durable ciphertext storage, 05 verified retained export, 06 root-controlled key/store delivery, 07 cold planner connection and 08 private export service landed in 0ef6024. 09 receiving-purpose custody and 10 independent original replay landed in b3c9a58. 11 grant issuance and verification is in progress; 12 cold grant service is open. Ten landed, one in progress, one open; row 11 itself remains in progress. Source only, not production verification.](docs/images/consume-authorization-progress.svg)](docs/production-status.md#consume-authorization-substeps)
+[![Consume authorization and issuance: 01–03 landed in f6dd3cb, 04–08 in 0ef6024, 09–10 in b3c9a58 and 11 grant issuance and verification in 4b421e2. 12 isolated cold grant service is next and open. Eleven landed, zero in progress, one open; enclosing token-release row 11 remains in progress. Source only, not production verification.](docs/images/consume-authorization-progress.svg)](docs/production-status.md#consume-authorization-substeps)
 
-**Active A11 detail — 0/5 landed · 1 in progress · 4 open.**
+**A11 source detail — 5/5 landed · 0 in progress · 0 open.**
 
-[![Consume-grant issuance detail inside A11: A11.1 wire/signature contract is in progress, authored but uncommitted. A11.2 caller/root admission plus replay-derived claims is next and open. A11.3 grant production, A11.4 independent grant verification and A11.5 source integration, inventory and consumer join are open. Zero landed, one in progress, four open. These five components add no completed parent work; source only, not tested or running.](docs/images/consume-grant-progress.svg)](docs/production-status.md#consume-grant-issuance-detail)
+[![Consume-grant issuance detail inside A11: wire/signature contract, caller/root admission and replay-derived claims, grant production, independent grant verification, and source integration with inventory and consumer joins all landed in 4b421e2. Five landed, zero in progress, zero open. These nested components are not additional parent completions; source only, not tested or running.](docs/images/consume-grant-progress.svg)](docs/production-status.md#consume-grant-issuance-detail)
 
-**Now:** A11.1 wire/signature contract. **Next:** A11.2 caller/root admission and
-replay-derived claims. No actual consume grant is issued yet; A12 cold service stays open.
+**Landed:** genuine grant production and independent verification in
+[4b421e2](https://github.com/example/private-deployment).
+**Next:** A12 isolated grant key/FD delivery and cold service. No runtime grant or service is demonstrated.
 
 The [12-substep checklist](docs/production-status.md#consume-authorization-substeps)
 and [five-part A11 detail](docs/production-status.md#consume-grant-issuance-detail)
@@ -76,11 +79,11 @@ are still open. The full activation workflow remains **19/26 landed**.
 
 **OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 10 landed, 1 in progress and 5 other open. Row 11 has committed authorization foundations, private encrypted export and independent receiving replay, not completed issuance. Its twelve substeps show ten landed, grant issuance/verification in progress and cold grant service open. A11 has five finer components: zero landed, one in progress and four open. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 10 landed, 1 in progress and 5 other open. Row 11 has eleven of twelve substeps landed, including genuine grant production and independent verification; cold grant service remains open. A11 has five of five source components landed. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 **Protected token release — 10/16 landed; 1 in progress and 5 other open.**
 
-[![Protected token release: units 01–10 landed, 11 consume authorization and issuance in progress, 12–16 open. Unit 11 is expanded above into 12 substeps: 10 landed, 1 in progress and 1 open. The active A11 detail has zero of five components landed, one in progress and four open. Source counts only.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![Protected token release: units 01–10 landed, 11 consume authorization and issuance in progress, 12–16 open. Unit 11 is expanded above into 12 substeps: 11 landed, zero in progress and one open. A11 has five of five components landed; A12 cold grant service is next and open. Source counts only.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).

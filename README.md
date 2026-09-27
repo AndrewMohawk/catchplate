@@ -28,36 +28,34 @@ activation (1), workload/native integration (3), and providers/operations (7).
 The [remaining-work breakdown](docs/production-status.md#remaining-work-breakdown)
 names each scope. Landed source does not imply current executability: the
 [shared execution replay inventory](docs/production-status.md#current-integration-boundary)
-now includes activation and dedicated cold grant, reserve and SQL roles in
-committed source. Completion/recovery, token release and public/portal activation
+now includes activation and dedicated cold grant, reserve, SQL and completion
+roles in committed source. Protected token release and public/portal activation
 remain open.
 
 <details>
 <summary>All 46 source checkpoints and the nested milestone bars</summary>
 
-[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 18/26 finer steps shown below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Full source tracker: evidence handoff 10/10, historical recovery 4/5, permissions and grants 10/10, finalization and sessions 7/8, workloads and native 3/6, providers and operations 0/7. F08 is in progress: 3/6 direct children landed, with 19/26 finer steps shown below. Child counts do not add to the 46 parents. Source-only, not production verification.](docs/images/implementation-progress.svg)](docs/production-status.md#next-source-milestones)
 
 </details>
 
-**OIDC session activation — 18/26 detailed source steps landed; 8 unfinished.**
-✓ Landed · → In progress (1) · — Other open (7).
+**OIDC session activation — 19/26 detailed source steps landed; 7 open.**
+✓ Landed (19) · N Next (1) · — Other open (6).
 
-[![OIDC activation: steps 01–18 landed, 19 completion and historical reconciliation in progress, and 20–26 open. Step 19 has landed historical replay and a private completion/recovery library. Next within 19: dedicated cold completion key/readers/TLS/journal/service wiring, signed state-peer admission and response/receiving integration. Generic activation completion still rejects. Private replay/custody remains 8/8 source components inside step 15, not extra tasks. No token release or public activation is claimed. Source-only; parent progress 34/46 and production acceptance 0/6.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, 20 protected token release NEXT/open, and 21–26 open. Step 19 contains five source-landed diagnostic components: historical replay, custody/recovery library, cold keys/readers/TLS/service, signed state peer and original response receiving. These do not add steps; no leaf is marked active. Private replay remains 8/8 inside step 15. Generic activation completion APIs remain rejected; the dedicated path requires historical custody. Source-only, not current session state, token release or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).
 Grouping milestones are not counted twice; these 26 steps all belong to F08.
 Counts are not effort percentages or an ETA.
 
-[The SQL source batch](https://github.com/example/private-deployment)
-closes **private replay/custody (8/8 components)**, **independent pending admission**
-and **one-use protected SQL**. **Step 19 remains in progress:** historical replay
-is [landed](https://github.com/example/private-deployment);
-the [private completion/recovery library](docs/oidc-session-activation-completion-recovery.md)
-is [source-landed](https://github.com/example/private-deployment). **Next within 19:**
-cold completion key/readers/TLS/journal/service wiring, signed state-peer admission
-and response/receiving integration. Generic completion still rejects; token release
-and public/portal activation remain open. No current-session guarantee is claimed.
+**Step 19 source-landed:** ✓ Historical replay · ✓ Custody/recovery library ·
+✓ Cold keys/readers/TLS/service · ✓ Signed state peer · ✓ Original response receiving.
+The [completion batch](https://github.com/example/private-deployment) and
+[five-part evidence ledger](docs/production-status.md#completion-detail-f084e6)
+name each scope without adding tasks. **NEXT: step 20, protected one-use token
+release**; public/portal activation follows. No current-session guarantee or
+production verification is claimed.
 
 Full verification follows source freeze. Immutable dependencies and independently
 operated signing, Nitro/KMS and witness services remain prerequisites; the

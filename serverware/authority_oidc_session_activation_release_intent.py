@@ -1,8 +1,9 @@
-"""Fresh original release intent and possession, never committed release proof.
+"""Original release intent and possession, never committed release proof.
 
 Actual root enrollment and caller signatures are checked against independent
 scope. The five consumption identities remain expected bindings, not evidence
-of SQL, completion or current session state. No AES key or token opening occurs.
+of SQL, completion or current session state. The distinct historical entrypoint
+authenticates evidence only, never present permission. No token opening occurs.
 """
 from __future__ import annotations
 
@@ -38,6 +39,14 @@ def _fail(message):
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
 class _AdmittedIntent:
     """Ordinary output only; no API accepts it as release authority."""
+    payload: dict
+    intent_digest: str
+    live: object
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalIntentEvidence:
+    """Original evidence only; current guard does not renew caller permission."""
     payload: dict
     intent_digest: str
     live: object
@@ -191,7 +200,8 @@ def _admit(held, work):
     return enrolled, current, narrow, created, expires, window
 
 
-def _verify_original(held, original, enrolled, current, narrow, created, delivery_expiry, work):
+def _authenticate_original(held, original, enrolled, current, created, delivery_expiry, work):
+    """Shared original signature, exact bindings and original interval algebra."""
     current()
     envelope = contract._read(original, work)
     current()
@@ -211,6 +221,12 @@ def _verify_original(held, original, enrolled, current, narrow, created, deliver
     issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
     if expires > delivery_expiry or issued + skew < created:
         _fail("release intent escapes the original delivery interval")
+    return payload, age, skew, issued, expires
+
+
+def _verify_original(held, original, enrolled, current, narrow, created, delivery_expiry, work):
+    payload, age, skew, issued, expires = _authenticate_original(held, original,
+        enrolled, current, created, delivery_expiry, work)
     narrow(expires, age, skew)
     # Keep the guard's lifetime private and detached from the ordinary mutable
     # output payload. Mutating returned diagnostics cannot renew authority.
@@ -242,6 +258,41 @@ def _verify_on_work(*, intent_bytes, enrollment_bytes, root_public_key, forbidde
         _fail("release intent requires its actual signed original")
     enrolled, current, narrow, created, expires, _window = _admit(held, work)
     return _verify_original(held, held.intent, enrolled, current, narrow, created, expires, work)
+
+
+def _verify_historical_on_work(*, intent_bytes, enrollment_bytes, root_public_key,
+        forbidden_public_keys, expected_scope, expected_release, old_token_bytes,
+        live_window, transport_deadline_ns, work):
+    """Authenticate old intent evidence and current possession, not permission.
+
+    A separate fresh root recovery purpose must admit the unchanged outcome.
+    Original intent expiry/age are authenticated algebra, never a replacement
+    processing clock or current deadline. Delivery itself must remain live.
+    """
+    held = _hold(intent_bytes=intent_bytes, enrollment_bytes=enrollment_bytes,
+        root_public_key=root_public_key, forbidden_public_keys=forbidden_public_keys,
+        expected_scope=expected_scope, expected_release=expected_release, old_token_bytes=old_token_bytes,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+    if held.intent is None:
+        _fail("historical release intent requires its actual signed original")
+    enrolled, current, _narrow, created, delivery_expiry, _window = _admit(held, work)
+    payload, _age, original_skew, issued, _expires = _authenticate_original(
+        held, held.intent, enrolled, current, created, delivery_expiry, work)
+    processing_skew = min(original_skew, held.window[6])
+
+    def live():
+        now = current()
+        if (issued > now + processing_skew or created > now + processing_skew
+                or now >= delivery_expiry):
+            _fail("historical release intent evidence or live delivery is future-dated or expired")
+        return now
+
+    live()
+    identity = contract._digest(held.intent, work)
+    live()
+    owned = contract._capture(payload, work)
+    live()
+    return _HistoricalIntentEvidence(owned, identity, live)
 
 
 def _produce_on_work(*, enrollment_bytes, root_public_key, forbidden_public_keys,

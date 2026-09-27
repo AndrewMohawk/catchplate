@@ -239,6 +239,59 @@ def _verify_on_work(*, custody_bytes, root_public_key, live_window, transport_de
         raise OidcSessionActivationReleaseCustodyBootstrapError("activation release custody admission failed") from exc
 
 
+def _verify_historical_on_work(*, custody_bytes, root_public_key, live_window,
+        transport_deadline_ns, work):
+    """Authenticate old root custody as data, never as renewed release authority.
+
+    The original outer interval remains unchanged and need not still be live.
+    The supplied current processing allowance and original delivery expiry
+    bound these checks; a separate fresh recovery purpose must authorize
+    any later use. The real opening sample is not a renewed outer launch.
+    """
+    try:
+        original = authorization._original(custody_bytes, MAX_BYTES,
+            "historical activation release custody")
+        root = root_public_key
+        authorization._public(root)
+        window = clock._validate(live_window)
+        shape._integer(transport_deadline_ns, minimum=1)
+        deadline = min(window[4], transport_deadline_ns)
+        current = planner_bootstrap._processing(window, deadline, work)
+        current()
+        envelope = _decode(original, work)
+        shape._object(envelope, _ENVELOPE_FIELDS, "signed historical activation release custody")
+        shape._literal(envelope["schema"], SCHEMA)
+        shape._base64url(envelope["signatureBase64Url"], signature=True)
+        if type(envelope["payload"]) is not dict:
+            _fail("historical activation release custody payload is not an exact object")
+        _canonical(original, envelope, work)
+        payload = envelope["payload"]
+        unsigned = _wire(payload, work)
+        current()
+        capability._signature(root, envelope["signatureBase64Url"], SCHEMA, unsigned,
+            capture._SharedLedger(work))
+        current()
+        _canonical(original, envelope, work)
+        _payload_shape(payload, work)
+        # Match historical planner admission: actual present time, no future
+        # issue and no freshness call or backdated clock for the old interval.
+        if payload["issuedAtEpochNs"] > current():
+            _fail("historical activation release custody is future-issued")
+        opening = clock._sample_on_work(work)
+        current()
+        # The shared material path genuinely admits the original planner,
+        # preserves key/configuration joins and still rejects expired delivery.
+        result = _material(payload, original, root, window, deadline, opening, work, current)
+        _canonical(original, envelope, work)
+        current()
+        return result
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, OidcSessionActivationReleaseCustodyBootstrapError):
+            raise
+        raise OidcSessionActivationReleaseCustodyBootstrapError(
+            "historical activation release custody admission failed") from exc
+
+
 def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
         transport_deadline_ns, work):
     """Sign independent custody pins; do not manufacture verified intent/proof."""

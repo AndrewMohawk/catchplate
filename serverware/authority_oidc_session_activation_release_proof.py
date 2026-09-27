@@ -4,6 +4,8 @@ The caller must genuinely admit fresh intent and old-token possession in the
 same composition. This verifier authenticates a distinct root-enrolled proof
 against independent bindings; it neither replays history nor accepts a proof
 result object, historical keys, a signer, SQL or a plaintext-opening callback.
+The separate historical entrypoint authenticates old evidence under current
+processing and live delivery bounds, never present release permission.
 """
 from __future__ import annotations
 
@@ -37,6 +39,14 @@ def _fail(message):
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
 class _AdmittedProof:
     """Ordinary same-call output; no entrypoint accepts it as authority."""
+    payload: dict
+    proof_digest: str
+    live: object
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalProofEvidence:
+    """Original evidence only; current guard does not renew the signed proof."""
     payload: dict
     proof_digest: str
     live: object
@@ -184,6 +194,35 @@ def _release(held, current, work):
     return created, expires
 
 
+def _authenticate_original(held, enrolled, current, created, delivery_expiry, skew, work):
+    """Shared exact signature/bindings and algebra, never a freshness bypass."""
+    policy = enrolled.payload
+    age = policy["maximumAgeNs"]
+    intent_issued, intent_expires = held.intent_interval
+    envelope = contract._read(held.proof, work)
+    current()
+    contract._signature(envelope, enrolled.proof_public_key, work)
+    current()
+    payload = envelope["payload"]
+    for fields, expected in ((SCOPE_FIELDS, held.scope), (RELEASE_FIELDS, held.release),
+            (EVIDENCE_FIELDS, held.evidence)):
+        for name in fields:
+            plan._same(payload[name], expected[name], work, "release proof independent " + name)
+    plan._same(payload["enrollmentDigest"], enrolled.enrollment_digest, work,
+        "release proof original producer enrollment")
+    measurement = policy["proofKey"]["measurementDigest"]
+    plan._same(payload["producerMeasurementDigest"], measurement, work,
+        "release proof enrolled producer measurement")
+    plan._same(measurement, held.scope["producerIdentity"]["measurementDigest"], work,
+        "release proof independent producer measurement")
+    authorization._interval(payload, age)
+    issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
+    if (expires > min(intent_expires, delivery_expiry) or issued >= intent_expires
+            or issued + skew < intent_issued or issued + skew < created):
+        _fail("release proof escapes the original intent/delivery interval")
+    return payload, issued, expires
+
+
 def _verify_on_work(*, proof_bytes, enrollment_bytes, root_public_key, forbidden_public_keys,
         expected_scope, expected_release, expected_evidence, expected_intent_interval,
         live_window, transport_deadline_ns, work):
@@ -207,27 +246,8 @@ def _verify_on_work(*, proof_bytes, enrollment_bytes, root_public_key, forbidden
     now = current()
     if created > now + skew or intent_issued > now + skew or now >= min(delivery_expiry, intent_expires):
         _fail("release proof delivery or original intent is future-dated or expired")
-    envelope = contract._read(held.proof, work)
-    current()
-    contract._signature(envelope, enrolled.proof_public_key, work)
-    current()
-    payload = envelope["payload"]
-    for fields, expected in ((SCOPE_FIELDS, held.scope), (RELEASE_FIELDS, held.release),
-            (EVIDENCE_FIELDS, held.evidence)):
-        for name in fields:
-            plan._same(payload[name], expected[name], work, "release proof independent " + name)
-    plan._same(payload["enrollmentDigest"], enrolled.enrollment_digest, work,
-        "release proof original producer enrollment")
-    measurement = policy["proofKey"]["measurementDigest"]
-    plan._same(payload["producerMeasurementDigest"], measurement, work,
-        "release proof enrolled producer measurement")
-    plan._same(measurement, held.scope["producerIdentity"]["measurementDigest"], work,
-        "release proof independent producer measurement")
-    authorization._interval(payload, age)
-    issued, expires = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
-    if (expires > min(intent_expires, delivery_expiry) or issued >= intent_expires
-            or issued + skew < intent_issued or issued + skew < created):
-        _fail("release proof escapes the original intent/delivery interval")
+    payload, issued, expires = _authenticate_original(held, enrolled, current,
+        created, delivery_expiry, skew, work)
     narrow(expires, age, skew)
     # The live closure retains private immutable lifetime scalars, not the
     # returned mutable diagnostics; changing output cannot extend its guard.
@@ -246,3 +266,50 @@ def _verify_on_work(*, proof_bytes, enrollment_bytes, root_public_key, forbidden
     owned = contract._capture(payload, work)
     live()
     return _AdmittedProof(owned, digest, live)
+
+
+def _verify_historical_on_work(*, proof_bytes, enrollment_bytes, root_public_key,
+        forbidden_public_keys, expected_scope, expected_release, expected_evidence,
+        expected_intent_interval, live_window, transport_deadline_ns, work):
+    """Authenticate original proof evidence, not a fresh intent or permission.
+
+    The surrounding recovery composition genuinely admits the original intent,
+    current old-token possession and a separate fresh root recovery purpose.
+    Expired intent/proof intervals never clip or renew this processing window.
+    """
+    held = _hold(proof_bytes=proof_bytes, enrollment_bytes=enrollment_bytes,
+        root_public_key=root_public_key, forbidden_public_keys=forbidden_public_keys,
+        expected_scope=expected_scope, expected_release=expected_release, expected_evidence=expected_evidence,
+        expected_intent_interval=expected_intent_interval, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work)
+    current, narrow = _clock(held, work)
+    current()
+    enrolled = enrollments._admit_on_work(enrollment_bytes=held.enrollment,
+        root_public_key=held.root, expected_scope=held.scope,
+        forbidden_public_keys=held.forbidden, work=work)
+    current()
+    created, delivery_expiry = _release(held, current, work)
+    policy = enrolled.payload
+    age, original_skew = policy["maximumAgeNs"], policy["maximumClockSkewNs"]
+    processing_skew = min(original_skew, held.window[6])
+    intent_issued, _intent_expires = held.intent_interval
+    narrow(delivery_expiry, age, processing_skew)
+    now = current()
+    if created > now + processing_skew or intent_issued > now + processing_skew or now >= delivery_expiry:
+        _fail("historical release proof evidence or live delivery is future-dated or expired")
+    payload, issued, _expires = _authenticate_original(held, enrolled, current,
+        created, delivery_expiry, original_skew, work)
+
+    def live():
+        now = current()
+        if (issued > now + processing_skew or intent_issued > now + processing_skew
+                or created > now + processing_skew or now >= delivery_expiry):
+            _fail("historical release proof evidence or live delivery is no longer current")
+        return now
+
+    live()
+    digest = contract._digest(held.proof, work)
+    live()
+    owned = contract._capture(payload, work)
+    live()
+    return _HistoricalProofEvidence(owned, digest, live)

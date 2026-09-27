@@ -69,6 +69,29 @@ before callbacks, checks genuine original/key joins, and signs/verifies under
 the new domain. Returned material is ordinary owned data, never accepted as an
 authority input.
 
+### Historical custody originals for separate recovery
+
+The distinct `.176` source seam is
+`_verify_historical_on_work(*, custody_bytes, root_public_key, live_window,
+transport_deadline_ns, work)`. It verifies the exact old root signature,
+canonical closed source/purpose grammar, original bounded interval and genuine
+planner/configuration/key provenance under the supplied current processing
+allowance. Future-issued originals are rejected. The old outer may be expired,
+but its expiry is never changed; the actual delivery must still be unexpired.
+The unchanged live verifier continues to require its original outer interval.
+
+The returned `_ReleaseCustodyMaterial` is ordinary data. Its
+`attestation_interval` remains the old signed tuple and `opening_sample` is a
+real current processing sample, not evidence that the old outer is live. This
+path never applies `_fresh` or `_launch_guard` to the historical outer and never
+opens a new allowance. It grants no recovery, consume execution or token-opening
+permission. A separate fresh recovery purpose must independently bind the old
+custody identity, delivery key/target and existing exact one-record outcome;
+historical material cannot substitute for that authority. This seam is
+source-only, unbuilt and unexecuted.
+
+### Live custody owner
+
 `OidcSessionActivationReleaseCustody` requires original custody bytes, the root
 key, independently expected receiver identity, an exact 32-byte delivery key and
 the caller's current window/work/deadline. It binds exact class/PID/UID/GID,

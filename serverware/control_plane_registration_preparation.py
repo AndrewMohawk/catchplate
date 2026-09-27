@@ -20,6 +20,9 @@ admission; they either return verified original raw10 in memory or retain it
 under its distinct local record format together with the exact signer exchange
 and a last-published association. Storage does not renew the original verification
 window or establish a reservation, delivery attempt or SQL effect.
+The separate reserve facade is reached only after the public reserve action's
+own present-caller admission and can establish an authenticated reservation
+acknowledgment, never SQL execution, current-head authority or finalization.
 """
 from __future__ import annotations
 
@@ -297,8 +300,9 @@ def prepare_and_reserve_registration_execution(originals):
     """Private new-purpose preparation through one genuine reservation exchange.
 
     The actual application must separately authenticate the present caller and
-    permission to reserve; existing public grant-only handlers do not call this
-    entrypoint. Nested-v2 cold scope is mandatory before preparation starts.
+    permission to reserve; only the separate reserve handlers call this
+    entrypoint, not existing public grant-only preparation handlers. Nested-v2
+    cold scope is mandatory before preparation starts.
     One work allowance and the original preparation window cover the exchange.
 
     Retain the exact signer/grant association before sending a reserve. Append

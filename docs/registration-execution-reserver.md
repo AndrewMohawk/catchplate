@@ -3,7 +3,8 @@
 This source-only service composes the existing [reservation producer and
 durable delivery owner](registration-execution-reservation.md) for the fixed
 `webauthn.registration.evidence.admit` operation. It is unbuilt and unexecuted;
-packaging is not installation or deployment. No public caller is activated.
+packaging is not installation or deployment. The separately authorized public
+reserve actions have source wiring, not a provisioned or running deployment.
 It does not execute SQL, finalize a credential or return a current-head lease.
 
 ## Fixed identities and cold authority
@@ -146,11 +147,11 @@ remains a separate prerequisite.
 ## Remaining integration
 
 Root/key/FD/account/socket/ACL/journal provisioning and independent checkpoint
-admission remain external. Source packaging is uninstalled, and the public
-preparation handlers are not connected to this reserver by this slice.
-The [opt-in private control-plane handoff](control-plane-registration-reservation.md)
-now composes complete preparation retention, one reserve exchange and genuine
-raw3 verification under one original work/window. It requires nested caller
+admission remain external. Source packaging is uninstalled. The new
+[explicit public reserve actions](control-plane-registration-reservation.md#public-reserve-endpoints)
+use the opt-in control-plane handoff; existing grant-preparation handlers do not
+reserve. The handoff composes complete preparation retention, one reserve
+exchange and genuine raw3 verification under one original work/window. It requires nested caller
 scope v2 and independent predecessor pins; nested v1 and public preparation
 behavior stay unchanged. Returned acknowledgment is not a current-head lease.
 Protected SQL issuance/execution, completion and credential finalization still

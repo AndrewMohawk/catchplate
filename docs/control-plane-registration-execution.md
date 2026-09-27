@@ -126,7 +126,7 @@ No browser input or environment override selects the destination.
 
 An explicit nested `serverware.controlPlaneRegistrationExecution/v2` adds
 `reserverEndpoint` and independent `statePredecessor` to those six fields.
-It opts into the separate [private reservation handoff](control-plane-registration-reservation.md),
+It opts into the separate [reservation handoff and explicit reserve actions](control-plane-registration-reservation.md),
 without changing parent v3, FD203 or these public grant-preparation handlers.
 Nested v1 remains authorizer-only; no automatic upgrade or reserve send occurs.
 
@@ -304,14 +304,16 @@ now provide the source path from authenticated grant originals to an original
 state acknowledgment. The [cold reserver](registration-execution-reserver.md)
 composes them under independent root/key/checkpoint admission. It is not wired
 into these preparation handlers and supplies no SQL/finalization authority.
-The opt-in [private reservation facade](control-plane-registration-reservation.md)
-can now retain the complete preparation and verify a real raw3 response; no
-existing public handler calls it, and an authentic acknowledgment is not an
-independently current pending-head authority.
+The separate [public reserve endpoints](control-plane-registration-reservation.md#public-reserve-endpoints)
+now call the opt-in reservation facade after their own reserve-purpose admission.
+They retain the complete preparation and verify a real raw3 response; these
+grant-preparation routes remain unchanged. An authentic acknowledgment is not
+an independently current pending-head authority.
 
 The new endpoints provide API-only grant preparation, not the later public
-execution action or a complete operator UI workflow. Public reservation/current-root
-admission, protected execution and finalization orchestration remain open.
+execution action or a complete operator UI workflow. The separate reserve
+action is API-only; action-time current-root admission, protected execution
+and finalization orchestration remain open.
 Independent key/account/FD/listener
 provisioning, admitted immutable runtime/release closure, rollback and witness
 requirements, and consolidated frozen-source verification also remain open.

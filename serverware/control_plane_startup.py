@@ -160,6 +160,8 @@ def validate_control_plane_configuration() -> None:
     # evidence-only v2 and an explicitly disabled owner keep the old action set.
     if enrollment_owner is not None and enrollment_owner.execution_enabled:
         required_actions.add("webauthn.registration.execution.prepare")
+    if enrollment_owner is not None and enrollment_owner.reservation_enabled:
+        required_actions.add("webauthn.registration.execution.reserve")
     if "*" not in configured_actions and not required_actions.issubset(
         configured_actions
     ):

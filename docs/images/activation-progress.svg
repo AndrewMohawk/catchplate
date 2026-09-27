@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="818" viewBox="0 0 1000 818" role="img" aria-labelledby="activation-title activation-description">
-  <title id="activation-title">OIDC activation: 21 of 26 source steps landed; 0 active and 5 open; step 21 is source-landed in d3f846916e121b18d57e9979c700aaa1000d4969; step 22 is NEXT/open, not active. Step 20 has 5/5 diagnostic groups and 16/16 detail units landed.</title>
-  <desc id="activation-description">Steps 01–21 are source-landed, step 20 protected token release is source-landed and step 21 is source-landed in d3f846916e121b18d57e9979c700aaa1000d4969; step 22 is NEXT/open, not active; steps 22–26 remain open. Step 19 retains five landed diagnostic components. Step 20 has 5/5 groups landed: current proofs/possession/effects, metadata-only key custody, the protected consume pipeline, exact committed-original release and cold handoff. Detail is 16/16 landed, 0 in progress and 0 open. Row 14 completion/recovery and its six source components are landed; group c is 12/12 landed. Row 15 exact committed-original release is source-landed (6/6): fresh private authorization 15.1 landed c26c9e783b203f14f11505719af80bea2ad7fc8d; committed-original verification 15.2 landed b7be5cbdf2ef75eda606b025032943dc0812bcb9; completion-to-release proof 15.3 landed 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0; durable exact outcome 15.4 landed 73a7f82b7aacdb5f4e323715ccde1c264330d81a; guarded token opening 15.5 landed 5e5ca4050686f9003ec8fd35c6e189531e9d61a3; uncertain-outcome recovery 15.6 landed e49e14ec3039448af9f84bd0f21b20539046adba; 16.1 root bootstrap and key delivery is source-landed in e6fa55c4160fe8058b04583e165d3253315419d1; 16.2 isolated cold service and 16.3 bounded private transport are source-landed in 4097896b3d0eabd735a7deb711b5c884b7c98363; 16.4 independent response verifier is source-landed in abce0bb6f70ef9eb87d980ca9f0fd788fb6e3fb0; 16.5 authorized private handoff is source-landed in 5719d50b9d05de6420286ac52a4ac3fc285c83c0; row 16 cold handoff is source-landed. Release/handoff diagnostics are 11/11 landed, 0 active and 0 open; row 15 is 6/6 landed and row 16 is 5/5 landed, 0 active and 0 open. Authorization stays 12/12, grant detail 5/5 and SQL diagnostics 6/6, with criterion and commit evidence in the linked ledger. Nested counts are nonadditive; landed source is not runtime evidence. Execution is 7/7, private replay 8/8, project 34/46 and production acceptance 0/6 verified. Source is unbuilt, unexecuted and unprovisioned. Guarded opening and finite private transport are source-landed; no deployed/public delivery or current-session claim.</desc>
+  <title id="activation-title">OIDC activation: 21 of 26 source steps landed; 1 active and 4 other open; step 21 is source-landed in d3f846916e121b18d57e9979c700aaa1000d4969; step 22 is ACTIVE in uncommitted .182 source. Step 20 has 5/5 diagnostic groups and 16/16 detail units landed.</title>
+  <desc id="activation-description">Steps 01–21 are source-landed, step 20 protected token release is source-landed and step 21 is source-landed in d3f846916e121b18d57e9979c700aaa1000d4969; step 22 is ACTIVE in uncommitted .182 source; step 22 is active; steps 23–26 remain open. Step 19 retains five landed diagnostic components. Step 20 has 5/5 groups landed: current proofs/possession/effects, metadata-only key custody, the protected consume pipeline, exact committed-original release and cold handoff. Detail is 16/16 landed, 0 in progress and 0 open. Row 14 completion/recovery and its six source components are landed; group c is 12/12 landed. Row 15 exact committed-original release is source-landed (6/6): fresh private authorization 15.1 landed c26c9e783b203f14f11505719af80bea2ad7fc8d; committed-original verification 15.2 landed b7be5cbdf2ef75eda606b025032943dc0812bcb9; completion-to-release proof 15.3 landed 8d915515dd7296ef0f73bc5afe56e0d8db8f06f0; durable exact outcome 15.4 landed 73a7f82b7aacdb5f4e323715ccde1c264330d81a; guarded token opening 15.5 landed 5e5ca4050686f9003ec8fd35c6e189531e9d61a3; uncertain-outcome recovery 15.6 landed e49e14ec3039448af9f84bd0f21b20539046adba; 16.1 root bootstrap and key delivery is source-landed in e6fa55c4160fe8058b04583e165d3253315419d1; 16.2 isolated cold service and 16.3 bounded private transport are source-landed in 4097896b3d0eabd735a7deb711b5c884b7c98363; 16.4 independent response verifier is source-landed in abce0bb6f70ef9eb87d980ca9f0fd788fb6e3fb0; 16.5 authorized private handoff is source-landed in 5719d50b9d05de6420286ac52a4ac3fc285c83c0; row 16 cold handoff is source-landed. Release/handoff diagnostics are 11/11 landed, 0 active and 0 open; row 15 is 6/6 landed and row 16 is 5/5 landed, 0 active and 0 open. Authorization stays 12/12, grant detail 5/5 and SQL diagnostics 6/6, with criterion and commit evidence in the linked ledger. Nested counts are nonadditive; landed source is not runtime evidence. Execution is 7/7, private replay 8/8, project 34/46 and production acceptance 0/6 verified. Source is unbuilt, unexecuted and unprovisioned. Guarded opening and finite private transport are source-landed; no deployed/public delivery or current-session claim.</desc>
   <rect x="1" y="1" width="998" height="816" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">OIDC activation · granular source workflow</text>
     <text x="24" y="71" fill="#6ee7b7" font-size="23" font-weight="700">21 / 26 landed</text>
-    <text x="235" y="70" fill="#cbd5e1" font-size="17">0 in progress · 5 open · step 22 NEXT, not active</text>
+    <text x="235" y="70" fill="#cbd5e1" font-size="17">1 in progress · 4 open · step 22 ACTIVE (uncommitted)</text>
     <text x="24" y="95" fill="#94a3b8" font-size="14">Fixed tracked steps · full names, closure criteria and commit evidence in the linked ledger</text>
     <g font-size="12" font-weight="700" text-anchor="middle">
       <g fill="#34d399">
@@ -32,7 +32,7 @@
         <rect x="672" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>19 · F08.4e.6 · Completion and historical reconciliation · LANDED · f59e050079e89d98d982a082a05dd619e09fa9e7. Five diagnostic components remain inside this leaf; no token release or current-session claim.</title></rect>
         <rect x="708" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>20 · F08.4e.7 · Protected token release · LANDED · 5/5 groups; detail 16/16 landed, 0 in progress and 0 open. Row 14 completion/recovery landed; group c 12/12. Row 15 source-landed (6/6), 15.1 fresh private authorization landed c26c9e7; 15.2 committed-original verification landed b7be5cb; 15.3 completion-to-release proof landed 8d91551; 15.4 durable exact outcome landed 73a7f82; 15.5 guarded token opening landed 5e5ca40; 15.6 uncertain-outcome recovery landed e49e14e; 16.1 root bootstrap/key delivery LANDED e6fa55c; 16.2 cold service and 16.3 private transport LANDED 4097896; 16.4 response verifier LANDED abce0bb; 16.5 authorized private handoff LANDED 5719d50; row 16 cold handoff source-landed. Private transport source only, not deployed/public delivery.</title></rect>
         <rect x="744" y="112" width="32" height="44" rx="5" fill="#34d399" stroke="none"><title>21 · F08.5.1 · Target-bound permission · LANDED · d3f846916e121b18d57e9979c700aaa1000d4969</title></rect>
-        <rect x="780" y="112" width="32" height="44" rx="5" fill="#172554" stroke="#60a5fa" stroke-width="2"><title>22 · F08.5.2 · Public activation dispatch · NEXT / OPEN</title></rect>
+        <rect x="780" y="112" width="32" height="44" rx="5" fill="#422006" stroke="#fbbf24" stroke-width="2"><title>22 · F08.5.2 · Public activation dispatch · ACTIVE / UNCOMMITTED</title></rect>
         <rect x="816" y="112" width="32" height="44" rx="5"><title>23 · F08.5.3 · Public recovery dispatch · OPEN</title></rect>
         <rect x="852" y="112" width="32" height="44" rx="5"><title>24 · F08.6.1 · Explicit portal actions · OPEN</title></rect>
         <rect x="888" y="112" width="32" height="44" rx="5"><title>25 · F08.6.2 · Fresh portal permission · OPEN</title></rect>
@@ -54,17 +54,17 @@
       <g fill="#e2e8f0">
         <text x="580" y="131" fill="#052e26">16</text><text x="616" y="131" fill="#052e26">17</text><text x="652" y="131" fill="#052e26">18</text>
         <text x="688" y="131" fill="#052e26">19</text><text x="724" y="131" fill="#052e26">20</text><text x="760" y="131" fill="#052e26">21</text>
-        <text x="796" y="131" fill="#bfdbfe">22</text><text x="832" y="131">23</text><text x="868" y="131">24</text>
+        <text x="796" y="131" fill="#fde68a">22</text><text x="832" y="131">23</text><text x="868" y="131">24</text>
         <text x="904" y="131">25</text><text x="940" y="131">26</text>
         <text x="580" y="148" fill="#052e26">✓</text><text x="616" y="148" fill="#052e26">✓</text><text x="652" y="148" fill="#052e26">✓</text>
         <text x="688" y="148" fill="#052e26">✓</text><text x="724" y="148" fill="#052e26">✓</text><text x="760" y="148" fill="#052e26">✓</text>
-        <text x="796" y="148" fill="#bfdbfe">N</text><text x="832" y="148">—</text><text x="868" y="148">—</text>
+        <text x="796" y="148" fill="#fde68a">~</text><text x="832" y="148">—</text><text x="868" y="148">—</text>
         <text x="904" y="148">—</text><text x="940" y="148">—</text>
       </g>
     </g>
     <g font-size="13" font-weight="700">
       <text x="24" y="181" fill="#6ee7b7">✓ LANDED · 01–21</text>
-      <text x="365" y="181" fill="#93c5fd">N NEXT / OPEN · 22</text>
+      <text x="365" y="181" fill="#fbbf24">~ ACTIVE · 22</text>
       <text x="757" y="181" fill="#cbd5e1">— OPEN · 23–26</text>
     </g>
     <rect x="24" y="203" width="952" height="366" rx="12" fill="#172033" stroke="#475569"/>
@@ -92,7 +92,7 @@
       <text x="514" y="378">19</text><text x="550" y="378">Completion and reconciliation</text>
       <text x="514" y="402" fill="#6ee7b7">20</text><text x="550" y="402" fill="#6ee7b7">Protected token release</text>
       <text x="514" y="426" fill="#6ee7b7">21</text><text x="550" y="426" fill="#6ee7b7">Target-bound permission</text>
-      <text x="514" y="450" fill="#93c5fd">22</text><text x="550" y="450" fill="#93c5fd">Public activation dispatch</text>
+      <text x="514" y="450" fill="#fbbf24">22</text><text x="550" y="450" fill="#fbbf24">Public activation dispatch</text>
       <text x="514" y="474">23</text><text x="550" y="474">Public recovery dispatch</text>
       <text x="514" y="498">24</text><text x="550" y="498">Explicit portal actions</text>
       <text x="514" y="522">25</text><text x="550" y="522">Fresh portal permission</text>
@@ -111,7 +111,7 @@
       <text x="888" y="354">✓ LANDED</text>
       <text x="888" y="378">✓ LANDED</text>
       <text x="888" y="402" fill="#6ee7b7">✓ LANDED</text><text x="888" y="426" fill="#6ee7b7">✓ LANDED</text>
-      <text x="878" y="450" fill="#93c5fd">N NEXT</text><text x="888" y="474" fill="#cbd5e1">— OPEN</text>
+      <text x="878" y="450" fill="#fbbf24">~ ACTIVE</text><text x="888" y="474" fill="#cbd5e1">— OPEN</text>
       <text x="888" y="498" fill="#cbd5e1">— OPEN</text><text x="888" y="522" fill="#cbd5e1">— OPEN</text>
       <text x="888" y="546" fill="#cbd5e1">— OPEN</text>
     </g>
@@ -147,7 +147,7 @@
       <text x="884" y="711" fill="#d1fae5">✓ e · Cold handoff</text>
     </g>
     <text x="24" y="744" fill="#cbd5e1" font-size="14">Step 20 detail: 16/16 landed · 0 in progress · 0 open · group c 12/12 · groups 5/5</text>
-    <a href="../production-status.md#public-actions-f085"><text x="24" y="770" fill="#93c5fd" font-size="14">LANDED 21 permission · d3f8469 · NEXT 22 public activation</text></a>
+    <a href="../production-status.md#public-actions-f085"><text x="24" y="770" fill="#fbbf24" font-size="14">LANDED 21 permission · d3f8469 · ACTIVE 22 public activation · .182 uncommitted</text></a>
     <text x="24" y="797" fill="#94a3b8" font-size="14">Source-only · unbuilt / unexecuted / unprovisioned · parent 34/46 · production verified 0/6</text>
   </g>
 </svg>

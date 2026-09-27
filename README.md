@@ -25,18 +25,22 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 ### Current workflow: session activation
 
-**21/26 source steps landed · 0 active · 5 todo.** Fresh target-bound permission
+**21/26 source steps landed · 1 active · 4 todo.** Fresh target-bound permission
 is source-landed in [d3f8469](https://github.com/example/private-deployment).
-Next is step 22: connect explicit public activation dispatch.
+Active: step 22, public activation dispatch (.182 composition uncommitted).
+The post-permission planner connection, token-free pre-planner claim and
+original authorization are underway. The [claim foundation](https://github.com/example/private-deployment)
+is committed, but no public dispatch endpoint or downstream execution/token/cookie
+flow is connected yet.
 
-[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch NEXT/todo; 23–26 recovery and portal work todo. Twenty-one landed, zero active and five todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch active in uncommitted .182 source; 23–26 recovery and portal work todo. Twenty-one landed, one active and four todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Public and portal checkpoints remain individually tracked:
 
 | Step / stable ID | Deliverable | Status |
 | --- | --- | --- |
 | 21 · F08.5.1 | Authorize the exact user/session/credential target, with fresh approval and dedicated caller-key custody | Landed · [d3f8469](https://github.com/example/private-deployment) |
-| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | Next / todo |
+| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | In progress · uncommitted |
 | 23 · F08.5.3 | Connect separately authorized recovery; a missing response never permits automatic activation retry | Todo |
 | 24 · F08.6.1 | Add explicit portal activate/recover controls bound to the exact retained target | Todo |
 | 25 · F08.6.2 | Require fresh action-bound portal approval; discard prompts when actor or target changes | Todo |

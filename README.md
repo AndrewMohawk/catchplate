@@ -23,11 +23,11 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-- **Landed:** cold registration reservation service and separate signer-original
-  storage ([0efea27](https://github.com/example/private-deployment));
-  neither is activated by a public execution route.
+- **Landed:** grant preparation now durably retains and links its exact signer
+  originals ([b626a6f](https://github.com/example/private-deployment)),
+  with explicit recovery rules for partial writes.
 - **Next:** connect the public execution handoff, protected one-use SQL and
-  completion recovery; persist and associate signer originals during preparation.
+  completion recovery, then separately authorized credential finalization.
   Full verification follows implementation and source freeze; current source is
   unbuilt and unexecuted.
 - **External prerequisites:** an immutable dependency snapshot and independently

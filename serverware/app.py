@@ -3196,7 +3196,8 @@ def _pending_oidc_session_for_request(request: Request, *, fresh: bool = False) 
 
 @app.post("/api/auth/session/webauthn/options")
 def operator_session_webauthn_options(request: Request) -> dict[str, Any]:
-    _, session = _pending_oidc_session_for_request(request)
+    _require_registration_execution_session_csrf(request)
+    _, session = _pending_oidc_session_for_request(request, fresh=True)
     try:
         options = oidc_session_binding_options(
             session_id=str(session["id"]),
@@ -3395,7 +3396,7 @@ def _require_registration_execution_session_csrf(request: Request) -> None:
     if (not cookie or len(cookie) > 1024 or len(headers) != 1
             or not headers[0] or len(headers[0]) > 1024
             or not hmac.compare_digest(cookie.encode("utf-8"), headers[0].encode("utf-8"))):
-        raise HTTPException(status_code=403, detail="CSRF token required for pending-session execution preparation")
+        raise HTTPException(status_code=403, detail="CSRF token required for pending-session action")
 
 
 def _require_registration_execution_bootstrap_branch(
@@ -3834,6 +3835,9 @@ def operator_session_webauthn_recovery_verify(
 def operator_session_webauthn_verify(
     payload: OIDCSessionWebAuthnVerify, request: Request, response: Response
 ) -> dict[str, Any]:
+    # This action always uses the browser cookie, even when another valid
+    # authentication header would bypass generic middleware CSRF admission.
+    _require_registration_execution_session_csrf(request)
     try:
         assertion_binding = oidc_session_assertion_binding(payload.response)
     except WebAuthnError as exc:
@@ -3842,11 +3846,13 @@ def operator_session_webauthn_verify(
     if not token:
         raise HTTPException(status_code=401, detail="OIDC browser session required")
     try:
-        session = oidc_browser_session_for_request(request)
-    except (OIDCAuthError, OIDCAuthoritativeStateError) as exc:
+        session = oidc_browser_session_from_token(token)
+    except OIDCAuthoritativeStateError as exc:
+        raise HTTPException(status_code=503, detail="OIDC browser session state is unavailable") from exc
+    except OIDCAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     if session is not None and session.get("status") == "pending_webauthn":
-        _, session = _pending_oidc_session_for_request(request)
+        _, session = _pending_oidc_session_for_request(request, fresh=True)
         active_token = secrets.token_urlsafe(48)
         try:
             evidence = verify_oidc_session_binding_assertion(
@@ -3888,7 +3894,28 @@ def operator_session_webauthn_verify(
         raise HTTPException(
             status_code=409, detail="OIDC browser session is not awaiting WebAuthn"
         )
-    active_expires_at = datetime.fromisoformat(str(evidence["session"]["expires_at"]))
+    # A committed transaction or retained delivery does not override current
+    # credential trust or authoritative roles. Re-read the rotated session and
+    # admit its actual active identity before releasing its cookie. This is a
+    # local delivery check, not external currentness or protected F08 execution.
+    try:
+        active_session = oidc_browser_session_from_token(active_token)
+        active_identity = (None if active_session is None
+            else oidc_identity_from_browser_session(active_session))
+        if (active_identity is None
+                or active_identity.auth_method != "oidc-session"
+                or active_identity.user_id != evidence["session"]["user_id"]
+                or active_session["id"] != evidence["session"]["id"]
+                or active_session.get("bound_webauthn_credential_id")
+                    != evidence["session"].get("bound_webauthn_credential_id")):
+            raise OIDCAuthError("OIDC browser session delivery scope changed")
+    except (OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError) as exc:
+        raise HTTPException(status_code=503, detail={
+            "error": "oidc_session_activation_delivery_unavailable",
+            "message": "Activation may have committed; current session delivery is unavailable",
+            "automaticRetryAllowed": False,
+        }) from exc
+    active_expires_at = datetime.fromisoformat(str(active_session["expires_at"]))
     active_max_age = max(
         1, int((active_expires_at - datetime.now(timezone.utc)).total_seconds())
     )
@@ -21674,10 +21701,37 @@ UI_HTML = r"""
       return false;
     }
 
+    let oidcSessionActivationBusy = false;
+    let oidcSessionStatusUnknown = false;
+
+    function oidcSessionActivationIsActive(status) {
+      return status?.authenticated === true && status.sessionState === 'active'
+        && status.authMethod === 'oidc-session';
+    }
+
+    function markOIDCSessionStatusUnknown() {
+      oidcSessionStatusUnknown = true;
+      state.authStatus = null;
+      renderAuthStatus();
+    }
+
     async function fetchAuthStatus() {
       const response = await fetch('/api/auth/status', {credentials: 'same-origin', cache: 'no-store'});
       if (!response.ok) throw new Error(`Authentication status failed with ${response.status}`);
-      state.authStatus = await response.json();
+      const status = await response.json();
+      if (!status || typeof status !== 'object' || Array.isArray(status)
+          || typeof status.authenticated !== 'boolean'
+          || ![null, 'pending_webauthn', 'active'].includes(status.sessionState)
+          || ![null, 'oidc-session'].includes(status.authMethod)
+          || !(status.userId === null || (typeof status.userId === 'string' && status.userId.length > 0))
+          || !Array.isArray(status.roles) || !status.roles.every(role => typeof role === 'string')
+          || typeof status.webauthnRequired !== 'boolean'
+          || typeof status.oidcBrowserLoginConfigured !== 'boolean'
+          || (status.authenticated && (!oidcSessionActivationIsActive(status) || status.userId === null))) {
+        throw new Error('Authentication status response is invalid');
+      }
+      state.authStatus = status;
+      oidcSessionStatusUnknown = false;
       renderAuthStatus();
       return state.authStatus;
     }
@@ -21687,7 +21741,9 @@ UI_HTML = r"""
       const pendingWebAuthn = Boolean(state.authStatus?.webauthnRequired);
       const hasBrowserSession = ['pending_webauthn', 'active'].includes(state.authStatus?.sessionState);
       const tokenAuthenticated = Boolean(adminToken());
-      const label = authenticated
+      const label = oidcSessionStatusUnknown
+        ? 'Session state unknown'
+        : authenticated
         ? state.authStatus.userId
         : pendingWebAuthn
           ? 'Passkey required'
@@ -21695,9 +21751,24 @@ UI_HTML = r"""
           ? 'Token session'
           : 'Signed out';
       $('operator-auth-status').textContent = label;
-      $('operator-auth-status').className = authenticated || tokenAuthenticated ? 'pill good' : 'pill warn';
+      $('operator-auth-status').className = !oidcSessionStatusUnknown && (authenticated || tokenAuthenticated) ? 'pill good' : 'pill warn';
       $('operator-sign-in').hidden = hasBrowserSession || tokenAuthenticated || !state.authStatus?.oidcBrowserLoginConfigured;
       $('operator-session-verify').hidden = !pendingWebAuthn;
+      $('operator-session-verify').disabled = oidcSessionActivationBusy;
+      let statusRefresh = $('operator-session-status-refresh');
+      if (!statusRefresh) {
+        statusRefresh = document.createElement('button');
+        statusRefresh.id = 'operator-session-status-refresh';
+        statusRefresh.type = 'button';
+        statusRefresh.className = 'secondary';
+        statusRefresh.textContent = 'Refresh session status';
+        statusRefresh.addEventListener('click', async () => {
+          try { await refreshOIDCSessionActivationStatus(); }
+          catch (error) { setStatus(error.message, 'error'); }
+        });
+        $('operator-session-verify').insertAdjacentElement('afterend', statusRefresh);
+      }
+      statusRefresh.disabled = oidcSessionActivationBusy;
       $('operator-sign-out').hidden = !hasBrowserSession;
       $('admin-token').hidden = authenticated;
       syncCustodyAuth();
@@ -21732,56 +21803,98 @@ UI_HTML = r"""
       return payload;
     }
 
-    async function verifyOIDCSessionPasskey() {
-      if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');
-      let options;
+    async function refreshOIDCSessionActivationStatus() {
+      if (oidcSessionActivationBusy) throw new Error('A session action is already in progress. No additional request was sent.');
+      oidcSessionActivationBusy = true;
+      renderAuthStatus();
       try {
-        options = await sessionApi('/api/auth/session/webauthn/options');
-      } catch (error) {
-        const detail = error instanceof ApiError ? error.detail : null;
-        if (
-          error.status !== 409
-          || detail?.error !== 'oidc_session_webauthn_unavailable'
-        ) throw error;
-        if (detail.firstEnrollmentAvailable) {
-          await enrollFirstOIDCSessionPasskey(Boolean(detail.bootstrapRequired));
-        } else if (detail.offlineRevocationAvailable) {
+        let status;
+        try { status = await fetchAuthStatus(); }
+        catch (_) {
+          markOIDCSessionStatusUnknown();
+          throw new Error('Session activation outcome unknown: current server status is unavailable or invalid. Use Refresh session status again; no verification request was repeated.');
+        }
+        if (oidcSessionActivationIsActive(status)) {
+          setStatus('The server currently reports an authenticated active OIDC session. This read-only refresh did not repeat activation.', 'success');
+        } else {
+          setStatus('The server does not currently report an authenticated active OIDC session. This read-only result does not prove an earlier activation failed; no verification request was repeated.', 'pending');
+        }
+        return status;
+      } finally {
+        oidcSessionActivationBusy = false;
+        renderAuthStatus();
+      }
+    }
+
+    async function verifyOIDCSessionPasskey() {
+      if (oidcSessionActivationBusy) throw new Error('A session action is already in progress. No additional request was sent.');
+      if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');
+      oidcSessionActivationBusy = true;
+      renderAuthStatus();
+      try {
+        let options;
+        try {
+          options = await sessionApi('/api/auth/session/webauthn/options');
+        } catch (error) {
+          const detail = error instanceof ApiError ? error.detail : null;
+          if (
+            error.status !== 409
+            || detail?.error !== 'oidc_session_webauthn_unavailable'
+          ) throw error;
+          if (detail.firstEnrollmentAvailable) {
+            await enrollFirstOIDCSessionPasskey(Boolean(detail.bootstrapRequired));
+          } else if (detail.offlineRevocationAvailable) {
+            await decommissionLostOIDCSessionPasskey();
+            await recoverOIDCSessionPasskey();
+          } else if (detail.recoveryAvailable) {
+            await recoverOIDCSessionPasskey();
+          } else {
+            throw error;
+          }
+          options = await sessionApi('/api/auth/session/webauthn/options');
+        }
+        let assertion;
+        try {
+          assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
+        } catch (error) {
+          if (
+            error?.name !== 'NotAllowedError'
+            || !window.confirm('Is this the lost last security key? Continuing requires two separate offline-root signatures: one to revoke it and one to register its replacement.')
+          ) throw error;
           await decommissionLostOIDCSessionPasskey();
           await recoverOIDCSessionPasskey();
-        } else if (detail.recoveryAvailable) {
-          await recoverOIDCSessionPasskey();
-        } else {
-          throw error;
+          options = await sessionApi('/api/auth/session/webauthn/options');
+          assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
         }
-        options = await sessionApi('/api/auth/session/webauthn/options');
-      }
-      let assertion;
-      try {
-        assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
-      } catch (error) {
-        if (
-          error?.name !== 'NotAllowedError'
-          || !window.confirm('Is this the lost last security key? Continuing requires two separate offline-root signatures: one to revoke it and one to register its replacement.')
-        ) throw error;
-        await decommissionLostOIDCSessionPasskey();
-        await recoverOIDCSessionPasskey();
-        options = await sessionApi('/api/auth/session/webauthn/options');
-        assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
-      }
-      const verifyRequest = {body: JSON.stringify({response: credentialToJson(assertion)})};
-      try {
-        await sessionApi('/api/auth/session/webauthn/verify', verifyRequest);
-      } catch (error) {
-        if (!(error instanceof TypeError)) throw error;
-        const status = await fetchAuthStatus();
-        if (!status?.authenticated) {
-          await sessionApi('/api/auth/session/webauthn/verify', verifyRequest);
+        const verifyRequest = {body: JSON.stringify({response: credentialToJson(assertion)})};
+        let responseAccepted = false;
+        try {
+          // One dispatch only. A lost response is not permission to resend it.
+          const result = await sessionApi('/api/auth/session/webauthn/verify', verifyRequest);
+          responseAccepted = result !== null && typeof result === 'object' && !Array.isArray(result)
+            && Object.keys(result).length === 2 && result.ok === true && result.authenticated === true;
+        } catch (_) {
+          // Read current status below; never recover delivery by automatic POST.
         }
+        csrfToken = null;
+        let status;
+        try { status = await fetchAuthStatus(); }
+        catch (_) {
+          markOIDCSessionStatusUnknown();
+          throw new Error('Session activation outcome unknown: current server status is unavailable or invalid. Use Refresh session status; no verification request was repeated.');
+        }
+        if (!responseAccepted) {
+          throw new Error('Session activation response was unavailable, rejected or invalid; that dispatch outcome is unknown. Use Refresh session status to inspect current state. No verification request was repeated.');
+        }
+        if (!oidcSessionActivationIsActive(status)) {
+          throw new Error('Session activation is not confirmed by current server status; the outcome is unknown. Use Refresh session status. No verification request was repeated.');
+        }
+        await refresh();
+        return {authenticated: status.authenticated, sessionState: status.sessionState, authMethod: status.authMethod};
+      } finally {
+        oidcSessionActivationBusy = false;
+        renderAuthStatus();
       }
-      csrfToken = null;
-      await fetchAuthStatus();
-      await refresh();
-      return {authenticated: true};
     }
 
     async function enrollFirstOIDCSessionPasskey(bootstrapRequired) {

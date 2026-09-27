@@ -300,6 +300,18 @@ class _EnrollmentOwner:
                 expected_user_id=expected_user_id, expected_session_id=expected_session_id,
                 recovery=True, live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
+    def _inspect_retained_registration_activation_subject(self, *, local_digest,
+            expected_user_id, expected_session_id, live_window, transport_deadline_ns, work):
+        """Local original replay only; no activation, completion fetch or retry."""
+        from serverware import control_plane_registration_activation_subject as activation
+
+        _require_pid()
+        with _LOCK:
+            _live(self, work=work)
+            return activation._inspect_on_owner(self, local_digest=local_digest,
+                expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+
     @property
     def reservation_enabled(self):
         _live(self)

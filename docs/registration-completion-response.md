@@ -110,9 +110,14 @@ The [private retained-original caller](control-plane-registration-handoff.md)
 now composes actual transport, this verifier and durable outcome association
 while original caller/grant authorization remains live. Separate
 [public actions](public-registration-handoff.md) now perform present-purpose and
-ownership admission in source. Historical caller recovery remains separate
-work. This receiver does not itself authorize a public action,
-credential finalization or session/workload enrollment. Finalization still
+ownership admission in source and remain live-only. The separate
+[historical completion admission](registration-completion-history.md) now
+composes genuine original planning/history, caller/grant and completion
+verification even after the original execution controls expire. Historical
+present-caller ownership, separate recovery-purpose permission and bounded
+reconciliation/transport/storage integration remain open. This receiver does
+not itself authorize a public action, credential finalization or session/workload
+enrollment. Finalization still
 requires its own genuine committed-evidence and exact signer-original joins.
 No production acceptance gate is closed.
 

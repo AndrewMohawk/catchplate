@@ -47,11 +47,12 @@ caller/audience and enrolled age/skew metadata. It contains no live window,
 deadline, live-check callback, signing key or permission token. No public
 entrypoint accepts that result as authority.
 
-This is one prerequisite for historical completion admission, not an enabled
-recovery workflow. A future caller must still authenticate the original
-verifier-signed planning request, planner-signed response and historical
-expectations; join the original grant/reservation/completion; and enforce
-present caller permission and appropriate durable retention. The current
+The now-implemented [historical completion admission](registration-completion-history.md)
+composes original planning-request/response authentication, genuine historical
+plan replay and caller/grant/reservation/completion joins. That original
+verification does not enable recovery: present-caller historical ownership
+admission, separate recovery-purpose authorization, and bounded transport,
+storage and journal reconciliation remain open integration work. The current
 [handoff admission](registration-execution-handoff-admission.md) remains
 explicitly live-only. Independently authorized caller/key provisioning and
 root/configuration provenance remain external requirements. A valid historical

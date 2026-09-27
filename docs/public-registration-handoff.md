@@ -99,11 +99,13 @@ release a dispatch claim or authorize SQL retry.
 
 ## Still incomplete
 
-Both public actions require live original signer/caller/grant controls. The new
-[historical caller-authorization verifier](registration-historical-authorization.md)
-is only a prerequisite: historical signed planning request/response and history
-admission, present recovery authorization and reconciliation remain separate
-implementation. It does not relax these routes or renew execution permission.
+Both public actions still require live original signer/caller/grant controls.
+[Historical completion admission](registration-completion-history.md) now
+composes genuine historical planning request/response, full plan/history replay,
+caller/grant and completion-original verification in source. It does not relax
+these routes or renew execution permission. Historical present-caller ownership,
+separate recovery-purpose permission and bounded reconciliation/transport/storage
+integration remain unimplemented.
 
 Separate credential finalization, complete portal UX, independent currentness,
 provisioning, frozen verification and full production acceptance remain open.

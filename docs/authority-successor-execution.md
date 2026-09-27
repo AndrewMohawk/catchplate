@@ -47,7 +47,8 @@ historical commitments. Neither is relabelled as the new original grant digest.
 
 The successor grant uses a separate root-signed enrollment, bound to the
 original current-root enrollment, database, generation, source revision and
-the fixed six successor operations. Its dedicated authorizer key/measurement
+the exact seven [supported replay operations](authority-successor-replay-families.md),
+not the larger source-planning inventory. Its dedicated authorizer key/measurement
 is not a computation, completion, state or plan-signing identity. Existing
 issuer database credentials do not supply this signing authority.
 
@@ -91,7 +92,7 @@ execution-grant admission by this separate path.
 [`authority_current_root_execution_admission`](../serverware/authority_current_root_execution_admission.py)
 authenticates the original enrollment, reserve request and state receipt, checks
 the independently expected pending head/sequence/fence, and recomputes the
-original computation snapshot from actual six-family plan replay. The candidate
+original computation snapshot from actual seven-operation plan replay. The candidate
 contains only same-call derived request, selected rows, mutations, result,
 work units, complete vectors and expected marker data. It is ordinary data, not
 a proof token or a callable database permission.

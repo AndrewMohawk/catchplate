@@ -4,6 +4,9 @@ Only original raw2 revocation, raw3 evidence-admission, raw4 transition or
 ciphertext-only raw2 activation plans are accepted. Activation additionally
 requires the actual independently configured private custody owner and original
 live window; it has no historical-expiry fallback.
+The replay inventory is the union of these implemented disjoint families, not
+the larger planning-program inventory. A registered consume planner supplies
+no generic execution replay family and is rejected here.
 The actual family verifier authenticates originals and recomputes semantics,
 memberships, complete queries, mutations and every required index projection.
 Operation-local before roots must match the supplied complete vector exactly;
@@ -36,11 +39,13 @@ from serverware import authority_webauthn_transition_retention as transition
 
 capture, framing, wire = vector.capture, vector.framing, vector.wire
 shape = revocation.plan.contract
-OPERATIONS = delta.OPERATIONS
 REVOCATION_OPERATION = revocation.plan.contract.OPERATION
 EVIDENCE_OPERATIONS = evidence.plan.contract.OPERATIONS
 TRANSITION_OPERATIONS = transition.plan.contract.OPERATIONS
 ACTIVATION_OPERATION = activation_contract.OPERATION
+# Planning registration alone never grants an original execution-frame grammar.
+OPERATIONS = (frozenset({REVOCATION_OPERATION, ACTIVATION_OPERATION})
+    | EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS)
 MAX_ORIGINAL_BYTES = authority.MAX_RESULT_BYTES
 _REVOCATION_EXPECTATIONS = revocation.wire._EXPECTATIONS - {
     "planner_public_key", "verifier_public_key"}
@@ -75,15 +80,19 @@ class _ReplayedPlan:
 
 
 def _frame_maxima(operation):
-    """Return fixed original-frame caps only for the complete disjoint families."""
-    delta._source(operation)
+    """Return original-frame caps only for implemented disjoint replay families."""
     if (OPERATIONS != frozenset({REVOCATION_OPERATION, ACTIVATION_OPERATION})
             | EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS
+            or not OPERATIONS <= delta.OPERATIONS
+            or not OPERATIONS <= frozenset(delta.programs.PROGRAMS)
             or EVIDENCE_OPERATIONS & TRANSITION_OPERATIONS
             or REVOCATION_OPERATION == ACTIVATION_OPERATION
             or REVOCATION_OPERATION in EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS
             or ACTIVATION_OPERATION in EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS):
-        raise CurrentRootPlanReplayError("successor replay families differ from the complete source inventory")
+        raise CurrentRootPlanReplayError("successor replay families are not a disjoint source-program subset")
+    if type(operation) is not str or operation not in OPERATIONS:
+        raise CurrentRootPlanReplayError("successor operation has no implemented original replay family")
+    delta._source(operation)
     if operation == REVOCATION_OPERATION:
         return (revocation.plan.contract.MAX_PAYLOAD_BYTES, revocation.MAX_CONTEXT_BYTES)
     if operation in EVIDENCE_OPERATIONS:

@@ -15,8 +15,9 @@ original root-signed enrollment bytes. It does not take independently selectable
 database, generation or operation-list overrides.
 
 Genuine current-root enrollment admission supplies the database, generation and
-original enrollment identity. The producer fixes the exact six successor
-operations, exports and reparses canonical authorizer PEM/SPKI, and checks the
+original enrollment identity. The producer fixes the exact seven
+[supported replay operations](authority-successor-replay-families.md), not all
+registered planning programs, exports and reparses canonical authorizer PEM/SPKI, and checks the
 actual key is distinct from root, computation, completion and state keys before
 root signing. The root must independently approve that authorizer measurement
 and age/skew policy; hashing or signing them does not establish provenance.
@@ -39,8 +40,11 @@ key to its dedicated public pin. That key is separate from current-root
 computation/completion/state keys and the actual planner/operation keys. There
 is no generic role-key fallback.
 
-The actual six-operation replay runs once over original raw2 revocation,
-raw3 evidence or raw4 transition frames. The producer derives the typed
+The actual seven-operation replay runs once over original raw2 revocation,
+raw3 evidence, raw4 transition or ciphertext-only raw2 activation frames.
+Activation additionally requires its independently admitted actual receiving
+custody and original live window; consume planning has no generic receiving
+replay and is excluded. The producer derives the typed
 request and operation identities, retained-plan commitments, genuine result,
 complete before/after vectors and original control/frame commitments from
 that same call. It does not accept successful replay objects, caller-selected

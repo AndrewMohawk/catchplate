@@ -26,7 +26,7 @@ class SuccessorExecutionGrantEnrollmentError(ValueError):
 def _produce_on_work(*, current_root_enrollment_bytes, root_private_key,
         root_public_key, authorizer_public_key, authorizer_measurement_digest,
         maximum_grant_age_ns, maximum_clock_skew_ns, work):
-    """Sign the exact six-operation delegation from genuine enrollment originals.
+    """Sign the exact seven-operation replay delegation from enrollment originals.
 
     Root/authorizer handles and policy inputs are independently supplied trust,
     not identities inferred from a database row, plan, scope or returned token.

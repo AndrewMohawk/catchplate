@@ -45,6 +45,7 @@ GRANT_IDENTITY_DOMAIN = "serverware.policyAuthoritySuccessorExecutionGrantIdenti
 MAX_GRANT_BYTES = 64 * 1024
 MAX_ENROLLMENT_BYTES = 16 * 1024
 MAX_NODES, MAX_DEPTH = 4096, 6
+# Root delegation covers exactly implemented replay, not every source planner.
 OPERATIONS = tuple(sorted(replay.OPERATIONS))
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _KEY_FIELDS = frozenset({"publicKeyPem", "spkiDigest", "measurementDigest"})
@@ -103,7 +104,7 @@ def _enrollment_shape(payload):
     operations = payload["operations"]
     if (type(operations) is not list or len(operations) != len(OPERATIONS)
             or any(type(value) is not str for value in operations) or tuple(operations) != OPERATIONS):
-        raise SuccessorExecutionGrantError("grant enrollment does not name the exact six source operations")
+        raise SuccessorExecutionGrantError("grant enrollment does not name the exact supported replay operations")
     record = payload["authorizer"]
     shape._object(record, _KEY_FIELDS, "successor grant authorizer")
     for name in ("spkiDigest", "measurementDigest"):

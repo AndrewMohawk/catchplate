@@ -25,12 +25,14 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-**Latest landed milestone:** the dedicated
-[registration execution-grant authorizer](docs/registration-execution-authorizer.md)
-has a protected service entrypoint and original-input transport in
-[commit 214cfd6](https://github.com/example/private-deployment).
-**Next:** finish the caller-side authorization, planning and returned-grant
-integration; protected public workflows and finalization remain open.
+**Latest landed milestone:** the
+[registration execution caller](docs/control-plane-registration-execution.md)
+now joins opt-in v3 caller-key ownership, original planning transport and local
+returned-grant verification in
+[commit 2b49c2c](https://github.com/example/private-deployment).
+**Next:** retain the new grant bundle under its own protected custody contract,
+then join present-caller/new-purpose admission and public workflows. Reservation,
+protected SQL execution and credential finalization remain open.
 
 [Open the progress tracker →](docs/production-status.md) for landed milestones,
 all six remaining gates, and their completion criteria. Independent signing,

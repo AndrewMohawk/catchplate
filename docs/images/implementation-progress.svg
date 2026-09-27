@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1606" viewBox="0 0 1000 1606" role="img" aria-labelledby="title description">
   <title id="title">Source implementation: 34 of 46 parents landed; 12 open including F08. F08 has 19/26 leaves landed. Step 20 remains in progress, with a separate 16-unit detail view.</title>
-  <desc id="description">Six cards list all 46 stable parents: evidence 10/10, history 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. F08 direct 3/6, protected 4/5, planning 5/5, cold admission 3/3, execution 6/7 and private replay 8/8 remain unchanged. The active inventory stays 19/26 landed, with step 20 in progress and 6 other open. Step 20 has 2/5 diagnostic groups landed; its separate 16-unit detail shows 9 landed, 0 in progress and 7 open. Consume custody, retention and cold construction are source-landed in 658c59eabfffb8ed7f17525c9efbe16f527cfd34; planner OS service is NEXT. Group c stays in progress at 7/12 pieces. Exact release and cold handoff remain open. Nested counts are not additive. No consume SQL, plaintext release or current-session claim. Source is unbuilt and unexecuted; production acceptance remains 0/6 verified.</desc>
+  <desc id="description">Six cards list all 46 stable parents: evidence 10/10, history 4/5, permissions 10/10, finalization 7/8, workloads 3/6 and operations 0/7. F08 direct 3/6, protected 4/5, planning 5/5, cold admission 3/3, execution 6/7 and private replay 8/8 remain unchanged. The active inventory stays 19/26 landed, with step 20 in progress and 6 other open. Step 20 has 2/5 diagnostic groups landed; its separate 16-unit detail shows 10 landed, 0 in progress and 6 open. The cold planner launcher and private service are source-landed in d7336814d65d81ad070dbab1d55715f7e6ca2cd8; private consume authorization and issuance is NEXT. Group c stays in progress at 8/12 pieces. Exact release and cold handoff remain open. Nested counts are not additive. No consume SQL, plaintext release or current-session claim. Source is unbuilt and unexecuted; production acceptance remains 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="1604" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="40" fill="#f8fafc" font-size="26" font-weight="700">Implementation, checkpoint by checkpoint</text>
@@ -216,7 +216,7 @@
         <rect x="204" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4b landed: encrypted-original helper, not durable custody</title></rect>
         <rect x="388" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4c landed: business effects</title></rect>
         <rect x="572" y="45" width="176" height="28" rx="5" fill="#34d399"><title>F08.4d landed: protected planning, 5 of 5 source pieces</title></rect>
-        <rect x="756" y="45" width="176" height="28" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4e in progress: 6/7 pieces landed; private replay 8/8. Step 20 has 2/5 diagnostic groups landed; finer detail 9/16 landed, 0 in progress, 7 open. Exact release and cold handoff remain open. No plaintext release or current-session guarantee.</title></rect>
+        <rect x="756" y="45" width="176" height="28" rx="5" fill="#422006" stroke="#fbbf24"><title>F08.4e in progress: 6/7 pieces landed; private replay 8/8. Step 20 has 2/5 diagnostic groups landed; finer detail 10/16 landed, 0 in progress, 6 open. Exact release and cold handoff remain open. No plaintext release or current-session guarantee.</title></rect>
       </g>
       <g text-anchor="middle" font-size="13" font-weight="700">
         <text x="108" y="64" fill="#0f172a">✓ a · Read proofs</text>
@@ -241,7 +241,7 @@
         <text x="660" y="136" fill="#0f172a">✓ d.4 · Configured owner</text>
         <text x="844" y="136" fill="#0f172a">✓ d.5 · Cold admission</text>
       </g>
-      <text x="20" y="169" fill="#94a3b8" font-size="13">19/26 landed · Release groups 2/5 · finer detail 9/16 landed, 7 open · planner OS service NEXT.</text>
+      <text x="20" y="169" fill="#94a3b8" font-size="13">19/26 landed · Release groups 2/5 · detail 10/16 landed, 6 open · private authorization / issuance NEXT.</text>
     </g>
 
     <text x="24" y="1537" fill="#f8fafc" font-size="16" font-weight="700">Source-only: unbuilt · unexecuted · unprovisioned</text>

@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="602" viewBox="0 0 1000 602" role="img" aria-labelledby="release-title release-description">
-  <title id="release-title">Protected token release: 9 of 16 implementation-detail units landed, 0 in progress, 7 open. Planner OS service is NEXT.</title>
-  <desc id="release-description">Detail inside activation step 20. Units 01 current proofs and effects, 02 metadata-only key custody, 03 read acquisition, 04 completed-activation provenance, 05 fresh state observation and 06 signed plan with stateless owner are committed source. Units 07 consume-history custody, 08 durable plan retention and 09 root-admitted cold planner construction are source-landed in 658c59eabfffb8ed7f17525c9efbe16f527cfd34. Units 10 planner OS launcher/service, 11 private authorization and issuance, 12 reservation, 13 one-use SQL, 14 durable completion and recovery, 15 exact token release and 16 cold release handoff are open; 10 is NEXT. Stable IDs and closure criteria are in the linked ledger. Group c has 7/12 pieces landed but is unfinished: diagnostic groups remain 2/5, activation 19/26 and parents 34/46. Nested counts are not additive or an effort percentage. No runtime or production claim. Source is unbuilt and unexecuted; production gates remain 0/6 verified.</desc>
+  <title id="release-title">Protected token release: 10 of 16 implementation-detail units landed, 0 in progress, 6 open. Private consume authorization and issuance is NEXT.</title>
+  <desc id="release-description">Detail inside activation step 20. Units 01 current proofs and effects, 02 metadata-only key custody, 03 read acquisition, 04 completed-activation provenance, 05 fresh state observation and 06 signed plan with stateless owner are committed source. Units 07 consume-history custody, 08 durable plan retention and 09 root-admitted cold planner construction are source-landed in 658c59eabfffb8ed7f17525c9efbe16f527cfd34. Unit 10 cold planner launcher and private service is source-landed in d7336814d65d81ad070dbab1d55715f7e6ca2cd8. Units 11 private consume authorization and issuance, 12 reservation, 13 one-use SQL, 14 durable completion and recovery, 15 exact token release and 16 cold release handoff are open; 11 is NEXT. Stable IDs and closure criteria are in the linked ledger. Group c has 8/12 pieces landed but is unfinished: diagnostic groups remain 2/5, activation 19/26 and parents 34/46. Nested counts are not additive or an effort percentage. No runtime or production claim. Source is uninstalled, unbuilt and unexecuted; production gates remain 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="600" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">Protected token release · inside step 20</text>
-    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">9 / 16 landed</text>
-    <text x="228" y="71" fill="#cbd5e1" font-size="18">0 in progress · 7 open</text>
+    <text x="24" y="72" fill="#6ee7b7" font-size="23" font-weight="700">10 / 16 landed</text>
+    <text x="228" y="71" fill="#cbd5e1" font-size="18">0 in progress · 6 open</text>
     <text x="24" y="98" fill="#94a3b8" font-size="14">One segment per named implementation unit · source status, not an effort percentage</text>
 
     <g fill="#34d399">
@@ -19,11 +19,11 @@
     <g fill="#34d399">
       <rect x="384" y="112" width="52" height="38" rx="5"><title>07 · F08.4e.7.c.5 · Consume-history custody · LANDED · 658c59e</title></rect>
       <rect x="444" y="112" width="52" height="38" rx="5"><title>08 · F08.4e.7.c.6 · Durable plan retention and genuine replay · LANDED · 658c59e</title></rect>
-      <rect x="504" y="112" width="52" height="38" rx="5"><title>09 · F08.4e.7.c.7 · Root-admitted cold planner construction · LANDED · 658c59e; OS service remains row 10</title></rect>
+      <rect x="504" y="112" width="52" height="38" rx="5"><title>09 · F08.4e.7.c.7 · Root-admitted cold planner construction · LANDED · 658c59e; OS service separately counted at row 10</title></rect>
+      <rect x="564" y="112" width="52" height="38" rx="5"><title>10 · F08.4e.7.c.8 · Cold planner launcher and service · LANDED · d733681; source only, not installed or running</title></rect>
     </g>
     <g fill="#334155" stroke="#94a3b8">
-      <rect x="564" y="112" width="52" height="38" rx="5"><title>10 · F08.4e.7.c.8 · Cold planner launcher and service · OPEN, next queued</title></rect>
-      <rect x="624" y="112" width="52" height="38" rx="5"><title>11 · F08.4e.7.c.9 · Private consume authorization and issuance · OPEN</title></rect>
+      <rect x="624" y="112" width="52" height="38" rx="5"><title>11 · F08.4e.7.c.9 · Private consume authorization and issuance · OPEN, NEXT</title></rect>
       <rect x="684" y="112" width="52" height="38" rx="5"><title>12 · F08.4e.7.c.10 · Reservation and pending admission · OPEN</title></rect>
       <rect x="744" y="112" width="52" height="38" rx="5"><title>13 · F08.4e.7.c.11 · One-use protected consume SQL · OPEN</title></rect>
       <rect x="804" y="112" width="52" height="38" rx="5"><title>14 · F08.4e.7.c.12 · Durable completion and recovery · OPEN</title></rect>
@@ -38,10 +38,10 @@
       </g>
       <g fill="#052e26">
         <text x="410" y="137">07</text><text x="470" y="137">08</text>
-        <text x="530" y="137">09</text>
+        <text x="530" y="137">09</text><text x="590" y="137">10</text>
       </g>
       <g fill="#e2e8f0">
-        <text x="590" y="137">10</text><text x="650" y="137">11</text>
+        <text x="650" y="137">11</text>
         <text x="710" y="137">12</text><text x="770" y="137">13</text>
         <text x="830" y="137">14</text><text x="890" y="137">15</text>
         <text x="950" y="137">16</text>
@@ -82,10 +82,10 @@
         <text x="24" y="492">✓ LANDED · 658c59e · request-bound v2 purpose</text>
         <text x="24" y="536">✓ LANDED · 658c59e · durable originals / replay</text>
         <text x="512" y="228">✓ LANDED · 658c59e · actual retained construction</text>
+        <text x="512" y="272">✓ LANDED · d733681 · private single-request service</text>
       </g>
       <g fill="#cbd5e1">
-        <text x="512" y="272">— OPEN · NEXT queued source step</text>
-        <text x="512" y="316">— OPEN · separate from public permission</text>
+        <text x="512" y="316">— OPEN · NEXT · separate from public permission</text>
         <text x="512" y="360">— OPEN · independently pinned pending state</text>
         <text x="512" y="404">— OPEN · durable one-use execution</text>
         <text x="512" y="448">— OPEN · reconcile without SQL retry</text>

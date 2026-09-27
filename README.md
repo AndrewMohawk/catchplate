@@ -30,14 +30,14 @@ names each scope; the active session work is expanded below.
 
 ### Now building: protected token release
 
-**9/16 implementation-detail units landed · 0 in progress · 7 open.**
+**10/16 implementation-detail units landed · 0 in progress · 6 open.**
 These are the pieces **inside activation step 20**, not 16 additional project
 milestones. Each numbered segment below has a name and written status.
 
-[![Protected token release, step 20: 01–09 landed in source, including consume-history custody, durable plan retention and root-admitted cold construction in 658c59e. Units 10–16 remain open: planner OS service is NEXT, followed by private issuance, reservation, one-use SQL, recovery, exact token release and release handoff. Nine of sixteen detail units landed; not production verification.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
+[![Protected token release, step 20: 01–10 landed in source, including the cold planner launcher and private service in d733681. Units 11–16 remain open: private consume authorization and issuance is NEXT, followed by reservation, one-use SQL, recovery, exact token release and release handoff. Ten of sixteen detail units landed; not production verification.](docs/images/token-release-progress.svg)](docs/production-status.md#token-release-implementation-detail)
 
-**Newly landed:** [consume custody, retained originals and cold construction](https://github.com/example/private-deployment).
-**Next:** the planner's OS key/FD launcher and private service.
+**Newly landed:** [cold planner key/FD launcher and private service](https://github.com/example/private-deployment).
+**Next:** private consume authorization and issuance.
 
 **Done** means committed source, **in progress** includes unfinished/uncommitted
 work, and **open** means its full criterion has not landed. The
@@ -56,7 +56,7 @@ are still open. The full activation workflow remains **19/26 landed**.
 
 **OIDC session activation — 19/26 landed; 1 in progress and 6 other open.**
 
-[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 9 landed, 0 in progress and 7 open. Consume custody, retention and cold construction are source-landed; planner OS service is NEXT. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![OIDC activation: steps 01–19 landed, step 20 protected token release in progress, and 21–26 open. Step 20 has 2/5 diagnostic groups landed, expanded into 16 detail units: 10 landed, 0 in progress and 6 open. The cold planner launcher and private service are source-landed; private consume authorization and issuance is NEXT. Nested counts do not add to the total. Source-only; no token release or production claim.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 Each segment maps to a
 [named task, completion criterion and commit evidence](docs/production-status.md#active-workflow-granular-source-steps).

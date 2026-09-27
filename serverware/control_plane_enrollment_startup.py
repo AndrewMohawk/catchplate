@@ -125,6 +125,9 @@ def _continuity(owner):
     if (owner._finalization_key_fd is not None and _descriptor_identity(
             owner._finalization_key_fd, private=True) != owner._finalization_key_identity):
         raise EnrollmentStartupError("registration finalization caller key custody changed")
+    if (owner._activation_key_fd is not None and _descriptor_identity(
+            owner._activation_key_fd, private=True) != owner._activation_key_identity):
+        raise EnrollmentStartupError("activation execution caller key custody changed")
     return observed_epoch
 
 
@@ -180,7 +183,8 @@ class _EnrollmentOwner:
         "_bootstrap_identity", "_key_fd", "_key_identity", "_response_path", "_response_pin", "_closed",
         "_execution_key", "_execution_key_fd", "_execution_key_identity",
         "_finalization_key", "_finalization_key_fd", "_finalization_key_identity",
-        "_release_spent")
+        "_release_spent", "_activation_key", "_activation_key_fd",
+        "_activation_key_identity", "_activation_permission")
 
     def __init__(self):
         raise EnrollmentStartupError("enrollment owner requires fixed cold startup")
@@ -199,6 +203,28 @@ class _EnrollmentOwner:
     def finalization_enabled(self):
         _live(self)
         return self._finalization_key is not None
+
+    @property
+    def activation_execution_enabled(self):
+        """Cold signer configuration only, never present-user permission."""
+        _live(self)
+        return (self._activation_key is not None and self._material is not None
+            and self._material.activation_execution is not None)
+
+    def _oidc_session_activation_permission(self, *, request, permission_bytes,
+            live_window, transport_deadline_ns, work):
+        """Enter a live, lock-owned permission scope; never renew an allowance.
+
+        Genuine permission precedes planning because its assertion advances the
+        credential counter. The actual context owns the parent lock and revokes
+        its fixed post-plan signer on exit; a past success cannot authorize it.
+        """
+        from serverware import control_plane_oidc_session_activation_execution as activation
+
+        _require_pid()
+        return activation._permission_on_owner(self, request=request,
+            permission_bytes=permission_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work)
 
     @property
     def finalization_reservation_enabled(self):
@@ -700,6 +726,7 @@ def initialize_from_environment():
             key, key_identity, response_path, response_pin = None, None, None, None
             execution_key, execution_fd, execution_identity = None, None, None
             finalization_key, finalization_fd, finalization_identity = None, None, None
+            activation_key, activation_fd, activation_identity = None, None, None
             if material.release_client is not None and identity != (65532, 65532):
                 raise EnrollmentStartupError("release caller requires the fixed control-plane identity")
             if (material.finalization_slot_reserved and material.finalization is None
@@ -713,6 +740,16 @@ def initialize_from_environment():
                         raise
                 else:
                     raise EnrollmentStartupError("disabled v4 finalization has an undeclared open key slot")
+            if material.activation_slot_reserved and material.activation_execution is None:
+                if 205 in inventory:
+                    raise EnrollmentStartupError("disabled v6 activation forbids its reserved inherited key slot")
+                try:
+                    fcntl.fcntl(205, fcntl.F_GETFD)
+                except OSError as exc:
+                    if exc.errno != errno.EBADF:
+                        raise
+                else:
+                    raise EnrollmentStartupError("disabled v6 activation has an undeclared open key slot")
             if policy is None:
                 if key_fd is not None or public_key is not None:
                     raise EnrollmentStartupError("disabled enrollment bootstrap contains issuer key material")
@@ -786,6 +823,38 @@ def initialize_from_environment():
                 if finalization_pin in (issuer_pin, response_pin,
                         None if execution_key is None else execution_pin):
                     raise EnrollmentStartupError("finalization caller key reuses another retained purpose key")
+            if material.activation_execution is not None:
+                from cryptography.hazmat.primitives import serialization
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+                from serverware import response_identity
+
+                activation = material.activation_execution
+                activation_fd = activation.caller_private_key_fd
+                if (identity != (65532, 65532) or not material.activation_slot_reserved
+                        or activation_fd != 205
+                        or activation_fd in (descriptor, key_fd, execution_fd, finalization_fd)
+                        or activation_fd not in inventory):
+                    raise EnrollmentStartupError("activation caller key requires its distinct admitted slot")
+                activation_raw, activation_identity = _read_original(activation_fd, private=True)
+                if (not activation_raw.startswith(b"-----BEGIN PRIVATE KEY-----\n")
+                        or not activation_raw.endswith(b"-----END PRIVATE KEY-----\n")):
+                    raise EnrollmentStartupError("activation caller key must be unencrypted PKCS8 PEM")
+                work.charge(input_bytes=len(activation_raw))
+                activation_key = issuer.evidence.production._callback(work,
+                    lambda: serialization.load_pem_private_key(activation_raw, password=None))
+                del activation_raw
+                if not isinstance(activation_key, Ed25519PrivateKey):
+                    raise EnrollmentStartupError("activation caller key must be Ed25519")
+                issuer.evidence.keys._pair_on_work(activation_key, activation.caller_public_key, work)
+                activation_pin = issuer.evidence.keys._spki_on_work(activation.caller_public_key, work)
+                if response_path is None:
+                    response_path = response_identity.RESPONSE_SIGNING_KEY_PATH
+                    response_pin = _response_spki(response_path, identity[0], work)
+                if activation_pin in (response_pin,
+                        None if key is None else issuer_pin,
+                        None if execution_key is None else execution_pin,
+                        None if finalization_key is None else finalization_pin):
+                    raise EnrollmentStartupError("activation caller key reuses another retained purpose key")
             if (material.configuration_digest != digest or _environment() != namespace
                     or (os.geteuid(), os.getegid()) != identity
                     or _descriptor_identity(descriptor, private=False) != original_identity
@@ -794,6 +863,8 @@ def initialize_from_environment():
                         execution_fd, private=True) != execution_identity
                     or finalization_fd is not None and _descriptor_identity(
                         finalization_fd, private=True) != finalization_identity
+                    or activation_fd is not None and _descriptor_identity(
+                        activation_fd, private=True) != activation_identity
                     or custody.require_started() is not custody_owner
                     or client._snapshot(custody_owner) is not binding):
                 raise EnrollmentStartupError("enrollment startup inputs changed during admission")
@@ -807,6 +878,8 @@ def initialize_from_environment():
             owner._execution_key_identity = execution_identity
             owner._finalization_key, owner._finalization_key_fd = finalization_key, finalization_fd
             owner._finalization_key_identity = finalization_identity
+            owner._activation_key, owner._activation_key_fd = activation_key, activation_fd
+            owner._activation_key_identity, owner._activation_permission = activation_identity, None
             owner._release_spent = False
             owner._response_path, owner._response_pin = response_path, response_pin
             _owner, _state = owner, "started"
@@ -854,3 +927,4 @@ def close():
             owner._private_key, owner._material = None, None
             owner._execution_key = None
             owner._finalization_key = None
+            owner._activation_key, owner._activation_permission = None, None

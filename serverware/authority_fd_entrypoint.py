@@ -25,6 +25,12 @@ CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnr
 CONTROL_PLANE_ENROLLMENT_V4_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v4"
 CONTROL_PLANE_ENROLLMENT_V5_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v5"
 CONTROL_PLANE_ENROLLMENT_V5_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v5"
+CONTROL_PLANE_ENROLLMENT_V6_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v6"
+CONTROL_PLANE_ENROLLMENT_V6_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v6"
+CONTROL_PLANE_ACTIVATION_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v1"
+CONTROL_PLANE_ACTIVATION_KEY_FD = 205
+CONTROL_PLANE_ACTIVATION_KEY_NAME = "serverware-oidc-session-activation-execution-caller-key"
+CONTROL_PLANE_ACTIVATION_SOCKET = "/run/serverware/oidc-session-activation-execution/authorizer.sock"
 CONTROL_PLANE_RELEASE_SCHEMA = "serverware.controlPlaneOidcSessionActivationRelease/v1"
 CONTROL_PLANE_RELEASE_SOCKET = "/run/serverware/oidc-session-activation-token-release/release.sock"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
@@ -725,8 +731,54 @@ def _control_plane_release_public_shape(value):
     # checks remain in actual child admission. This adds no delivered slot.
 
 
-def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
-    """Project closed v2-v5 slots; child admission alone supplies authority."""
+def _control_plane_activation_key_slot(value, *, issuer_descriptor, bootstrap_descriptor):
+    """V6 metadata only; actual caller/root/key admission belongs to startup."""
+    if issuer_descriptor == CONTROL_PLANE_ACTIVATION_KEY_FD:
+        raise RuntimeError("v6 reserves the activation key slot independently of enablement")
+    if value is None:
+        return None
+    if (type(value) is not dict or set(value) != {"schema", "activationCallerPrivateKeyFd", "plannerKey",
+            "currentRootEnrollment", "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
+            or value["schema"] != CONTROL_PLANE_ACTIVATION_SCHEMA
+            or type(value["activationCallerPrivateKeyFd"]) is not int
+            or value["activationCallerPrivateKeyFd"] != CONTROL_PLANE_ACTIVATION_KEY_FD
+            or bootstrap_descriptor == CONTROL_PLANE_ACTIVATION_KEY_FD):
+        raise RuntimeError("activation caller key delivery scope is invalid")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    planner = value["plannerKey"]
+    if type(planner) is not dict or set(planner) != {"publicKeyBase64Url", "spkiDigest"}:
+        raise RuntimeError("activation planner key delivery shape is not closed")
+    encoded, pin = planner["publicKeyBase64Url"], planner["spkiDigest"]
+    if (type(encoded) is not str or len(encoded) != 43
+            or any(character not in alphabet for character in encoded)
+            or alphabet.index(encoded[-1]) & 3
+            or type(pin) is not str or len(pin) != 71 or not pin.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in pin[7:])):
+        raise RuntimeError("activation planner public key encoding is not bounded canonical data")
+    for name, maximum in (("currentRootEnrollment", 128 * 1024),
+            ("grantEnrollment", 16 * 1024), ("authorizationEnrollment", 16 * 1024)):
+        original = value[name]
+        if type(original) is not dict or set(original) != {"base64Url", "byteCount"}:
+            raise RuntimeError("activation caller enrollment delivery shape is not closed")
+        encoded, size = original["base64Url"], original["byteCount"]
+        if (type(size) is not int or not 2 <= size <= maximum or type(encoded) is not str
+                or len(encoded) != (4 * size + 2) // 3
+                or any(character not in alphabet for character in encoded)):
+            raise RuntimeError("activation caller enrollment original exceeds its delivery bound")
+        unused = 4 if size % 3 == 1 else 2 if size % 3 == 2 else 0
+        if unused and alphabet.index(encoded[-1]) & ((1 << unused) - 1):
+            raise RuntimeError("activation caller enrollment encoding is not canonical")
+    endpoint = value["authorizerEndpoint"]
+    if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"}
+            or endpoint["socketPath"] != CONTROL_PLANE_ACTIVATION_SOCKET
+            or type(endpoint["requestTimeoutSeconds"]) is not int or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
+            or any(type(endpoint[name]) is not int or endpoint[name] != 0 for name in ("listenerUid", "listenerGid"))):
+        raise RuntimeError("activation authorizer endpoint differs from its fixed delivery contract")
+    return CONTROL_PLANE_ACTIVATION_KEY_FD
+
+
+def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
+    """Project closed v2-v6 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -746,22 +798,27 @@ def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
                 or value["schema"] not in (CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V5_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V5_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V6_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
         is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
         is_v5 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V5_BOOTSTRAP_SCHEMA
+        is_v6 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V6_BOOTSTRAP_SCHEMA
         payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
             "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
-        if is_v3 or is_v4 or is_v5:
+        if is_v3 or is_v4 or is_v5 or is_v6:
             payload_fields.add("registrationExecution")
-        if is_v4 or is_v5:
+        if is_v4 or is_v5 or is_v6:
             payload_fields.add("registrationFinalization")
-        if is_v5:
+        if is_v5 or is_v6:
             payload_fields.add("oidcSessionActivationRelease")
+        if is_v6:
+            payload_fields.add("oidcSessionActivationExecution")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V5_PAYLOAD_SCHEMA if is_v5
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V6_PAYLOAD_SCHEMA if is_v6
+                    else CONTROL_PLANE_ENROLLMENT_V5_PAYLOAD_SCHEMA if is_v5
                     else CONTROL_PLANE_ENROLLMENT_V4_PAYLOAD_SCHEMA if is_v4
                     else CONTROL_PLANE_ENROLLMENT_V3_PAYLOAD_SCHEMA if is_v3
                     else CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA)):
@@ -788,18 +845,25 @@ def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
         if target is not None and (type(target) is not int or not 32 <= target <= 1023):
             raise RuntimeError("control-plane enrollment key descriptor is outside its exact range")
         execution_target = (_control_plane_execution_key_slot(payload["registrationExecution"],
-            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 or is_v4 or is_v5 else None)
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 or is_v4 or is_v5 or is_v6 else None)
         finalization_target = (_control_plane_finalization_key_slot(payload["registrationFinalization"],
-            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v4 or is_v5 else None)
-        if is_v5:
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v4 or is_v5 or is_v6 else None)
+        if is_v5 or is_v6:
             _control_plane_release_public_shape(payload["oidcSessionActivationRelease"])
+        activation_target = (_control_plane_activation_key_slot(payload["oidcSessionActivationExecution"],
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v6 else None)
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:
             raise RuntimeError("control-plane enrollment bootstrap is not original canonical JSON")
     except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
         raise RuntimeError("control-plane enrollment bootstrap is invalid") from exc
-    return target, execution_target, finalization_target, is_v4 or is_v5
+    return target, execution_target, finalization_target, is_v4 or is_v5 or is_v6, activation_target, is_v6
+
+
+def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
+    """Preserve the existing exact four-field projection for prior consumers."""
+    return _control_plane_enrollment_slot_projection(descriptor)[:4]
 
 
 def _control_plane_enrollment_key_slots(descriptor: int) -> tuple[int | None, int | None]:
@@ -856,13 +920,14 @@ def _open_control_plane_registration_finalization_key(bootstrap_descriptor: int,
 def _open_control_plane_purpose_key(bootstrap_descriptor: int, *, target,
         source_name: str, occupied_descriptors: set[int]) -> int | None:
     if source_name not in (CONTROL_PLANE_ENROLLMENT_KEY_NAME, CONTROL_PLANE_EXECUTION_KEY_NAME,
-            CONTROL_PLANE_FINALIZATION_KEY_NAME):
+            CONTROL_PLANE_FINALIZATION_KEY_NAME, CONTROL_PLANE_ACTIVATION_KEY_NAME):
         raise RuntimeError("control-plane private-key source is not a fixed purpose")
     if target is None:
         return None
     if (type(target) is not int or not 32 <= target <= 1023 or target == bootstrap_descriptor
             or source_name == CONTROL_PLANE_EXECUTION_KEY_NAME and target != CONTROL_PLANE_EXECUTION_KEY_FD
-            or source_name == CONTROL_PLANE_FINALIZATION_KEY_NAME and target != CONTROL_PLANE_FINALIZATION_KEY_FD):
+            or source_name == CONTROL_PLANE_FINALIZATION_KEY_NAME and target != CONTROL_PLANE_FINALIZATION_KEY_FD
+            or source_name == CONTROL_PLANE_ACTIVATION_KEY_NAME and target != CONTROL_PLANE_ACTIVATION_KEY_FD):
         raise RuntimeError("control-plane private-key target differs from its fixed purpose")
     if target in occupied_descriptors:
         raise RuntimeError("control-plane enrollment key descriptor is already assigned")
@@ -913,6 +978,25 @@ def _open_control_plane_purpose_key(bootstrap_descriptor: int, *, target,
             except OSError:
                 pass
         raise
+
+
+def _open_control_plane_oidc_session_activation_key(bootstrap_descriptor: int, *,
+        occupied_descriptors: set[int]) -> int | None:
+    """Deliver the fixed activation key only; null v6 forbids any FD205."""
+    slots = _control_plane_enrollment_slot_projection(bootstrap_descriptor)
+    target, reserved = slots[4], slots[5]
+    if reserved and target is None:
+        if CONTROL_PLANE_ACTIVATION_KEY_FD in occupied_descriptors:
+            raise RuntimeError("disabled v6 activation has an occupied reserved key slot")
+        try:
+            fcntl.fcntl(CONTROL_PLANE_ACTIVATION_KEY_FD, fcntl.F_GETFD)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+        else:
+            raise RuntimeError("disabled v6 activation has an undeclared open key slot")
+    return _open_control_plane_purpose_key(bootstrap_descriptor, target=target,
+        source_name=CONTROL_PLANE_ACTIVATION_KEY_NAME, occupied_descriptors=occupied_descriptors)
 
 
 def _control_plane_custody_configuration(descriptor: int) -> dict:
@@ -1626,6 +1710,10 @@ def _normal_main(role: str) -> int:
                 enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
             if finalization_key is not None:
                 descriptors.append(finalization_key)
+            activation_key = _open_control_plane_oidc_session_activation_key(
+                enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
+            if activation_key is not None:
+                descriptors.append(activation_key)
             environment["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
             _drop_identity(role)
             os.execve(

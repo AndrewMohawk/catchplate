@@ -436,6 +436,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_registration_finalization_sql_http as finalization_sql_contract
     from serverware import control_plane_registration_finalization_completion_routes as finalization_completion_routes
     from serverware import control_plane_registration_finalization_completion_http as finalization_completion_contract
+    from serverware import control_plane_oidc_session_activation_permission_routes as activation_permission_routes
+    from serverware import control_plane_oidc_session_activation_permission_http as activation_permission_contract
 
     request_path = request.scope.get("path")
     handoff_request = (request.method == "POST" and request_path in (
@@ -450,6 +452,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         request.method == "POST" and request_path in finalization_completion_routes.PATHS)
     finalization_completion_recovery = request_path in finalization_completion_routes.RECOVERY_PATHS
     finalization_completion_options = request_path in finalization_completion_routes.OPTIONS_PATHS
+    activation_permission_request = (
+        request.method == "POST" and request_path in activation_permission_routes.PATHS)
     reservation_request = (
         request.method == "POST" and request_path in _REGISTRATION_RESERVATION_PATHS
     )
@@ -458,7 +462,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     )
     registration_preparation_request = (
         request.method == "POST" and request_path in _REGISTRATION_PREPARATION_PATHS
-    ) or execution_preparation_request or reservation_request or handoff_request or recovery_request or finalization_request or finalization_grant_request or finalization_reservation_request or finalization_sql_request or finalization_completion_request
+    ) or execution_preparation_request or reservation_request or handoff_request or recovery_request or finalization_request or finalization_grant_request or finalization_reservation_request or finalization_sql_request or finalization_completion_request or activation_permission_request
     preparation_error = (_registration_reservation_error if reservation_request
         else _registration_execution_preparation_error if execution_preparation_request
         else _registration_preparation_error)
@@ -478,6 +482,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     elif finalization_completion_request:
         preparation_error = lambda status, code: finalization_completion_routes.error(
             status, code, recovery=finalization_completion_recovery)
+    elif activation_permission_request:
+        preparation_error = activation_permission_routes.error
     if registration_preparation_request:
         # This new route family has one exact framing path. Do not change the
         # existing browser /verify parser, defaults or finalization behavior.
@@ -491,7 +497,8 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             return preparation_error(400, "registration_preparation_framing_invalid")
         if request.headers.getlist("content-type") != ["application/json"]:
             return preparation_error(415, "registration_preparation_json_required")
-        route_limit = (finalization_completion_contract.MAX_REQUEST_BYTES if finalization_completion_request
+        route_limit = (activation_permission_contract.MAX_REQUEST_BYTES if activation_permission_request
+            else finalization_completion_contract.MAX_REQUEST_BYTES if finalization_completion_request
             else finalization_sql_contract.MAX_REQUEST_BYTES if finalization_sql_request
             else finalization_reservation_contract.MAX_REQUEST_BYTES if finalization_reservation_request
             else finalization_grant_contract.MAX_REQUEST_BYTES if finalization_grant_request
@@ -546,6 +553,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
                 content={"detail": "authority route requires Content-Length"},
             )
     request_limit = {
+        **{path: activation_permission_contract.MAX_REQUEST_BYTES for path in activation_permission_routes.PATHS},
         **{path: handoff_contract.MAX_REQUEST_BYTES for path in (
             handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS)},
         **{path: recovery_contract.MAX_REQUEST_BYTES for path in recovery_routes.PATHS},
@@ -641,7 +649,10 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             if len(body) != content_length:
                 return preparation_error(400, "registration_preparation_framing_invalid")
             try:
-                if finalization_completion_request:
+                if activation_permission_request:
+                    activation_permission_contract.parse_request(request._body, options=True)
+                    request.state.oidc_session_activation_permission_bytes = request._body
+                elif finalization_completion_request:
                     request.state.registration_finalization_completion_payload = (
                         finalization_completion_contract.parse_request(request._body,
                             recovery=finalization_completion_recovery,
@@ -670,7 +681,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
                     request.state.registration_execution_preparation_payload = (
                         WebAuthnRegistrationExecutionPrepare.model_validate(_plain_setup_json(document))
                     )
-                elif not handoff_request and not recovery_request and not finalization_request and not finalization_grant_request and not finalization_reservation_request and not finalization_sql_request and not finalization_completion_request:
+                elif not handoff_request and not recovery_request and not finalization_request and not finalization_grant_request and not finalization_reservation_request and not finalization_sql_request and not finalization_completion_request and not activation_permission_request:
                     request.state.registration_preparation_payload = (
                         WebAuthnRegistrationPrepare.model_validate(_plain_setup_json(document))
                     )
@@ -4579,6 +4590,7 @@ def _control_plane_requester_roles(action: str) -> set[str]:
         "webauthn.registration.finalization.execute",
         "webauthn.registration.finalization.complete",
         "webauthn.registration.finalization.recover",
+        "webauthn.oidc-session.activation.authorize",
         "webauthn.credential.revoke",
         "break_glass.grant",
     }:
@@ -24879,6 +24891,7 @@ from serverware import control_plane_registration_finalization_grant_routes as _
 from serverware import control_plane_registration_finalization_reservation_routes as _registration_finalization_reservation_routes
 from serverware import control_plane_registration_finalization_sql_routes as _registration_finalization_sql_routes
 from serverware import control_plane_registration_finalization_completion_routes as _registration_finalization_completion_routes
+from serverware import control_plane_oidc_session_activation_permission_routes as _activation_permission_routes
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -24887,4 +24900,5 @@ _fastapi_app.include_router(_registration_finalization_grant_routes.router)
 _fastapi_app.include_router(_registration_finalization_reservation_routes.router)
 _fastapi_app.include_router(_registration_finalization_sql_routes.router)
 _fastapi_app.include_router(_registration_finalization_completion_routes.router)
+_fastapi_app.include_router(_activation_permission_routes.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

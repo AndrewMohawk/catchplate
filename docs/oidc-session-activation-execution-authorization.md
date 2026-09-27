@@ -79,6 +79,16 @@ all three enrollment originals and the original window/deadline/work.
 The request producer additionally requires the independently held caller private
 key. It requires prior present-purpose admission; it does not establish it.
 
+The producer's private optional `_continuity` seam can add the actual enclosing
+owner's current resource/permission guard. It exchanges only increasing epoch
+and monotonic floors before and after mandatory clock samples, checks unchanged
+work limits and nondecreasing usage, and rejects returned floors at or beyond
+the currently narrowed epoch deadline or monotonic bound. No authority result,
+replacement clock or successful permission object enters this seam. The actual
+producer and its own output verification share that same clock closure;
+standalone callers and all existing verification paths retain their default
+behavior when no extra continuity restriction is supplied.
+
 `authority_oidc_session_activation_execution_grant_production._produce_on_work`
 takes these original inputs, original signed authorization, an independently
 held grant signer and the exact `OidcSessionActivationExecutionCustody` owner

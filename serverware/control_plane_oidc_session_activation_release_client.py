@@ -128,7 +128,7 @@ def _request_locked(held, work):
         capture._SharedLedger(work)
         identity()
         # Fixed metadata continuity only, not _live's unrelated HTTP private-key
-        # load. At most four existing sealed descriptors are inspected; none is
+        # load. At most five existing sealed descriptors are inspected; none is
         # read, transferred, relaxed or owned by this public-only component.
         work.charge(input_bytes=4096)
         sample(production._callback(work, lambda: startup._continuity(held.owner)))

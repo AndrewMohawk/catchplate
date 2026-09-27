@@ -13,8 +13,8 @@ Actual deployment provisioning and public orchestration remain open.
 Source `.180` adds an explicit [v5 public-only release configuration](control-plane-oidc-session-activation-release-bootstrap.md)
 and a [one-use private caller](control-plane-oidc-session-activation-release-client.md).
 The original v2 issuer contract below remains unchanged; v3/v4 execution and
-finalization retain their existing fields and reserved key slots. Only v5 can
-configure this release lane, including when the separate issuer is disabled.
+finalization retain their existing fields and reserved key slots. Explicit v5
+and v6 can configure this release lane, including when the separate issuer is disabled.
 The actual startup owner must run as UID/GID 65532 and keeps the same runtime
 root, configuration, original receipt and inherited descriptor identities.
 The release component receives no private key and introduces no descriptor.
@@ -37,11 +37,36 @@ variable is `SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR`, with
 provisioned listener has mode 0660 and owner/group `65502:65532`, with searchable
 parent directories. A read-only directory bind permits connecting, not replacing
 the listener. Actual peer credentials and signed original response admission
-remain mandatory. Select this overlay only for an explicitly enabled v5 lane;
+remain mandatory. Select this overlay only for an explicitly enabled v5/v6 release lane;
 it neither creates the worker/socket nor mounts a release or signing key.
 The existing enrollment-only offline preparer is unchanged and does not compose
 this overlay. Any separately composed artifact still requires independent
 immutable-release admission and frozen verification. No deployment is performed.
+
+## Dedicated activation caller extension
+
+Uncommitted source `.181` adds the explicit [v6 activation caller configuration](control-plane-oidc-session-activation-execution-bootstrap.md).
+The nullable lane is separate from the issuer, registration callers and public-only
+release client. The actual root entrypoint delivers only its fixed, independently
+inventoried FD205 from the provisioned activation caller-key path. Null v6 rejects
+that slot even when it is open but absent from the inventory; v2–v5 remain unchanged.
+
+Startup authenticates the original parent and three enrollment originals, reads
+the sealed Ed25519 key, checks the actual enrolled pair, and rejects reuse of the
+HTTP response, issuer, registration execution or finalization keys. This works
+with a disabled issuer; no other purpose supplies a fallback key. The actual
+owner retains the dedicated key/FD/identity and checks the same process, runtime
+receipt and descriptor continuity. Shutdown drops its key and permission-context
+references without closing borrowed inherited descriptors.
+
+`activation_execution_enabled` describes configuration, not present permission.
+The private `_oidc_session_activation_permission` wrapper forwards the actual
+request and permission bytes with the original work/window/deadline to the
+lock-owned activation context. Fresh target permission precedes planning, and
+the context's post-plan signer is revoked on exit. No public permission-success
+object, renewed allowance, automatic grant dispatch or protected mutation is
+created by this cold configuration. These are source joins, not deployment or
+completion credit for step 21.
 
 ## Decision and trust boundary
 

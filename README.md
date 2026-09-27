@@ -25,17 +25,17 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 ### Current workflow: session activation
 
-**20/26 source steps landed · 0 active · 6 todo.** Protected token release and
+**20/26 source steps landed · 1 active · 5 todo.** Protected token release and
 private handoff are source-landed in [5719d50](https://github.com/example/private-deployment).
-Next is step 21: fresh permission for the exact activation target.
+Active: step 21, fresh permission for the exact activation target (.181 source uncommitted).
 
-[![Session activation's 26 named source steps: 01–20 landed; 21 target-bound permission NEXT/todo; 22–26 public activation, recovery and portal work todo. Twenty landed, zero active and six todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation's 26 named source steps: 01–20 landed; 21 target-bound permission in progress, .181 uncommitted; 22–26 public activation, recovery and portal work todo. Twenty landed, one active and five todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 The six steps after protected release remain individually tracked:
 
 | Step / stable ID | Remaining deliverable | Status |
 | --- | --- | --- |
-| 21 · F08.5.1 | Authorize the exact user/session/credential target, with fresh approval and dedicated caller-key custody | Next / todo |
+| 21 · F08.5.1 | Authorize the exact user/session/credential target, with fresh approval and dedicated caller-key custody | In progress · uncommitted |
 | 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | Todo |
 | 23 · F08.5.3 | Connect separately authorized recovery; a missing response never permits automatic activation retry | Todo |
 | 24 · F08.6.1 | Add explicit portal activate/recover controls bound to the exact retained target | Todo |
@@ -47,7 +47,7 @@ The six steps after protected release remain individually tracked:
 
 The existing 11 release/handoff substeps have **11 landed · 0 active · 0 todo**.
 
-[![All eleven release and handoff substeps are source-landed: 15.1–15.6 exact release/recovery and 16.1–16.5 cold construction, service, transport, independent verification and authorized private handoff. Private handoff landed in 5719d50. No active or open components remain inside this detail; public authorization and portal steps 21–26 remain open. No runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
+[![All eleven release and handoff substeps are source-landed: 15.1–15.6 exact release/recovery and 16.1–16.5 cold construction, service, transport, independent verification and authorized private handoff. Private handoff landed in 5719d50. No active or open components remain inside this detail; step 21 public permission is active and uncommitted; portal and dispatch steps 22–26 remain open. No runtime or production verification.](docs/images/release-handoff-progress.svg)](docs/production-status.md#exact-release-and-handoff-detail)
 
 | Status | Handoff substep | Evidence |
 | --- | --- | --- |

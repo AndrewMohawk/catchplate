@@ -64,6 +64,18 @@ producer performs genuine plan replay itself and signs only same-call derived
 claims with independent authorization scope; public caller admission, cold
 authorizer ownership and key/service provisioning remain external.
 
+The later [registration execution authorization prerequisite](registration-execution-authorization.md)
+provides a separate root-delegated caller purpose for the fixed
+`webauthn.registration.evidence.admit` request. Actual original raw8 source and
+raw2 evidence inputs are reconstructed into the typed request; its signed
+authorization is authenticated and joined to genuine raw3 plan replay before
+successor-grant signing. Plan production is unchanged. This is not a supplied
+permission digest or successful replay carrier. Existing control-plane
+enrollment grants still permit evidence
+signing only: their operation string cannot be repurposed into SQL permission.
+No cold process, public caller route, reserve or SQL call is added by this
+prerequisite, and credential finalization remains a separate operation.
+
 [`authority_successor_execution_preparation._produce_reserve_on_work`](../serverware/authority_successor_execution_preparation.py)
 connects an original grant to actual reserve production. It accepts grant and
 enrollment originals, independent authorization/history/key inputs and the

@@ -14,6 +14,7 @@ old expired originals cannot acquire a fresh execution interval.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from serverware import authority_successor_execution_grant as grants
 from serverware import authority_successor_execution_grant_signing as signing
@@ -28,6 +29,25 @@ class SuccessorExecutionGrantProductionError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HeldInputs:
+    """Private captured inputs, not a successful replay or authorization token."""
+
+    operation: str
+    originals: tuple
+    before: bytes
+    grant_enrollment: bytes
+    current_enrollment: bytes
+    root: object
+    signer: object
+    planner: object
+    operation_key: object
+    expectations: dict
+    deadline: int
+    inherited: int | None
+    original_bytes: int
+
+
 def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, before_vector_bytes, grant_enrollment_bytes,
         current_root_enrollment_bytes, root_public_key, authorizer_private_key,
@@ -39,6 +59,23 @@ def _produce_on_work(*, operation, originals, expectations, planner_public_key,
     carries an authorization commitment. Neither that plan nor this producer
     establishes the independent caller-authorization or current-root owner.
     """
+    shape._digest(expected_authorization_digest)
+    held = _hold_on_work(operation=operation, originals=originals,
+        expectations=expectations, planner_public_key=planner_public_key,
+        operation_public_key=operation_public_key, before_vector_bytes=before_vector_bytes,
+        grant_enrollment_bytes=grant_enrollment_bytes,
+        current_root_enrollment_bytes=current_root_enrollment_bytes,
+        root_public_key=root_public_key, authorizer_private_key=authorizer_private_key,
+        deadline_epoch_ns=deadline_epoch_ns, work=work,
+        transport_deadline_ns=transport_deadline_ns)
+    return _produce_held_on_work(held, expected_authorization_digest, work=work)
+
+
+def _hold_on_work(*, operation, originals, expectations, planner_public_key,
+        operation_public_key, before_vector_bytes, grant_enrollment_bytes,
+        current_root_enrollment_bytes, root_public_key, authorizer_private_key,
+        deadline_epoch_ns, work, transport_deadline_ns=None):
+    """Capture the caller graph before the dedicated authorization callback."""
     capture._SharedLedger(work)
     held_operation = operation
     held_originals, held_before = replay._originals(held_operation, originals, before_vector_bytes)
@@ -46,8 +83,9 @@ def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         grants.MAX_ENROLLMENT_BYTES, "successor grant enrollment")
     held_current_enrollment = authorization._original(current_root_enrollment_bytes,
         authorization.MAX_ENROLLMENT_BYTES, "current-root enrollment")
-    if sum(len(raw) for raw in (*held_originals, held_before,
-            held_grant_enrollment, held_current_enrollment)) > replay.MAX_ORIGINAL_BYTES:
+    original_bytes = sum(len(raw) for raw in (*held_originals, held_before,
+        held_grant_enrollment, held_current_enrollment))
+    if original_bytes > replay.MAX_ORIGINAL_BYTES:
         raise SuccessorExecutionGrantProductionError("grant production originals exceed the source aggregate")
     held_root, held_signer = root_public_key, authorizer_private_key
     held_planner, held_operation_key = planner_public_key, operation_public_key
@@ -55,16 +93,37 @@ def _produce_on_work(*, operation, originals, expectations, planner_public_key,
     authorization._private(held_signer)
     authorization._public(held_planner)
     authorization._public(held_operation_key)
-    shape._digest(expected_authorization_digest)
     shape._integer(deadline_epoch_ns, minimum=1)
     if transport_deadline_ns is not None:
         shape._integer(transport_deadline_ns, minimum=1)
-    held_authorization = expected_authorization_digest
     held_deadline, inherited = deadline_epoch_ns, transport_deadline_ns
     # The actual family capture owns all caller graphs (and preserves the
     # exact revocation UTC instant) before any enrollment/key/clock callback.
     owned_expectations = replay._expectations(held_operation, expectations,
         held_planner, held_operation_key, work)
+    return _HeldInputs(held_operation, held_originals, held_before,
+        held_grant_enrollment, held_current_enrollment, held_root, held_signer,
+        held_planner, held_operation_key, owned_expectations, held_deadline,
+        inherited, original_bytes)
+
+
+def _produce_held_on_work(held, held_authorization, *, work, request_binding=None):
+    """Shared private suffix; a binding is only from the raw-auth composition.
+
+    No externally exposed producer accepts a successful authorization carrier.
+    The registration wrapper itself verifies original authorization bytes and
+    supplies its same-call observations here on the unchanged work allowance.
+    """
+    capture._SharedLedger(work)
+    if type(held) is not _HeldInputs:
+        raise SuccessorExecutionGrantProductionError("grant inputs were not captured by the source producer")
+    shape._digest(held_authorization)
+    held_operation, held_originals, held_before = held.operation, held.originals, held.before
+    held_grant_enrollment, held_current_enrollment = held.grant_enrollment, held.current_enrollment
+    held_root, held_signer = held.root, held.signer
+    held_planner, held_operation_key = held.planner, held.operation_key
+    held_deadline, inherited = held.deadline, held.inherited
+    owned_expectations = held.expectations
 
     material = grants._admit_enrollment_on_work(grant_enrollment_bytes=held_grant_enrollment,
         current_root_enrollment_bytes=held_current_enrollment, root_public_key=held_root, work=work)
@@ -74,10 +133,28 @@ def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         policy["maximumGrantAgeNs"], policy["maximumClockSkewNs"])
     authorizer_key = material.authorizer_public_key
     maximum_age, skew = policy_pins[5:]
-    window = clock._open_on_work(deadline_epoch_ns=held_deadline,
-        maximum_lifetime_ns=maximum_age, maximum_clock_skew_ns=skew, work=work)
-    bound = window[4] if inherited is None else min(window[4], inherited)
-    last_epoch, last_monotonic = window[0], window[2]
+    if request_binding is None:
+        window = clock._open_on_work(deadline_epoch_ns=held_deadline,
+            maximum_lifetime_ns=maximum_age, maximum_clock_skew_ns=skew, work=work)
+        bound = window[4] if inherited is None else min(window[4], inherited)
+        last_epoch, last_monotonic = window[0], window[2]
+    else:
+        # Reuse the verifier's original clock bracket, including its final
+        # rollback observations. Neither enrollment replay nor plan replay
+        # earns a fresh interval or a replacement cumulative work allowance.
+        window = clock._validate(request_binding.window)
+        maximum_age, skew = min(maximum_age, window[5]), min(skew, window[6])
+        expires = min(window[3], held_deadline, request_binding.expires_at_epoch_ns,
+            window[0] + maximum_age)
+        window = clock._validate((window[0], window[1], window[2], expires,
+            window[1] + expires - window[0], maximum_age, skew))
+        bound = min(window[4], request_binding.deadline_ns)
+        if inherited is not None:
+            bound = min(bound, inherited)
+        last_epoch = request_binding.last_epoch_ns
+        last_monotonic = request_binding.last_monotonic_ns
+        plan._same(held_authorization, request_binding.authorization_digest, work,
+            "grant authorization differs from the genuine original authorization")
     original_interval = None
 
     def live():
@@ -105,6 +182,8 @@ def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         expectations=owned_expectations, planner_public_key=held_planner,
         operation_public_key=held_operation_key, before_vector_bytes=held_before, work=work)
     issued, original_expires = replayed.original_interval
+    if request_binding is not None and issued < request_binding.issued_at_epoch_ns:
+        raise SuccessorExecutionGrantProductionError("original plan precedes its request authorization")
     expires = min(window[3], original_expires, issued + maximum_age, held_deadline)
     # Shortening retains the ORIGINAL actual clock bracket. Do not reopen a
     # window after expensive replay or replace the signed plan's issue instant.
@@ -127,6 +206,11 @@ def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         lambda: authorization.commitment.operation_id(held_operation, request_digest))
     plan._same(operation_id, replayed.request["operationId"], work,
         "grant operation identity differs from the actual typed request")
+    if request_binding is not None:
+        plan._same(request_digest, request_binding.request_digest, work,
+            "actual original plan request differs from its request authorization")
+        plan._same(operation_id, request_binding.operation_id, work,
+            "actual original plan operation differs from its request authorization")
     claims = grants._replay_claims(replayed, work)
     payload = {"schema": grants.GRANT_PAYLOAD_SCHEMA,
         "sourceRevision": grants.authority.SOURCE_REVISION,

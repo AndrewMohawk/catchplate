@@ -23,11 +23,13 @@ Checkpoint: **2026-09-26 — pre-production, source-only.**
 **0 of 6 production gates verified · 6 remaining.** This is release readiness,
 not percentage of code written, effort remaining, or an ETA.
 
-**Latest implementation milestone:** the native proof client can optionally
-[attest and then CONNECT on the same TLS session](docs/native-proof-client.md#opt-in-ingress-attestation-before-connect).
-[Portal workload identities](docs/portal-oauth-agent-guide.md#choose-or-author-the-workload-identity)
-and the [signed-handoff Python client](docs/workload-mtls.md) are also in source.
-These paths still need verification against the frozen release.
+**Latest implementation milestone:** registration evidence now has a
+[separate execution-request authorization path](docs/registration-execution-authorization.md)
+in source; its service and public-route integration remain open. The native
+client's [same-TLS attestation and CONNECT](docs/native-proof-client.md#opt-in-ingress-attestation-before-connect),
+[portal workload identities](docs/portal-oauth-agent-guide.md#choose-or-author-the-workload-identity)
+and [signed-handoff Python client](docs/workload-mtls.md) are also implemented in
+source. These paths still need verification against the frozen release.
 
 | Acceptance gate | State | What remains to close it |
 | --- | --- | --- |

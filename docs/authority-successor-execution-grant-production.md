@@ -54,6 +54,24 @@ caller/request authority. Neither a plan signature, its contents, the supplied
 digest's shape nor this producer establishes that authority. Original
 enrollment, key, history and complete-root provenance remain prerequisites.
 
+### Registration's separate original authorization
+
+The [registration execution authorization prerequisite](registration-execution-authorization.md)
+adds a fixed-purpose original-authorization composition for
+`webauthn.registration.evidence.admit`. Its root-delegated caller key is separate
+from the grant authorizer, planner and evidence signer. Genuine original raw8
+source-exchange and raw2 evidence inputs supply the typed request; authorization
+is joined to the request and operation identity derived from genuine raw3 plan
+replay before successor-grant signing. The grant continuation authenticates the
+original authorization and derives its identity instead of accepting a copied
+authorization digest as permission. Existing plan production is unchanged.
+
+The existing `authorize-webauthn-registration` enrollment grant remains
+evidence-signing-only. A shared operation string cannot upgrade it into SQL
+authority. The new `authorize-registration-evidence-execution` purpose does not
+authorize separate credential finalization or the other successor operations.
+It supplies no public caller route, cold key owner or deployment admission.
+
 ## Original lifetimes and pre-decision order
 
 The signed grant preserves the original plan's issue time. Expiry can only
@@ -72,7 +90,7 @@ replay carrier.
 
 ## Authority that remains external
 
-The signing helpers support only
+The successor grant signing helpers support only
 `serverware.signedPolicyAuthoritySuccessorExecutionGrant/v1` and
 `serverware.signedPolicyAuthoritySuccessorExecutionGrantEnrollment/v1`.
 The original outputs remain bounded to 64 KiB and 16 KiB respectively; replay

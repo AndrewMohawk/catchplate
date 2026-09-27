@@ -20,6 +20,8 @@ No private key, signing, grant consumption, store, socket or new work is used.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from serverware import authority_revocation_configuration as configuration
 from serverware import authority_request_commitment as commitment
 from serverware import authority_webauthn_enrollment_authorization as enrollment
@@ -43,6 +45,21 @@ authority, evidence = production.authority, production.evidence
 
 class WebAuthnRegistrationSignerResponseError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _ExecutionRequestOriginals:
+    """Same-call replay outputs, never an accepted authorization input."""
+
+    request: dict
+    generation_digest: str
+    planner_public_key: object
+    evidence_public_key: object
+    excluded_caller_spkis: tuple
+    issued_at_epoch_ns: int
+    expires_at_epoch_ns: int
+    deadline_ns: int
+    last_epoch_ns: int
 
 
 def _fresh(*, grant_context, grant_timing, grant_window, grant_age, grant_skew,
@@ -86,12 +103,13 @@ def _finalization_request_on_work(arguments, envelope_bytes, work):
     return owned
 
 
-def _verify_on_configuration_core(*, finalization, sibling_challenge_ids,
+def _verify_on_configuration_core(*, finalization, sibling_challenge_ids, execution=False,
         payload, configuration_digest, generation, runtime_role_identities,
         request_originals, response_originals, work):
     """One genuine replay; only the fixed output derivation differs."""
     ledger = evidence.capture._SharedLedger(work)
-    if (type(finalization) is not bool or type(sibling_challenge_ids) is not list
+    if (type(finalization) is not bool or type(execution) is not bool
+            or execution and finalization or type(sibling_challenge_ids) is not list
             or len(sibling_challenge_ids) > production.registration.MAX_SIBLINGS
             or not finalization and sibling_challenge_ids
             or any(type(value) is not str or not 1 <= len(value) <= 4096
@@ -253,7 +271,43 @@ def _verify_on_configuration_core(*, finalization, sibling_challenge_ids,
         source_request.MAX_CONTEXT_BYTES, source_request.MAX_CONTEXT_NODES)
     evidence.capability._canonical(request_bytes, request, ledger,
         authority.MAX_REQUEST_BYTES, source_request.MAX_CONTEXT_NODES)
-    return request, returned_inputs
+    if not execution:
+        return request, returned_inputs
+
+    # The dedicated execution-request issuer needs the actual configured keys
+    # and the intersection of the ORIGINAL authenticated lifetimes. Neither a
+    # new replay instant nor a returned request can renew those controls. This
+    # branch adds no work or behavior to the existing pair-returning APIs.
+    original_issued = max(grant.issued_at_epoch_ns, issued, evidence_issued)
+    original_expires = min(grant.expires_at_epoch_ns, expires, evidence_expires, deadline)
+    inherited_deadline = min(grant_window[4], source_window[4])
+    if original_expires <= original_issued:
+        raise WebAuthnRegistrationSignerResponseError("execution request original intervals do not intersect")
+    custody = admission.configuration._capture_on_work(purpose="registration",
+        payload=owned_payload, configuration_digest=digest, generation=owned_generation,
+        runtime_role_identities=owned_runtime, work=work)
+    evidence.plan._same(custody.generation_digest, generation_digest, work,
+        "execution request source generation changed")
+    # All actual role pins come from this same root-admitted configuration,
+    # never parallel caller keys. Reject reuse of even the older enrollment
+    # issuer: its signature has a different purpose and audience.
+    role_pins = []
+    work.prepare_scan(owned_payload["roles"])
+    for role in owned_payload["roles"].values():
+        for field in ("signingSpkiDigest", "responseSigningSpkiDigest"):
+            if field in role:
+                evidence.plan.contract._digest(role[field])
+                role_pins.append(role[field])
+    for key in (issuer_key, public_key, custody.pins[1]):
+        role_pins.append(evidence.keys._spki_on_work(key, work))
+    work.prepare_copy(role_pins)
+    excluded_pins = tuple(role_pins)
+    now = _fresh(**freshness)
+    evidence._fresh(evidence_timing, now, evidence_age, evidence_skew)
+    evidence.capability._canonical(request_bytes, request, ledger,
+        authority.MAX_REQUEST_BYTES, source_request.MAX_CONTEXT_NODES)
+    return _ExecutionRequestOriginals(request, generation_digest, custody.pins[1],
+        public_key, excluded_pins, original_issued, original_expires, inherited_deadline, now)
 
 
 def _verify_on_configuration(*, payload, configuration_digest, generation,
@@ -263,6 +317,20 @@ def _verify_on_configuration(*, payload, configuration_digest, generation,
         payload=payload, configuration_digest=configuration_digest, generation=generation,
         runtime_role_identities=runtime_role_identities, request_originals=request_originals,
         response_originals=response_originals, work=work)
+
+
+def _verify_execution_request_on_configuration(*, payload, configuration_digest, generation,
+        runtime_role_identities, request_originals, response_originals, work):
+    """Replay original evidence for a separately authorized execution issuer.
+
+    This does not turn the old evidence-signing grant into execution permission.
+    The actual caller still needs a distinct root-delegated purpose and key.
+    No successful replay object is accepted as input to an issuance API.
+    """
+    return _verify_on_configuration_core(finalization=False, execution=True,
+        sibling_challenge_ids=[], payload=payload, configuration_digest=configuration_digest,
+        generation=generation, runtime_role_identities=runtime_role_identities,
+        request_originals=request_originals, response_originals=response_originals, work=work)
 
 
 def _verify_finalization_on_configuration(*, payload, configuration_digest, generation,

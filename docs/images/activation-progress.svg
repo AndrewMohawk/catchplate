@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="884" viewBox="0 0 1000 884" role="img" aria-labelledby="activation-title activation-description">
   <title id="activation-title">OIDC activation: 14 of 26 source leaves landed; 1 in progress and 11 other open. Execution authorization grant is next.</title>
-  <desc id="activation-description">The 26 numbered segments map to the named checklist below: the first fourteen are landed, including the encrypted execution bundle at step 14. Private activation replay at step 15 is in progress, execution authorization grant at step 16 is next and still open, and steps 17 through 26 are open. Every item has a stable ID and a written status, so color is not required. The former sixteen-leaf inventory becomes twenty-six by splitting three open scopes into thirteen leaves; no completed work is lost and no parent checkpoint is added. Parent progress remains 34 of 46; production remains 0 of 6 verified. These source-only counts are not a percentage, effort estimate or ETA. Source is unbuilt, unexecuted and unprovisioned. A sampled local signed head is not off-host or atomic action-time authority.</desc>
+  <desc id="activation-description">The 26 numbered segments map to the named checklist below: the first fourteen are landed, including the encrypted execution bundle at step 14. At step 15, genuine private replay and durable ciphertext-store source are landed, but the leaf remains in progress: independent cold custody, sender/export and generic execution/SQL integration are still open. Execution authorization grant at step 16 is next and still open, and steps 17 through 26 are open. Every item has a stable ID and a written status, so color is not required. The former sixteen-leaf inventory becomes twenty-six by splitting three open scopes into thirteen leaves; no completed work is lost and no parent checkpoint is added. Parent progress remains 34 of 46; production remains 0 of 6 verified. These source-only counts are not a percentage, effort estimate or ETA. Source is unbuilt, unexecuted and unprovisioned. A sampled local signed head is not off-host or atomic action-time authority.</desc>
   <rect x="1" y="1" width="998" height="882" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="37" fill="#f8fafc" font-size="25" font-weight="700">OIDC activation · granular source workflow</text>
@@ -25,7 +25,7 @@
         <rect x="456" y="112" width="32" height="44" rx="5"><title>13 · F08.4d.5c · Fresh latest-head admission · LANDED</title></rect>
       </g>
       <rect x="492" y="112" width="32" height="44" rx="5" fill="#34d399"><title>14 · F08.4e.1 · Encrypted execution bundle · LANDED</title></rect>
-      <rect x="528" y="112" width="32" height="44" rx="5" fill="#fbbf24"><title>15 · F08.4e.2 · Private activation replay · IN PROGRESS, private custody and replay integration partial</title></rect>
+      <rect x="528" y="112" width="32" height="44" rx="5" fill="#fbbf24"><title>15 · F08.4e.2 · Private activation replay · IN PROGRESS; genuine replay and ciphertext-store source landed; independent cold custody, sender/export and generic execution/SQL integration open</title></rect>
       <g fill="#334155" stroke="#94a3b8">
         <rect x="564" y="112" width="32" height="44" rx="5" fill="#0f172a" stroke="#60a5fa" stroke-width="2"><title>16 · F08.4e.3 · Execution authorization grant · NEXT, OPEN, not active</title></rect>
         <rect x="600" y="112" width="32" height="44" rx="5"><title>17 · F08.4e.4 · Reservation and pending admission · OPEN</title></rect>
@@ -118,7 +118,7 @@
       <text x="562" y="294" fill="#fef3c7">Private activation replay</text>
     </g>
     <text x="562" y="271" fill="#6ee7b7" font-size="12">F08.4e.1 · ✓ LANDED</text>
-    <text x="562" y="311" fill="#fde68a" font-size="12">F08.4e.2 · → IN PROGRESS · integration partial</text>
+    <text x="562" y="311" fill="#fde68a" font-size="12">F08.4e.2 · → IN PROGRESS · custody/export open</text>
     <text x="536" y="261" text-anchor="middle" fill="#6ee7b7" font-size="14" font-weight="700">14</text>
     <text x="536" y="301" text-anchor="middle" fill="#fde68a" font-size="14" font-weight="700">15</text>
     <g font-size="14" font-weight="600" fill="#e2e8f0">

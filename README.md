@@ -48,12 +48,14 @@ completed work was lost or new product scope added. Each segment maps to a
 Grouping milestones are not counted twice; these 26 steps all belong to F08.
 Counts are not effort percentages or an ETA.
 
-**Landed:** encrypted execution-bundle codec and candidate preparation, plus
-partial receiving replay, in [918581b](https://github.com/example/private-deployment).
-**Now:** finish private replay/custody integration: independent cold custody,
-first-exact durable export/recovery and generic execution/SQL framing remain open.
-**Next:** execution authorization grant, then reservation, one-use SQL,
-completion and token delivery; separately authorized public and portal flows follow.
+Within **F08.4e.2 · Private replay/custody integration**, still in progress:
+
+- **Completed source:** encrypted bundle/candidate preparation, bound journal read and genuine receiving replay — [918581b](https://github.com/example/private-deployment).
+- **Also landed:** [first-exact ciphertext storage](docs/oidc-session-activation-execution-store.md) — [07ca0fc](https://github.com/example/private-deployment). This partial step does not close F08.4e.2.
+- **Current / next integration:** independently admitted cold custody, actual sender/export transport, and generic grant/reserve/SQL framing. Storage alone does not complete that path.
+
+Execution authorization is the next milestone after this integration; reservation,
+one-use SQL, completion, token delivery and separate public/portal flows follow.
 
 Full verification follows source freeze. Immutable dependencies and independently
 operated signing, Nitro/KMS and witness services remain prerequisites; the

@@ -1,9 +1,13 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.141`, implementation only. All six WebAuthn successor operations
-now have genuine configured programs in a separate `typed-successor-planning`
-registry. This closes the source program inventory, not verified import/runtime
-startup or public operation admission. Legacy kernel/planning inventories and
+Status: source `.144`, implementation only. All six WebAuthn successor operations
+have genuine configured programs in a separate `typed-successor-planning`
+registry. The additional `oidc.session.activate` declaration has only private
+[read admission](oidc-session-activation-reads.md), [business effects](oidc-session-activation-transition.md)
+and [encrypted-original delivery](oidc-session-activation-delivery.md) building
+blocks, **no successor factory**. Registry closure therefore reports that missing
+program and remains fail-closed; the earlier six-program closure is not current
+startup evidence. Legacy kernel/planning inventories and
 legacy service, SQL execution and witness gates exclude these successors.
 Revocation and the two evidence-admission programs produce signed originals;
 registration finalization, trust staging and completion now also have separate

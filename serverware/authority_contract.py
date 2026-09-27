@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.143"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.144"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -261,7 +261,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
 })
 _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
     "webauthn.trust.stage", "webauthn.trust.complete", "webauthn.registration.create",
-    "webauthn.registration.finalize", "webauthn.credential.revoke",
+    "webauthn.registration.finalize", "webauthn.credential.revoke", "oidc.session.activate",
 })
 PROOF_PRIMITIVES = frozenset(
     {
@@ -291,6 +291,7 @@ _TYPED_WEBAUTHN_CHALLENGE_OPERATIONS = frozenset(
 )
 _TYPED_SUCCESSOR_PLANNING_OPERATIONS = frozenset(
     {
+        "oidc.session.activate",
         "webauthn.credential.revoke",
         "webauthn.registration.evidence.admit",
         "webauthn.registration.finalize",
@@ -2601,6 +2602,50 @@ _OPERATIONS = {
         maximum_mutations=40,
         maximum_work_units=1024,
     ),
+    "oidc.session.activate": _spec(
+        "finalize_oidc_browser_session_activation",
+        reads=(
+            "oidc_browser_sessions",
+            "oidc_session_activation_deliveries",
+            "webauthn_credentials",
+            "webauthn_challenges",
+            "webauthn_trust_publications",
+            "webauthn_trust_publication_high_water",
+            "rbac_role_bindings",
+            "rbac_authority_state",
+            "metadata_audit_outbox",
+        ),
+        writes=(
+            "oidc_browser_sessions",
+            "oidc_session_activation_deliveries",
+            "webauthn_credentials",
+            "webauthn_challenges",
+            "metadata_audit_outbox",
+            "policy_authority_bounded_aggregate_states",
+        ),
+        # The dedicated proof worker binds exact primary IDs from original
+        # arguments. Complete-query batches require untagged row envelopes.
+        selectors={},
+        # The dedicated transition verifies the original target-key assertion.
+        # It must not inherit a generic preverified-receipt/framework branch.
+        webauthn="original-target-bound-assertion",
+        mutation_kinds={
+            "oidc_browser_sessions": ("UPDATE",),
+            "oidc_session_activation_deliveries": ("INSERT",),
+            "webauthn_credentials": ("UPDATE",),
+            "webauthn_challenges": ("UPDATE",),
+            "metadata_audit_outbox": ("INSERT",),
+            "policy_authority_bounded_aggregate_states": ("UPDATE",),
+        },
+        proof_primitives=(
+            "primary-key-row",
+            "aggregate-high-water",
+            authority_complete_query.PROOF_PRIMITIVE,
+        ),
+        maximum_query_rows=16,
+        maximum_mutations=5,
+        maximum_work_units=128,
+    ),
     "webauthn.credential.revoke": _spec(
         "revoke_webauthn_credential",
         reads=_WEBAUTHN
@@ -3008,6 +3053,7 @@ def _synthesize_business_intent(
     if operation not in {
         "webauthn.challenge.create",
         "webauthn.challenge.consume",
+        "oidc.session.activate",
     }:
         excluded.add("challenge_id")
     if work is not None:

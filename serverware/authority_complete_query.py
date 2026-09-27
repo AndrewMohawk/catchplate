@@ -2,8 +2,9 @@
 
 The explicit-revocation family retains its six roles unchanged. Successor
 registration has two unconditional roles and two additional OIDC-first-
-enrollment roles. Trust staging has five fixed ranges and four dependent
-ranges per declared withdrawal, all under one unchanged 192-row closure.
+enrollment roles. OIDC activation has seven fixed equality ranges. Trust staging
+has five fixed ranges and four dependent ranges per declared withdrawal, all
+under one unchanged 192-row closure.
 Arguments and cutoff are supplied intent/time, not facts.
 Binding proves neither a complete index population nor a current root, trusted
 clock, SQL result, authorized operation or working kernel. Actual proof and
@@ -28,6 +29,7 @@ PROOF_PRIMITIVE = "authenticated-complete-index-range"
 OPERATION = "webauthn.credential.revoke"
 REGISTRATION_OPERATION = "webauthn.registration.finalize"
 STAGE_OPERATION = "webauthn.trust.stage"
+ACTIVATION_OPERATION = "oidc.session.activate"
 STAGE_MAX_ROWS = 192
 CASCADE_MAX = 32
 MAX_ARGUMENT_FIELDS = 64
@@ -55,6 +57,8 @@ class _Role:
 
     @property
     def selector_names(self) -> tuple[str, ...]:
+        if self.name in _ACTIVATION_SELECTORS:
+            return (_ACTIVATION_SELECTORS[self.name][0],)
         if self.name == "live_trusted_credentials":
             return ()
         if self.name == "candidate_bundle_history":
@@ -97,6 +101,30 @@ _ROLES = (
     _Role("pending_trust_publications", "webauthn_trust_publications", "webauthn_publication_status",
           None, "pending_trust_publications", "pending"),
 )
+_ACTIVATION_SELECTORS = {
+    "session_new_token": ("token_digest", "new_token_digest"),
+    "delivery_session": ("session_id", "session_id"),
+    "delivery_old_token": ("old_token_digest", "old_token_digest"),
+    "delivery_new_token": ("new_token_digest", "new_token_digest"),
+    "delivery_assertion": ("assertion_digest", "assertion_digest"),
+    "delivery_challenge": ("challenge_id", "challenge_id"),
+}
+_ACTIVATION_ARGUMENT_FIELDS = frozenset({
+    "session_id", "user_id", "credential_id", "credential_record_id", "challenge_id",
+    "old_token_digest", "new_token_digest", "assertion_digest",
+    "delivery_ttl_seconds", "businessIntent",
+})
+_ACTIVATION_ROLES = (
+    _Role("session_new_token", "oidc_browser_sessions", "oidc_session_token_digest",
+          None, "activation_session_new_token"),
+    *tuple(_Role(name, "oidc_session_activation_deliveries",
+                 "oidc_activation_delivery_" + selector, None, "activation_" + name)
+           for name, (selector, _) in _ACTIVATION_SELECTORS.items()
+           if name != "session_new_token"),
+    _Role("pending_trust_publications", "webauthn_trust_publications",
+          "webauthn_publication_status", None, "activation_pending_trust", "pending"),
+)
+ACTIVATION_ROLES = tuple(role.name for role in _ACTIVATION_ROLES)
 ROLES = tuple(role.name for role in _ROLES)
 _REGISTRATION_ROLES = (
     _Role("credential_id_history", "webauthn_credentials", "webauthn_credential_id",
@@ -138,8 +166,13 @@ def _operation(value: Any) -> None:
 
 def _role(operation: str, role: Any) -> _Role:
     _operation(operation)
-    if operation not in (OPERATION, REGISTRATION_OPERATION, STAGE_OPERATION) or type(role) is not str or not 1 <= len(role) <= 128:
+    if operation not in (OPERATION, REGISTRATION_OPERATION, STAGE_OPERATION, ACTIVATION_OPERATION) or type(role) is not str or not 1 <= len(role) <= 128:
         raise CompleteQueryError("complete query role is not declared for its operation")
+    if operation == ACTIVATION_OPERATION:
+        for candidate in _ACTIVATION_ROLES:
+            if role == candidate.name:
+                return candidate
+        raise CompleteQueryError("activation complete role is not source declared")
     if operation == STAGE_OPERATION:
         for candidate in _STAGE_BASE_ROLES:
             if role == candidate.name:
@@ -540,6 +573,8 @@ def family_roles(operation: str, *, arguments: Any) -> tuple[str, ...]:
     unchanged revocation family's existing validator still checks its inputs.
     """
     _operation(operation)
+    if operation == ACTIVATION_OPERATION:
+        return ACTIVATION_ROLES
     if operation == OPERATION:
         return ROLES
     if operation == STAGE_OPERATION:
@@ -563,6 +598,8 @@ def family_limits(operation: str, *, arguments: Any) -> dict[str, int]:
     The fixed outside-prefix bound must be added by the actual frontier owner.
     """
     roles = family_roles(operation, arguments=arguments)
+    if operation == ACTIVATION_OPERATION:
+        return {"query_count": 7, "head_count": 7, "max_frontier_rows": 1}
     if operation == OPERATION:
         return {"query_count": 6, "head_count": 5, "max_frontier_rows": CASCADE_MAX}
     if operation == STAGE_OPERATION:
@@ -666,9 +703,50 @@ def _bind_stage(declared: _Role, inputs, *, work: _ValidationWork | None = None)
     return CompleteIndexQuery(STAGE_OPERATION, declared.name, selector, maximum)
 
 
+def _activation_binding_inputs(arguments: Any, cutoff_us: Any, *,
+                               work: _ValidationWork | None = None) -> dict[str, Any]:
+    """Fixed scalar intent only; businessIntent and assertion admission are separate."""
+    _cutoff(cutoff_us)
+    if (type(arguments) is not dict or len(arguments) != len(_ACTIVATION_ARGUMENT_FIELDS)
+            or set(arguments) != _ACTIVATION_ARGUMENT_FIELDS
+            or type(arguments["businessIntent"]) is not dict):
+        raise CompleteQueryError("activation query arguments are not source closed")
+    values = {}
+    for name in ("session_id", "user_id", "credential_record_id", "challenge_id"):
+        value = _source_id(arguments[name], work=work)
+        if name == "session_id":
+            if work is not None:
+                work.prepare_utf8(value)
+            if len(value.encode("utf-8")) > 128:
+                raise CompleteQueryError("activation session identifier exceeds its bound")
+        values[name] = value
+    values["credential_id"] = _registration_id(arguments["credential_id"], credential=True, work=work)
+    for name in ("old_token_digest", "new_token_digest", "assertion_digest"):
+        values[name] = _stage_digest(arguments[name], work=work)
+    ttl = arguments["delivery_ttl_seconds"]
+    if type(ttl) is not int or not 5 <= ttl <= 60:
+        raise CompleteQueryError("activation delivery lifetime is outside its source bound")
+    values["delivery_ttl_seconds"] = ttl
+    return values
+
+
+def _bind_activation(declared: _Role, inputs: dict[str, Any], *,
+                     work: _ValidationWork | None = None) -> CompleteIndexQuery:
+    if declared.name == "pending_trust_publications":
+        selector = (("status", "pending"),)
+    else:
+        name, argument = _ACTIVATION_SELECTORS[declared.name]
+        selector = ((name, inputs[argument]),)
+    if work is not None:
+        _prepare_constructor_work(declared.index_id, selector, work)
+    return CompleteIndexQuery(ACTIVATION_OPERATION, declared.name, selector, 1)
+
+
 def bind_query(operation: str, role: str, *, arguments: Any, cutoff_us: int) -> CompleteIndexQuery:
     """Derive a fixed role from supplied intent/time, not caller index claims."""
     declared = _role(operation, role)
+    if operation == ACTIVATION_OPERATION:
+        return _bind_activation(declared, _activation_binding_inputs(arguments, cutoff_us))
     if operation == STAGE_OPERATION:
         return _bind_stage(declared, _stage_binding_inputs(arguments, cutoff_us))
     if operation == REGISTRATION_OPERATION:
@@ -682,6 +760,9 @@ def _bind_query(
 ) -> CompleteIndexQuery:
     """Private metered route through the same binding and constructor body."""
     declared = _role(operation, role)
+    if operation == ACTIVATION_OPERATION:
+        return _bind_activation(declared,
+            _activation_binding_inputs(arguments, cutoff_us, work=work), work=work)
     if operation == STAGE_OPERATION:
         return _bind_stage(declared, _stage_binding_inputs(arguments, cutoff_us, work=work), work=work)
     if operation == REGISTRATION_OPERATION:
@@ -699,6 +780,17 @@ def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery
     enforce each shared union ceiling and the existing operation-wide bounds.
     """
     _operation(operation)
+    if operation == ACTIVATION_OPERATION:
+        inputs = _activation_binding_inputs(arguments, cutoff_us)
+        if type(complete_queries) is not tuple or len(complete_queries) != len(ACTIVATION_ROLES):
+            raise CompleteQueryError("activation complete query inventory is not exact")
+        owned = tuple(snapshot_query(query) for query in complete_queries)
+        if tuple(query.role for query in owned) != ACTIVATION_ROLES:
+            raise CompleteQueryError("activation complete roles are missing, duplicated or out of order")
+        for query in owned:
+            if query != _bind_activation(_role(operation, query.role), inputs):
+                raise CompleteQueryError("activation complete query differs from its original arguments")
+        return owned
     if operation == STAGE_OPERATION:
         inputs = _stage_binding_inputs(arguments, cutoff_us)
         roles = _stage_family_roles(len(inputs[5]))
@@ -738,6 +830,8 @@ def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery
 def role_manifest(operation: str) -> list[dict[str, Any]]:
     """Fresh fixed declarations for source commitment, not runtime activation."""
     _operation(operation)
+    if operation == ACTIVATION_OPERATION:
+        return _activation_role_manifest()
     if operation == STAGE_OPERATION:
         return _stage_role_manifest()
     if operation == REGISTRATION_OPERATION:
@@ -764,6 +858,30 @@ def role_manifest(operation: str) -> list[dict[str, Any]]:
                          {"rule": "max(1,length-of-hint-list)", "hintField": declared.hint_field,
                           "maximum": CASCADE_MAX}),
             "sharedBudget": {"group": declared.shared_group, "maximumRows": declared.maximum_rows,
+                             "measure": "distinct-primary-address-union"},
+            "proofPrimitive": PROOF_PRIMITIVE, "workUnits": 1,
+            "order": "fixed-index-key", "overflowDisposition": "fail-closed",
+        })
+    return result
+
+
+def _activation_role_manifest() -> list[dict[str, Any]]:
+    result = []
+    for declared in _ACTIVATION_ROLES:
+        profile = projection.profile_for(declared.index_id)
+        if declared.name == "pending_trust_publications":
+            sources = {"status": {"constant": "pending"}}
+        else:
+            selector, argument = _ACTIVATION_SELECTORS[declared.name]
+            sources = {selector: "arguments." + argument}
+        result.append({
+            "schema": ROLE_SCHEMA, "querySchema": QUERY_SCHEMA,
+            "operation": ACTIVATION_OPERATION, "role": declared.name,
+            "queryId": f"serverware.policyAuthorityQuery/{ACTIVATION_OPERATION}/{declared.name}/{declared.table}/v1",
+            "table": declared.table, "indexId": declared.index_id,
+            "projectionDigest": profile.projection_digest, "selectorSources": sources,
+            "rowBound": {"rule": "constant", "maximum": 1},
+            "sharedBudget": {"group": declared.shared_group, "maximumRows": 1,
                              "measure": "distinct-primary-address-union"},
             "proofPrimitive": PROOF_PRIMITIVE, "workUnits": 1,
             "order": "fixed-index-key", "overflowDisposition": "fail-closed",

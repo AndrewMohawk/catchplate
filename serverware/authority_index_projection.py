@@ -185,6 +185,22 @@ _DEFINITIONS = (
         "global/pending-or-published", (), "signed64-rollback-epoch/signed64-sequence",
         "generation-pair-inclusive-to-partition-end/not-a-maximum-claim",
     ),
+    _Definition(
+        "oidc_session_token_digest", "oidc_browser_sessions",
+        (("id", "text"), ("token_digest", "text")),
+        (("token_digest", "text"),), "all-rows-including-expired-or-revoked",
+        ("token_digest",), "zero16", "whole-equality-partition",
+    ),
+    *tuple(
+        _Definition(
+            "oidc_activation_delivery_" + field, "oidc_session_activation_deliveries",
+            (("id", "text"), (field, "text")), ((field, "text"),),
+            "all-rows-including-expired-or-consumed", (field,),
+            "zero16", "whole-equality-partition",
+        )
+        for field in ("session_id", "old_token_digest", "new_token_digest",
+                      "assertion_digest", "challenge_id")
+    ),
 )
 INDEX_IDS = tuple(definition.index_id for definition in _DEFINITIONS)
 

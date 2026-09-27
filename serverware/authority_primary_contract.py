@@ -35,6 +35,7 @@ PRIMARY_KEY_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "durable_budget_events": ("reservation_id",),
     "metadata_audit_outbox": ("id",),
     "oidc_browser_sessions": ("id",),
+    "oidc_session_activation_deliveries": ("id",),
     "pending_oauth_credentials": ("id",),
     "policy_activation_aborts": ("preparation_digest",),
     "policy_activation_approval_consumptions": ("approval_id",),

@@ -1,9 +1,12 @@
 # Consume SQL receiver bootstrap prerequisites
 
 [`oidc_session_activation_delivery_execution_sql_bootstrap.py`](../serverware/oidc_session_activation_delivery_execution_sql_bootstrap.py)
-authenticates a distinct root-signed resource contract for a **future** consume
-SQL worker. It does not construct that worker, issue a consume SQL packet,
-execute SQL or close token-release row 12. Source is unbuilt, unexecuted,
+authenticates a distinct root-signed resource contract for the consume SQL
+worker. The separate [OS delivery](oidc-session-activation-delivery-execution-sql-delivery.md),
+[cold service](oidc-session-activation-delivery-execution-sql-service.md) and
+[issuer/executor bridge](oidc-session-activation-delivery-sql.md) connect that
+contract to genuine pending admission and protected SQL. This bootstrap alone
+does not construct a worker or execute SQL. Source is unbuilt, unexecuted,
 uninstalled and unprovisioned; no production acceptance is claimed.
 
 ## Fixed role and originals
@@ -36,8 +39,9 @@ Current-root, consume-grant and consume-caller enrollment originals are decoded
 under their exact caps and independently verified against the real root. Their
 identities, database/generation and exact current-root original must agree with
 the planner and role. The source fixes operation
-`oidc.session.activation-delivery.consume`; none of the generic replay/grant/SQL
-dispatch inventories is widened.
+`oidc.session.activation-delivery.consume`; generic original replay/grant
+dispatch remains closed. Protected SQL selects a dedicated consume packet
+branch with its own exact original inventory, domains and frame bounds.
 
 ## Independent pending and attempt scope
 

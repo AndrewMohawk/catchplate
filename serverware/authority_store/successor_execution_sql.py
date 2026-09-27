@@ -42,6 +42,7 @@ from serverware import authority_current_root_plan_replay as replay
 from serverware import authority_current_root_vector as vector
 from serverware import authority_successor_execution_grant as grants
 from serverware import authority_successor_execution_packet as packet
+from serverware import authority_oidc_session_activation_delivery_execution_packet as delivery_packet
 from serverware.authority_store import current_root_execution_sql as effects
 from serverware.authority_store.mutation_sql import _schema_name
 from serverware.authority_store.revocation_retained_sql import _closed, _literal
@@ -155,25 +156,38 @@ def _signed_shape(expression, schema, fields, payload_schema):
     """
 
 
-def _originals(namespace):
+def _originals(namespace, *, delivery=False):
+    if type(delivery) is not bool:
+        raise ValueError("successor original profile must be source fixed")
+    grant_wire = delivery_packet.grants if delivery else grants
+    grant_enrollment = delivery_packet.enrollments if delivery else grants
+    snapshot = delivery_packet.computation if delivery else computation
+    inventory = delivery_packet.CONTROL_MAXIMA if delivery else packet._CONTROL_MAXIMA
+    original_fields = delivery_packet.ORIGINAL_FIELDS if delivery else packet.ORIGINAL_FIELDS
     controls = {name: {"maximum": maximum, "nodes": authorization.MAX_NODES,
-        "depth": authorization.MAX_DEPTH} for name, maximum in packet._CONTROL_MAXIMA}
-    for name in ("grantEnrollment", "grant"):
-        controls[name].update(nodes=grants.MAX_NODES, depth=grants.MAX_DEPTH)
-    controls["computationSnapshot"].update(nodes=computation.MAX_SNAPSHOT_NODES, depth=4)
+        "depth": authorization.MAX_DEPTH} for name, maximum in inventory}
+    controls["grantEnrollment"].update(nodes=grant_enrollment.MAX_NODES, depth=grant_enrollment.MAX_DEPTH)
+    controls["grant"].update(nodes=grant_wire.MAX_NODES, depth=grant_wire.MAX_DEPTH)
+    controls["computationSnapshot"].update(nodes=snapshot.MAX_SNAPSHOT_NODES, depth=4)
     domains = {"currentRootEnrollment": authorization.ENROLLMENT_IDENTITY_DOMAIN,
-        "grantEnrollment": grants.ENROLLMENT_IDENTITY_DOMAIN, "grant": grants.GRANT_IDENTITY_DOMAIN,
+        "grantEnrollment": grant_enrollment.ENROLLMENT_IDENTITY_DOMAIN, "grant": grant_wire.GRANT_IDENTITY_DOMAIN,
         "reserveRequest": authorization.REQUEST_IDENTITY_DOMAIN,
         "reserveReceipt": authorization.RECEIPT_IDENTITY_DOMAIN,
-        "computationSnapshot": computation.SNAPSHOT_DOMAIN}
-    # The same closed source inventory bounds live admission, snapshots,
-    # grants and retained packets. Activation's second original is ciphertext;
-    # this SQL loop hashes opaque bytes and never opens or JSON-decodes it.
-    maxima = {operation: list(replay._frame_maxima(operation))
-        for operation in sorted(replay.OPERATIONS)}
+        "computationSnapshot": snapshot.SNAPSHOT_DOMAIN}
+    if delivery:
+        for name in ("callerEnrollment", "callerAuthorization"):
+            controls[name].update(nodes=delivery_packet.caller.MAX_NODES, depth=delivery_packet.caller.MAX_DEPTH)
+        domains.update(callerEnrollment=delivery_packet.caller.ENROLLMENT_IDENTITY_DOMAIN,
+            callerAuthorization=delivery_packet.caller.REQUEST_IDENTITY_DOMAIN)
+        maxima = {delivery_packet.OPERATION: list(grant_wire.FRAME_MAXIMA)}
+    else:
+        maxima = {operation: list(replay._frame_maxima(operation))
+            for operation in sorted(replay.OPERATIONS)}
+    # Only the explicit fixed consume branch uses its dedicated raw2 grammar.
+    # Encrypted frames remain opaque bytes: no key, decrypt or JSON fallback.
     cases = "\n".join(f"WHEN {_literal(name)} THEN {_literal(domain)}" for name, domain in domains.items())
     return f"""
-        IF NOT {_closed("sxe_packet->'originals'", packet.ORIGINAL_FIELDS)}
+        IF NOT {_closed("sxe_packet->'originals'", original_fields)}
         THEN RAISE EXCEPTION 'successor original inventory is not exact'; END IF;
         sxe_documents := '{{}}'::jsonb; sxe_identities := '{{}}'::jsonb; sxe_total := 0;
         FOR sxe_name, sxe_control IN SELECT item.key, item.value
@@ -215,12 +229,20 @@ def _originals(namespace):
     """
 
 
-def _bindings(namespace):
+def _bindings(namespace, *, delivery=False):
+    if type(delivery) is not bool:
+        raise ValueError("successor binding profile must be source fixed")
+    grant_wire = delivery_packet.grants if delivery else grants
+    grant_enrollment = delivery_packet.enrollments if delivery else grants
+    snapshot = delivery_packet.computation if delivery else computation
+    snapshot_fields = snapshot._FIELDS if delivery else snapshot._SNAPSHOT_FIELDS
     shared = ("databaseId", "generationDigest", "operation", "requestDigest", "operationId")
     snapshot_joins = ("sourceRevision", "databaseId", "generationDigest", "operation", "requestDigest",
         "operationId", "retainedRecordDigest", "planDigest", "beforeVectorDigest", "afterVectorDigest",
         "resultDigest", "originalFrames", "originalIssuedAtEpochNs", "originalExpiresAtEpochNs",
         "signedSnapshotDigest", "signedCapabilityId")
+    if delivery:
+        snapshot_joins = snapshot_joins[:-2]
     pairs = [("sxe_grant->" + _literal(name), "sxe_snapshot->" + _literal(name)) for name in snapshot_joins]
     pairs += [("sxe_reserve->" + _literal(name), "sxe_snapshot->" + _literal(name)) for name in shared]
     pairs += [("sxe_receipt->" + _literal(name), "sxe_reserve->" + _literal(name))
@@ -264,12 +286,67 @@ def _bindings(namespace):
     pairs += [("crx_marker->" + _literal(name), value) for name, value in marker.items()]
     for name in ("beforeVectorDigest", "afterVectorDigest"):
         pairs.append(("sxe_receipt->" + _literal(name), "sxe_snapshot->" + _literal(name)))
+    caller_shapes = ""
+    caller_lifetime = ""
+    if delivery:
+        caller = delivery_packet.caller
+        caller_shapes = f"""
+            {_signed_shape("sxe_documents->'callerEnrollment'", caller.ENROLLMENT_SCHEMA,
+                caller.ENROLLMENT_FIELDS, caller.ENROLLMENT_PAYLOAD_SCHEMA)}
+            {_signed_shape("sxe_documents->'callerAuthorization'", caller.REQUEST_SCHEMA,
+                caller.REQUEST_FIELDS, caller.REQUEST_PAYLOAD_SCHEMA)}
+            sxe_caller_enrollment := sxe_documents->'callerEnrollment'->'payload';
+            sxe_caller := sxe_documents->'callerAuthorization'->'payload';
+        """
+        pairs += [("sxe_caller->" + _literal(name), "sxe_caller_enrollment->" + _literal(name))
+            for name in caller._SCOPE_FIELDS]
+        pairs += [("sxe_caller->" + _literal(name), "sxe_grant->" + _literal(name))
+            for name in ("sourceRevision", "configurationDigest", "databaseId", "generationDigest",
+                "operation", "requestDigest", "operationId", "planDigest", "retainedRecordDigest",
+                "journalDigest", "beforeVectorDigest", "currentRootEnrollmentDigest", "grantEnrollmentDigest")]
+        pairs += [("sxe_caller->'authorizationEnrollmentDigest'", "sxe_identities->'callerEnrollment'"),
+            ("sxe_packet->'authorizationDigest'", "sxe_identities->'callerAuthorization'"),
+            ("sxe_caller->'callerMeasurementDigest'", "sxe_caller_enrollment->'callerKey'->'measurementDigest'"),
+            ("sxe_caller->'audienceSpkiDigest'", "sxe_grant_enrollment->'authorizer'->'spkiDigest'"),
+            ("sxe_caller->>'purpose'", _literal(caller.PURPOSE)),
+            ("sxe_caller_enrollment->>'purpose'", _literal(caller.PURPOSE)),
+            ("sxe_caller_enrollment->>'operation'", _literal(delivery_packet.OPERATION)),
+            ("sxe_grant_enrollment->>'operation'", _literal(delivery_packet.OPERATION))]
+        caller_lifetime = f"""
+            {_integer("sxe_caller->'issuedAtEpochNs'", minimum=1)}
+            {_integer("sxe_caller->'expiresAtEpochNs'", minimum=1)}
+            {_integer("sxe_caller_enrollment->'maximumAgeNs'", minimum=1,
+                maximum=authority.VERIFIER_RESPONSE_MAX_AGE_NS)}
+            {_integer("sxe_caller_enrollment->'maximumClockSkewNs'",
+                maximum=authority.VERIFIER_MAX_CLOCK_SKEW_NS)}
+            {_integer("sxe_grant_enrollment->'maximumGrantAgeNs'", minimum=1,
+                maximum=authority.VERIFIER_RESPONSE_MAX_AGE_NS)}
+            {_integer("sxe_grant_enrollment->'maximumClockSkewNs'",
+                maximum=authority.VERIFIER_MAX_CLOCK_SKEW_NS)}
+            {_integer("sxe_snapshot->'originalIssuedAtEpochNs'", minimum=1)}
+            {_integer("sxe_snapshot->'originalExpiresAtEpochNs'", minimum=1)}
+            IF (sxe_caller->>'issuedAtEpochNs')::bigint < sxe_issued
+                OR (sxe_caller->>'expiresAtEpochNs')::bigint <= (sxe_caller->>'issuedAtEpochNs')::bigint
+                OR (sxe_caller->>'expiresAtEpochNs')::bigint - (sxe_caller->>'issuedAtEpochNs')::bigint
+                    > (sxe_caller_enrollment->>'maximumAgeNs')::bigint
+                OR (sxe_caller->>'issuedAtEpochNs')::numeric >
+                    pg_catalog.floor(EXTRACT(EPOCH FROM pg_catalog.clock_timestamp()) * 1000000000)
+                    + (sxe_caller_enrollment->>'maximumClockSkewNs')::bigint
+                OR sxe_expires > (sxe_caller->>'expiresAtEpochNs')::bigint
+                OR sxe_issued <> (sxe_snapshot->>'originalIssuedAtEpochNs')::bigint
+                OR (sxe_caller->>'expiresAtEpochNs')::bigint > (sxe_snapshot->>'originalExpiresAtEpochNs')::bigint
+                OR (sxe_grant->>'expiresAtEpochNs')::bigint > (sxe_snapshot->>'originalExpiresAtEpochNs')::bigint
+                OR (sxe_grant->>'expiresAtEpochNs')::bigint - sxe_issued
+                    > (sxe_grant_enrollment->>'maximumGrantAgeNs')::bigint
+            THEN RAISE EXCEPTION 'consume packet retimes caller or original grant authority'; END IF;
+        """
     return f"""
         {_signed_shape("sxe_documents->'currentRootEnrollment'", authorization.ENROLLMENT_SCHEMA,
             authorization.ENROLLMENT_FIELDS, authorization.ENROLLMENT_PAYLOAD_SCHEMA)}
-        {_signed_shape("sxe_documents->'grantEnrollment'", grants.ENROLLMENT_SCHEMA,
-            grants.ENROLLMENT_FIELDS, grants.ENROLLMENT_PAYLOAD_SCHEMA)}
-        {_signed_shape("sxe_documents->'grant'", grants.GRANT_SCHEMA, grants.GRANT_FIELDS, grants.GRANT_PAYLOAD_SCHEMA)}
+        {_signed_shape("sxe_documents->'grantEnrollment'", grant_enrollment.ENROLLMENT_SCHEMA,
+            grant_enrollment.ENROLLMENT_FIELDS, grant_enrollment.ENROLLMENT_PAYLOAD_SCHEMA)}
+        {_signed_shape("sxe_documents->'grant'", grant_wire.GRANT_SCHEMA,
+            grant_wire.GRANT_FIELDS, grant_wire.GRANT_PAYLOAD_SCHEMA)}
         {_signed_shape("sxe_documents->'reserveRequest'", authorization.REQUEST_SCHEMA,
             authorization.RESERVE_FIELDS, authorization.REQUEST_PAYLOAD_SCHEMA)}
         {_signed_shape("sxe_documents->'reserveReceipt'", authorization.RECEIPT_SCHEMA,
@@ -280,8 +357,9 @@ def _bindings(namespace):
         sxe_reserve := sxe_documents->'reserveRequest'->'payload';
         sxe_receipt := sxe_documents->'reserveReceipt'->'payload';
         sxe_snapshot := sxe_documents->'computationSnapshot';
-        IF NOT {_closed('sxe_snapshot', computation._SNAPSHOT_FIELDS)}
-            OR sxe_snapshot->>'schema' IS DISTINCT FROM {_literal(computation.SNAPSHOT_SCHEMA)}
+        {caller_shapes}
+        IF NOT {_closed('sxe_snapshot', snapshot_fields)}
+            OR sxe_snapshot->>'schema' IS DISTINCT FROM {_literal(snapshot.SNAPSHOT_SCHEMA)}
             OR sxe_snapshot->>'sourceRevision' IS DISTINCT FROM {_literal(authority.SOURCE_REVISION)}
         THEN RAISE EXCEPTION 'successor original computation snapshot changed'; END IF;
         {_equal(pairs, 'successor packet original scope or marker commitments changed')}
@@ -289,6 +367,7 @@ def _bindings(namespace):
         {_integer("sxe_enrollment->'maxControlAgeNs'", minimum=1, maximum=authority.VERIFIER_RESPONSE_MAX_AGE_NS)}
         {_integer("sxe_enrollment->'maxClockSkewNs'", maximum=authority.VERIFIER_MAX_CLOCK_SKEW_NS)}
         {_integer("sxe_grant->'expiresAtEpochNs'", minimum=1)}
+        {caller_lifetime}
         IF sxe_expires > (sxe_grant->>'expiresAtEpochNs')::bigint
             OR sxe_expires - sxe_issued > (sxe_enrollment->>'maxControlAgeNs')::bigint
             OR sxe_issued::numeric > pg_catalog.floor(EXTRACT(EPOCH FROM pg_catalog.clock_timestamp()) * 1000000000)
@@ -383,8 +462,13 @@ def _packet(namespace):
             OR (sxe_packet->'beforeVector' - 'primaryRoots' - 'countedRoots') IS DISTINCT FROM {_literal(effects._json(header))}::jsonb
             OR (sxe_packet->'afterVector' - 'primaryRoots' - 'countedRoots') IS DISTINCT FROM {_literal(effects._json(header))}::jsonb
         THEN RAISE EXCEPTION 'successor custody result/vector commitments changed'; END IF;
-        {_originals(namespace)}
-        {_bindings(namespace)}
+        IF crx_operation = {_literal(delivery_packet.OPERATION)} THEN
+            {_originals(namespace, delivery=True)}
+            {_bindings(namespace, delivery=True)}
+        ELSE
+            {_originals(namespace)}
+            {_bindings(namespace)}
+        END IF;
         {_live()}
     """
 
@@ -464,6 +548,7 @@ def successor_execution_functions_sql(namespace: str, *, issuer_role: str, execu
         sxe_canonical text; sxe_text text; sxe_raw bytea; sxe_signature bytea;
         sxe_documents jsonb; sxe_document jsonb; sxe_identities jsonb; sxe_control jsonb;
         sxe_enrollment jsonb; sxe_grant_enrollment jsonb; sxe_grant jsonb;
+        sxe_caller_enrollment jsonb; sxe_caller jsonb;
         sxe_reserve jsonb; sxe_receipt jsonb; sxe_snapshot jsonb;
         sxe_plan_maxima jsonb; sxe_frames jsonb; sxe_frame jsonb;
         sxe_name text; sxe_domain text; sxe_maximum bigint; sxe_count bigint; sxe_position bigint;

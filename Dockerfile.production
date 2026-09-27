@@ -129,6 +129,7 @@ COPY --from=verified-production-source /source/serverware/oidc_session_activatio
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_reserver_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_sql_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_sql_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py
 COPY --from=verified-production-source /source/serverware /runtime/app/serverware
 COPY --from=verified-production-source /source/scripts /runtime/app/scripts
@@ -171,6 +172,8 @@ COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-sessi
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-reserver.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-reserver.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-sql.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-sql.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-sql.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-sql.service.in
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-execution-sql.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-execution-sql.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-execution-sql.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-execution-sql.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-completion.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-completion.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-completion.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-completion.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.socket /runtime/app/ops/systemd/serverware-policy-custody@.socket
@@ -203,6 +206,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_reserver_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_execution_sql_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_sql_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py \
     && chmod 0755 /runtime/custody-trust \
     && chmod 0750 /runtime/gate-materials \

@@ -2,16 +2,17 @@
 
 [`authority_oidc_session_activation_delivery_pending_admission.py`](../serverware/authority_oidc_session_activation_delivery_pending_admission.py)
 checks a genuine reservation response against independently held current pending
-pins. A signed ACK is not its own latest-head authority. This is a source-only
-library prerequisite: unbuilt, unexecuted and unprovisioned. The cold pending
-consumer is not connected in this batch, so token-release row 12 remains open
-and in progress despite the connected reservation primitives.
+pins. A signed ACK is not its own latest-head authority. This is source-only,
+unbuilt, unexecuted and unprovisioned. Its dedicated original-input continuation
+now feeds actual protected [packet issuance](oidc-session-activation-delivery-execution-packet.md)
+without a second proof replay; library outputs alone never close a cold-service
+or production acceptance criterion.
 
 The [independent SQL bootstrap](oidc-session-activation-delivery-execution-sql-bootstrap.md)
 now defines the root-held predecessor/current-pending pins, distinct receiving
 purpose, fixed resource inventory and separate issuer/executor database scope.
-It is not yet connected to an actual cold pending consumer or consume SQL
-producer. The [reserver service](oidc-session-activation-delivery-execution-reserver-service.md)
+The dedicated consume SQL path must use those independent pins, not returned
+reservation data. The [reserver service](oidc-session-activation-delivery-execution-reserver-service.md)
 only returns retained reservation originals; it does not select the SQL
 receiver's expected pending head.
 
@@ -65,7 +66,15 @@ live through final return, narrowed by actual receiving/caller/grant/plan/reserv
 limits. Expired consume plans are not admitted as history, and neither a stored
 ACK nor a newly opened processing window renews execution authority.
 
-Only unchanged raw3 is returned. There is no proof-carrying SQL suffix before a
-real dedicated consumer exists. Generic consume dispatch remains rejected;
-one-use SQL, commit evidence, durable completion/recovery, exact token release
-and public permission remain separate, unfinished connections.
+The existing `_admit_on_work` still returns only unchanged raw3. The separately
+named private `_admit_full_on_work` accepts exactly the same original inputs and
+retains that invocation's genuine selected rows, three effects, complete vectors,
+eighteen-field marker and original reserve interval. Its current guard also
+retains the actual SQL-issuer receiving purpose. No entrypoint accepts this
+candidate or guard as proof. The dedicated packet producer consumes this suffix
+internally once; the protected issuer accepts only original-input arguments.
+
+Generic consume grant/replay/preparation dispatch remains rejected. SQL custody
+and a normal transaction observation are not signed completion, exact committed
+token release, fresh public permission or portal handoff. Historical consume
+completion and recovery admission remain separate, unfinished work.

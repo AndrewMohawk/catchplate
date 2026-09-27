@@ -59,6 +59,17 @@ class SuccessorCustodyObservation:
     expires_at_epoch_ns: int
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _IssuedDelivery:
+    """Actual same-call insertion output, never an accepted authority input."""
+
+    observation: SuccessorCustodyObservation
+    marker_expectation: dict
+    live_window: tuple
+    deadline_ns: int
+    live: object
+
+
 @dataclass(frozen=True, slots=True)
 class SuccessorExecutionObservation:
     """Normal outer-commit observation, not external signed completion."""
@@ -333,6 +344,55 @@ class SuccessorExecutionIssuer:
         work.prepare_utf8(prepared.packet_digest)
         return _run_on_configuration(configured, purpose="issue", parameters=(text, prepared.packet_digest),
             expected=prepared, live_window=window, work=work, transport_deadline_ns=bound)
+
+    def _issue_delivery_on_work(self, *, originals, expectations, before_vector_bytes, authorization_bytes,
+            grant_bytes, response_originals, authorization_enrollment_bytes, grant_enrollment_bytes,
+            current_root_enrollment_bytes, root_public_key, planner_public_key,
+            operation_public_key, configuration_digest, expected_predecessor_sequence,
+            expected_predecessor_head_digest, expected_database_id, expected_generation_digest,
+            expected_pending_sequence, expected_pending_head_digest, expected_fence,
+            receiving_custody, live_window, transport_deadline_ns, work):
+        """Genuinely admit consume originals once and insert their exact custody."""
+        from serverware import authority_oidc_session_activation_delivery_execution_packet as delivery_packet
+
+        configured = SuccessorExecutionIssuer._snapshot_configuration(self)
+        prepared = delivery_packet._prepare_on_work(originals=originals, expectations=expectations,
+            before_vector_bytes=before_vector_bytes, authorization_bytes=authorization_bytes,
+            grant_bytes=grant_bytes, response_originals=response_originals,
+            authorization_enrollment_bytes=authorization_enrollment_bytes,
+            grant_enrollment_bytes=grant_enrollment_bytes,
+            current_root_enrollment_bytes=current_root_enrollment_bytes, root_public_key=root_public_key,
+            planner_public_key=planner_public_key, operation_public_key=operation_public_key,
+            configuration_digest=configuration_digest, expected_predecessor_sequence=expected_predecessor_sequence,
+            expected_predecessor_head_digest=expected_predecessor_head_digest,
+            expected_database_id=expected_database_id, expected_generation_digest=expected_generation_digest,
+            expected_pending_sequence=expected_pending_sequence, expected_pending_head_digest=expected_pending_head_digest,
+            expected_fence=expected_fence, receiving_custody=receiving_custody,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+
+        def live():
+            now = prepared.live()
+            if (SuccessorExecutionIssuer._snapshot_configuration(self) is not configured
+                    or now >= prepared.expires_at_epoch_ns):
+                raise SuccessorExecutionOwnerError("consume custody issuer changed or original reserve expired")
+            return now
+
+        live()
+        work.prepare_copy(prepared.marker_expectation)
+        marker = prepared.marker_expectation.copy()
+        work.charge(input_bytes=len(prepared.packet_bytes))
+        text = prepared.packet_bytes.decode("ascii")
+        work.prepare_utf8(prepared.packet_digest)
+        live()
+        observed = _run_on_configuration(configured, purpose="issue",
+            parameters=(text, prepared.packet_digest), expected=prepared,
+            live_window=prepared.live_window, work=work, transport_deadline_ns=prepared.deadline_ns)
+        live()
+        if type(observed) is not SuccessorCustodyObservation:
+            raise SuccessorExecutionOwnerError("consume custody lacks its actual insertion observation")
+        result = _IssuedDelivery(observed, marker, prepared.live_window, prepared.deadline_ns, live)
+        live()
+        return result
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)

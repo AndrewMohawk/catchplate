@@ -169,8 +169,10 @@ class SuccessorExecutionAttempts:
                     live()
 
                 live()
-                evidence.production._callback(work,
-                    lambda: storage.CurrentRootJournal.recover(journal, recover_record))
+                # The genuine record consumer charges the inherited ledger.
+                # A metrics-constant native callback around the whole recovery
+                # would reject those required charges after the first record.
+                storage.CurrentRootJournal.recover(journal, recover_record)
                 live()
             if (self._sequence, self._head_digest) != expected:
                 raise SuccessorExecutionAttemptsError("attempt journal differs from independently current checkpoint")

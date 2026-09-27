@@ -48,6 +48,7 @@ class _ReplayedDelivery:
     deadline_ns: int
     valid_until_epoch_ns: int
     live: object
+    selected_rows: tuple
 
 
 def _fail(message):
@@ -268,8 +269,10 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
     record_digest = evidence.plan._frame(IDENTITY_DOMAIN, raw_pair, work)
     transition = actual.transition
     work.prepare_copy(transition.mutations)
+    work.prepare_copy(invocation.context.selected_rows)
     output = evidence.capture._JSONCapture(ledger, maximum_bytes=MAX_ORIGINAL_BYTES).visit({
-        "request": invocation.request, "result": transition.result, "mutations": list(transition.mutations)})
+        "request": invocation.request, "result": transition.result, "mutations": list(transition.mutations),
+        "selectedRows": list(invocation.context.selected_rows)})
     work_units = transition.work_units
     registration._integer(work_units, "consume execution replay work", 1,
         contract.authority.operation_spec(OPERATION)["maximumWorkUnits"])
@@ -277,9 +280,10 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
     if interval[0] >= interval[1] or output["result"].get("tokenReleased") is not False:
         _fail("consume replay output is not its token-free original live derivation")
     work.prepare_copy(output["mutations"])
+    work.prepare_copy(output["selectedRows"])
     result = _ReplayedDelivery(OPERATION, output["request"], raw_pair, record_digest,
         before_bytes, after_bytes, before_digest, after_digest, output["result"], interval,
         plan_digest, tuple(output["mutations"]), work_units, result_window, result_bound,
-        valid_until, check)
+        valid_until, check, tuple(output["selectedRows"]))
     check()
     return result

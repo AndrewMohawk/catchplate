@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="760" height="386" viewBox="0 0 760 386" role="img" aria-labelledby="activation-recovery-title activation-recovery-description">
-  <title id="activation-recovery-title">Step 23 recovery is active. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY is active/partial: parent v15 and actor-bound durable acquisition landed in f054573; recovery-worker staging remains open. COMPLETE, EXCHANGE and HTTP remain todo. The separate historical-loader combined-preallocation fix is still required before source freeze. These six facets are not new milestones or effort percentages. No functional recovery or token delivery is claimed. Source only; unbuilt, unexecuted and unprovisioned.</title>
-  <desc id="activation-recovery-description">Six diagnostic facets inside active step 23, not six new milestones. TARGET binds the retained intent-stage target and old-token possession through a bounded three-record selector. ACTOR supplies fresh WebAuthn, current roles and trust, configured approval, genuine options and a private live context. Both are source-landed in 9f036648f7fee2f88208a1e6b284b39c4acb08ee. AUTHORITY is amber active/partial: parent v15, fresh actor-bound acquisition, the policy-keyed durable claim and verified retained raw3 context are source-landed in f0545737c49f74c499b4767828b1333ec64b8271. The cold eight-FD issuer and finite verified private client landed previously in eb4242552861df8924acd8d418140907f7f56cd0, building on the pure policy/producer/triple-admission foundation in 1c64354034e46db1bc796b3506ee6b73e0ddfd6c. Recovery-worker staging remains open. The separate earlier historical-loader combined-preallocation fix remains required before source freeze and is not closed by the new phase cap. Retained grants and canonical outcome reconstruction do not prove storage exists. COMPLETE prior-stage recovery, EXCHANGE protected recovery and genuine response, and HTTP public recovery/guarded cookie remain todo. Options alone do not authorize or execute recovery. Activation remains 22/26 landed, with 1 active step and 3 todo; public actions remain 2/3, project 34/46 and production acceptance 0/6 verified. No automatic SQL retry or functional recovery claim. Source is unbuilt, unexecuted and unprovisioned.</desc>
+  <title id="activation-recovery-title">Step 23 recovery is active. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY is active/partial: actor-bound durable acquisition is source-landed, but recovery-worker staging remains open. Historical combined preallocation is source-connected in 8ecfbc4, not a heap, RSS or runtime guarantee. COMPLETE, EXCHANGE and HTTP remain todo. These six facets are not new milestones or effort percentages. No functional recovery or token delivery is claimed. Source only; unbuilt, unexecuted and unprovisioned.</title>
+  <desc id="activation-recovery-description">Six diagnostic facets inside active step 23, not six new milestones. TARGET binds the retained intent-stage target and old-token possession through a bounded three-record selector. ACTOR supplies fresh WebAuthn, current roles and trust, configured approval, genuine options and a private live context. Both are source-landed in 9f036648f7fee2f88208a1e6b284b39c4acb08ee. AUTHORITY is amber active/partial: its prior parent-v15, fresh actor-bound acquisition, policy-keyed durable claim and verified retained raw3 foundation is source-landed in f0545737c49f74c499b4767828b1333ec64b8271. The cold eight-FD issuer and finite verified private client landed previously in eb4242552861df8924acd8d418140907f7f56cd0, building on the pure policy/producer/triple-admission foundation in 1c64354034e46db1bc796b3506ee6b73e0ddfd6c. Recovery-worker staging remains open. Historical combined preallocation is source-connected in 8ecfbc4b700554166f4a63ac37a9d3eccae2ca5b: retained caller and cold configuration, enrollment originals, selected record footprints and replay headroom are reserved before the first historical body read. This source-defined byte bound is not a heap, RSS or runtime guarantee. Retained grants and canonical outcome reconstruction do not prove storage exists. COMPLETE prior-stage recovery, EXCHANGE protected recovery and genuine response, and HTTP public recovery/guarded cookie remain todo. Options alone do not authorize or execute recovery. Activation remains 22/26 landed, with 1 active step and 3 todo; public actions remain 2/3, project 34/46 and production acceptance 0/6 verified. No automatic SQL retry or functional recovery claim. Source is unbuilt, unexecuted and unprovisioned.</desc>
   <rect x="1" y="1" width="758" height="384" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="33" fill="#f8fafc" font-size="24" font-weight="700">Inside step 23 · Separately authorized recovery</text>
-    <text x="24" y="59" fill="#fde68a" font-size="15" font-weight="600">ACTIVE · .205 / f054573 · durable acquisition; worker staging open</text>
+    <text x="24" y="59" fill="#fde68a" font-size="15" font-weight="600">ACTIVE · .206 / 8ecfbc4 · historical capacity joined; staging open</text>
     <a href="../production-status.md#activation-recovery-detail">
       <g font-size="12" font-weight="700" text-anchor="middle">
         <g aria-label="TARGET: Retained target, old-token possession and bounded three-record selection; source-landed in 9f03664">
@@ -22,7 +22,7 @@
           <text x="320" y="95" fill="#f1f5f9">COMPLETE</text>
           <text x="320" y="113" fill="#cbd5e1" font-size="11">— TODO</text>
         </g>
-        <g aria-label="AUTHORITY: Active and partial; parent v15 and actor-bound durable acquisition source-landed in f054573; recovery-worker staging unfinished; earlier historical-loader combined-preallocation fix required before freeze">
+        <g aria-label="AUTHORITY: Active and partial; prior actor-bound durable acquisition source-landed in f054573; historical combined preallocation source-connected in 8ecfbc4; recovery-worker staging unfinished; no heap, RSS or runtime guarantee">
           <rect x="384" y="76" width="112" height="46" rx="5" fill="#422006" stroke="#fbbf24"/>
           <text x="440" y="95" fill="#fef3c7">AUTHORITY</text>
           <text x="440" y="113" fill="#fde68a" font-size="11">→ PARTIAL</text>
@@ -50,7 +50,7 @@
         <text x="736" y="146" fill="#a7f3d0">SOURCE LANDED · 9f03664</text>
         <text x="736" y="170" fill="#a7f3d0">SOURCE LANDED · 9f03664</text>
         <text x="736" y="194" fill="#cbd5e1">TODO</text>
-        <text x="736" y="218" fill="#fde68a">ACTIVE / PARTIAL · f054573</text>
+        <text x="736" y="218" fill="#fde68a">ACTIVE / PARTIAL · 8ecfbc4</text>
         <text x="736" y="242" fill="#cbd5e1">TODO</text>
         <text x="736" y="266" fill="#cbd5e1">TODO</text>
       </g>
@@ -58,7 +58,7 @@
     <path d="M24 282H736" stroke="#334155"/>
     <text x="24" y="305" fill="#cbd5e1" font-size="13">Six facets inside one tracked step · not new milestones or effort percentages</text>
     <text x="24" y="327" fill="#cbd5e1" font-size="13">Activation 22/26 · 1 active · 3 todo · public actions 2/3 · production 0/6 verified</text>
-    <text x="24" y="349" fill="#fde68a" font-size="12">Worker staging open · historical-loader combined-preallocation fix required before freeze</text>
+    <text x="24" y="349" fill="#fde68a" font-size="12">Historical preallocation source-connected · no heap, RSS or runtime guarantee</text>
     <text x="24" y="371" fill="#94a3b8" font-size="12">Source only · unbuilt / unexecuted / unprovisioned · project 34/46 unchanged</text>
   </g>
 </svg>

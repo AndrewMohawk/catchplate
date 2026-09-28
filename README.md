@@ -30,19 +30,18 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 authorized recovery, is active; portal steps 24–26 remain todo. Public actions
 stay 2/3 source-landed—recovery is not an automatic SQL retry.
 
-Latest source: [`.205` / f054573](https://github.com/example/private-deployment)
-lands parent-v15 recovery configuration and fresh actor-bound acquisition with a
-policy-keyed durable claim and verified retained raw3 context. AUTHORITY stays
-partial: recovery-worker staging remains open, as do prior-stage completion
-recovery, protected exchange and the public recovery/cookie path. A separate
-historical-loader combined-preallocation fix is still required before source
-freeze; the new phase cap does not close it. No functional recovery is claimed.
+Latest source: [`.206` / 8ecfbc4](https://github.com/example/private-deployment)
+connects historical combined preallocation before body reads, including retained
+caller/configuration and replay capacity. This is a source-defined byte bound,
+not a heap, RSS or runtime guarantee. AUTHORITY stays partial for recovery-worker
+staging; prior-stage completion recovery, protected exchange and the public
+recovery/guarded-cookie path remain open. No functional recovery is claimed.
 Resources and portal remain open; source is unbuilt, unexecuted and unprovisioned.
-Previous source: [`.204` cold recovery issuer and finite verified client](https://github.com/example/private-deployment).
+Previous source: [`.205` actor-bound durable recovery acquisition](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-recovery-detail)
 live in the tracker.
 
-[![Step 23 recovery is active. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY is active/partial: parent v15 and actor-bound durable acquisition landed in f054573; recovery-worker staging remains open. COMPLETE, EXCHANGE and HTTP remain todo. The separate historical-loader combined-preallocation fix is still required before source freeze. These six facets are not new milestones or effort percentages. No functional recovery or token delivery is claimed. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
+[![Step 23 recovery is active. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY is active/partial: actor-bound durable acquisition is source-landed, but recovery-worker staging remains open. Historical combined preallocation is source-connected in 8ecfbc4, not a heap, RSS or runtime guarantee. COMPLETE, EXCHANGE and HTTP remain todo. These six facets are not new milestones or effort percentages. No functional recovery or token delivery is claimed. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-recovery-detail).
@@ -52,7 +51,7 @@ Nested counts are not additive and are not effort estimates.
 <details>
 <summary>Full 26-step workflow and completed step 22 history</summary>
 
-[![Session activation: 22 of 26 source steps landed; step 23 recovery is active and steps 24–26 are todo. TARGET and ACTOR are source-landed in 9f03664. AUTHORITY is active/partial: parent v15 and actor-bound durable acquisition landed in f054573; recovery-worker staging remains open. COMPLETE, EXCHANGE and HTTP remain todo. The separate historical-loader combined-preallocation fix is still required before source freeze. Project 34/46, public actions 2/3 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation: 22 of 26 source steps landed; step 23 recovery is active and steps 24–26 are todo. TARGET and ACTOR are source-landed in 9f03664. AUTHORITY is active/partial: actor-bound durable acquisition is source-landed, but recovery-worker staging remains open. Historical combined preallocation is source-connected in 8ecfbc4, not a heap, RSS or runtime guarantee. COMPLETE, EXCHANGE and HTTP remain todo. Project 34/46, public actions 2/3 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 The completed dispatch graphic below preserves the **historical .201 checkpoint**,
 including its then-current 0 active / 4 todo rollup; current step 23 is active.
@@ -63,7 +62,7 @@ including its then-current 0 active / 4 todo rollup; current step 23 is active.
 | --- | --- | --- |
 | 21 · F08.5.1 | Fresh authorization for the exact user/session/credential target | [Landed · d3f8469](https://github.com/example/private-deployment) |
 | 22 · F08.5.2 | Public activation with durable dispatch/outcome tracking and truthful responses | [Landed · 0bffe70](https://github.com/example/private-deployment) |
-| 23 · F08.5.3 | Separately authorized recovery; no automatic activation retry | Active · target/actor landed; authority partial in .205 |
+| 23 · F08.5.3 | Separately authorized recovery; no automatic activation retry | Active · target/actor landed; authority partial in .206 |
 | 24 · F08.6.1 | Explicit portal activate/recover controls bound to the retained target | Todo |
 | 25 · F08.6.2 | Fresh action-bound approval; discard prompts when actor or target changes | Todo |
 | 26 · F08.6.3 | Confirm the session only after exact delivery and a fresh current-auth check | Todo |

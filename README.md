@@ -26,13 +26,18 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: historical recovery and workload identity
 
-[`.232` source / 3718394](https://github.com/example/private-deployment)
+[`.233` source / dece33a](https://github.com/example/private-deployment)
+connects [independently authorized public trust publication and standard Rust ingress admission](docs/workload-identity-trust-distribution.md).
+The immutable single-issuer startup profile binds the exact CA bundle, running
+binary, signed policy and complete mTLS selector inventory. Original expiry
+remains enforced; changing trust requires explicit authorization and restart.
+
+Earlier [`.232` / 3718394](https://github.com/example/private-deployment)
 adds [explicit SDK/CLI options and one-shot submission](docs/workload-identity-submission.md),
-portal issuance with mandatory fresh WebAuthn and a different approver, and an
-imported-options-receipt → passkey → assertion-download handoff. Successful CLI
-submission genuinely admits the leaf and retained local key under the same
-original budget. Sticky attempt claims and exact response retention do not
-authorize automatic retry; approval continuation is explicit.
+mandatory fresh WebAuthn and a different portal approver, plus an imported-options
+receipt → passkey → assertion-download handoff. Successful CLI submission admits
+the leaf and retained local key under the same original budget. Sticky claims
+and exact response retention never authorize automatic retry; approval continuation is explicit.
 
 Earlier [`.231` caller/public action](https://github.com/example/private-deployment)
 and [`.230` issuer worker](https://github.com/example/private-deployment)
@@ -51,10 +56,11 @@ is separately credited for:
   `--admit-workload-certificate` for pinned-issuer certificate admission.
   These local modes remain network-free; they do not submit to the new worker.
 
-This is source integration, not a tested pilot or new landed checkpoint.
+N04 remains partial: this is source integration, not a tested pilot or new landed checkpoint.
 Source remains unbuilt, unexecuted and unprovisioned.
-Trust distribution, issuer lifecycle, authenticated channels, sidecar integration,
-H05 historical recovery and O04 approval integration debt remain open.
+Native/client attestation trust-pin integration, trust rotation and issuer lifecycle,
+authenticated channels, sidecar integration, H05 historical recovery and O04
+approval integration debt remain open.
 [Remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation

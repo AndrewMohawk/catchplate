@@ -26,14 +26,12 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: historical recovery
 
-[`.225` purpose-specific recovery workers](https://github.com/example/private-deployment)
-connect separate grant, reservation, SQL and completion authority to the
-[protected planning bridge](https://github.com/example/private-deployment).
-Original evidence keys remain separate from fresh completion authority.
-**Historical consume execution remains disabled:** interrupted
-recovery still needs independent selection of the original consume authority.
-H05 also retains fresh proof/grant/release authority and explicit older-source
-replay work. Normal-auth configuration is unchanged.
+[`.226` independent consume recovery](https://github.com/example/private-deployment)
+separates original consume authority from the older activation target before
+fresh approval and completion verification. Fresh historical consume is connected
+through its explicit signed bridge; historical
+intent/proof/grant/release and older-source replay remain unfinished.
+This is source integration, not a tested pilot. Normal-auth configuration is unchanged.
 [Details and remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation

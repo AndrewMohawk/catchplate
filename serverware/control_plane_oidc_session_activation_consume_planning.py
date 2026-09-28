@@ -23,6 +23,10 @@ caller, plan, production = execution.caller, execution.plan, execution.productio
 assertion, registration = consume.assertion, consume.registration
 _SUBJECT = (("delivery_id", "deliveryId"), ("user_id", "userId"), ("session_id", "sessionId"),
     ("credential_id", "credentialId"), ("credential_record_id", "credentialRecordId"), ("challenge_id", "challengeId"))
+_CONTINUATION_PHASES = ("consume-planning", "consume-planned", "consume-authorizing", "consume-authorized",
+    "consume-dispatching", "consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed",
+    "release-intent-signing", "release-intent-authorized", "release-proof-requesting", "release-proof-verified",
+    "release-handoff-requesting")
 
 
 def _inputs(planner_bootstrap_bytes, history_custody_bytes):
@@ -61,9 +65,46 @@ def _scope(material, deadline, work):
         "maximumClockSkewNs": payload["maximumClockSkewNs"], "deadlineEpochNs": deadline})
 
 
-def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custody_bytes):
+def _claim_on_permission(permission, *, target_digest, authorization_digest, current):
+    """One live durable claim shared by acquisition and direct preparation."""
+    if type(permission) is not execution._ActivationPermission or not callable(current):
+        execution._fail("consume claim requires its actual permission and retained guard")
+    permission._identity()
+    if permission._dispatch_phase != "consume-planning" or permission._consume_spent is not True:
+        execution._fail("consume claim is outside its one-shot planning continuation")
+    work, custody = permission._work, permission._owner._custody
+    current()
+    actual_authorization = plan._frame(caller.REQUEST_IDENTITY_DOMAIN, (permission._sql_originals[0],), work)
+    plan._same((target_digest, authorization_digest),
+        (permission._target[2]["localDigest"], actual_authorization), work,
+        "consume claim original target and activation authorization")
+    held = permission._consume_claim
+    if held is not None:
+        if held is not permission._consume_claim_seal or held[:2] != (target_digest, authorization_digest):
+            execution._fail("consume acquisition cannot replace its actual durable claim")
+        caller.shape._digest(held[2])
+        current()
+        return held[2]
+    work.charge(input_bytes=retained.MAX_CLAIM_IO_BYTES)
+    current()
+    slot = production._callback(work, lambda: execution.custody.ControlPlaneCustodyClient.claim_oidc_session_activation_consume_planning(
+        custody, finalization_digest=target_digest, activation_authorization_digest=authorization_digest,
+        source_revision=state.authority.SOURCE_REVISION))
+    current()
+    caller.shape._digest(slot)
+    claim = target_digest, authorization_digest, slot
+    permission._consume_claim = permission._consume_claim_seal = claim
+    current()
+    return slot
+
+
+def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custody_bytes,
+        _current=None, _additional_original_bytes=0):
     """No independent entry/resumption: use the actual acknowledged context."""
     root_original, history_original = _inputs(planner_bootstrap_bytes, history_custody_bytes)
+    if ((_current is not None and not callable(_current))
+            or type(_additional_original_bytes) is not int or not 0 <= _additional_original_bytes < consume.MAX_ORIGINAL_BYTES):
+        execution._fail("consume preparation requires only restrictive inherited acquisition accounting")
     if type(permission) is not execution._ActivationPermission:
         execution._fail("consume planning requires the actual active permission")
     owner, work, raw = permission._owner, permission._work, permission._sql_originals
@@ -96,7 +137,7 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
     cookie = old.decode("ascii")
     held_bytes = sum(map(len, (root_original, history_original, *activation_originals, old, before, expectations_original,
         policy.current_root_enrollment_bytes, permission._original,
-        parent.activation_planning.planner_bootstrap_bytes))) + activation.MAX_ASSERTION_BYTES
+        parent.activation_planning.planner_bootstrap_bytes))) + activation.MAX_ASSERTION_BYTES + _additional_original_bytes
     if held_bytes >= consume.MAX_ORIGINAL_BYTES:
         execution._fail("consume planning original inventory exceeds its aggregate bound")
     material = signed = None
@@ -107,14 +148,15 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
                 or parent.activation_execution is not policy or policy.consume_planner_endpoint != endpoint
                 or permission._sql_originals is not raw or permission._completion_originals is not completed
                 or permission._completion_context is not continuation
-                or permission._dispatch_phase not in (
-                    "consume-planning", "consume-planned", "consume-authorizing", "consume-authorized",
-                    "consume-dispatching", "consume-sql", "consume-dispatched",
-                    "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized",
-                    "release-proof-requesting", "release-proof-verified", "release-handoff-requesting")
+                or permission._dispatch_phase not in _CONTINUATION_PHASES
                 or permission._request.cookies.get(application.OIDC_SESSION_COOKIE_NAME) != cookie):
             execution._fail("consume planning replaced its actual original context or possession")
         now = guard()
+        if _current is not None:
+            observed = _current()
+            if type(observed) is not int or observed < now:
+                execution._fail("consume acquisition guard reversed its original clock")
+            now = observed
         if signed is not None:
             consume.evidence._fresh(signed, now, material.payload["maximumPlanAgeNs"],
                 material.payload["maximumClockSkewNs"])
@@ -179,13 +221,8 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
         - len(transport.BOUNDED_PREPARE_PURPOSE) - transport.BOUNDED_PREPARE_REQUEST_LIMITS[-1])
     if response_cap < 1:
         execution._fail("consume preparation has no bounded original response capacity")
-    work.charge(input_bytes=retained.MAX_CLAIM_IO_BYTES)
-    current()
-    slot = production._callback(work, lambda: execution.custody.ControlPlaneCustodyClient.claim_oidc_session_activation_consume_planning(
-        custody, finalization_digest=target["localDigest"], activation_authorization_digest=authorization_digest,
-        source_revision=state.authority.SOURCE_REVISION))
-    caller.shape._digest(slot)
-    current()
+    _claim_on_permission(permission, target_digest=target["localDigest"],
+        authorization_digest=authorization_digest, current=current)
     prepared = transport._socket_prepare_on_work(endpoint, old_token_bytes=old,
         activation_originals=activation_originals, live_window=window, deadline_ns=bound,
         work=work, current=current, maximum_response_bytes=response_cap)

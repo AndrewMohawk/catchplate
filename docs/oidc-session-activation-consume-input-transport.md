@@ -62,7 +62,7 @@ allocation; all body buffers/copies are precharged together on the same work.
 
 ```text
 _originals(values, *, response)
-_recv_request(connection, *, deadline_ns, work, current)
+_recv_request(connection, *, deadline_ns, work, current, maximum_request_bytes=None)
 _send_response(connection, originals, *, deadline_ns, work, current)
 _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current)
 ```
@@ -70,6 +70,10 @@ _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current)
 Server helpers reuse actual guarded release chunks and preserve the accepted
 socket's existing ownership; they never close or detach it. Native calls retain
 real current checks outside stable-ledger callbacks. Exact EOF is mandatory.
+The optional service-side request ceiling only tightens the fixed maximum and
+is checked against the full length inventory before any body buffer is read.
+It lets the actual service reserve held cold originals and derived outputs as
+part of the same complete-call inventory; request data cannot enlarge it.
 The caller uses only the generic engine's thirteenth literal entry,
 `_consume_inputs_on_work`, with the actual cumulative work, original deadline
 and positive epoch-returning current guard. It owns and closes its single

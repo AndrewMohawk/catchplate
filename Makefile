@@ -1162,6 +1162,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_consume_input_transport.py \
 	serverware/oidc_session_activation_consume_input_admission.py \
 	serverware/control_plane_oidc_session_activation_consume_input_request.py \
+	serverware/oidc_session_activation_consume_input_issuer_bootstrap.py \
+	serverware/oidc_session_activation_consume_input_issuer_entrypoint.py \
+	serverware/oidc_session_activation_consume_input_issuer_launcher.py \
+	serverware/oidc_session_activation_consume_input_issuer_startup.py \
+	serverware/oidc_session_activation_consume_input_issuer_runner.py \
+	serverware/control_plane_oidc_session_activation_consume_input_acquisition_bootstrap.py \
+	serverware/control_plane_oidc_session_activation_consume_input_acquisition.py \
 	serverware/oidc_session_activation_http_contract.py \
 	serverware/control_plane_oidc_session_activation_consume_planning.py \
 	serverware/control_plane_oidc_session_activation_consume_records.py \
@@ -3285,6 +3292,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_consume_input_transport.py \
 				serverware/oidc_session_activation_consume_input_admission.py \
 				serverware/control_plane_oidc_session_activation_consume_input_request.py \
+				serverware/oidc_session_activation_consume_input_issuer_bootstrap.py \
+				serverware/oidc_session_activation_consume_input_issuer_entrypoint.py \
+				serverware/oidc_session_activation_consume_input_issuer_launcher.py \
+				serverware/oidc_session_activation_consume_input_issuer_startup.py \
+				serverware/oidc_session_activation_consume_input_issuer_runner.py \
+				serverware/control_plane_oidc_session_activation_consume_input_acquisition_bootstrap.py \
+				serverware/control_plane_oidc_session_activation_consume_input_acquisition.py \
 				serverware/oidc_session_activation_http_contract.py \
 				serverware/control_plane_oidc_session_activation_consume_planning.py \
 				serverware/control_plane_oidc_session_activation_consume_records.py \

@@ -312,6 +312,22 @@ class _EnrollmentOwner:
             history_custody_bytes=history_custody_bytes)
 
     @property
+    def consume_input_acquisition_enabled(self):
+        """Cold endpoint/policy availability, not live issuer or user authority."""
+        _continuity(self)
+        return self._material is not None and self._material.consume_input_acquisition is not None
+
+    def _acquire_oidc_session_activation_consume(self):
+        """Acquire only on this parent's original still-active completion call."""
+        from serverware import control_plane_oidc_session_activation_execution as execution
+
+        _require_pid()
+        permission = self._activation_permission
+        if type(permission) is not execution._ActivationPermission or permission._owner is not self:
+            raise EnrollmentStartupError("consume input acquisition requires the actual active parent permission")
+        return permission.acquire_and_prepare_consume()
+
+    @property
     def consume_execution_enabled(self):
         """Cold configuration only, never permission to sign or execute."""
         _live(self)

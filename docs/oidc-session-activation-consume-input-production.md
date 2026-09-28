@@ -74,6 +74,9 @@ Public signed controls do not replace private encrypted-original replay or
 current delivery-row proof. Those remain mandatory inside the genuine consume
 planner, including actual delivery expiry and possession checks. This library
 opens no AES/history key, decrypts no token, writes no SQL/state, runs no worker,
-and claims neither consume commit nor credential release. Independently owned
-issuer key custody, durable acquisition and actual worker-resource delivery
-remain separate work; these originals alone do not close the public flow.
+and claims neither consume commit nor credential release. The separate
+[one-shot issuer](oidc-session-activation-consume-input-issuer-service.md) and
+[durable acquisition client](oidc-session-activation-consume-input-acquisition.md)
+are now source-connected. Actual resource provisioning and exact delivery into
+the matching consume worker remain open; these originals alone do not close the
+public flow or prove a service ran.

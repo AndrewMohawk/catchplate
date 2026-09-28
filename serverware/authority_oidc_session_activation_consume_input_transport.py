@@ -96,8 +96,11 @@ def _originals(values, *, response):
     return values
 
 
-def _recv_request(connection, *, deadline_ns, work, current):
+def _recv_request(connection, *, deadline_ns, work, current, maximum_request_bytes=None):
     """Fixed public caller peer precedes header and bounded body allocation."""
+    maximum = MAX_REQUEST_BYTES if maximum_request_bytes is None else maximum_request_bytes
+    if type(maximum) is not int or not 1 <= maximum <= MAX_REQUEST_BYTES:
+        _fail("consume input request allowance must only tighten the fixed maximum")
     kwargs = {"deadline_ns": deadline_ns, "work": work, "current": current}
     chunks._guard(work, current, deadline_ns)
     chunks._connection(connection, **kwargs)
@@ -109,6 +112,8 @@ def _recv_request(connection, *, deadline_ns, work, current):
     lengths = tuple(int.from_bytes(header[index:index + 8], "big")
         for index in range(0, len(header), 8))
     _request_lengths(lengths)
+    if sum(lengths) > maximum:
+        _fail("consume input request exceeds the remaining original service inventory")
     work.charge(input_bytes=2 * sum(lengths))
     originals = tuple(chunks._recv_precharged(connection, size, **kwargs) for size in lengths)
     chunks._eof(connection, **kwargs)

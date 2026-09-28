@@ -165,6 +165,7 @@ class _ActivationPermission:
         "_planning_spent", "_planning_bounds", "_planning_observed",
         "_dispatch_phase", "_sql_originals", "_sql_seal", "_completion_originals", "_completion_seal",
         "_completion_context", "_completion_context_seal", "_consume_spent",
+        "_consume_claim", "_consume_claim_seal",
         "_consume_lifetimes", "_consume_lifetimes_seal",
         "_consume_originals", "_consume_originals_seal", "_consume_context", "_consume_context_seal",
         "_consume_possession", "_consume_possession_seal", "_consume_authorization_spent",
@@ -200,6 +201,7 @@ class _ActivationPermission:
         self._completion_originals = self._completion_seal = None
         self._completion_context = self._completion_context_seal = None
         self._consume_spent = False
+        self._consume_claim = self._consume_claim_seal = None
         self._consume_lifetimes = self._consume_lifetimes_seal = None
         self._consume_originals = self._consume_originals_seal = None
         self._consume_context = self._consume_context_seal = None
@@ -272,10 +274,16 @@ class _ActivationPermission:
             _fail("consume planning lost the actual same-call completion continuation")
         if self._consume_lifetimes is not self._consume_lifetimes_seal:
             _fail("consume planning replaced its admitted root-original lifetimes")
+        if (self._consume_claim is not self._consume_claim_seal
+                or self._consume_claim is not None and (
+                    type(self._consume_claim) is not tuple or len(self._consume_claim) != 3
+                    or any(type(value) is not str for value in self._consume_claim))):
+            _fail("consume planning replaced its original same-call durable claim")
         if phase in ("consume-planned", "consume-authorizing", "consume-authorized",
                 "consume-dispatching", "consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed",
                 "release-intent-signing", "release-intent-authorized"):
-            if (self._consume_spent is not True or type(self._consume_originals) is not tuple
+            if (self._consume_spent is not True or self._consume_claim is None
+                    or type(self._consume_originals) is not tuple
                     or len(self._consume_originals) != 2 or self._consume_originals is not self._consume_originals_seal
                     or any(type(raw) is not tuple or len(raw) != count
                         or any(type(value) is not bytes for value in raw)
@@ -468,6 +476,7 @@ class _ActivationPermission:
         self._completion_originals = self._completion_seal = None
         self._completion_context = self._completion_context_seal = None
         self._consume_spent = True
+        self._consume_claim = self._consume_claim_seal = None
         self._consume_lifetimes = self._consume_lifetimes_seal = None
         self._consume_originals = self._consume_originals_seal = None
         self._consume_context = self._consume_context_seal = None
@@ -681,6 +690,24 @@ class _ActivationPermission:
             self._dispatch_phase = "consume-planning"
             result = consume._prepare_on_permission(self,
                 planner_bootstrap_bytes=originals[0], history_custody_bytes=originals[1])
+            self._dispatch_phase = "consume-planned"
+            return result
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+    def acquire_and_prepare_consume(self):
+        """Acquire root inputs once, on this actual acknowledged continuation."""
+        from serverware import control_plane_oidc_session_activation_consume_input_acquisition as acquisition
+
+        try:
+            self._identity()
+            if self._state != "active" or self._dispatch_phase != "completed" or self._consume_spent:
+                _fail("consume input acquisition requires the unspent same-call completion")
+            self._consume_spent = True
+            self._dispatch_phase = "consume-planning"
+            result = acquisition._acquire_on_permission(self)
             self._dispatch_phase = "consume-planned"
             return result
         except BaseException:

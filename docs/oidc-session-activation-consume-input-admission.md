@@ -31,10 +31,12 @@ floors. The immutable seven-field result contains the two originals, genuine
 planner/policy data, narrowed window/deadline and a same-call guard. It is output
 data: no public admission API accepts it in place of originals.
 
-This path supplies no private replay, fresh database observation, durable
+This verifier supplies no private replay, fresh database observation, durable
 retention, one-use journal claim, key/resource delivery, worker readiness or
-token release. The eventual acquisition caller must claim before issuer I/O,
-retain opaque response originals before semantic admission, and keep this within
-the actual live permission. Those service/client connections remain open; the
-existing direct `prepare_consume` path is not silently changed into a network
-acquisition path. No build or execution has been performed.
+token release. The separate [same-permission acquisition client](oidc-session-activation-consume-input-acquisition.md)
+now claims before issuer I/O and retains opaque response originals before this
+admission. Its explicit `acquire_and_prepare_consume` entrypoint keeps the whole
+exchange within the actual live permission; the existing direct `prepare_consume`
+path is not silently changed into network acquisition. The issuer/client are
+source-connected, but actual resource provisioning and exact worker delivery
+remain open. No build or execution has been performed.

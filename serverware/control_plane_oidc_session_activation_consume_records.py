@@ -1,6 +1,6 @@
 """Token-free consume-planning claim and opaque original response retention.
 
-One separate logical claim owns at most fifteen physical files. These records
+One separate logical claim owns at most sixteen physical files. These records
 contain public/ciphertext originals and one-use SQL/intent/proof claims, never the old
 token or prepare request. Shape and content identity admit no permission,
 plan, grant, committed SQL result or authenticated completion.
@@ -17,6 +17,7 @@ from serverware import authority_oidc_session_activation_delivery_execution_auth
 from serverware import authority_oidc_session_activation_delivery_planner_transport as transport
 from serverware import authority_oidc_session_activation_delivery_reservation_transport as reserve
 from serverware import authority_oidc_session_activation_delivery_sql_transport as sql
+from serverware import authority_oidc_session_activation_consume_input_transport as inputs
 from serverware import authority_oidc_session_activation_release_hints as hints
 from serverware import authority_oidc_session_activation_release_proof_transport as proof_response
 from serverware import control_plane_custody_records as records
@@ -29,8 +30,8 @@ MAGIC = b"SWCOC001"
 # Appended indices preserve every earlier domain and encoded original.
 KINDS = ("claimed", "prepared", "exported", "authorized", "grant", "reserved",
     "sql-claimed", "sql-outcome", "completion-outcome", "completion-hints",
-    "release-intent-claimed", "release-intent", "release-proof-claimed", "release-proof", "release-grants")
-_COUNTS = (0, 6, 7, 1, 1, 3, 0, 4, 4, 2, 0, 1, 0, 4, 2)
+    "release-intent-claimed", "release-intent", "release-proof-claimed", "release-proof", "release-grants", "inputs")
+_COUNTS = (0, 6, 7, 1, 1, 3, 0, 4, 4, 2, 0, 1, 0, 4, 2, 2)
 SLOT_DOMAIN = "serverware.controlPlaneOidcSessionActivationConsumeSlot/v1"
 _DOMAINS = tuple("serverware.controlPlaneOidcSessionActivationConsumeRecord/" + kind + "/v1"
     for kind in KINDS)
@@ -40,14 +41,15 @@ _BODY_MAXIMA = (0, transport.MAX_RESPONSE_BYTES, transport.MAX_EXPORT_RESPONSE_B
     caller.MAX_AUTHORIZATION_BYTES, grant.MAX_RESPONSE_BYTES, reserve.MAX_RESPONSE_BYTES,
     0, sql.MAX_RESPONSE_BYTES, completion.MAX_RESPONSE_BYTES, sum(hints.LIMITS), 0,
     intent.MAX_BYTES, 0, proof_response.MAX_RESPONSE_BYTES,
-    release_client.MAX_BYTES + release_client.MAX_SERVER_BOOTSTRAP_BYTES)
+    release_client.MAX_BYTES + release_client.MAX_SERVER_BOOTSTRAP_BYTES, inputs.MAX_RESPONSE_BYTES)
 _MAXIMA = tuple(_MAX_HEADER_BYTES + count * 8 + maximum
     for count, maximum in zip(_COUNTS, _BODY_MAXIMA))
 (MAX_CLAIM_BYTES, MAX_PREPARED_BYTES, MAX_EXPORTED_BYTES, MAX_AUTHORIZED_BYTES,
     MAX_GRANT_BYTES, MAX_RESERVATION_BYTES, MAX_SQL_CLAIM_BYTES, MAX_SQL_OUTCOME_BYTES,
     MAX_COMPLETION_OUTCOME_BYTES, MAX_COMPLETION_HINTS_BYTES,
     MAX_RELEASE_INTENT_CLAIM_BYTES, MAX_RELEASE_INTENT_BYTES,
-    MAX_RELEASE_PROOF_CLAIM_BYTES, MAX_RELEASE_PROOF_BYTES, MAX_RELEASE_GRANTS_BYTES) = _MAXIMA
+    MAX_RELEASE_PROOF_CLAIM_BYTES, MAX_RELEASE_PROOF_BYTES, MAX_RELEASE_GRANTS_BYTES,
+    MAX_INPUTS_BYTES) = _MAXIMA
 MAX_RECORD_BYTES = max(_MAXIMA)
 MAX_CLAIM_IO_BYTES = activation.MAX_RECORD_BYTES + 3 * MAX_CLAIM_BYTES
 MAX_LOAD_IO_BYTES = activation.MAX_RECORD_BYTES + sum(_MAXIMA)
@@ -84,6 +86,7 @@ class ConsumeRecords:
     release_proof_attempt: ConsumeRecord | None = None
     release_proof: ConsumeRecord | None = None
     release_grants: ConsumeRecord | None = None
+    inputs: ConsumeRecord | None = None
 
 
 def _framed_digest(domain, bodies):
@@ -145,6 +148,8 @@ def _lengths(profile, lengths):
             if (lengths[0] > release_client.MAX_BYTES
                     or lengths[1] > release_client.MAX_SERVER_BOOTSTRAP_BYTES):
                 raise CustodyRecordError("release grant originals exceed their fixed byte bounds")
+        elif profile == 15:
+            inputs._response_lengths(lengths)
         if sum(lengths) > _BODY_MAXIMA[profile]:
             raise CustodyRecordError("consume stage exceeds its fixed aggregate bound")
     except transport.AuthorityTransportError as exc:

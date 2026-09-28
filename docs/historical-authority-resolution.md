@@ -6,7 +6,8 @@ activation/consume completion recovery in `.222`, consume-input bridging
 in `.223`, protected consume planning/caller preparation in `.224`, and
 purpose-specific consume worker bridges in `.225`, and independently selected
 consume authority in `.226`, fresh release-intent/proof preparation in `.227`,
-and current-authority LIVE release over historical evidence in `.228`:
+current-authority LIVE release over historical evidence in `.228`, and read-only
+retained RI intent/proof admission in `.229`:
 reuse the existing independently
 root-admitted historical archive and genuine original replay. Do not create a
 second trust catalog, infer retired keys from stored records, or weaken a
@@ -39,9 +40,12 @@ policy/bootstrap v2 current-planner originals and complete same-state compatibil
 It preserves the original delivery key. [LIVE release](control-plane-live-release-history.md)
 now uses a separate fresh actor, independently signed current R2 grants and the
 original R1 evidence root through protected opening and guarded current-session
-delivery. An already retained intent under a retired distinct intent authority,
-historical retained-release recovery and key migration still need their remaining
-joins. Explicit older-source replay
+delivery. [Retained RI readmission](control-plane-retained-intent-history.md) now
+selects an original intent and independently archived proof enrollment before
+the fresh preparation ceremony, then genuinely verifies the retained originals
+without retired private keys or new proof-service contact. Historical LIVE and
+retained-release delivery under that RI still need a separate current-authority
+grant/custody bridge. Key/state migration and explicit older-source replay
 implementations also remain open.
 
 ## Existing components and the actual gap
@@ -122,8 +126,9 @@ actual controls/receiving. The distinct fresh consume purpose passes its archive
 effect gate only with the explicit input bridge and worker authority. `.227`
 connects fresh R2 intent/proof preparation; `.228` connects separately approved
 LIVE release and current R2 grants over R0/R1 evidence through the final response.
-Retired-intent readmission, historical retained-release recovery, migration and
-step 5 remain open. None is runtime-verified.
+`.229` connects read-only retained-intent/proof admission under independently
+archived RI. Delivery under that RI, historical retained-release recovery,
+migration and step 5 remain open. None is runtime-verified.
 
 1. Cold-admit the operation-specific historical enrollment originals alongside
    their exact configuration/root/cohort inventory. Bind the inventory to the
@@ -164,9 +169,10 @@ step 5 remain open. None is runtime-verified.
    remains mandatory. The activation target's scope does not supply consume
    pins, and retained records cannot enroll replacement authority. Fresh consume
    uses its explicit bridge. Fresh R2 intent/proof and separately approved LIVE
-   release now preserve that evidence split. Already retained intent/proof under
-   a retired distinct authority and historical retained-release custody still
-   require their independent joins; current signed grants are never historical
+   release now preserve that evidence split. Retained intent/proof can now be
+   readmitted under independently archived RI without retired private keys.
+   Effectful delivery and historical retained-release custody still require
+   independent current-authority joins; current signed grants are never historical
    evidence or permission to retry a spent release.
 5. Admit older source revisions only through explicit versioned replay code
    covering their original schemas and semantics. Unsupported revisions and

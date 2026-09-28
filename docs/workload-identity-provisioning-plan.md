@@ -1,12 +1,17 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # N04: workload identity provisioning contract
 
-This is an implementation decision, not a landed capability or permission to
-provision an issuer. N04 remains open. Existing signed identity selectors and
-TLS client support do not by themselves provision a workload identity.
+This records the local client decision, implemented in source in
+[`.229` / fcbe181](https://github.com/example/private-deployment).
+See the [actual local profile and limits](workload-identity-provisioning.md).
+N04 remains open: the [independent server issuer](workload-identity-issuer-plan.md),
+authenticated channels and lifecycle still need implementation and deployment.
+Source is unbuilt/unexecuted; this contract grants no issuance authority.
 
 ## Client ownership
 
-The planned client module is `serverware_agent_trust/workload_identity_provisioning.py`,
+The client module is `serverware_agent_trust/workload_identity_provisioning.py`,
 called through two explicit local modes of the existing enrollment CLI:
 `--prepare-workload-identity` and `--admit-workload-certificate`.
 

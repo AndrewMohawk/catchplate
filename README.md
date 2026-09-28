@@ -18,23 +18,29 @@ long-lived credential.
 
 Checkpoint: **2026-09-28 — pre-production, source-only.**
 
-**35/46 source checkpoints landed · 1 active · 10 todo.**
+**35/46 source checkpoints landed · 2 active · 9 todo.**
 
-**Production acceptance: 0/6 verified.** Current source is unbuilt and unexecuted.
+**Production acceptance: 0/6 verified.** Current source is unbuilt, unexecuted and unprovisioned.
 
-[![Project checkpoints, one segment per task: 35 of 46 source-landed; 1 active and 10 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05 is in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Project checkpoints, one segment per task: 35 of 46 source-landed; 2 active and 9 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05 and N04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: historical recovery
+### Current work: historical recovery and workload identity
 
-[`.228` LIVE release over historical evidence](https://github.com/example/private-deployment)
-connects separate fresh release approval, current signed grants, protected
-opening and guarded session delivery while preserving original activation and
-consume authority. Same state and delivery key are required. Retired-intent
-readmission, historical retained-release recovery, migration and older-source
-replay remain unfinished.
-This is source integration, not a tested pilot. Normal-auth configuration is unchanged.
-[Current change](docs/control-plane-live-release-history.md)
-· [Remaining boundaries](docs/historical-authority-resolution.md).
+[`.229` source / fcbe181](https://github.com/example/private-deployment)
+advances two unfinished lanes:
+
+- **H05:** [Read-only retained intent/proof admission](docs/control-plane-retained-intent-history.md)
+  uses independently archived signing authority (RI), without retired private
+  keys or old-RI token delivery. Historical retained-release delivery, migration
+  and older-source replay remain open.
+- **N04:** The [local workload identity CLI](docs/workload-identity-provisioning.md)
+  adds `--prepare-workload-identity` for key/CSR/request creation and
+  `--admit-workload-certificate` for pinned-issuer certificate admission.
+  Server-side issuance, client-CA distribution, rotation and verified workload
+  channels remain open.
+
+This is source integration, not a tested pilot or new landed checkpoint.
+Normal-auth configuration is unchanged. [Remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation
 
@@ -47,13 +53,13 @@ cookie-only WebAuthn and approval continuation, and a separate exact-target
 current-cookie check. Activation uses two distinct fresh ceremonies; historical
 acknowledgments and delivery reports do not establish a current session.
 No automatic retry, profile fallback or original-expiry renewal is authorized.
-Source is unbuilt, unexecuted and unprovisioned. **H05 historical authority is
-in progress; production acceptance remains open.**
+Source is unbuilt, unexecuted and unprovisioned. **H05 historical authority and
+N04 workload identity are in progress; production acceptance remains open.**
 Previous source: [`.217` public consume completion and recovery closure](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-recovery-detail)
 live in the tracker.
 
-[![Session activation: all 26 source steps landed; 0 active and 0 todo. Portal steps 24–26 and F08 are source-landed in 170d0ac: explicit target-bound actions, fresh cookie-only WebAuthn and approval continuation, and separate exact-target current-cookie confirmation. Activation uses two distinct fresh ceremonies; generic failures never authorize automatic retry. Step 23 recovery remains credited to dde38d8. Public actions 3/3 and F08 direct children 6/6 are source-landed; project 35/46 has 1 active and 10 todo, with H05 in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation: all 26 source steps landed; 0 active and 0 todo. Portal steps 24–26 and F08 are source-landed in 170d0ac: explicit target-bound actions, fresh cookie-only WebAuthn and approval continuation, and separate exact-target current-cookie confirmation. Activation uses two distinct fresh ceremonies; generic failures never authorize automatic retry. Step 23 recovery remains credited to dde38d8. Public actions 3/3 and F08 direct children 6/6 are source-landed; project 35/46 has 2 active and 9 todo, with H05 and N04 in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-recovery-detail).
@@ -63,7 +69,7 @@ Nested counts are not additive and are not effort estimates.
 <details>
 <summary>Completed step 23 recovery and step 22 dispatch details</summary>
 
-[![Step 23 recovery is source-landed in dde38d8. TARGET and ACTOR are source-landed in 9f03664; AUTHORITY in 097ce54; EXCHANGE in 272a40e; HTTP in dbd99f6; COMPLETE in dde38d8. Public data-only consume completion connects through the same retained originals to separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Portal steps 24–26 subsequently landed in 170d0ac, completing activation 26/26 and F08 direct 6/6. Project 35/46 has 1 active and 10 todo; H05 is in progress. These six recovery facets are not new milestones or effort percentages. No automatic retry or original-expiry renewal is authorized. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
+[![Step 23 recovery is source-landed in dde38d8. TARGET and ACTOR are source-landed in 9f03664; AUTHORITY in 097ce54; EXCHANGE in 272a40e; HTTP in dbd99f6; COMPLETE in dde38d8. Public data-only consume completion connects through the same retained originals to separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Portal steps 24–26 subsequently landed in 170d0ac, completing activation 26/26 and F08 direct 6/6. Project 35/46 has 2 active and 9 todo; H05 and N04 are in progress. These six recovery facets are not new milestones or effort percentages. No automatic retry or original-expiry renewal is authorized. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
 
 The completed dispatch graphic below preserves the **historical .201 checkpoint**,
 including its then-current 0 active / 4 todo rollup; step 23 is now source-landed.
@@ -96,7 +102,7 @@ lists every remaining item and its evidence.
 | ID | Checkpoint | Source status |
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
-| N04 | Workload identity provisioning and authenticated channels | Todo |
+| N04 | Workload identity provisioning and authenticated channels | In progress |
 | N05 | Native enrollment, verified CA installation and proxy setup | Todo |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |

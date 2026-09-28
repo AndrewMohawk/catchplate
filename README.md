@@ -26,12 +26,13 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.236` source / fb46d59](https://github.com/example/private-deployment)
-adds the [native enrollment authorization foundation](docs/native-enrollment-assignment.md):
-matching Python/Rust verification of independently signed exact-packet assignments
-and a separate purpose-only native key. Signing remains private and inaccessible
-until actual policy, cold trust, durable claims and the TLS route are connected.
-It does not repurpose the response signer or enable production enrollment.
+[`.237` source / f4f9572](https://github.com/example/private-deployment)
+adds the [original-evidence native enrollment receiver](docs/native-enrollment-verification.md):
+independent assignment, purpose-specific packet signature and genuine role-3/role-5
+Nitro checks on the actual retained TLS stream. Its result is diagnostic only,
+with `okForAction: false`; it does not approve packet semantics or installation.
+The [`.236` assignment/key foundation](https://github.com/example/private-deployment)
+remains dormant: native signing is private and inaccessible, without a serving route.
 
 Earlier [`.235` / 8ff93af](https://github.com/example/private-deployment)
 connects [native workload-issuer verification before CONNECT](docs/native-workload-trust.md).
@@ -44,9 +45,10 @@ The four active checkpoints remain partial:
   authenticated service/sidecar journeys and runtime verification remain open.
 - **H05 · Historical recovery:** [retained intent/proof readmission](docs/control-plane-retained-intent-history.md)
   is source-connected; historical release delivery, migration and older-source replay remain open.
-- **N05 · Native enrollment:** the authorization/signer foundation is source-landed
-  but dormant. Actual policy/transport integration, durable outcomes, original
-  evidence verification, scoped CA installation and egress/canary setup remain open.
+- **N05 · Native enrollment:** the original-evidence receiver is source-connected;
+  signing remains inaccessible. Actual Snapshot/packet semantics, cold roots,
+  TLS acquisition, durable claims/recovery, SDK/issuer integration, scoped CA
+  installation and proxy/egress/canary setup remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
   is source-connected; protected provider/filesystem effects and durable
   interruption outcomes remain open.
@@ -67,7 +69,7 @@ current-cookie check. Activation uses two distinct fresh ceremonies; historical
 acknowledgments and delivery reports do not establish a current session.
 No automatic retry, profile fallback or original-expiry renewal is authorized.
 Source is unbuilt, unexecuted and unprovisioned. **H05 historical authority,
-N04 workload identity and O04 protected side effects are in progress; production acceptance remains open.**
+N04 workload identity, N05 native enrollment and O04 protected side effects are in progress; production acceptance remains open.**
 Previous source: [`.217` public consume completion and recovery closure](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-recovery-detail)
 live in the tracker.
@@ -116,7 +118,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; original-evidence receiver source-connected |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

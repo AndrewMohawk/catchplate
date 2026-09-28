@@ -1,6 +1,6 @@
-"""Bounded activation POST data, not a route, permission or success result.
+"""Bounded activation POST data, not a permission or success result.
 
-The future handler must authenticate the actual pending request and run the
+The explicit handler authenticates the actual pending request and runs the
 single live permission/dispatch context. These projections neither verify the
 two WebAuthn ceremonies nor obtain any independently issued authority original.
 Failure helpers require the documented source-controlled dispatch boundary.

@@ -188,13 +188,17 @@ def _state_keys(held, material, current, work):
 
 def _verify_on_work(*, response_originals, request_originals,
         client_authorization_bytes, server_bootstrap_bytes, root_public_key,
-        expected_client_scope, live_window, transport_deadline_ns, work, _continuity=None):
+        expected_client_scope, live_window, transport_deadline_ns, work, _continuity=None,
+        _retain_current=None):
     """Return exact token64 only after genuine same-call public-original checks.
 
     This is standalone receiving verification, not a transport/caller owner.
     The request echo alone authenticates nothing, and even a correct token does
     not prove storage, service execution, recipient acknowledgment or one egress.
     """
+    retained = _retain_current
+    if retained is not None and not callable(retained):
+        _fail("release response final guard retention is not callable")
     held = _hold(response_originals=response_originals, request_originals=request_originals,
         client_authorization_bytes=client_authorization_bytes,
         server_bootstrap_bytes=server_bootstrap_bytes, root_public_key=root_public_key,
@@ -314,4 +318,17 @@ def _verify_on_work(*, response_originals, request_originals,
     plan._same(token_digest, expected_release["deliveryScope"]["newTokenDigest"], work,
         "release response authenticated exact token commitment")
     current()
+    if retained is not None:
+        # A source-selected final delivery owner retains these actual guards;
+        # no token, material result or callback return becomes authority input.
+        limits, before = work.limits, work.metrics
+        ceilings = limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes
+        retained(current, window, bound)
+        after = work.metrics
+        if (work.limits is not limits
+                or ceilings != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or after.hash_work < before.hash_work or after.input_bytes < before.input_bytes
+                or after.json_nodes < before.json_nodes):
+            _fail("release response guard retention reset its original work")
+        current()
     return token

@@ -402,6 +402,10 @@ async def csrf_middleware(request: Request, call_next):
     try:
         validate_csrf_request(request)
     except HTTPException as exc:
+        from serverware import control_plane_oidc_session_activation_routes as activation_routes
+
+        if request.scope.get("path") == activation_routes.POST_PATH:
+            return activation_routes.error(exc.status_code)
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
@@ -422,6 +426,16 @@ async def csrf_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
+    from serverware import control_plane_oidc_session_activation_routes as activation_routes
+
+    if request.scope.get("path") == activation_routes.POST_PATH:
+        refusal = await activation_routes._frame_request(request)
+        if refusal is not None:
+            return refusal
+        # The dedicated core consumes only these bounded original bytes. Do
+        # not apply the older registration parsers or read the stream twice.
+        return await call_next(request)
+
     from serverware import control_plane_registration_handoff_routes as handoff_routes
     from serverware import control_plane_registration_handoff_http as handoff_contract
     from serverware import control_plane_registration_recovery_routes as recovery_routes
@@ -1105,10 +1119,17 @@ class _SignedControlPlaneASGI:
                 unsigned_headers=unsigned_headers,
                 proof_headers=proof_headers,
             )
-            await response(scope, receive, send)
+            from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
+
+            await activation_delivery._send_response(scope, receive, send, response,
+                before_dispatch=invalid_request_nonce,
+                downstream_failed=downstream_error is not None or buffered.too_large or not buffered.complete)
             if downstream_error is not None:
                 raise downstream_error
         finally:
+            from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
+
+            activation_delivery._discard_scope(scope)
             if acquired_buffer_slot:
                 _SIGNED_RESPONSE_BUFFER_SLOTS.release()
 
@@ -24892,6 +24913,7 @@ from serverware import control_plane_registration_finalization_reservation_route
 from serverware import control_plane_registration_finalization_sql_routes as _registration_finalization_sql_routes
 from serverware import control_plane_registration_finalization_completion_routes as _registration_finalization_completion_routes
 from serverware import control_plane_oidc_session_activation_permission_routes as _activation_permission_routes
+from serverware import control_plane_oidc_session_activation_routes as _activation_routes
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -24901,4 +24923,5 @@ _fastapi_app.include_router(_registration_finalization_reservation_routes.router
 _fastapi_app.include_router(_registration_finalization_sql_routes.router)
 _fastapi_app.include_router(_registration_finalization_completion_routes.router)
 _fastapi_app.include_router(_activation_permission_routes.router)
+_fastapi_app.include_router(_activation_routes.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

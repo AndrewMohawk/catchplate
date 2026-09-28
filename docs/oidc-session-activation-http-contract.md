@@ -1,14 +1,15 @@
 # Explicit activation HTTP data contract
 
 Source only, unbuilt and unexecuted. This module defines bounded request data
-and conservative failure data for a future explicit activation POST. It adds
-no route, middleware, options endpoint, WebAuthn ceremony, authority issuer,
-cookie operation or successful activation response. The existing
+and conservative failure data for the explicit activation POST. The separate
+[public route](oidc-session-activation-public-http.md) connects genuine
+permission, private dispatch and final cookie delivery in source `.201`;
+this data module supplies none of their authority. The existing
 `/api/auth/session/activation/permission/options` contract remains unchanged.
 
 ## Closed request
 
-The future body is an immutable JSON object of at most 256 KiB, with exactly:
+The body is an immutable JSON object of at most 256 KiB, with exactly:
 
 | Field | Required data |
 | --- | --- |
@@ -78,9 +79,10 @@ about a permission assertion's counter update or any earlier invocation.
 Neither helper accepts an arbitrary success flag, selects HTTP status codes,
 sets a cookie or claims `activationExecuted: false` after uncertain effects.
 
-There is deliberately no success helper. A future route may replace the pending
-cookie only after genuine token verification and a fresh exact current-session,
-credential and identity check. Unknown outcomes preserve the pending cookie,
-authorize no resend and prove neither commit nor nonexecution. Public routing,
-cookie/current-auth integration, separately authorized recovery and portal work
-remain open; this data contract closes none of those boundaries.
+There is deliberately no success helper. The public route may replace the
+pending cookie only after genuine token verification and a fresh exact
+current-session, credential and identity check, retaining the actual verification
+limits through cleanup and the HTTP send boundary. Unknown outcomes preserve
+the pending cookie, authorize no resend and prove neither commit nor nonexecution.
+Separately authorized recovery, portal work, provisioning and runtime verification
+remain open; this data contract alone closes none of those boundaries.

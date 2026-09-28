@@ -16,7 +16,7 @@ execution, planning, hints = handoff.execution, handoff.planning, handoff.hints
 clients, delivery, plan = handoff.clients, handoff.delivery, handoff.plan
 
 
-def _acquire_on_permission(permission):
+def _acquire_on_permission(permission, *, _delivery=None):
     """Receive only through the actual active, already proof-verified owner."""
     if type(permission) is not execution._ActivationPermission:
         execution._fail("release grant acquisition requires the actual permission")
@@ -121,4 +121,5 @@ def _acquire_on_permission(permission):
     # The existing raw2 retention runs before semantic admission, including
     # empty/malformed grant bytes. Its final genuine receiver retains current.
     return handoff._release_on_permission(permission, client_authorization_bytes=response[0],
-        server_bootstrap_bytes=response[1], _current=current, _additional_original_bytes=additional)
+        server_bootstrap_bytes=response[1], _current=current, _additional_original_bytes=additional,
+        _delivery=_delivery)

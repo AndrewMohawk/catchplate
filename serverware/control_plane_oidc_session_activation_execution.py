@@ -161,7 +161,7 @@ class _ActivationPermission:
 
     __slots__ = ("_owner", "_request", "_original", "_window", "_deadline", "_work",
         "_pid", "_thread", "_state", "_locked", "_trust", "_scope", "_target", "_spent",
-        "_permission_epoch", "_session_expiry", "_inputs", "_seal",
+        "_permission_epoch", "_session_expiry", "_inputs", "_seal", "_normal_exit",
         "_planning_spent", "_planning_bounds", "_planning_observed",
         "_dispatch_phase", "_sql_originals", "_sql_seal", "_completion_originals", "_completion_seal",
         "_completion_context", "_completion_context_seal", "_consume_spent",
@@ -192,6 +192,7 @@ class _ActivationPermission:
         shape._integer(self._deadline, minimum=1)
         self._work, self._pid, self._thread = work, os.getpid(), threading.get_ident()
         self._state, self._locked, self._trust = "new", False, None
+        self._normal_exit = False
         self._scope, self._target, self._spent = None, None, False
         self._permission_epoch = None
         self._session_expiry = None
@@ -464,6 +465,7 @@ class _ActivationPermission:
             self._planning_observed = narrowed[0], narrowed[2]
 
     def _revoke(self):
+        self._normal_exit = False
         self._state, self._spent, self._planning_spent = "closed", True, True
         if self._owner._activation_permission is self:
             self._owner._activation_permission = None
@@ -565,6 +567,10 @@ class _ActivationPermission:
                 self._current()
         finally:
             self._revoke()
+        if exc_type is None:
+            # Only a successful final live check AND completed per-call
+            # cleanup can enable the source-owned HTTP delivery continuation.
+            self._normal_exit = True
         return False
 
     def authorize(self, *, originals, expectations, before_vector_bytes):
@@ -807,7 +813,7 @@ class _ActivationPermission:
             raise
 
 
-    def acquire_and_release_token(self):
+    def acquire_and_release_token(self, *, _delivery=None):
         """Acquire one fresh grant pair and hand off on this same live call."""
         from serverware import control_plane_oidc_session_activation_release_grant_acquisition as acquisition
 
@@ -820,7 +826,7 @@ class _ActivationPermission:
             # recovery. Spend this shared handoff latch before any issuer I/O.
             self._release_handoff_spent = True
             self._dispatch_phase = "release-handoff-requesting"
-            return acquisition._acquire_on_permission(self)
+            return acquisition._acquire_on_permission(self, _delivery=_delivery)
         except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:
                 self._revoke()

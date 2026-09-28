@@ -32,7 +32,7 @@ planning, reservations = completion.planning, completion.reservations
 
 
 def _release_on_permission(permission, *, client_authorization_bytes, server_bootstrap_bytes,
-        _current=None, _additional_original_bytes=0):
+        _current=None, _additional_original_bytes=0, _delivery=None):
     """No posted target, successful carrier, key, possession or allowance input."""
     if type(permission) is not execution._ActivationPermission:
         execution._fail("release handoff requires the actual active permission")
@@ -365,8 +365,19 @@ def _release_on_permission(permission, *, client_authorization_bytes, server_boo
         deadline_ns=bound, work=work, current=current)
     current()
     window, bound = permission._planning_bounds
-    # No weaker post-verification owner callback or success carrier follows.
+    extra = {}
+    if _delivery is not None:
+        from serverware import control_plane_oidc_session_activation_delivery as terminal
+
+        if type(_delivery) is not terminal._StagedResponse:
+            execution._fail("release handoff final delivery must be source owned")
+        continuation, retain = _delivery._receiving_on_permission(permission, receiving_continuity)
+        extra["_retain_current"] = retain
+    else:
+        continuation = receiving_continuity
+    # Default remains a token-only tail return. The HTTP path retains the
+    # genuine receiver guard, not a weaker owner-only check or success carrier.
     return receiving._verify_on_work(response_originals=returned, request_originals=request,
         client_authorization_bytes=client_raw, server_bootstrap_bytes=server_raw,
         root_public_key=root, expected_client_scope=scope, live_window=window,
-        transport_deadline_ns=bound, work=work, _continuity=receiving_continuity)
+        transport_deadline_ns=bound, work=work, _continuity=continuation, **extra)

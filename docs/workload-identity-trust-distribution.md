@@ -206,6 +206,12 @@ rollback state and independent witnessing remain open. So do native-profile and
 client enrollment/attestation trust-pin integration, authenticated workload and
 sidecar journeys, and all independent production release/custody gates.
 
+The separate [native workload-trust session profile](native-workload-trust.md)
+now source-connects genuine quote-authenticated DER inventory to a pinned issuer
+and the actual client's certificate chain, including a pre-CONNECT proof-client
+check. It is not this signed PEM-publication profile's native startup admission,
+production packet enrollment, lifecycle closure or runtime evidence of success.
+
 After complete source freeze, acceptance must demonstrate actual publication,
 startup, policy-change and expiry behavior; wrong-root/CA/binary/policy/selector
 rejection; partial-publication recovery boundaries; and real mTLS traffic without

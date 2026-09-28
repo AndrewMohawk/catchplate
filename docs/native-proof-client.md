@@ -240,6 +240,14 @@ acceptance is not a production-readiness or runtime-success claim.
 
 ## Enrollment is a separate integration boundary
 
+The additive [native workload-trust profile](native-workload-trust.md) selects
+`serverware.nativeProxyIngress/v2` and a separately pinned `workloadIssuer`.
+It authenticates actual held runtime trust roots and verifies the client chain
+selected by the actual outer TLS handshake under only that issuer **before
+CONNECT on the same socket**. V1 remains unchanged; v2 cannot silently fall back.
+This closes a source-level initial session/issuer join, not the enrollment
+boundary below or long-running renewal, rotation, revocation and witness proof.
+
 Neither this signed response-capture profile nor the separate
 [native ingress capture](native-ingress-client.md) replaces a production
 enrollment receipt. Existing enrollment additionally binds a signed packet,

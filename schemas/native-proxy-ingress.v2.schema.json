@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-proxy-ingress.v2.schema.json",
+  "title": "Serverware native proof-client ingress configuration v2",
+  "description": "Closed independently pinned configuration original, at most 16384 bytes, for an opt-in initial native ingress attestation followed by CONNECT on the same owned outer TLS connection. Existing proof-client settings supply the literal endpoint, TLS credentials and original deadline; this object cannot override them. Shape does not verify any quote, establish pin provenance, grant CA trust or release/action/production authority, or provide durable nonce consumption or long-running renewal. Runtime enforces original byte caps, held-file custody, complete scope joins and genuine verification against the actual TLS connection.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "workloadIssuer"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeProxyIngress/v2"},
+    "startupEvidence": {
+      "description": "Pinned serverware.nativeIngressPublicEvidence/v1 startup original, at most 65536 bytes. Genuine still-fresh startup quote verification precedes reading the outer client private key; the server response cannot replace this pin.",
+      "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
+    },
+    "startupExpectations": {
+      "description": "Pinned serverware.nativeIngressAttestationExpectations/v1 original, at most 16384 bytes. It independently fixes the startup quote nonce and complete expected scope; maxAgeSeconds remains 1..300, not a renewal mechanism.",
+      "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
+    },
+    "sessionScope": {
+      "description": "Pinned nonce-free serverware.nativeIngressSessionScope/v1 original, at most 16384 bytes. Every static expectation must match startup. The actual client generates and retains one fresh challenge, rather than learning it from the response or inserting it into this original.",
+      "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
+    },
+    "workloadIssuer": {
+      "description": "Independently pinned canonical single-certificate PEM, at most 65536 bytes and DER at most 16384 bytes. The explicit client-trust-v2 exchange must authenticate exact selected-issuer membership in the actual ordered root inventory and genuinely verify the client chain selected by this same TLS handshake under only this anchor before CONNECT. No downgrade or replacement from the response is permitted.",
+      "$ref": "native-ingress-client.v3.schema.json#/$defs/artifact"
+    },
+    "trustRoots": {
+      "description": "Pinned native Nitro PKI trust-root original, at most 1048576 bytes. This is quote-verification trust, not the outer TLS client-key material or an independently established release/PCR mapping.",
+      "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
+    }
+  }
+}

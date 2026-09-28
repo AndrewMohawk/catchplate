@@ -28,7 +28,7 @@ pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8]
     // pinned nonce field as the raw client challenge, not a derived quote nonce.
     verify_checked(raw, SessionExpectations::PinnedNonce {
         expected: &expected, original: expectations_raw,
-    }, trust_roots_raw, client)
+    }, trust_roots_raw, client, None)
 }
 
 pub(super) fn verify_with_challenge(raw: &[u8], scope_raw: &[u8], trust_roots_raw: &[u8],
@@ -37,11 +37,24 @@ pub(super) fn verify_with_challenge(raw: &[u8], scope_raw: &[u8], trust_roots_ra
     ensure(challenge != [0; 32], "native ingress client challenge must be nonzero")?;
     verify_checked(raw, SessionExpectations::ClientChallenge {
         scope: &scope, original: scope_raw, challenge,
-    }, trust_roots_raw, client)
+    }, trust_roots_raw, client, None)
+}
+
+/// The explicit workload lane requires paired v2 originals. Its independently
+/// pinned issuer and actual configured client chain are public original bytes,
+/// not previously successful verifier output or an evidence-selected root.
+pub(super) fn verify_client_trust_with_challenge(raw: &[u8], scope_raw: &[u8],
+    trust_roots_raw: &[u8], challenge: [u8; 32], client: &ClientConnection,
+    issuer_der: &[u8], client_certificate_pem: &[u8]) -> Result<Value, String> {
+    let scope = SessionScope::parse(scope_raw)?;
+    ensure(challenge != [0; 32], "native workload client challenge must be nonzero")?;
+    verify_checked(raw, SessionExpectations::ClientChallenge {
+        scope: &scope, original: scope_raw, challenge,
+    }, trust_roots_raw, client, Some((issuer_der, client_certificate_pem)))
 }
 
 fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw: &[u8],
-    client: &ClientConnection) -> Result<Value, String> {
+    client: &ClientConnection, workload: Option<(&[u8], &[u8])>) -> Result<Value, String> {
     let roots = TrustRoots::parse(trust_roots_raw)?;
     let (expected, challenge) = match &profile {
         SessionExpectations::PinnedNonce { expected, .. } => (&expected.scope, expected.nonce),
@@ -69,7 +82,10 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
     let evidence = json::parse(body, MAX_INPUT - 1)?;
     exact(&evidence, &["apiVersion", "evidenceScope", "okForAction",
         "clientChallengeBase64url", "tlsExporterBase64url", "publicIdentityBase64url"])?;
-    ensure(text(&evidence, "apiVersion")? == "serverware.nativeIngressSessionEvidence/v1"
+    let evidence_version = if workload.is_some() {
+        "serverware.nativeIngressSessionEvidence/v2"
+    } else { "serverware.nativeIngressSessionEvidence/v1" };
+    ensure(text(&evidence, "apiVersion")? == evidence_version
         && text(&evidence, "evidenceScope")? == "unverified-session-public-material"
         && evidence.get("okForAction").and_then(Value::as_bool) == Some(false),
         "native ingress session evidence version or scope differs")?;
@@ -77,11 +93,18 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
         && fixed_b64::<32>(text(&evidence, "tlsExporterBase64url")?)? == exporter,
         "native ingress echoes differ from the held challenge and actual TLS exporter")?;
     let public_identity = decode_b64(text(&evidence, "publicIdentityBase64url")?, MAX_PUBLIC_IDENTITY)?;
+    let evidence_profile = if workload.is_some() {
+        EvidenceProfile::SessionClientTrust
+    } else { EvidenceProfile::Session };
     let checked = ingress::verify_original(&public_identity, expected, &roots,
-        EvidenceProfile::Session, &quote_nonce)?;
+        evidence_profile, &quote_nonce)?;
     ensure(peer_chain[0].as_ref() == checked.leaf.as_slice()
         && peer_chain[1].as_ref() == checked.ca.as_slice(),
         "native ingress quoted certificates differ from the actual TLS peer originals")?;
+    let workload_verification = match workload {
+        Some((issuer, chain)) => Some(checked.verify_client_issuer(issuer, chain, expected)?),
+        None => None,
+    };
 
     let (version, quote_verification) = match profile {
         SessionExpectations::PinnedNonce { expected, original } => (
@@ -93,7 +116,7 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
             checked.summary_for_session_scope(&public_identity, original, trust_roots_raw, scope),
         ),
     };
-    Ok(json!({
+    let mut result = json!({
         "apiVersion":version,
         "resultScope":"local-ingress-session-and-quote-only", "okForAction":false,
         "evidenceSha256":digest_text(&digest(raw)),
@@ -101,5 +124,13 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
         "tlsExporterSha256":digest_text(&digest(&exporter)),
         "peerCertificateSha256":digest_text(&digest(peer_chain[0].as_ref())),
         "quoteVerification":quote_verification,
-    }))
+    });
+    if let Some(verified) = workload_verification {
+        result["apiVersion"] = json!("serverware.nativeIngressSessionVerification/v3");
+        for field in ["clientIssuerCertificateSha256", "clientIssuerSpkiSha256",
+            "clientLeafCertificateSha256"] {
+            result[field] = verified[field].clone();
+        }
+    }
+    Ok(result)
 }

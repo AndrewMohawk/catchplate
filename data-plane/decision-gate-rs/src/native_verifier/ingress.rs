@@ -9,6 +9,11 @@ use super::{b64, config::TrustRoots, decode_b64, digest, digest_text, ensure, ex
     now_seconds, parse_digest, text};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use rustls::{RootCertStore, server::WebPkiClientVerifier};
+use rustls::pki_types::{CertificateDer, UnixTime};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
 
 const MAX_INPUT: usize = 64 * 1024;
 const MAX_CERTIFICATE: usize = 16 * 1024;
@@ -16,8 +21,10 @@ const MAX_DOCUMENT: usize = 12 * 1024;
 const MAX_SPKI: usize = 1024;
 const KEY_BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
+const CLIENT_TRUST_DOMAIN: &[u8] = b"serverware/mutual-tls-client-trust/v1\0";
+const CLIENT_TRUST_PROFILE: &str = "native-framed-der-v1";
 
-pub(super) enum EvidenceProfile { Startup, Session }
+pub(super) enum EvidenceProfile { Startup, Session, SessionClientTrust }
 enum SummaryProfile { Expectations, SessionScope }
 
 pub(super) struct VerifiedIngress {
@@ -29,6 +36,8 @@ pub(super) struct VerifiedIngress {
     nonce: [u8; 32],
     issued: u64,
     verified_at: u64,
+    valid_until: u64,
+    client_trust_certificates: Option<Vec<Vec<u8>>>,
 }
 
 pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])
@@ -44,9 +53,13 @@ pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8]
 pub(super) fn verify_original(raw: &[u8], expected: &SessionScope, roots: &TrustRoots,
     profile: EvidenceProfile, quote_nonce: &[u8; 32]) -> Result<VerifiedIngress, String> {
     ensure(*quote_nonce != [0; 32], "native ingress quote nonce must be nonzero")?;
-    let scope = match profile {
-        EvidenceProfile::Startup => "unverified-startup-public-material",
-        EvidenceProfile::Session => "unverified-session-public-material",
+    let (scope, version, expose_client_trust) = match profile {
+        EvidenceProfile::Startup => ("unverified-startup-public-material",
+            "serverware.nativeIngressPublicEvidence/v1", false),
+        EvidenceProfile::Session => ("unverified-session-public-material",
+            "serverware.nativeIngressPublicEvidence/v1", false),
+        EvidenceProfile::SessionClientTrust => ("unverified-session-public-material",
+            "serverware.nativeIngressPublicEvidence/v2", true),
     };
     ensure(raw.len() > 1 && raw.len() <= MAX_INPUT && raw.last() == Some(&b'\n'),
         "native ingress evidence requires one bounded original JSON line")?;
@@ -55,17 +68,26 @@ pub(super) fn verify_original(raw: &[u8], expected: &SessionScope, roots: &Trust
         "native ingress evidence contains extra framing")?;
     let evidence = json::parse(body, MAX_INPUT - 1)?;
     exact(&evidence, &["apiVersion", "evidenceScope", "okForAction", "ingress", "quote"])?;
-    ensure(text(&evidence, "apiVersion")? == "serverware.nativeIngressPublicEvidence/v1"
+    ensure(text(&evidence, "apiVersion")? == version
         && text(&evidence, "evidenceScope")? == scope
         && evidence.get("okForAction").and_then(Value::as_bool) == Some(false),
         "native ingress public evidence version or scope differs")?;
     let ingress = evidence.get("ingress").ok_or("native ingress public TLS object is absent")?;
-    exact(ingress, &["tlsProtocol", "clientAuthentication", "certificateChainDerBase64url",
-        "leafPublicKeySpkiDerBase64url", "clientTrustBundleSha256"])?;
+    if expose_client_trust {
+        exact(ingress, &["tlsProtocol", "clientAuthentication", "certificateChainDerBase64url",
+            "leafPublicKeySpkiDerBase64url", "clientTrustBundleSha256", "clientTrustProfile",
+            "clientTrustCertificatesDerBase64url"])?;
+    } else {
+        exact(ingress, &["tlsProtocol", "clientAuthentication", "certificateChainDerBase64url",
+            "leafPublicKeySpkiDerBase64url", "clientTrustBundleSha256"])?;
+    }
     ensure(text(ingress, "tlsProtocol")? == "TLSv1.3"
         && text(ingress, "clientAuthentication")? == "mandatory-webpki"
         && parse_digest::<32>(text(ingress, "clientTrustBundleSha256")?, "sha256:", true)?
             == expected.client_trust, "native ingress TLS or independently expected client trust differs")?;
+    let client_trust_certificates = if expose_client_trust {
+        Some(client_trust_originals(ingress, &expected.client_trust)?)
+    } else { None };
     let chain = ingress.get("certificateChainDerBase64url").and_then(Value::as_array)
         .ok_or("native ingress public chain is not an array")?;
     ensure(chain.len() == 2, "native ingress requires the exact leaf and CA pair")?;
@@ -119,10 +141,143 @@ pub(super) fn verify_original(raw: &[u8], expected: &SessionScope, roots: &Trust
         "native ingress verification crossed its certificate/quote validity or reversed clock")?;
 
     Ok(VerifiedIngress { leaf, ca, leaf_spki_sha, ca_spki_sha,
-        document_sha: digest(&document), nonce, issued, verified_at: opening })
+        document_sha: digest(&document), nonce, issued, verified_at: opening,
+        valid_until: certificates.valid_until_unix_seconds, client_trust_certificates })
+}
+
+// Preserve the producer's original order and framing. This is the native DER
+// commitment, never the standard listener's exact-PEM authorization digest.
+fn client_trust_originals(ingress: &Value, expected: &[u8; 32])
+    -> Result<Vec<Vec<u8>>, String> {
+    ensure(text(ingress, "clientTrustProfile")? == CLIENT_TRUST_PROFILE,
+        "native client trust commitment profile differs")?;
+    let values = ingress.get("clientTrustCertificatesDerBase64url").and_then(Value::as_array)
+        .ok_or("native client trust originals are not an array")?;
+    ensure(!values.is_empty() && values.len() <= 32,
+        "native client trust inventory exceeds its count bound")?;
+    let mut originals = Vec::with_capacity(values.len());
+    let mut seen = BTreeSet::new();
+    let mut total = 0usize;
+    let mut commitment = Sha256::new();
+    commitment.update(CLIENT_TRUST_DOMAIN);
+    commitment.update((values.len() as u32).to_be_bytes());
+    for value in values {
+        let original = decode_b64(value.as_str().ok_or("native client trust original is not text")?,
+            64 * 1024)?;
+        total = total.checked_add(original.len()).ok_or("native client trust size overflow")?;
+        ensure(total <= 1024 * 1024 && seen.insert(original.clone()),
+            "native client trust originals exceed their bound or repeat")?;
+        let (remaining, _) = x509_parser::parse_x509_certificate(&original)
+            .map_err(|_| "native client trust certificate DER is invalid")?;
+        ensure(remaining.is_empty(), "native client trust certificate DER has trailing bytes")?;
+        commitment.update((original.len() as u64).to_be_bytes());
+        commitment.update(&original);
+        originals.push(original);
+    }
+    let actual: [u8; 32] = commitment.finalize().into();
+    ensure(&actual == expected, "native client trust originals differ from the quoted commitment")?;
+    Ok(originals)
+}
+
+fn client_chain(original: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    ensure(!original.is_empty() && original.len() <= 64 * 1024,
+        "native workload client chain exceeds its original bound")?;
+    let mut remaining = std::str::from_utf8(original)
+        .map_err(|_| "native workload client PEM is not UTF-8")?;
+    let mut chain = Vec::new();
+    let mut seen = BTreeSet::new();
+    const END: &str = "-----END CERTIFICATE-----\n";
+    while !remaining.is_empty() {
+        ensure(chain.len() < 8, "native workload client chain exceeds its count bound")?;
+        let length = remaining.find(END).ok_or("native workload client PEM footer is absent")?
+            .checked_add(END.len()).ok_or("native workload client PEM size overflow")?;
+        let certificate = super::pem_der(&remaining[..length], "CERTIFICATE", 64 * 1024)?;
+        ensure(certificate.len() <= MAX_CERTIFICATE && seen.insert(certificate.clone()),
+            "native workload client certificate exceeds its bound or repeats")?;
+        let (trailing, _) = x509_parser::parse_x509_certificate(&certificate)
+            .map_err(|_| "native workload client certificate DER is invalid")?;
+        ensure(trailing.is_empty(), "native workload client certificate has trailing DER")?;
+        chain.push(certificate);
+        remaining = &remaining[length..];
+    }
+    Ok(chain)
 }
 
 impl VerifiedIngress {
+    /// Re-admit public originals, not a copied certificate/verification DTO.
+    /// The fixed client owner must have used this exact retained chain and key
+    /// for the same ClientConnection already joined by ingress_session.
+    pub(super) fn verify_client_issuer(&self, issuer_der: &[u8], client_certificate_pem: &[u8],
+        expected: &SessionScope)
+        -> Result<Value, String> {
+        let inventory = self.client_trust_certificates.as_ref()
+            .ok_or("native workload issuer requires authenticated v2 trust originals")?;
+        ensure(!issuer_der.is_empty() && issuer_der.len() <= MAX_CERTIFICATE
+            && inventory.iter().filter(|original| original.as_slice() == issuer_der).count() == 1,
+            "native workload issuer differs from the independently pinned quoted root")?;
+        let (trailing, issuer) = x509_parser::parse_x509_certificate(issuer_der)
+            .map_err(|_| "native workload issuer DER is invalid")?;
+        ensure(trailing.is_empty(), "native workload issuer has trailing DER")?;
+        let basic = issuer.basic_constraints().map_err(|_| "native workload issuer constraints are invalid")?
+            .ok_or("native workload issuer lacks CA constraints")?;
+        let usage = issuer.key_usage().map_err(|_| "native workload issuer key usage is invalid")?
+            .ok_or("native workload issuer lacks key usage")?;
+        ensure(basic.value.ca && usage.value.key_cert_sign(),
+            "native workload issuer is not a certificate-signing CA")?;
+        let opening = now_seconds()?;
+        ensure(i128::from(issuer.validity().not_before.timestamp()) <= i128::from(opening)
+            && i128::from(opening) < i128::from(issuer.validity().not_after.timestamp()),
+            "native workload issuer is outside its original validity")?;
+        let issuer_spki = issuer.public_key().raw;
+        let chain = client_chain(client_certificate_pem)?;
+        ensure(!chain.is_empty() && chain[0].as_slice() != issuer_der,
+            "native workload client leaf cannot be its issuer")?;
+        let (trailing, leaf) = x509_parser::parse_x509_certificate(&chain[0])
+            .map_err(|_| "native workload client leaf is invalid")?;
+        let leaf_basic = leaf.basic_constraints().map_err(|_| "native workload leaf constraints are invalid")?;
+        let leaf_usage = leaf.key_usage().map_err(|_| "native workload leaf key usage is invalid")?
+            .ok_or("native workload leaf lacks key usage")?;
+        ensure(trailing.is_empty() && !leaf_basic.is_some_and(|value| value.value.ca)
+            && leaf_usage.value.digital_signature(),
+            "native workload client leaf must be a signing end entity")?;
+        let mut intermediates = Vec::new();
+        for (index, certificate) in chain.iter().enumerate().skip(1) {
+            if certificate.as_slice() == issuer_der {
+                ensure(index + 1 == chain.len(), "native workload issuer appears before chain tail")?;
+            } else {
+                intermediates.push(CertificateDer::from(certificate.as_slice()));
+            }
+        }
+        let mut roots = RootCertStore::empty();
+        roots.add(CertificateDer::from(issuer_der.to_vec()))
+            .map_err(|_| "native workload issuer is not a WebPKI trust anchor")?;
+        let verifier = WebPkiClientVerifier::builder(Arc::new(roots)).build()
+            .map_err(|_| "native workload client verifier could not be constructed")?;
+        let leaf_original = CertificateDer::from(chain[0].as_slice());
+        verifier.verify_client_cert(&leaf_original, &intermediates,
+            UnixTime::since_unix_epoch(Duration::from_secs(opening)))
+            .map_err(|_| "native workload client chain is not valid under its pinned issuer")?;
+        let closing = now_seconds()?;
+        ensure(closing >= opening
+            && i128::from(closing) < i128::from(issuer.validity().not_after.timestamp())
+            && closing >= self.verified_at && closing < self.valid_until
+            && self.issued <= closing.checked_add(expected.future_skew).ok_or("native workload age overflow")?
+            && closing.saturating_sub(self.issued) <= expected.max_age,
+            "native workload client verification crossed its original validity")?;
+        // Include every retained intermediate, not only the leaf and anchor,
+        // in the closing validity check. No certificate interval is renewed.
+        for original in &chain {
+            let (_, certificate) = x509_parser::parse_x509_certificate(original)
+                .map_err(|_| "native workload client chain certificate is invalid")?;
+            ensure(i128::from(certificate.validity().not_before.timestamp()) <= i128::from(closing)
+                && i128::from(closing) < i128::from(certificate.validity().not_after.timestamp()),
+                "native workload client chain expired during verification")?;
+        }
+        Ok(json!({"clientIssuerCertificateSha256":digest_text(&digest(issuer_der)),
+            "clientIssuerSpkiSha256":digest_text(&digest(issuer_spki)),
+            "clientLeafCertificateSha256":digest_text(&digest(&chain[0]))}))
+    }
+
     // Hash the complete input originals, including the public evidence's LF.
     // This result never supplies a trust-store mutation or action permission.
     pub(super) fn summary(&self, raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8],
@@ -144,7 +299,7 @@ impl VerifiedIngress {
             SummaryProfile::SessionScope =>
                 ("serverware.nativeIngressAttestationVerification/v2", "sessionScopeSha256"),
         };
-        json!({
+        let mut result = json!({
             "apiVersion":version,
             "resultScope":"local-ingress-quote-only", "okForAction":false,
             "evidenceSha256":digest_text(&digest(raw)),
@@ -161,6 +316,12 @@ impl VerifiedIngress {
             "nitroAttestationDocumentSha256":digest_text(&self.document_sha),
             "nonceBase64url":b64(&self.nonce),
             "quoteIssuedAtUnixSeconds":self.issued, "verifiedAtUnixSeconds":self.verified_at,
-        })
+        });
+        if let Some(originals) = &self.client_trust_certificates {
+            result["apiVersion"] = json!("serverware.nativeIngressAttestationVerification/v3");
+            result["clientTrustProfile"] = json!(CLIENT_TRUST_PROFILE);
+            result["clientTrustCertificateCount"] = json!(originals.len());
+        }
+        result
     }
 }

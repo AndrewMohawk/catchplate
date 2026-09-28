@@ -7,6 +7,12 @@ independently pinned expectations and Nitro trust roots. It verifies actual
 certificate and original Nitro signatures, not just matching digests. It does
 not connect to a server, install a CA, establish readiness or authorize an action.
 
+The offline startup CLI remains strict v1. The separate
+[native workload-trust session profile](native-workload-trust.md) adds genuine
+verification of v2 session root-inventory originals and an independently pinned
+issuer/client chain on an actual TLS connection. It does not reinterpret startup
+evidence, expand this CLI, or turn its JSON output into enrollment authority.
+
 ## Fixed inputs and CLI
 
 ```text

@@ -3653,6 +3653,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				ops/systemd/serverware-launch-authority-relay.service \
 				ops/systemd/serverware-launch-authority-relay.socket \
 				schemas/production-launch-manifest.v3.schema.json \
+				schemas/native-ingress-client.v3.schema.json \
+				schemas/native-ingress-session-evidence.v2.schema.json \
+				schemas/native-proxy-ingress.v2.schema.json \
 				schemas/release-completion-verification.v1.schema.json \
 				schemas/release-completion-result-signing-request.v1.schema.json \
 				schemas/release-completion-result-signing-response.v1.schema.json \

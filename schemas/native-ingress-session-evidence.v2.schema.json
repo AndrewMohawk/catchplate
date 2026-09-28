@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-ingress-session-evidence.v2.schema.json",
+  "title": "Serverware native ingress session evidence v2",
+  "description": "Explicit client-trust-v2 session quotation only; requested with x-serverware-ingress-evidence: client-trust-v2. No version downgrade is allowed. The wire object is compact JSON plus one LF, at most 98304 bytes. Schema shape does not verify TLS exporter provenance, a Nitro signature, certificate or peer identity, freshness, enrollment, authorization, current witness state or readiness. The verifier must compare the echoed challenge/exporter with independently retained actual client-session values, never adopt these echoes as expectations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "evidenceScope", "okForAction", "clientChallengeBase64url",
+    "tlsExporterBase64url", "publicIdentityBase64url"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeIngressSessionEvidence/v2"},
+    "evidenceScope": {"const": "unverified-session-public-material"},
+    "okForAction": {"const": false},
+    "clientChallengeBase64url": {
+      "description": "Echo of the caller's raw nonzero 32-byte challenge, not proof of its freshness or one-use reservation.",
+      "$ref": "#/$defs/nonzeroRaw32"
+    },
+    "tlsExporterBase64url": {
+      "description": "Echo of the actual 32-byte exporter for fixed label EXPORTER-Serverware-Native-Ingress-v1 and raw caller challenge context. A consumer must use its independently observed actual TLS exporter, not trust this echo.",
+      "$ref": "#/$defs/nonzeroRaw32"
+    },
+    "publicIdentityBase64url": {
+      "description": "Canonical unpadded URL-safe base64 of the exact nativeIngressPublicEvidence/v2 original line, including its final LF, at most 65536 decoded bytes. Runtime verification requires nested scope unverified-session-public-material and the same retained ingress key with nonce SHA256(fixed NUL-terminated session domain || challenge32 || exporter32). Nested ingress additionally requires clientTrustProfile=native-framed-der-v1 and clientTrustCertificatesDerBase64url, the exact ordered original DER roots. The verifier recomputes the domain-separated count/length-framed digest and authenticates it through the original role-3 Nitro quote. Existing 32-root, 65536-byte per-root and 1048576-byte aggregate inventory limits do not enlarge the 65536-byte nested wire cap; oversized exports fail. JSON Schema does not decode or verify that nested evidence.",
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 87382,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])"
+    }
+  },
+  "$defs": {
+    "nonzeroRaw32": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^(?!A{43}(?![\\s\\S]))[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])"
+    }
+  }
+}

@@ -18,7 +18,14 @@ enum Completion { AuthenticatedClose, ConnectContinuation }
 
 pub(super) fn exchange<T: Read + Write>(connection: &mut T, authority: &str,
     challenge: [u8; 32]) -> Result<Vec<u8>, String> {
-    exchange_fixed(connection, authority, challenge, Completion::AuthenticatedClose)
+    exchange_fixed(connection, authority, challenge, Completion::AuthenticatedClose, false)
+}
+
+/// Standalone v3 selects only the paired client-trust-v2 original profile.
+/// This is not a CONNECT continuation or a caller-controlled header facility.
+pub(super) fn exchange_client_trust<T: Read + Write>(connection: &mut T, authority: &str,
+    challenge: [u8; 32]) -> Result<Vec<u8>, String> {
+    exchange_fixed(connection, authority, challenge, Completion::AuthenticatedClose, true)
 }
 
 /// The caller must supply an actual original-deadline TLS owner and verify the
@@ -26,11 +33,18 @@ pub(super) fn exchange<T: Read + Write>(connection: &mut T, authority: &str,
 /// This fixed opt-in never accepts an arbitrary HTTP method, path or header.
 pub(super) fn exchange_for_connect<T: Read + Write>(connection: &mut T, authority: &str,
     challenge: [u8; 32]) -> Result<Vec<u8>, String> {
-    exchange_fixed(connection, authority, challenge, Completion::ConnectContinuation)
+    exchange_fixed(connection, authority, challenge, Completion::ConnectContinuation, false)
+}
+
+/// The separately owned proof client must genuinely admit this paired v2
+/// evidence on the same connection before CONNECT; framing grants no authority.
+pub(super) fn exchange_for_connect_client_trust<T: Read + Write>(connection: &mut T, authority: &str,
+    challenge: [u8; 32]) -> Result<Vec<u8>, String> {
+    exchange_fixed(connection, authority, challenge, Completion::ConnectContinuation, true)
 }
 
 fn exchange_fixed<T: Read + Write>(connection: &mut T, authority: &str,
-    challenge: [u8; 32], completion: Completion) -> Result<Vec<u8>, String> {
+    challenge: [u8; 32], completion: Completion, client_trust: bool) -> Result<Vec<u8>, String> {
     validate_authority(authority)?;
     if challenge == [0; 32] {
         return Err("native ingress HTTP challenge must be nonzero".to_owned());
@@ -42,8 +56,9 @@ fn exchange_fixed<T: Read + Write>(connection: &mut T, authority: &str,
         Completion::ConnectContinuation =>
             "x-serverware-ingress-continuation: connect-v1\r\nConnection: keep-alive\r\n\r\n",
     };
+    let profile = if client_trust { "x-serverware-ingress-evidence: client-trust-v2\r\n" } else { "" };
     let request = format!(
-        "GET /attestation HTTP/1.1\r\nHost: {authority}\r\n{CHALLENGE_HEADER}: {}\r\n{ending}",
+        "GET /attestation HTTP/1.1\r\nHost: {authority}\r\n{CHALLENGE_HEADER}: {}\r\n{profile}{ending}",
         URL_SAFE_NO_PAD.encode(challenge));
     // Both actual TLS callers check their original lifetime before and after
     // every read/write/flush, including accesses to buffered plaintext. No

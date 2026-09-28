@@ -66,6 +66,21 @@ pub(crate) fn verify_ingress_session_with_challenge(raw: &[u8], scope_raw: &[u8]
     Ok(bytes)
 }
 
+/// Source-selected v2 evidence verifies the actual quoted native client-root
+/// inventory and the caller's retained certificate chain under its independent
+/// issuer. The caller must use that exact chain on this held TLS connection;
+/// copied summaries, standard PEM-bundle diagnostics and legacy evidence cannot
+/// select this lane. Returns only a bounded local v3 verdict, not permission.
+pub(crate) fn verify_ingress_session_client_trust_with_challenge(raw: &[u8], scope_raw: &[u8],
+    roots_raw: &[u8], challenge: [u8; 32], client: &rustls::ClientConnection,
+    issuer_der: &[u8], client_certificate_pem: &[u8]) -> Result<Vec<u8>, String> {
+    let result = ingress_session::verify_client_trust_with_challenge(raw, scope_raw,
+        roots_raw, challenge, client, issuer_der, client_certificate_pem)?;
+    let bytes = serde_json::to_vec(&result).map_err(|_| "encode native workload ingress verdict")?;
+    ensure(!bytes.is_empty() && bytes.len() < 4096, "native workload ingress verdict exceeds its bound")?;
+    Ok(bytes)
+}
+
 pub(super) fn verify_ingress(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])
     -> Result<Vec<u8>, String> {
     let result = ingress::verify(raw, expectations_raw, trust_roots_raw)?;

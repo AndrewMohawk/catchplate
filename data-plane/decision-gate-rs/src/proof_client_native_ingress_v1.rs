@@ -16,7 +16,9 @@ mod http;
 
 use super::proof_client_native_transport_v1::NativeProxyTransportV1;
 use originals::{ArtifactV1, HeldOriginal};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ring::rand::{SecureRandom, SystemRandom};
+use rustls::pki_types::{pem::PemObject, CertificateDer};
 use serde::Deserialize;
 use serde_json::Value;
 use std::cell::{Cell, RefCell};
@@ -28,6 +30,7 @@ const MAX_CONFIGURATION: usize = 16 * 1024;
 const MAX_STARTUP: usize = 64 * 1024;
 const MAX_EXPECTATIONS: usize = 16 * 1024;
 const MAX_ROOTS: usize = 1024 * 1024;
+const MAX_WORKLOAD_ISSUER: usize = 64 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -37,6 +40,7 @@ struct Configuration {
     startup_expectations: ArtifactV1,
     session_scope: ArtifactV1,
     trust_roots: ArtifactV1,
+    workload_issuer: Option<ArtifactV1>,
 }
 
 struct Original {
@@ -51,6 +55,7 @@ pub(super) struct NativeIngressAdmission {
     expectations: Vec<u8>,
     scope_original: Vec<u8>,
     roots: Vec<u8>,
+    workload_issuer: Option<Vec<u8>>,
     scope: Value,
     roots_sha256: String,
     bootstrap: native_verifier::IngressClientBootstrap,
@@ -81,18 +86,53 @@ fn read(artifact: ArtifactV1, maximum: usize, originals: &mut Vec<Original>,
     Ok(bytes)
 }
 
+fn workload_issuer_der(original: &[u8]) -> Result<Vec<u8>, String> {
+    // Decode only the held independently pinned original. Actual CA purpose,
+    // quoted membership and client-chain admission remain the independent verifier's work.
+    let der = CertificateDer::from_pem_slice(original)
+        .map_err(|_| "native workload issuer PEM is malformed")?;
+    if der.is_empty() || der.len() > 16 * 1024 {
+        return Err("native workload issuer DER exceeds its bound".to_owned());
+    }
+    let encoded = STANDARD.encode(der.as_ref());
+    let mut canonical = b"-----BEGIN CERTIFICATE-----\n".to_vec();
+    for line in encoded.as_bytes().chunks(64) {
+        canonical.extend_from_slice(line);
+        canonical.push(b'\n');
+    }
+    canonical.extend_from_slice(b"-----END CERTIFICATE-----\n");
+    if canonical != original {
+        return Err("native workload issuer must be exactly one canonical PEM certificate".to_owned());
+    }
+    Ok(der.to_vec())
+}
+
 impl NativeIngressAdmission {
     pub(super) fn open(configuration: &Path, pin: &str, deadline: Instant)
         -> Result<Self, String> {
         let pid = std::process::id();
         live(pid, deadline)?;
-        let mut originals = Vec::with_capacity(5);
+        let mut originals = Vec::with_capacity(6);
         let raw = read(ArtifactV1 { path: configuration.to_owned(), sha256: pin.to_owned() },
             MAX_CONFIGURATION, &mut originals, pid, deadline)?;
         let value = json::parse(&raw, MAX_CONFIGURATION)?;
+        let version = value.get("apiVersion").and_then(Value::as_str);
+        let client_trust_v2 = match version {
+            Some("serverware.nativeProxyIngress/v1") => false,
+            Some("serverware.nativeProxyIngress/v2") => true,
+            _ => return Err("native ingress configuration version is unsupported".to_owned()),
+        };
+        let fields = value.as_object().ok_or("native ingress configuration is not an object")?;
+        let required = ["apiVersion", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots"];
+        if required.iter().any(|name| !fields.contains_key(*name))
+            || fields.len() != required.len() + usize::from(client_trust_v2)
+            || fields.contains_key("workloadIssuer") != client_trust_v2 {
+            return Err("native ingress configuration fields differ from its exact version".to_owned());
+        }
         let config: Configuration = serde_json::from_value(value)
             .map_err(|_| "native ingress configuration has an invalid closed schema")?;
-        if config.api_version != "serverware.nativeProxyIngress/v1" {
+        if config.api_version != if client_trust_v2 { "serverware.nativeProxyIngress/v2" }
+            else { "serverware.nativeProxyIngress/v1" } {
             return Err("native ingress configuration version is unsupported".to_owned());
         }
         let startup = read(config.startup_evidence, MAX_STARTUP, &mut originals, pid, deadline)?;
@@ -101,6 +141,14 @@ impl NativeIngressAdmission {
         let scope_original = read(config.session_scope, MAX_EXPECTATIONS,
             &mut originals, pid, deadline)?;
         let roots = read(config.trust_roots, MAX_ROOTS, &mut originals, pid, deadline)?;
+        let workload_issuer = if client_trust_v2 {
+            let artifact = config.workload_issuer
+                .ok_or("native ingress v2 requires an independently pinned workload issuer")?;
+            let original = read(artifact, MAX_WORKLOAD_ISSUER, &mut originals, pid, deadline)?;
+            let der = workload_issuer_der(&original)?;
+            live(pid, deadline)?;
+            Some(der)
+        } else { None };
         live(pid, deadline)?;
         let mut challenge = [0u8; 32];
         SystemRandom::new().fill(&mut challenge)
@@ -114,7 +162,7 @@ impl NativeIngressAdmission {
         let scope = json::parse(&scope_original, MAX_EXPECTATIONS)?;
         let roots_sha256 = super::sha256_prefixed(&roots);
         let owner = Self { originals: RefCell::new(originals), startup, expectations,
-            scope_original, roots, scope, roots_sha256, bootstrap, pid, deadline,
+            scope_original, roots, workload_issuer, scope, roots_sha256, bootstrap, pid, deadline,
             poisoned: Cell::new(false), attempted: Cell::new(false) };
         owner.recheck()?;
         Ok(owner)
@@ -208,16 +256,31 @@ impl NativeIngressAdmission {
             {
                 return Err("native ingress TLS peer differs from verified startup originals".to_owned());
             }
+            if self.workload_issuer.is_some() {
+                // This activates the transport's sticky actual-resolver capture
+                // guard before the sole attestation exchange, not after CONNECT.
+                transport.client_certificate_pem()?;
+            }
             let evidence = {
                 let mut checked = AttestationIo { admission: self, transport: &mut *transport };
-                http::exchange_for_connect(&mut checked, authority, self.bootstrap.challenge)?
+                if self.workload_issuer.is_some() {
+                    http::exchange_for_connect_client_trust(&mut checked, authority, self.bootstrap.challenge)?
+                } else {
+                    http::exchange_for_connect(&mut checked, authority, self.bootstrap.challenge)?
+                }
             };
             self.check()?;
             transport.check().map_err(|_| "native ingress transport lifetime ended")?;
             transport.require_no_buffered_plaintext()
                 .map_err(|_| "native ingress continuation is not an empty live TLS boundary")?;
-            native_verifier::verify_ingress_session_with_challenge(&evidence,
-                &self.scope_original, &self.roots, self.bootstrap.challenge, transport.client())?;
+            if let Some(issuer) = self.workload_issuer.as_deref() {
+                native_verifier::verify_ingress_session_client_trust_with_challenge(&evidence,
+                    &self.scope_original, &self.roots, self.bootstrap.challenge, transport.client(),
+                    issuer, transport.client_certificate_pem()?)?;
+            } else {
+                native_verifier::verify_ingress_session_with_challenge(&evidence,
+                    &self.scope_original, &self.roots, self.bootstrap.challenge, transport.client())?;
+            }
             transport.check().map_err(|_| "native ingress transport lifetime ended")?;
             self.recheck()?;
             transport.check().map_err(|_| "native ingress transport lifetime ended")?;

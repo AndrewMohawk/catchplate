@@ -7,6 +7,17 @@ evidence before trusting its single CA in a private connection configuration,
 then verifies fresh evidence on that actual connection. It never installs a
 global CA, dispatches an application operation or grants action authority.
 
+The additive [v3 workload-trust profile](native-workload-trust.md) retains the
+nonce-free v2 inputs and adds one independently pinned `workloadIssuer` public
+PEM artifact. It explicitly requests v2 session evidence, authenticates the
+actual runtime's ordered DER trust inventory, and verifies the same configured
+client chain under only the selected issuer. Existing v1/v2 remain unchanged.
+See the [closed v3 schema](../schemas/native-ingress-client.v3.schema.json) for
+the tenth field; the issuer is at most 64 KiB PEM / 16 KiB DER. Its local capture
+and verification use distinct v3 result versions with `okForAction=false`.
+The existing bounds and sequence below apply, with this extra held original and
+same-session trust verification before publication, not a new CONNECT capability.
+
 ## Exact invocation and configuration
 
 The only arguments are the two required pairs, in either order:

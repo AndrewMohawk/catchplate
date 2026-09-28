@@ -11,21 +11,99 @@
 mod deadline_tcp;
 
 use deadline_tcp::DeadlineTcp;
-use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection, HandshakeKind, ProtocolVersion, StreamOwned};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use rustls::client::ResolvesClientCert;
+use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::sign::CertifiedKey;
+use rustls::{ClientConfig, ClientConnection, HandshakeKind, ProtocolVersion, SignatureScheme, StreamOwned};
+use std::cell::Cell;
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const MAX_PLAINTEXT_IO_BYTES: usize = 16 * 1024;
 const MAX_TLS_OUTPUT_BYTES: usize = 64 * 1024;
 const MAX_WIRE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_CLIENT_CHAIN_BYTES: usize = 64 * 1024;
+
+enum ClientIdentityCapture {
+    Unused,
+    Captured(Vec<CertificateDer<'static>>),
+    Sealed,
+    Unavailable,
+}
+
+// Delegate selection and signing to the original resolver. Only the public
+// certificate chain actually selected for this connection is copied; no
+// private key is loaded, exported or cloned by this capture adapter.
+struct CapturingClientIdentity {
+    original: Arc<dyn ResolvesClientCert>,
+    captured: Arc<Mutex<ClientIdentityCapture>>,
+}
+
+impl fmt::Debug for CapturingClientIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CapturingClientIdentity")
+    }
+}
+
+impl ResolvesClientCert for CapturingClientIdentity {
+    fn resolve(&self, root_hint_subjects: &[&[u8]], sigschemes: &[SignatureScheme])
+        -> Option<Arc<CertifiedKey>> {
+        let selected = self.original.resolve(root_hint_subjects, sigschemes);
+        if let Ok(mut captured) = self.captured.lock() {
+            let chain = selected.as_ref().map(|key| &key.cert);
+            let bounded = chain.is_some_and(|chain| !chain.is_empty() && chain.len() <= 8
+                && chain.iter().all(|item| !item.is_empty() && item.len() <= 16 * 1024)
+                && chain.iter().map(|item| item.len()).sum::<usize>() <= MAX_CLIENT_CHAIN_BYTES);
+            *captured = if matches!(*captured, ClientIdentityCapture::Unused) && bounded {
+                ClientIdentityCapture::Captured(chain.expect("bounded selected chain").clone())
+            } else {
+                ClientIdentityCapture::Unavailable
+            };
+        }
+        selected
+    }
+
+    fn has_certs(&self) -> bool { self.original.has_certs() }
+    fn only_raw_public_keys(&self) -> bool { self.original.only_raw_public_keys() }
+}
+
+fn captured_pem(captured: &Arc<Mutex<ClientIdentityCapture>>) -> Option<Vec<u8>> {
+    let mut selected = captured.lock().ok()?;
+    let ClientIdentityCapture::Captured(chain) =
+        std::mem::replace(&mut *selected, ClientIdentityCapture::Unavailable) else { return None; };
+    let mut maximum = 0usize;
+    for certificate in &chain {
+        let encoded = certificate.len().checked_add(2)?.checked_div(3)?.checked_mul(4)?;
+        maximum = maximum.checked_add(encoded)?.checked_add(encoded.checked_add(63)? / 64)?
+            .checked_add(54)?;
+        if maximum > MAX_CLIENT_CHAIN_BYTES { return None; }
+    }
+    let mut pem = Vec::with_capacity(maximum);
+    for certificate in chain {
+        pem.extend_from_slice(b"-----BEGIN CERTIFICATE-----\n");
+        let encoded = STANDARD.encode(certificate.as_ref());
+        for line in encoded.as_bytes().chunks(64) {
+            pem.extend_from_slice(line);
+            pem.push(b'\n');
+        }
+        pem.extend_from_slice(b"-----END CERTIFICATE-----\n");
+    }
+    if pem.is_empty() || pem.len() > MAX_CLIENT_CHAIN_BYTES { return None; }
+    *selected = ClientIdentityCapture::Sealed;
+    Some(pem)
+}
 
 pub(super) struct NativeProxyTransportV1 {
     tls: StreamOwned<ClientConnection, DeadlineTcp>,
     owner_pid: u32,
     deadline: Instant,
+    client_identity: Arc<Mutex<ClientIdentityCapture>>,
+    client_certificate_pem: Option<Vec<u8>>,
+    client_identity_required: Cell<bool>,
 }
 
 fn check_lifetime(owner_pid: u32, deadline: Instant) -> io::Result<()> {
@@ -50,13 +128,20 @@ pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
     if config.enable_early_data {
         return Err("native proxy TLS configuration must disable early data".to_owned());
     }
-    let mut client = ClientConnection::new(config, name)
+    let captured = Arc::new(Mutex::new(ClientIdentityCapture::Unused));
+    let mut retained_config = (*config).clone();
+    retained_config.client_auth_cert_resolver = Arc::new(CapturingClientIdentity {
+        original: Arc::clone(&config.client_auth_cert_resolver), captured: Arc::clone(&captured),
+    });
+    let mut client = ClientConnection::new(Arc::new(retained_config), name)
         .map_err(|_| "native proxy TLS initialization failed".to_owned())?;
     client.set_buffer_limit(Some(MAX_TLS_OUTPUT_BYTES));
     check_lifetime(owner_pid, deadline).map_err(|error| error.to_string())?;
     let socket = deadline_tcp::connect(endpoint, deadline, MAX_WIRE_BYTES, MAX_WIRE_BYTES)?;
     let mut transport = NativeProxyTransportV1 {
         tls: StreamOwned::new(client, socket), owner_pid, deadline,
+        client_identity: captured, client_certificate_pem: None,
+        client_identity_required: Cell::new(false),
     };
     transport.check().map_err(|error| error.to_string())?;
     while transport.tls.conn.is_handshaking() {
@@ -73,6 +158,9 @@ pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
         return Err("native proxy requires a full TLS1.3 handshake without early data".to_owned());
     }
     transport.flush().map_err(|_| "native proxy TLS handshake flush failed".to_owned())?;
+    // The full handshake has completed using the delegated signer. Captured
+    // public DER is encoded here solely for the original-certificate verifier.
+    transport.client_certificate_pem = captured_pem(&transport.client_identity);
     transport.check().map_err(|error| error.to_string())?;
     Ok(transport)
 }
@@ -80,8 +168,24 @@ pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
 impl NativeProxyTransportV1 {
     pub(super) fn client(&self) -> &ClientConnection { &self.tls.conn }
 
+    pub(super) fn client_certificate_pem(&self) -> Result<&[u8], String> {
+        // Once the v2 path requests this identity, absence or any later resolver
+        // activity is a sticky refusal on all subsequent transport operations.
+        self.client_identity_required.set(true);
+        self.check().map_err(|_| "native proxy lost its actual client certificate selection")?;
+        self.client_certificate_pem.as_deref()
+            .ok_or_else(|| "native proxy did not retain its actual client certificate chain".to_owned())
+    }
+
     pub(super) fn check(&self) -> io::Result<()> {
         check_lifetime(self.owner_pid, self.deadline)?;
+        if self.client_identity_required.get()
+            && (!self.client_identity.lock().ok()
+                .is_some_and(|captured| matches!(*captured, ClientIdentityCapture::Sealed))
+                || self.client_certificate_pem.is_none()) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
+                "native proxy actual client certificate capture is unavailable"));
+        }
         self.tls.sock.check()
     }
 

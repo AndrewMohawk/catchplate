@@ -34,6 +34,22 @@ fn object<'a>(input: &'a str, label: &str, maximum: usize)
     Ok((der, &input[length..]))
 }
 
+/// Decode only the independently pinned public issuer original. This is not
+/// proof of runtime admission: the v3 session verifier must authenticate its
+/// exact DER/SPKI against the actual quoted client-root inventory and chain.
+pub(super) fn workload_issuer_original(original: &[u8]) -> Result<Vec<u8>, String> {
+    ensure(!original.is_empty() && original.len() <= 64 * 1024,
+        "native workload issuer PEM exceeds its bound")?;
+    let text = std::str::from_utf8(original)
+        .map_err(|_| "native workload issuer PEM is not UTF-8")?;
+    let (der, rest) = object(text, "CERTIFICATE", 16 * 1024)?;
+    ensure(rest.is_empty(), "native workload issuer must be exactly one canonical PEM certificate")?;
+    let (remaining, _) = x509_parser::parse_x509_certificate(&der)
+        .map_err(|_| "native workload issuer DER is malformed")?;
+    ensure(remaining.is_empty(), "native workload issuer DER has trailing bytes")?;
+    Ok(der.to_vec())
+}
+
 pub(super) fn configuration(ca: &[u8], certificate_pem: &[u8], private_pem: &[u8])
     -> Result<ClientConfig, String> {
     ensure(!ca.is_empty() && ca.len() <= 16 * 1024

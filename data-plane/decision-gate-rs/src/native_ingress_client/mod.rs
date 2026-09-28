@@ -4,6 +4,8 @@
 //! TLS configuration is built only after startup-original verification; a new
 //! full session then supplies fresh original evidence. Results stay local and
 //! non-actionable. Blocking filesystem/stdout still needs an outer watchdog.
+//! V3 also admits the actual client chain under an independently pinned issuer
+//! present in that session's quoted root inventory; it still never sends CONNECT.
 
 mod config;
 mod http;
@@ -100,7 +102,7 @@ pub(super) fn run() -> Result<(), String> {
     };
     let (mut session_original, session_input) = read(session_artifact, 16 * 1024, deadline, pid)?;
     let (mut roots_original, roots) = read(config.trust_roots, 1024 * 1024, deadline, pid)?;
-    // V2 pins a nonce-free scope original and owns exactly one CSPRNG challenge
+    // V2/V3 pin a nonce-free scope original and own exactly one CSPRNG challenge
     // for this invocation. Never patch the original, learn the challenge from
     // the response, or regenerate it for the closing startup check. A failed,
     // zero or startup-equal draw aborts; it is not retried or persisted.
@@ -122,6 +124,15 @@ pub(super) fn run() -> Result<(), String> {
     let bootstrap = prepare()?;
     live(deadline, pid)?;
 
+    let mut workload_issuer = match config.workload_issuer {
+        Some(artifact) => {
+            let (held, original) = read(artifact, 64 * 1024, deadline, pid)?;
+            let der = identity::workload_issuer_original(&original)?;
+            live(deadline, pid)?;
+            Some((held, original, der))
+        }
+        None => None,
+    };
     // No client private key is loaded or network contacted before the actual
     // startup quote/certificate and complete independent scope checks above.
     let (mut certificate_original, certificate_pem) =
@@ -140,6 +151,9 @@ pub(super) fn run() -> Result<(), String> {
     recheck(&mut [&mut configuration_original, &mut startup_original,
         &mut startup_expectations_original, &mut session_original,
         &mut roots_original, &mut certificate_original, &mut key_original], deadline, pid)?;
+    if let Some((held, _, _)) = workload_issuer.as_mut() {
+        recheck(&mut [held], deadline, pid)?;
+    }
     key_original.require_private()?;
     let mut connection = transport::connect(config.endpoint, tls_config, name, deadline)?;
     // Use only the verified startup's exact peer identity before sending the
@@ -148,12 +162,21 @@ pub(super) fn run() -> Result<(), String> {
     ensure(peers.len() == 2 && peers[0].as_ref() == bootstrap.leaf.as_slice()
         && peers[1].as_ref() == bootstrap.ca.as_slice(),
         "native client connected peer differs from verified startup originals")?;
-    let evidence = http::exchange(&mut connection, &authority, bootstrap.challenge)?;
-    let verified = match generated_challenge {
-        Some(challenge) => native_verifier::verify_ingress_session_with_challenge(
+    let evidence = if workload_issuer.is_some() {
+        http::exchange_client_trust(&mut connection, &authority, bootstrap.challenge)?
+    } else {
+        http::exchange(&mut connection, &authority, bootstrap.challenge)?
+    };
+    let verified = match (generated_challenge, workload_issuer.as_ref()) {
+        (Some(challenge), Some((_, _, issuer_der))) =>
+            native_verifier::verify_ingress_session_client_trust_with_challenge(
+                &evidence, &session_input, &roots, challenge, connection.client(),
+                issuer_der, &certificate_pem)?,
+        (Some(challenge), None) => native_verifier::verify_ingress_session_with_challenge(
             &evidence, &session_input, &roots, challenge, connection.client())?,
-        None => native_verifier::verify_ingress_session(
+        (None, None) => native_verifier::verify_ingress_session(
             &evidence, &session_input, &roots, connection.client())?,
+        (None, Some(_)) => return Err("native client trust requires its generated challenge".to_owned()),
     };
     connection.check()?;
     // Recheck startup freshness after the exchange. This initial bootstrap
@@ -162,10 +185,14 @@ pub(super) fn run() -> Result<(), String> {
     let final_bootstrap = prepare()?;
     connection.check()?;
     let mut result = json!({
-        "apiVersion":if generated_challenge.is_some() {
+        "apiVersion":if workload_issuer.is_some() {
+            "serverware.nativeIngressClientCapture/v3"
+        } else if generated_challenge.is_some() {
             "serverware.nativeIngressClientCapture/v2"
         } else { "serverware.nativeIngressClientCapture/v1" },
-        "resultScope":"local-fixed-endpoint-session-and-quote-only", "okForAction":false,
+        "resultScope":if workload_issuer.is_some() {
+            "local-fixed-endpoint-session-client-trust-and-quote-only"
+        } else { "local-fixed-endpoint-session-and-quote-only" }, "okForAction":false,
         "configurationSha256":super::sha256_prefixed(&configuration_raw),
         "endpoint":config.endpoint.to_string(),
         "clientCertificateSha256":super::sha256_prefixed(&certificate_pem),
@@ -173,6 +200,10 @@ pub(super) fn run() -> Result<(), String> {
         "startupVerification":final_bootstrap.verification,
         "sessionVerification":json::parse(&verified, 4095)?,
     });
+    if let Some((_, original, _)) = workload_issuer.as_ref() {
+        result.as_object_mut().ok_or("native client capture is not an object")?
+            .insert("workloadIssuerOriginalSha256".to_owned(), json!(super::sha256_prefixed(original)));
+    }
     if generated_challenge.is_some() {
         // This source claim belongs to the actual client owner, not a verifier
         // API that merely receives a caller-held challenge. It grants no replay
@@ -188,6 +219,9 @@ pub(super) fn run() -> Result<(), String> {
     recheck(&mut [&mut configuration_original, &mut startup_original,
         &mut startup_expectations_original, &mut session_original,
         &mut roots_original, &mut certificate_original, &mut key_original], deadline, pid)?;
+    if let Some((held, _, _)) = workload_issuer.as_mut() {
+        recheck(&mut [held], deadline, pid)?;
+    }
     key_original.require_private()?;
     connection.check()?;
     // Public-only output; failure/expiry may leave a partial line, which is not

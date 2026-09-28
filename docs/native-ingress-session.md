@@ -6,6 +6,15 @@ bound to a caller challenge and that connection's TLS exporter. This is a
 session quotation producer, not automatic client bootstrap, verified CA
 installation, runtime readiness, principal authorization or production admission.
 
+An explicit [workload-trust v2 profile](native-workload-trust.md) now exports the
+actual retained ordered client-root DER inventory under the same genuine role-3
+commitment. Request it with `x-serverware-ingress-evidence: client-trust-v2`.
+Absent selector preserves the v1 wire below; unsupported or repeated selectors
+fail. The [v2 outer schema](../schemas/native-ingress-session-evidence.v2.schema.json)
+requires a paired v2 nested original, with `clientTrustProfile` and
+`clientTrustCertificatesDerBase64url` added to `ingress`. Startup stays v1, the
+quote domains and 64/96 KiB output limits are unchanged, and there is no downgrade.
+
 ## Exact request and shared challenge
 
 The request is exactly `GET /attestation`, with no query or body. The fixed
@@ -73,8 +82,8 @@ Without this explicit continuation request, the existing one-shot response and
 authenticated TLS EOF remain unchanged. Both clients still require startup
 evidence inside the configured 1–300-second age limit: this initial path does
 not refresh an old startup pin or implement long-running enrollment renewal.
-The public evidence wire shape, caller challenge recipe and local-only verdict
-below are unchanged. No durable replay reservation, full public-evidence flow,
+For the default v1 request, the public evidence wire shape, caller challenge
+recipe and local-only verdict below are unchanged. No durable replay reservation, full public-evidence flow,
 release/KMS/witness authority, or production/action admission is added.
 
 ## Same key, new original quote
@@ -124,7 +133,7 @@ the derived session nonce above, not the startup nonce. The
 [startup stdout export](native-public-identity.md) keeps its separate
 `unverified-startup-public-material` scope and unchanged launch quote.
 
-The nested original carries only the actual public certificate chain/SPKI,
+The default v1 nested original carries only the actual public certificate chain/SPKI,
 client-root commitment and quote originals. It exports no private keys,
 client-root DER inventory or configuration secrets. Schema conformance does
 not decode/admit the nested quote or verify any cryptography. Matching public
@@ -166,6 +175,15 @@ Both session APIs derive the quote nonce from that challenge and the actual
 exporter. The nonce-free [scope schema](../schemas/native-ingress-session-scope.v1.schema.json)
 retains the existing 11 static scope fields plus its own version, with no
 peer-derived expectations or synthetic insertion of a nonce into the original.
+
+The separate source-selected v2-evidence API is
+`verify_ingress_session_client_trust_with_challenge(raw, scope_raw, trust_roots_raw,
+challenge, client, issuer_der, client_certificate_pem)`. It takes original
+evidence, independently retained scope/issuer, actual client connection and
+the same configured or handshake-selected client chain—not a prior JSON verdict.
+It requires paired v2 evidence, authenticates the framed DER inventory and
+selected issuer, and genuinely checks the current clientAuth chain before
+returning a local-only v3 verification result. Legacy APIs remain strict v1.
 
 Startup and session evidence scopes are not interchangeable. The session API
 does not rewrite the expectation original or learn a replacement challenge from

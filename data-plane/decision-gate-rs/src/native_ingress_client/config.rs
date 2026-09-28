@@ -4,6 +4,7 @@
 //! actual original, and separately verifies quotes before using the private CA.
 //! V1 pins complete session expectations, including a caller-supplied challenge.
 //! V2 pins a nonce-free session scope; the controller owns challenge generation.
+//! V3 additionally pins a workload issuer for fresh, quoted client-trust admission.
 
 use super::{ensure, json, originals::ArtifactV1};
 use serde::Deserialize;
@@ -23,6 +24,7 @@ pub(super) struct Configuration {
     pub(super) trust_roots: ArtifactV1,
     pub(super) client_certificate: ArtifactV1,
     pub(super) client_private_key: ArtifactV1,
+    pub(super) workload_issuer: Option<ArtifactV1>,
 }
 
 pub(super) enum SessionInput {
@@ -54,6 +56,18 @@ enum WireConfiguration {
         trust_roots: ArtifactV1,
         client_certificate: ArtifactV1,
         client_private_key: ArtifactV1,
+    },
+    #[serde(rename = "serverware.nativeIngressClient/v3", rename_all = "camelCase")]
+    V3 {
+        endpoint: String,
+        timeout_milliseconds: u64,
+        startup_evidence: ArtifactV1,
+        startup_expectations: ArtifactV1,
+        session_scope: ArtifactV1,
+        trust_roots: ArtifactV1,
+        client_certificate: ArtifactV1,
+        client_private_key: ArtifactV1,
+        workload_issuer: ArtifactV1,
     },
 }
 
@@ -103,8 +117,10 @@ impl Configuration {
         let value = json::parse(original, MAX_CONFIGURATION_BYTES)?;
         let config: WireConfiguration = serde_json::from_value(value)
             .map_err(|_| "native ingress client configuration violates its closed contract")?;
-        let generated = matches!(&config, WireConfiguration::V2 { .. });
-        match config {
+        let generated = matches!(&config, WireConfiguration::V2 { .. } | WireConfiguration::V3 { .. });
+        let (address, timeout_milliseconds, startup_evidence, startup_expectations,
+            session_artifact, trust_roots, client_certificate, client_private_key,
+            workload_issuer) = match config {
             WireConfiguration::V1 {
                 endpoint: address, timeout_milliseconds, startup_evidence,
                 startup_expectations, session_expectations: session_artifact,
@@ -114,30 +130,39 @@ impl Configuration {
                 endpoint: address, timeout_milliseconds, startup_evidence,
                 startup_expectations, session_scope: session_artifact,
                 trust_roots, client_certificate, client_private_key,
-            } => {
-                ensure((100..=30_000).contains(&timeout_milliseconds),
-                    "native ingress client timeout is outside its fixed bounds")?;
-                let endpoint = endpoint(&address)?;
-                for artifact in [&startup_evidence, &startup_expectations,
-                    &session_artifact, &trust_roots, &client_certificate, &client_private_key]
-                {
-                    check_artifact(artifact)?;
-                }
-                Ok(Self {
-                    endpoint,
-                    timeout: Duration::from_millis(timeout_milliseconds),
-                    startup_evidence,
-                    startup_expectations,
-                    session: if generated {
-                        SessionInput::GeneratedChallenge(session_artifact)
-                    } else {
-                        SessionInput::PinnedChallenge(session_artifact)
-                    },
-                    trust_roots,
-                    client_certificate,
-                    client_private_key,
-                })
-            }
+            } => (address, timeout_milliseconds, startup_evidence, startup_expectations,
+                session_artifact, trust_roots, client_certificate, client_private_key, None),
+            WireConfiguration::V3 {
+                endpoint: address, timeout_milliseconds, startup_evidence,
+                startup_expectations, session_scope: session_artifact,
+                trust_roots, client_certificate, client_private_key, workload_issuer,
+            } => (address, timeout_milliseconds, startup_evidence, startup_expectations,
+                session_artifact, trust_roots, client_certificate, client_private_key,
+                Some(workload_issuer)),
+        };
+        ensure((100..=30_000).contains(&timeout_milliseconds),
+            "native ingress client timeout is outside its fixed bounds")?;
+        let endpoint = endpoint(&address)?;
+        for artifact in [&startup_evidence, &startup_expectations,
+            &session_artifact, &trust_roots, &client_certificate, &client_private_key]
+        {
+            check_artifact(artifact)?;
         }
+        if let Some(artifact) = &workload_issuer { check_artifact(artifact)?; }
+        Ok(Self {
+            endpoint,
+            timeout: Duration::from_millis(timeout_milliseconds),
+            startup_evidence,
+            startup_expectations,
+            session: if generated {
+                SessionInput::GeneratedChallenge(session_artifact)
+            } else {
+                SessionInput::PinnedChallenge(session_artifact)
+            },
+            trust_roots,
+            client_certificate,
+            client_private_key,
+            workload_issuer,
+        })
     }
 }

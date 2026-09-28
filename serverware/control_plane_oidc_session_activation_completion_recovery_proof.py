@@ -100,9 +100,30 @@ def _require_proof(value):
 
 
 def _proof_on_intent(selected_intent):
-    from serverware import control_plane_oidc_session_activation_completion_recovery_release as owner_call
-
+    """Preparation-only acquisition or historical re-admission."""
     intent_source._require_intent(selected_intent)
+    if selected_intent.inputs._purpose != "release-intent-proof":
+        _fail("proof preparation cannot borrow a release-purpose actor")
+    return _proof_from_intent(selected_intent)
+
+
+def _readmit_on_intent(selected_intent):
+    """Existing original only; never contact setup/proof services or publish."""
+    intent_source._require_intent(selected_intent)
+    if selected_intent.inputs._purpose != "release":
+        _fail("proof readmission requires its separate fresh release actor")
+    return _proof_from_intent(selected_intent)
+
+
+def _proof_from_intent(selected_intent):
+    intent_source._require_intent(selected_intent)
+    if selected_intent.inputs._purpose == "release-intent-proof":
+        from serverware import control_plane_oidc_session_activation_completion_recovery_release as owner_call
+    elif selected_intent.inputs._purpose == "release":
+        from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as owner_call
+    else:
+        _fail("proof continuation has no actual source owner")
+
     owner_call._require_proof_call(selected_intent)
     inputs = selected_intent.inputs
     owner, work, policy = inputs.actor._owner, inputs.work, inputs.proof_policy
@@ -125,6 +146,8 @@ def _proof_on_intent(selected_intent):
     setup_size = 0 if setup_originals is None else len(setup_originals[0])
     setup_material = None
     historical = returned is not None
+    if not historical and inputs._purpose != "release-intent-proof":
+        _fail("release requires an existing proof; it cannot contact or resume preparation")
     if historical:
         returned = transport._originals(returned, response=True)
         _capacity(setup_size, sum(map(len, returned)), setup_admitted=False)

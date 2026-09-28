@@ -688,6 +688,27 @@ class ControlPlaneCustodyClient:
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed after release dispatch claim")
 
+    def claim_oidc_session_activation_completion_recovery_release_attempt(self, *,
+            client_authorization_digest, request_identity, profile, server_bootstrap_digest,
+            expected_outcome_digest, work, current, maximum_original_bytes=None):
+        """Spend the unchanged global release slot under original guarded LIVE work."""
+        from serverware import control_plane_oidc_session_activation_release_attempt as attempts
+
+        scalars = tuple(journal._digest(value) for value in (client_authorization_digest,
+            request_identity, server_bootstrap_digest, expected_outcome_digest))
+        if type(profile) is not str or profile != attempts.LIVE_PROFILE or not callable(current):
+            raise CustodyClientError("completion release dispatch requires its fixed LIVE profile and guard")
+        current()
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.claim_oidc_session_activation_completion_recovery_release_attempt(
+            binding.journal, client_authorization_digest=scalars[0], request_identity=scalars[1],
+            profile=profile, server_bootstrap_digest=scalars[2], expected_outcome_digest=scalars[3],
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes)
+        current()
+        if digest != scalars[0] or _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller or global release claim changed")
+        return digest
+
     def claim_oidc_session_activation_dispatch(self, *, finalization_digest,
             request_binding_digest, authorization_enrollment_digest, source_revision):
         """Durably burn one retained activation target without storing secrets.
@@ -964,7 +985,7 @@ class ControlPlaneCustodyClient:
 
     def _completion_release_operation(self, *, finalization_digest, activation_authorization_digest,
             completion_originals, reconciliation_digest, work, current, maximum_original_bytes,
-            kind=None, originals=()):
+            kind=None, originals=(), load_grants=False):
         from serverware import control_plane_oidc_session_activation_consume_records as consume
         from serverware import control_plane_oidc_session_activation_completion_recovery_records as recovery
 
@@ -973,8 +994,10 @@ class ControlPlaneCustodyClient:
         if reconciliation_digest is not None:
             reconciliation_digest = journal._digest(reconciliation_digest)
         completed = recovery._originals("consume", completion_originals)
-        if kind is not None and kind not in consume.COMPLETION_RECOVERY_RELEASE_KINDS:
+        if kind is not None and kind not in consume.COMPLETION_RECOVERY_RELEASE_KINDS + consume.COMPLETION_RECOVERY_GRANT_KINDS:
             raise CustodyClientError("completion release kind is not source fixed")
+        if type(load_grants) is not bool or (load_grants and kind is not None):
+            raise CustodyClientError("completion release read profile is not source fixed")
         held = () if kind is None else consume._originals(consume._profile(kind), originals)
         if not callable(current):
             raise CustodyClientError("completion release requires its original resource guard")
@@ -983,7 +1006,8 @@ class ControlPlaneCustodyClient:
         result = journal.CustodyJournal._completion_release_operation(binding.journal,
             finalization_digest=target, activation_authorization_digest=authorization_digest,
             completion_originals=completed, reconciliation_digest=reconciliation_digest,
-            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind=kind, originals=held)
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind=kind,
+            originals=held, load_grants=load_grants)
         current()
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed during completion release retention")
@@ -991,9 +1015,10 @@ class ControlPlaneCustodyClient:
             journal._digest(result)
             return result
         slot = consume._slot_digest(target, authorization_digest)
-        if type(result) is not tuple or len(result) != len(consume.COMPLETION_RECOVERY_RELEASE_KINDS):
+        kinds = consume.COMPLETION_RECOVERY_GRANT_KINDS if load_grants else consume.COMPLETION_RECOVERY_RELEASE_KINDS
+        if type(result) is not tuple or len(result) != len(kinds):
             raise CustodyClientError("completion release record inventory differs")
-        for expected, record in zip(consume.COMPLETION_RECOVERY_RELEASE_KINDS, result):
+        for expected, record in zip(kinds, result):
             if record is not None and (type(record) is not consume.ConsumeRecord
                     or record.finalization_digest != target or record.activation_authorization_digest != authorization_digest
                     or record.slot_digest != slot or record.kind != expected):
@@ -1057,6 +1082,34 @@ class ControlPlaneCustodyClient:
             completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
             work=work, current=current, maximum_original_bytes=maximum_original_bytes,
             kind="release-proof", originals=originals)
+
+    def load_oidc_session_activation_completion_recovery_release_grants(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, work, current,
+            maximum_original_bytes=None):
+        """Return claim/raw2 DATA only; either existing record prohibits reacquisition."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, load_grants=True)
+
+    def claim_oidc_session_activation_completion_recovery_release_grants_attempt(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, work, current,
+            maximum_original_bytes=None):
+        """Irreversibly claim the existing consume target before any grant issuer contact."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="release-grants-claimed")
+
+    def append_oidc_session_activation_completion_recovery_release_grants(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, originals, work, current,
+            maximum_original_bytes=None):
+        """Retain opaque client/server raw2 before admission, never request or token frames."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind="release-grants", originals=originals)
 
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):

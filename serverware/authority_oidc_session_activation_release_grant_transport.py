@@ -120,8 +120,20 @@ def _send_response(connection, originals, *, deadline_ns, work, current):
     release._guard(work, current, deadline_ns)
 
 
-def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _response_limit(maximum_response_bytes):
+    """A caller may tighten, never enlarge, the fixed raw2 wire ceiling."""
+    if maximum_response_bytes is None:
+        return MAX_RESPONSE_BYTES
+    if (type(maximum_response_bytes) is not int
+            or not 0 < maximum_response_bytes <= MAX_RESPONSE_BYTES):
+        _fail("release grant response cap exceeds its fixed wire ceiling")
+    return maximum_response_bytes
+
+
+def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     """One same-work caller exchange returning unauthenticated raw2."""
     from serverware import authority_oidc_session_activation_caller_transport as guarded
     return guarded._release_grants_on_work(endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current,
+        maximum_response_bytes=maximum_response_bytes)

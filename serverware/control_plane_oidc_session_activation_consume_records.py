@@ -1,6 +1,7 @@
 """Token-free consume-planning claim and opaque original response retention.
 
-One separate logical claim owns at most seventeen physical files. These records
+One separate logical claim has eighteen possible physical files, subject to the
+unchanged global physical/quota ceilings. These records
 contain public/ciphertext originals and one-use SQL/intent/proof claims, never the old
 token or prepare request. Shape and content identity admit no permission,
 plan, grant, committed SQL result or authenticated completion.
@@ -32,8 +33,8 @@ MAGIC = b"SWCOC001"
 KINDS = ("claimed", "prepared", "exported", "authorized", "grant", "reserved",
     "sql-claimed", "sql-outcome", "completion-outcome", "completion-hints",
     "release-intent-claimed", "release-intent", "release-proof-claimed", "release-proof", "release-grants", "inputs",
-    "release-proof-setup")
-_COUNTS = (0, 6, 7, 1, 1, 3, 0, 4, 4, 2, 0, 1, 0, 4, 2, 2, 1)
+    "release-proof-setup", "release-grants-claimed")
+_COUNTS = (0, 6, 7, 1, 1, 3, 0, 4, 4, 2, 0, 1, 0, 4, 2, 2, 1, 0)
 SLOT_DOMAIN = "serverware.controlPlaneOidcSessionActivationConsumeSlot/v1"
 _DOMAINS = tuple("serverware.controlPlaneOidcSessionActivationConsumeRecord/" + kind + "/v1"
     for kind in KINDS)
@@ -44,7 +45,7 @@ _BODY_MAXIMA = (0, transport.MAX_RESPONSE_BYTES, transport.MAX_EXPORT_RESPONSE_B
     0, sql.MAX_RESPONSE_BYTES, completion.MAX_RESPONSE_BYTES, sum(hints.LIMITS), 0,
     intent.MAX_BYTES, 0, proof_response.MAX_RESPONSE_BYTES,
     release_client.MAX_BYTES + release_client.MAX_SERVER_BOOTSTRAP_BYTES, inputs.MAX_RESPONSE_BYTES,
-    proof_setup.MAX_BYTES)
+    proof_setup.MAX_BYTES, 0)
 _MAXIMA = tuple(_MAX_HEADER_BYTES + count * 8 + maximum
     for count, maximum in zip(_COUNTS, _BODY_MAXIMA))
 (MAX_CLAIM_BYTES, MAX_PREPARED_BYTES, MAX_EXPORTED_BYTES, MAX_AUTHORIZED_BYTES,
@@ -52,13 +53,14 @@ _MAXIMA = tuple(_MAX_HEADER_BYTES + count * 8 + maximum
     MAX_COMPLETION_OUTCOME_BYTES, MAX_COMPLETION_HINTS_BYTES,
     MAX_RELEASE_INTENT_CLAIM_BYTES, MAX_RELEASE_INTENT_BYTES,
     MAX_RELEASE_PROOF_CLAIM_BYTES, MAX_RELEASE_PROOF_BYTES, MAX_RELEASE_GRANTS_BYTES,
-    MAX_INPUTS_BYTES, MAX_RELEASE_PROOF_SETUP_BYTES) = _MAXIMA
+    MAX_INPUTS_BYTES, MAX_RELEASE_PROOF_SETUP_BYTES, MAX_RELEASE_GRANTS_CLAIM_BYTES) = _MAXIMA
 MAX_RECORD_BYTES = max(_MAXIMA)
 MAX_CLAIM_IO_BYTES = activation.MAX_RECORD_BYTES + 3 * MAX_CLAIM_BYTES
 MAX_LOAD_IO_BYTES = activation.MAX_RECORD_BYTES + sum(_MAXIMA)
 COMPLETION_RECOVERY_METADATA_BYTES = 16 * 1024
 COMPLETION_RECOVERY_RELEASE_KINDS = ("release-intent-claimed", "release-intent",
     "release-proof-claimed", "release-proof-setup", "release-proof")
+COMPLETION_RECOVERY_GRANT_KINDS = ("release-grants-claimed", "release-grants")
 CustodyRecordError = records.CustodyRecordError
 
 
@@ -94,6 +96,7 @@ class ConsumeRecords:
     release_grants: ConsumeRecord | None = None
     inputs: ConsumeRecord | None = None
     release_proof_setup: ConsumeRecord | None = None
+    release_grants_attempt: ConsumeRecord | None = None
 
 
 def _framed_digest(domain, bodies):
@@ -201,7 +204,7 @@ def _append_io_bytes(kind, originals):
 
 def _completion_recovery_publication_bytes(kind, originals):
     """Publication/readback reservation only; selected history is additional."""
-    if kind not in COMPLETION_RECOVERY_RELEASE_KINDS:
+    if kind not in COMPLETION_RECOVERY_RELEASE_KINDS + COMPLETION_RECOVERY_GRANT_KINDS:
         raise CustodyRecordError("completion recovery release kind is not source fixed")
     held = _originals(_profile(kind), originals)
     return 3 * (_MAX_HEADER_BYTES + 8 * len(held) + sum(len(raw) for raw in held))

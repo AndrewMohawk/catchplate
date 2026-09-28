@@ -48,6 +48,22 @@ The returned `_IntentContinuation` is privately constructed and identity-sealed.
 `_require_intent` checks its exact input association and full current guard. It
 stays inside the actual actor call; it is not a public permission or success DTO.
 
+## Separate release-only readmission
+
+`_readmit_on_inputs(inputs)` requires a new actual actor with sealed purpose
+`release`. Its one-use phase hook belongs only to the separate delivery
+orchestrator; the preparation entrypoint refuses that purpose and cannot be used
+to sign on its behalf. The bounded existing loader and independent historical
+verifier are reused, but an absent intent immediately refuses. There is no new
+claim, signing, publication, preparation retry or original-expiry renewal.
+
+The same exact private continuation and guards remain attached to that fresh
+release actor. Historical re-admission is not current token-release permission:
+the release owner must separately admit the intent/proof as current and admit
+independent root-signed LIVE/checkpoint-zero client/server authority. It must not
+infer a release profile or private-store state from local record absence. A
+closed preparation actor or its approval cannot supply the new release purpose.
+
 ## Original capacity
 
 `_additional_original_bytes(owner)` measures only already-held public cold

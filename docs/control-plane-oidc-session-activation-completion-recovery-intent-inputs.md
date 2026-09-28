@@ -1,11 +1,13 @@
 # Original-bound release preparation inputs
 
 The private `control_plane_oidc_session_activation_completion_recovery_intent_inputs`
-module derives release-intent expectations only inside the actual fresh consume
-completion actor with purpose `release-intent-proof`. It accepts the exact sealed
-historical controls and the exact raw6/receiving guard associated by the source
-orchestrator's one-use `_require_inputs_call`. The receiving guard is retained;
-a caller-supplied successful result or callback cannot replace that association.
+module derives release-intent expectations only inside an actual fresh consume
+completion actor. Preparation uses purpose `release-intent-proof`; read-only
+admission for token release uses a separate fresh actor with purpose `release`.
+It accepts the exact sealed historical controls and exact raw6/receiving guard
+associated by the matching source orchestrator's one-use `_require_inputs_call`.
+The receiving guard is retained; a caller-supplied successful result or callback
+cannot replace that association.
 
 The helper reselects the original activation claim and prepared raw5 using the
 bounded fixed loader. It historically admits the activation caller, its original
@@ -24,9 +26,13 @@ delivery expiry and the signed activation TTL only tighten the continuing
 processing window. Later genuine intent/proof admission must independently match
 the expectations. This helper neither opens a token nor signs an intent.
 
-`_admit_on_controls(selected, *, response_originals, receiving_current)` returns
-only the source-private sealed `_IntentInputs`. Its fixed graph snapshots,
-original references, actor association and cold pins are checked by
+`_admit_on_controls(selected, *, response_originals, receiving_current)` remains
+preparation-only. `_admit_for_release_on_controls` has the same keywords but
+requires the distinct release actor and the actual
+`control_plane_oidc_session_activation_completion_recovery_delivery` provenance
+hook. Both return only the source-private sealed `_IntentInputs`; its literal
+purpose is sealed and must continue matching the original actor. Fixed graph
+snapshots, original references, actor association and cold pins are checked by
 `_require_inputs` and `current()`. `window`, `deadline_ns`, `narrow()` and
 `continuity()` retain the same work and nondecreasing clock floors. Child
 continuations call the original ancestor only; no later intent/proof guard is
@@ -50,5 +56,7 @@ it does not replace either original record or create execution authority.
 This source connection grants no SQL retry, completion retry, release checkpoint,
 private store access, token exchange or cookie delivery. Missing retained intent
 or a reconstructed expected outcome proves neither private-outcome presence nor
-absence. No runtime, resource provisioning or production-readiness evidence is
-claimed.
+absence. A closed preparation actor cannot become a release actor. The separate
+release owner must independently admit current originals and root-signed
+LIVE/checkpoint-zero authority; these inputs select no profile or fallback.
+No runtime, resource provisioning or production-readiness evidence is claimed.

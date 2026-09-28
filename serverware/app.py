@@ -1139,8 +1139,10 @@ class _SignedControlPlaneASGI:
             )
             from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
             from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
+            from serverware import control_plane_oidc_session_activation_completion_recovery_delivery_response as completion_delivery
 
-            delivery = (recovery_delivery if scope.get("path") == recovery_delivery.POST_PATH
+            delivery = (completion_delivery if scope.get("path") == completion_delivery.POST_PATH
+                else recovery_delivery if scope.get("path") == recovery_delivery.POST_PATH
                 else activation_delivery)
             await delivery._send_response(scope, receive, send, response,
                 before_dispatch=invalid_request_nonce,
@@ -1150,9 +1152,11 @@ class _SignedControlPlaneASGI:
         finally:
             from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
             from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
+            from serverware import control_plane_oidc_session_activation_completion_recovery_delivery_response as completion_delivery
 
             activation_delivery._discard_scope(scope)
             recovery_delivery._discard_scope(scope)
+            completion_delivery._discard_scope(scope)
             if acquired_buffer_slot:
                 _SIGNED_RESPONSE_BUFFER_SLOTS.release()
 

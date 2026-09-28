@@ -147,9 +147,30 @@ def _require_intent(value):
 
 
 def _intent_on_inputs(inputs):
-    from serverware import control_plane_oidc_session_activation_completion_recovery_release as owner_call
-
+    """Preparation-only signing or historical re-admission."""
     inputs_source._require_inputs(inputs)
+    if inputs._purpose != "release-intent-proof":
+        _fail("intent preparation cannot borrow a release-purpose actor")
+    return _intent_from_inputs(inputs)
+
+
+def _readmit_on_inputs(inputs):
+    """Existing original only; never sign or publish on a release-purpose call."""
+    inputs_source._require_inputs(inputs)
+    if inputs._purpose != "release":
+        _fail("intent readmission requires its separate fresh release actor")
+    return _intent_from_inputs(inputs)
+
+
+def _intent_from_inputs(inputs):
+    inputs_source._require_inputs(inputs)
+    if inputs._purpose == "release-intent-proof":
+        from serverware import control_plane_oidc_session_activation_completion_recovery_release as owner_call
+    elif inputs._purpose == "release":
+        from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as owner_call
+    else:
+        _fail("intent continuation has no actual source owner")
+
     owner_call._require_intent_call(inputs)
     owner, work, policy = inputs.actor._owner, inputs.work, inputs.intent_policy
     root = inputs.root_public_key
@@ -183,6 +204,8 @@ def _intent_on_inputs(inputs):
     retained = _read_records(inputs, current)
     original = _record(retained[1], "release-intent", inputs)
     if original is None:
+        if inputs._purpose != "release-intent-proof":
+            _fail("release requires an existing intent; it cannot sign or resume preparation")
         if retained[0] is not None:
             _fail("release intent claim is spent without an original; it cannot be resumed")
         if type(inputs.setup_policy) is not setup_configured._ReleaseProofAcquisitionMaterial:

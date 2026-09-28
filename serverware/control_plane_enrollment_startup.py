@@ -532,6 +532,27 @@ class _EnrollmentOwner:
             recovery_bytes=recovery_bytes, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work, current=current)
 
+    def _oidc_session_activation_completion_delivery_options(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Fresh release challenge, distinct from intent/proof preparation."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actor
+
+        _require_pid()
+        return actor._options_on_owner(self, profile="consume", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current,
+            _purpose="release")
+
+    def _acquire_oidc_session_activation_completion_delivery(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Fresh first-release owner; no resumed SQL or preparation permission."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as delivery
+
+        _require_pid()
+        return delivery._acquire_on_owner(self, request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

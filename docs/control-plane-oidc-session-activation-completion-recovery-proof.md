@@ -53,6 +53,24 @@ with the already narrowed proof-enrollment window. The root retains the final
 guard separately through normal actor/trust cleanup while the actor is live;
 no ordinary closed-actor fallback is introduced.
 
+## Separate release-only readmission
+
+`_readmit_on_intent` accepts only the actual intent continuation belonging to a
+fresh actor with sealed purpose `release`. The separate delivery orchestrator's
+one-use proof hook is required even for this read-only call. Its existing proof
+claim and raw4 must already be present; absence refuses before setup, proof
+contact or publication. It uses the same genuine historical custody/proof
+admission, original delivery expiry, sealed original tuple and full current
+guard. The preparation entrypoint explicitly refuses a release-purpose actor.
+
+The root owner may consume the identity-sealed `_originals` raw4 as original
+data; it is not an independently sufficient success or permission object. The
+owner must genuinely re-admit current intent/proof and independently root-signed
+LIVE/checkpoint-zero client/server originals before a protected release exchange.
+This helper makes no checkpoint choice, infers no private-store absence and
+provides no RECOVERY fallback. Expired authority is not renewed. No preparation
+permission or closed actor is reused.
+
 ## Bounded capacity and remaining boundary
 
 All proof work uses the original, pre-reserved 8 MiB future representation lane.

@@ -73,6 +73,7 @@ class _IntentInputs:
     """Private same-call inputs; no external API accepts this as authority."""
 
     _construction: object
+    _purpose: str
     actor: object
     controls: object
     work: object
@@ -131,7 +132,7 @@ class _IntentInputs:
         return result
 
 
-_SEALED_FIELDS = ("actor", "controls", "work", "old_token_bytes", "completion_originals",
+_SEALED_FIELDS = ("_purpose", "actor", "controls", "work", "old_token_bytes", "completion_originals",
     "response_originals", "expected_release_bytes", "expected_release", "intent_scope_bytes",
     "intent_scope", "proof_scope_bytes", "proof_scope", "intent_policy", "proof_policy",
     "setup_policy", "planner_original", "root_public_key", "finalization_digest",
@@ -151,7 +152,8 @@ def _identity(value):
     actor = value.actor
     if (type(actor) is not actors._CompletionActorScope or actor._active is not True
             or actor._authorized is not True or actor._completion_recovery_spent is not True
-            or actor._purpose != "release-intent-proof" or actor._profile != "consume"
+            or type(value._purpose) is not str or value._purpose not in ("release-intent-proof", "release")
+            or actor._purpose != value._purpose or actor._profile != "consume"
             or actor._work is not value.work or actor._old_token is not value.old_token_bytes
             or value.controls._actor is not actor):
         _fail("release preparation outlived its distinct actual fresh actor")
@@ -165,13 +167,33 @@ def _require_inputs(value):
 
 
 def _admit_on_controls(selected, *, response_originals, receiving_current):
-    """Derive expectations from the actual acknowledged source continuation."""
-    from serverware import control_plane_oidc_session_activation_completion_recovery_release as source
+    """Preparation-only expectations on the actual acknowledged continuation."""
+    return _admit_for_purpose(selected, response_originals=response_originals,
+        receiving_current=receiving_current, purpose="release-intent-proof")
+
+
+def _admit_for_release_on_controls(selected, *, response_originals, receiving_current):
+    """Fresh release actor; only the separate delivery owner supplies provenance."""
+    return _admit_for_purpose(selected, response_originals=response_originals,
+        receiving_current=receiving_current, purpose="release")
+
+
+def _admit_for_purpose(selected, *, response_originals, receiving_current, purpose):
+    # Literal source owners, not a supplied callback, select the one-use
+    # provenance handshake. Neither owner can borrow the other's actor purpose.
+    if type(purpose) is not str:
+        _fail("release inputs require a literal actor purpose")
+    if purpose == "release-intent-proof":
+        from serverware import control_plane_oidc_session_activation_completion_recovery_release as source
+    elif purpose == "release":
+        from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as source
+    else:
+        _fail("release inputs require an exact source-selected actor purpose")
 
     controls_source._require_controls(selected)
     actor = selected._actor
     if (selected.profile != "consume" or type(actor) is not actors._CompletionActorScope
-            or actor._purpose != "release-intent-proof"
+            or actor._purpose != purpose
             or type(actor._future_original_bytes) is not int
             or not INPUT_RESERVATION_BYTES <= actor._future_original_bytes <= selected.original_reservation_bytes
             or selected.original_reservation_bytes > controls_source.MAX_ORIGINAL_BYTES
@@ -223,7 +245,7 @@ def _admit_on_controls(selected, *, response_originals, receiving_current):
 
     def identity():
         if (actor._owner is not owner or actor._target is not target or actor._old_token is not old
-                or actor._purpose != "release-intent-proof" or actor._future_original_bytes != future
+                or actor._purpose != purpose or actor._future_original_bytes != future
                 or parent.configuration_digest != config or parent.generation["digest"] != generation
                 or any(getattr(held, name) is not original for held, name, original in pins)):
             _fail("release preparation changed its original actor or cold pins")
@@ -366,7 +388,7 @@ def _admit_on_controls(selected, *, response_originals, receiving_current):
         return now
 
     live()
-    result = _IntentInputs(_CONSTRUCTION, actor, selected, work, old, response_originals[:4],
+    result = _IntentInputs(_CONSTRUCTION, purpose, actor, selected, work, old, response_originals[:4],
         response_originals, release_original, release, intent_scope_original, intent_scope,
         proof_scope_original, proof_scope, intent_policy, proof_policy, setup_policy,
         planner_original, root, finalization, activation_digest, selected.original_reservation_bytes,

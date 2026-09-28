@@ -1,8 +1,9 @@
-"""Fresh pre-intent actor under independently selected completion-only scope.
+"""Fresh purpose-bound actor under independently selected completion scope.
 
 Historical target proof and current user permission are different checks. This
-context supplies neither a completion result nor permission to execute SQL,
-recover a token, resume a spent attempt or set a browser cookie. The ordinary
+context alone supplies no completion result, release grant, SQL permission,
+token, retry or browser cookie. A release action requires its own fresh purpose,
+not a broadened preparation permission or closed actor. The ordinary
 intent-stage actor and its exact-type acquisition entrypoint stay unchanged.
 """
 from __future__ import annotations
@@ -26,6 +27,9 @@ OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryOptions/v1"
 RELEASE_INTENT_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryReleaseIntent/v1"
 RELEASE_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryReleaseOptions/v1"
 RELEASE_PATH = "/api/auth/session/activation/consume/completion/recovery/release-proof"
+DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1"
+DELIVERY_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryOptions/v1"
+DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recovery/release"
 
 
 def _configuration(owner, profile):
@@ -93,6 +97,11 @@ class _CompletionActorScope(actor._ActorScope):
             # Distinct WebAuthn/approval payload: completion-only permission
             # must never authorize a fresh signature or private proof request.
             self._binding["schema"] = RELEASE_INTENT_SCHEMA
+            self._binding["recoveryPurpose"] = purpose
+        elif purpose == "release":
+            # A separate fresh assertion and approval select release. Neither
+            # completion nor intent/proof preparation can authorize this use.
+            self._binding["schema"] = DELIVERY_SCHEMA
             self._binding["recoveryPurpose"] = purpose
         self._binding_pin = actor._snapshot(self._binding, work)
         self._payload_digest = None
@@ -172,24 +181,25 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
     from serverware import app as application
 
     actor._request(request, recovery_bytes)
-    if (type(_purpose) is not str or _purpose not in ("completion", "release-intent-proof")
+    if (type(_purpose) is not str or _purpose not in ("completion", "release-intent-proof", "release")
             or type(_additional_original_bytes) is not int
             or not 0 <= _additional_original_bytes < history.MAX_ORIGINAL_BYTES):
         actor._deny("completion recovery purpose or held capacity differs", 503)
-    if _purpose == "release-intent-proof":
-        path = RELEASE_PATH + "/options" if options else RELEASE_PATH
+    if _purpose in ("release-intent-proof", "release"):
+        action_path = RELEASE_PATH if _purpose == "release-intent-proof" else DELIVERY_PATH
+        path = action_path + "/options" if options else action_path
         if (profile != "consume" or request.method != "POST"
                 or request.scope.get("path") != path
                 or request.scope.get("query_string", b"") != b""):
-            actor._deny("release proof recovery requires its distinct fixed action", 400)
+            actor._deny("completion recovery purpose requires its distinct fixed action", 400)
     if (type(owner) is not startup._EnrollmentOwner or _ACTIVE is not None
             or actor._ACTIVE is not None or owner._activation_permission is not None):
         actor._deny("completion recovery requires a non-overlapping actual owner", 409)
     current()
     parent, recovery, configuration = _configuration(owner, profile)
-    if (_purpose == "release-intent-proof"
+    if (_purpose in ("release-intent-proof", "release")
             and (parent.release_intent is None or parent.release_proof is None)):
-        actor._deny("release proof recovery lacks independent cold intent/proof configuration", 503)
+        actor._deny("completion release purpose lacks independent cold intent/proof configuration", 503)
     configuration_pin = _configuration_pin(profile, configuration)
     work.charge(input_bytes=4 * len(recovery_bytes),
         json_nodes=4 * contract.permission.framing._JSON_LIMITS.max_total_nodes)
@@ -290,6 +300,9 @@ def _options_on_owner(owner, *, profile, request, recovery_bytes, live_window,
                 result = {**result, "schema": OPTIONS_SCHEMA, "completionProfile": profile}
                 if _purpose == "release-intent-proof":
                     result["schema"] = RELEASE_OPTIONS_SCHEMA
+                    result["recoveryPurpose"] = _purpose
+                elif _purpose == "release":
+                    result["schema"] = DELIVERY_OPTIONS_SCHEMA
                     result["recoveryPurpose"] = _purpose
                 scope.current()
             scope._guard()

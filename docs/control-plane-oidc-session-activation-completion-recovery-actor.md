@@ -43,6 +43,28 @@ before actor construction. Future intent/proof and reconciliation capacities are
 reserved before the first target body and carried forward once, not granted as
 a second budget. The existing completion coordinator rejects this new purpose.
 
+The source-fixed `release` purpose is separate again. `DELIVERY_PATH` selects
+only `POST /api/auth/session/activation/consume/completion/recovery/release`
+and its `/options` action, with no query string and only the consume profile.
+`DELIVERY_SCHEMA` is
+`serverware.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1`;
+`DELIVERY_OPTIONS_SCHEMA` is
+`serverware.oidcSessionActivationCompletionRecoveryDeliveryOptions/v1`.
+Its assertion/approval binding includes `recoveryPurpose: release`, so neither
+a completion assertion nor a `release-intent-proof` preparation assertion can
+substitute for the fresh release authorization. The exact purpose remains pinned
+through every guard and cleanup. Preparation permission is never broadened, and
+its closed actor is never reused.
+
+Both consume purposes require actual parent intent/proof configuration and use
+the same genuine historical target, old-possession check, fresh session/key/trust
+admission and original future-reservation accounting. The `release` actor is an
+authorization prerequisite only: these actor changes add no release checkpoint,
+grant selection, socket exchange, private store read or cookie effect. Any such
+continuation must independently admit its original release authority while this
+new actor is live; the existing private acquisition API remains exact-type
+incompatible.
+
 ## Current checks and lifecycle
 
 The actor reuses the existing sole-credential, current trust, explicit RBAC and
@@ -63,7 +85,11 @@ No parser result, signature-shaped object or retained metadata is permission.
 Options return only a real target-bound challenge. Authorization yields only
 inside the live context. Final guards and normal trust/startup-lock cleanup
 precede a normal-exit marker; cleanup revokes the actor and clears old-token
-access. There is no post-cleanup terminal handoff for this actor. The ordinary
+access. The ordinary actor remains closed and cannot supply a post-cleanup guard.
+Only the separate [source-owned release terminal](control-plane-oidc-session-activation-completion-recovery-delivery-response.md),
+selected before genuine LIVE admission, can retain the final receiver across
+known successful normal cleanup using captured independent original ancestors.
+It does not revive this actor or broaden preparation permission. The ordinary
 intent-stage actor and exact-type token-acquisition entrypoint remain distinct.
 
 ## Still required

@@ -64,12 +64,13 @@ in combination. The same work and deadlines survive each stage. Private plan
 commitments cover the exact bridge policy and old state, not a role-specific
 custody envelope that another independently authorized worker cannot share.
 
-This is source integration, not execution evidence. Public historical consume
-remains disabled: interrupted recovery still selects consume execution/root and
-completion pins from the activation target R0, although new consume controls
-were signed under R1. An independently admitted consume-evidence scope must
-select those original R1 pins before actor binding; retained records must not
-enroll authority. Historical intent, proof and release authority remain separate.
+This is source integration, not execution evidence. At `.225`, public historical
+consume remained disabled pending independently selected original R1 consume
+authority for interrupted recovery. The `.226`
+[consume-history selection](control-plane-consume-completion-history-selection.md)
+connects that lookup before fresh actor binding, genuine full-control replay and
+receiving. Fresh consume now uses its explicit signed bridge; retained records
+never enroll authority. Historical intent, proof and release remain gated.
 No completion result establishes
 token release or a current browser session. H05 and all production acceptance
 gates remain open; the current source has not been built or executed.

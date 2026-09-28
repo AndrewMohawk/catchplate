@@ -277,6 +277,24 @@ def _lookup_intent_on_work(material, *, configuration_digest, generation_digest,
         enrollment_digest, intent_lane=True, work=work)
 
 
+def _lookup_consume_on_work(material, *, configuration_digest, generation_digest,
+        authorization_enrollment_digest, work):
+    """Separate consume locator; never reuse activation or intent enrollment."""
+    wanted = configuration_digest, generation_digest, authorization_enrollment_digest
+    for value in wanted:
+        shape._digest(value)
+    selected = None
+    for scope in _scopes(material, work):
+        if (scope.configuration_digest, scope.generation_digest,
+                scope.consume_execution.authorization_enrollment_digest) == wanted:
+            if selected is not None:
+                raise OidcSessionActivationHistoryBootstrapError("consume original locator is ambiguous")
+            selected = scope
+    if selected is None:
+        raise OidcSessionActivationHistoryBootstrapError("consume original locator is not independently configured")
+    return selected
+
+
 def _scope_on_work(material, *, snapshot, work):
     values = _scopes(material, work)
     prior = finalization._scope_on_work(material.finalization_history, snapshot=snapshot, work=work)

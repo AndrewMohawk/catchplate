@@ -16,6 +16,7 @@ import time
 from serverware import control_plane_oidc_session_activation_recovery_actor as actor
 from serverware import control_plane_oidc_session_activation_completion_recovery_bootstrap as configured
 from serverware import control_plane_oidc_session_activation_completion_recovery_history as history
+from serverware import control_plane_oidc_session_activation_completion_recovery_consume_selection as consume_selection
 
 
 execution, startup, permission = actor.execution, actor.startup, actor.permission
@@ -55,10 +56,15 @@ def _configuration_pin(profile, scope):
         scope.current_pending)
 
 
-def _historical_configuration(target, profile):
+def _historical_configuration(target, profile, selected_consume=None):
     authority = target.authority
     if type(authority) is not history.historical._SelectedActivationHistory:
         actor._deny("completion recovery lacks its genuine historical authority", 503)
+    if selected_consume is not None:
+        if (profile != "consume" or type(selected_consume) is not consume_selection._ConsumeRecoverySelection
+                or selected_consume.target is not target):
+            actor._deny("consume completion changed its independent original selection", 503)
+        authority = selected_consume.authority
     recovery = authority.completion_recovery
     if type(recovery) is not configured._CompletionRecoveryMaterial:
         actor._deny("completion recovery lacks independently archived completion pins", 503)
@@ -68,7 +74,7 @@ def _historical_configuration(target, profile):
     return selected
 
 
-def _selected_configuration(target, profile, current):
+def _selected_configuration(target, profile, current, selected_consume=None):
     """Historical expectations with only the currently enabled transport.
 
     These are the existing cold scope fields, not proof of an outcome. The
@@ -76,7 +82,7 @@ def _selected_configuration(target, profile, current):
     signatures before any durable claim or network exchange.
     """
     target.live()
-    selected = _historical_configuration(target, profile)
+    selected = _historical_configuration(target, profile, selected_consume)
     if selected is current:
         # Preserve exact identity for the unchanged no-history live lane.
         return current
@@ -85,14 +91,13 @@ def _selected_configuration(target, profile, current):
 
 
 def _require_current_effect_authority(owner, parent, target):
-    """Completion history cannot silently enable a later current-key producer.
+    """History cannot silently authorize intent, proof or credential release.
 
-    Role-specific bridges connect same-call consume workers, but interrupted
-    completion still selects consume pins from the activation target's scope.
-    A bridged consume may instead have a separately enrolled evidence root.
-    Do not enable that effect until recovery independently selects its original
-    consume authority. Intent/proof/release joins also remain separate. Accept
-    only genuine current-mode selection, not coincident keys or matching fields.
+    Fresh consume has an explicit current-root bridge, purpose-specific workers
+    and independently selected original consume authority for later completion.
+    Other effect purposes still require genuine current-mode selection, not
+    coincident keys or matching fields. Completion-only history is no substitute
+    for their separate original-authority joins.
     """
     selected = target.authority
     if (type(selected) is not history.historical._SelectedActivationHistory
@@ -142,12 +147,13 @@ class _CompletionActorScope(actor._ActorScope):
         "_target_seal", "_completion_recovery_spent", "_completion_receiving_current",
         "_purpose", "_purpose_pin", "_future_original_bytes", "_future_original_bytes_pin",
         "_current_configuration", "_current_configuration_pin", "_configuration_seal",
-        "_consume_configuration", "_consume_planner_original", "_consume_configuration_pin")
+        "_consume_configuration", "_consume_planner_original", "_consume_configuration_pin",
+        "_consume_recovery_selection", "_consume_recovery_selection_pin")
 
     def __init__(self, construction, *, application, owner, request, original,
             payload, work, current, owner_scope, target, policy, policy_pin,
             request_pin, old_token, profile, parent, recovery, configuration,
-            current_configuration, purpose, future_original_bytes):
+            current_configuration, purpose, future_original_bytes, selected_consume):
         if (construction is not _CONSTRUCTION
                 or type(target) is not history._CompletionRecoveryTarget):
             actor._deny("completion recovery scope is privately constructed", 503)
@@ -164,6 +170,11 @@ class _CompletionActorScope(actor._ActorScope):
         self._current_configuration_pin = _configuration_pin(profile, current_configuration)
         self._configuration = self._configuration_seal = configuration
         self._configuration_pin = _configuration_pin(profile, configuration)
+        if profile == "consume" and purpose == "completion":
+            consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
+        elif selected_consume is not None:
+            actor._deny("consume history selection cannot authorize another effect purpose", 503)
+        self._consume_recovery_selection = self._consume_recovery_selection_pin = selected_consume
         self._consume_configuration = self._consume_planner_original = self._consume_configuration_pin = None
         if purpose == "consume":
             (self._consume_configuration, self._consume_planner_original,
@@ -205,8 +216,9 @@ class _CompletionActorScope(actor._ActorScope):
         self._payload_digest = None
         self._credential, self._count, self._roles = None, None, None
         self._rbac_pin, self._session_pin, self._trust_pin = None, None, None
-        self._window = target.live_window
-        self._bound = min(target.deadline_ns, owner_scope.deadline_ns)
+        self._window = target.live_window if selected_consume is None else selected_consume.window
+        self._bound = min(target.deadline_ns, owner_scope.deadline_ns, self._window[4],
+            target.deadline_ns if selected_consume is None else selected_consume.deadline_ns)
         self._epoch, self._monotonic = self._window[0], self._window[2]
         self._pid, self._thread = os.getpid(), threading.get_ident()
         self._active, self._authorized, self._normal_exit = True, False, False
@@ -230,10 +242,15 @@ class _CompletionActorScope(actor._ActorScope):
                 or startup._owner is not self._owner or target is not self._target_seal
                 or self._purpose is not self._purpose_pin
                 or self._future_original_bytes is not self._future_original_bytes_pin
+                or self._consume_recovery_selection is not self._consume_recovery_selection_pin
                 or getattr(self._request.state, actor.ORIGINAL_STATE_NAME, None) is not self._original):
             actor._deny("completion recovery actor is no longer live", 503)
         parent, recovery, current_configuration = _configuration(self._owner, self._profile)
-        historical = _historical_configuration(target, self._profile)
+        selected_consume = self._consume_recovery_selection
+        if selected_consume is not None:
+            consume_selection._require_selection(selected_consume,
+                owner=self._owner, target=target, work=work)
+        historical = _historical_configuration(target, self._profile, selected_consume)
         expected = (self._profile, current_configuration.endpoint, historical.packet_digest,
             historical.authorization_digest, historical.current_pending)
         if (parent is not self._parent or recovery is not self._recovery
@@ -246,6 +263,11 @@ class _CompletionActorScope(actor._ActorScope):
         self._source_current()
         self._owner_scope.current()
         epoch = target.live()
+        if selected_consume is not None:
+            selected_epoch = selected_consume.live()
+            if type(selected_epoch) is not int or selected_epoch < epoch:
+                actor._deny("consume completion selection clocks reversed", 503)
+            epoch = selected_epoch
         monotonic = execution.production._callback(work, time.monotonic_ns)
         if (type(epoch) is not int or type(monotonic) is not int
                 or epoch < self._epoch or monotonic < self._monotonic
@@ -370,8 +392,23 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         _additional_original_bytes=held_bytes + _additional_original_bytes)
     if type(target) is not history._CompletionRecoveryTarget:
         actor._deny("completion recovery original target is unavailable", 503)
-    configuration = _selected_configuration(target, profile, current_configuration)
-    if _purpose != "completion":
+    selected_consume = None
+    if profile == "consume" and _purpose == "completion":
+        # The target proves R0 activation/possession. Independently authenticate
+        # retained R1 consume controls before binding the new human ceremony.
+        # Target accounting already includes held actor and future captures.
+        selected_consume = consume_selection._select_on_owner(owner, target=target,
+            live_window=target.live_window, transport_deadline_ns=target.deadline_ns,
+            work=work, current=base_current, _additional_original_bytes=0)
+        consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
+        selected_window = execution.clock._validate(selected_consume.window)
+        if (selected_window[:3] != target.live_window[:3]
+                or any(new > old for new, old in zip(selected_window[3:], target.live_window[3:]))
+                or type(selected_consume.deadline_ns) is not int
+                or not 0 < selected_consume.deadline_ns <= min(target.deadline_ns, selected_window[4])):
+            actor._deny("consume completion selection widened the target allowance", 503)
+    configuration = _selected_configuration(target, profile, current_configuration, selected_consume)
+    if _purpose not in ("completion", "consume"):
         _require_current_effect_authority(owner, parent, target)
     window = execution.clock._validate(target.live_window)
     if (window[:3] != owner_scope.window[:3]
@@ -387,7 +424,7 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         policy_pin=policy_pin, request_pin=request_pin, old_token=old_token,
         profile=profile, parent=parent, recovery=recovery, configuration=configuration,
         current_configuration=current_configuration, purpose=_purpose,
-        future_original_bytes=_additional_original_bytes)
+        future_original_bytes=_additional_original_bytes, selected_consume=selected_consume)
     _ACTIVE = scope
     try:
         rbac_pin, session_pin, credential, roles, trust_pin = scope._read_current()

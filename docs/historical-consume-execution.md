@@ -3,9 +3,10 @@
 The `.224` connection carries the signed input bridge into the actual protected
 consume planner and recovery caller preparation. The `.225`
 [purpose-specific bridges](oidc-session-activation-history-role-bridges.md) now
-connect actual grant, reservation, SQL and completion custody. Public historical
-consume execution remains disabled pending independent consume-authority
-selection for interrupted recovery. This is source
+connect actual grant, reservation, SQL and completion custody. The `.226`
+[independent consume selector](control-plane-consume-completion-history-selection.md)
+connects interrupted completion and fresh public consume through the explicit
+signed input bridge. This is source
 integration, not a verified runtime, deployment or release. The same database,
 generation and complete state-enrollment payload compatibility remain mandatory;
 this does not implement
@@ -63,9 +64,9 @@ reservation, v5/v10 SQL and v6/v11 completion. Planning-only v7 cannot replace
 those roles. Completion now explicitly pins the consume-evidence root and policy
 interval under its fresh outer root; genuine historical planner v3/v7 admission
 and ciphertext replay derive the older activation provenance separately.
-The public actor still refuses archived effects because interrupted recovery
-selects consume authority from the older activation scope. The new consume
-signing key remains distinct from the HTTP signer
+The public actor now admits the distinct fresh consume purpose through its
+explicit old/current bridge, while other archived effect purposes stay gated.
+The new consume signing key remains distinct from the HTTP signer
 and both old and current activation caller keys. Original activation completion
 is evidence, not permission to repeat activation or reset a consume attempt.
 
@@ -77,23 +78,23 @@ captures are reserved before their bodies are decoded; valid individual original
 can still exceed the aggregate limit and be refused. These are source-defined
 representation bounds, not measured process memory.
 
-The separately authorized fresh `consume` caller is wired to this preparation,
-but its historical execution gate remains closed. Same-call completion now
-supports the bridge; later interrupted completion still derives execution/root
-and completion pins from `target.authority`, the old activation scope. New
-consume originals instead use the current consume root. Recovery must select
-an independently admitted original consume scope before actor binding, including
-its root, execution/completion pins and original interval. A retained digest
-may locate that scope but cannot enroll a root, substitute current pins or
-authorize another SQL attempt.
+The separately authorized fresh `consume` caller uses this preparation and the
+purpose-specific execution workers. Interrupted completion now selects its own
+original consume scope before actor binding, including its root, execution/
+completion pins and original interval. `target.authority` remains the separate
+activation provenance. A fixed bounded retained prefix is genuinely authenticated
+under the uniquely selected current or archived consume scope; the later complete
+control read must match those prefix identities and repeat genuine admission.
+A retained digest may locate that scope but cannot enroll a root, substitute
+current pins or authorize another SQL attempt. Only the independently enabled
+current endpoint routes completion.
 Historical intent/proof and release purposes likewise retain their current-material
 gate until their own original-authority joins exist. A completion result establishes
 neither a released token nor a current browser session. Original delivery expiry,
 durable attempt identity and uncertainty handling are unchanged; no automatic
 retry, permission revival or source-label rewrite is authorized.
 
-H05 remains partial. Independent interrupted consume-authority selection,
-later historical intent/proof/grant/release integration,
+H05 remains partial. Later historical intent/proof/grant/release integration,
 explicit older-source adapters, independent services and all production
 acceptance gates remain open. Builds and execution follow the complete source
 freeze; this document claims no passing tests or pilot readiness.

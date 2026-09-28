@@ -67,11 +67,14 @@ chooses this admission path; no posted profile or supplied historical root does.
 The lower delivery-plan/custody split and the actual worker now support private
 bridged prepare/export. Its source-owned `PrivateInputs/v2` commitment includes
 the signed bridge policy and old state enrollment; it does not substitute a
-purpose-specific custody envelope. The public historical-consume execution gate
-remains closed: grant v3, reservation v4, SQL v5 and completion v6 custody still
-need independently signed role-specific bridges. Historical completion of a
-planner-v3 result is also not enabled. Planning history v7 cannot impersonate
-those roles. These joins do not authorize historical intent/proof or release,
+purpose-specific custody envelope. The `.225`
+[role-specific bridges](oidc-session-activation-history-role-bridges.md) connect
+grant v8, reservation v9, SQL v10 and completion v11, including historical
+planner-v3 replay. The `.226`
+[independent consume selector](control-plane-consume-completion-history-selection.md)
+connects interrupted completion under original R1 authority, so the fresh public
+consume purpose now uses the explicit bridge. Planning history v7 cannot
+impersonate those roles. These joins do not authorize historical intent/proof or release,
 restore a spent claim, renew original expiry or establish runtime success.
 
 ## Prepare, retain, admit; then export, retain, compare

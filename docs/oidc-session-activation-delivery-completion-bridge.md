@@ -72,12 +72,14 @@ Original work, clock floors, owner identity and narrowed bounds survive private
 opening, replay and final receiving guards. These reservations are not a heap
 measurement. Global claims and original uncertainty remain intact.
 
-The public historical-consume gate remains closed. Later interrupted recovery
-still selects `target.authority.completion_recovery.consume` and consume
-execution/root/configuration pins from the activation target R0, while newly
-produced consume originals belong to R1. It needs an independently admitted
-consume-evidence selector and matching pins; a root found in a journal record
-is not authority. This batch connects the same-call worker/completion stack,
-not interrupted mixed-root public recovery or a current session. Token release
-is a separate purpose. Explicit older-source adapters and later historical
-release paths remain open.
+At the historical .225 boundary, the public historical-consume gate remained
+closed: interrupted recovery selected consume execution/completion pins from
+activation target R0 even when new consume originals belonged to R1. The .226
+[independent consume-history selector](control-plane-consume-completion-history-selection.md)
+now connects R1 admission before fresh actor binding to genuine controls and
+actual response verification, while preserving R0 activation association.
+Only the distinct fresh consume purpose is admitted through its explicit v21
+bridge and fresh actor. Historical intent/proof, release-grant and token-release
+purposes remain current-only; explicit older-source adapters remain open. A root
+found in a journal record is never authority, and no current-session or runtime
+success follows from this source connection.

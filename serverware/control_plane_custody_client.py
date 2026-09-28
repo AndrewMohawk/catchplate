@@ -1525,6 +1525,41 @@ class ControlPlaneCustodyClient:
         current()
         return retained
 
+    def load_oidc_session_activation_completion_recovery_consume_prefix(self, finalization_digest, *,
+            work, current, maximum_original_bytes=None):
+        """Return minimal original consume evidence DATA, never admission."""
+        from serverware import control_plane_oidc_session_activation_dispatch_attempt as attempts
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+
+        target = journal._digest(finalization_digest)
+        if not callable(current):
+            raise CustodyClientError("consume completion prefix requires the original guard")
+        current()
+        binding = _snapshot(self)
+        retained = journal.CustodyJournal.load_oidc_session_activation_completion_recovery_consume_prefix(
+            binding.journal, target, work=work, current=current, maximum_original_bytes=maximum_original_bytes)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while loading consume completion prefix")
+        if retained is None:
+            return None
+        if (type(retained) is not tuple or len(retained) != 4
+                or type(retained[0]) is not attempts.ActivationDispatchAttemptRecord
+                or retained[0].finalization_digest != target):
+            raise CustodyClientError("consume completion prefix fixed inventory differs")
+        activation, claim, prepared, authorized = retained
+        for record, kind, count in ((claim, "claimed", 0), (prepared, "prepared", 6),
+                (authorized, "authorized", 1)):
+            if (type(record) is not consume.ConsumeRecord or record.kind != kind
+                    or len(record.originals) != count or record.finalization_digest != target
+                    or record.source_revision != activation.source_revision
+                    or record.activation_authorization_digest != claim.activation_authorization_digest
+                    or record.slot_digest != claim.slot_digest
+                    or record.slot_digest != consume._slot_digest(target, record.activation_authorization_digest)):
+                raise CustodyClientError("consume completion prefix original association differs")
+        current()
+        return retained
+
     def load_oidc_session_activation_completion_recovery_controls(self, finalization_digest, *,
             phase, work, current, maximum_original_bytes=None):
         """Read exact fixed historical controls, never successful admission."""

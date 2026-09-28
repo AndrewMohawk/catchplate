@@ -4,7 +4,8 @@ Implementation decision after `.218`, connected for registration in `.219`,
 finalization history in `.220`, activation recovery targets in `.221`, and
 activation/consume completion recovery in `.222`, consume-input bridging
 in `.223`, protected consume planning/caller preparation in `.224`, and
-purpose-specific consume worker bridges in `.225`:
+purpose-specific consume worker bridges in `.225`, and independently selected
+consume authority in `.226`:
 reuse the existing independently
 root-admitted historical archive and genuine original replay. Do not create a
 second trust catalog, infer retired keys from stored records, or weaken a
@@ -27,11 +28,12 @@ now preserve that split through genuine private replay and current state/write
 checks. [Purpose-specific worker bridges](oidc-session-activation-history-role-bridges.md)
 connect grant v8, reservation v9, SQL v10 and completion v11 custody. Completion
 separates its fresh root from both the consume-evidence and activation roots,
-including actual historical ciphertext replay. Public historical consume effects
-remain disabled: interrupted recovery still chooses consume authority from the
-old activation scope, not the separately authorized original consume scope.
-Fresh consume effects, proof, grant and release authorities
-still need their remaining historical joins. Explicit older-source replay
+including actual historical ciphertext replay. [Independent consume selection](control-plane-consume-completion-history-selection.md)
+now authenticates the original consume scope before fresh completion approval,
+keeping old activation provenance separate through actual controls and receiving.
+Fresh public consume now connects through its explicit current-root input bridge;
+historical intent, proof, grant and release authorities still need their remaining
+joins. Explicit older-source replay
 implementations also remain open.
 
 ## Existing components and the actual gap
@@ -105,8 +107,11 @@ same-database/generation complete state-payload equality under independent roots
 widening the still-unconnected downstream custody purposes.
 `.225` connects those distinct role profiles and historical planner v3/v7
 completion, preserving the original signed consume-policy interval separately
-from fresh processing. These private worker connections do not by themselves
-change the public effect gate.
+from fresh processing. These private worker connections did not by themselves
+change the public effect gate. `.226` adds independently selected original
+consume authority, bounded retained-prefix lookup, fresh actor binding and
+actual controls/receiving. Only the distinct fresh consume purpose now passes
+the archived effect gate; its input bridge and worker authority remain mandatory.
 Downstream effect/release history and step 5 remain open. None is runtime-verified.
 
 1. Cold-admit the operation-specific historical enrollment originals alongside
@@ -141,14 +146,14 @@ Downstream effect/release history and step 5 remain open. None is runtime-verifi
    purpose-specific custody envelope. Distinct consume-grant v8, reserve v9,
    SQL v10 and completion v11 now join actual worker custody. The completion
    worker admits original planner v3/history v7 under explicitly pinned consume
-   authority, deriving older activation provenance independently. Keep the public
-   actor gate closed until interrupted recovery independently selects the
-   consume-evidence root, original execution/completion pins and interval before
-   actor binding. The activation target's scope cannot supply those pins for a
-   later consume signed under another root, and retained records cannot enroll
-   replacement authority.
-   Fresh consume effects, proof, grant and
-   release policies still require their remaining historical joins.
+   authority, deriving older activation provenance independently. Interrupted
+   recovery now independently selects the consume-evidence root, original
+   execution/completion pins and interval before actor binding. The bounded
+   prefix and later full controls must match, and genuine signature admission
+   remains mandatory. The activation target's scope does not supply consume
+   pins, and retained records cannot enroll replacement authority. Fresh consume
+   uses its explicit bridge; historical intent, proof, grant and release policies
+   still require their remaining joins.
 5. Admit older source revisions only through explicit versioned replay code
    covering their original schemas and semantics. Unsupported revisions and
    unknown or ambiguous cohorts continue to fail closed. Do not rewrite signed
@@ -189,7 +194,9 @@ flowchart TD
     B --> I[History v7 and planner v3 production, receiving and cold intake]
     I --> D[Protected planner and caller preparation: old evidence, current state]
     D --> G[Distinct grant v8, reserve v9, SQL v10 and completion v11 workers]
-    G --> L[Public actor closed; separate proof, grant and protected-release work]
+    G --> S[Independent original consume scope and retained prefix]
+    S --> C2[Fresh completion approval and genuine original response admission]
+    C2 --> E2[Fresh consume through explicit bridge; other effects remain gated]
 ```
 
 Retained headers locate admitted entries; signatures and complete semantic replay

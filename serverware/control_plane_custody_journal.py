@@ -3366,6 +3366,80 @@ class CustodyJournal:
                 activation_records.decode if phase == "activation" else consume_records.decode))
         return activation, consume, stages, tuple(selected)
 
+    def load_oidc_session_activation_completion_recovery_consume_prefix(self, finalization_digest, *,
+            work, current, maximum_original_bytes=None):
+        """Read only claim/claim/prepared/authorized DATA before actor binding.
+
+        Fixed metadata still proves the original dispatched association. No
+        outcome body, full control tuple, new slot or authority is produced.
+        """
+        from serverware.authority_query_read_work import _ValidationWork
+
+        target = _digest(finalization_digest)
+        maximum = completion_recovery.MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
+        _integer(maximum, minimum=0, maximum=completion_recovery.MAX_ORIGINAL_BYTES,
+            label="consume completion prefix remaining original capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("consume completion prefix requires original work and guard")
+        work.charge(json_nodes=512)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            try:
+                inventory = self._completion_control_inventory(target, "consume", current)
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if inventory is None:
+                return None
+            activation, consume, stages, controls = inventory
+            selected = tuple(item for item in controls if item[0] in (0, 1, 2, 4))
+            if tuple(item[0] for item in selected) != (0, 1, 2, 4):
+                raise CustodyJournalError("consume completion prefix fixed inventory differs")
+            identities = tuple(self._file_identities[item[1]] for item in selected)
+            total = sum(identity[6] for identity in identities)
+            if 3 * total + consume_records.COMPLETION_RECOVERY_METADATA_BYTES > maximum:
+                raise CustodyJournalError("consume completion prefix exceeds remaining preallocation capacity")
+            work.charge(input_bytes=3 * total + len(selected), hashes=2 * len(selected))
+            try:
+                result = []
+                for (position, name, decoder), identity in zip(selected, identities):
+                    original = self._read_completion_history_file(name, identity, current)
+                    current()
+                    record = decoder(original)
+                    current()
+                    if position == 0:
+                        if record != activation:
+                            raise CustodyJournalError("consume prefix activation claim changed")
+                    elif position == 1:
+                        if record != consume:
+                            raise CustodyJournalError("consume prefix original claim changed")
+                    else:
+                        kind = "prepared" if position == 2 else "authorized"
+                        actual = (record.source_revision, record.digest, len(original),
+                            record.originals[0] if kind == "prepared" else b"")
+                        if (record.kind != kind or actual != stages[kind]
+                                or record.finalization_digest != target
+                                or record.source_revision != activation.source_revision
+                                or record.slot_digest != consume.slot_digest
+                                or record.activation_authorization_digest != consume.activation_authorization_digest):
+                            raise CustodyJournalError("consume prefix original association changed")
+                    result.append(record)
+                    del original
+                refreshed = self._completion_control_inventory(target, "consume", current)
+                if (refreshed is None or tuple(item for item in refreshed[3]
+                        if item[0] in (0, 1, 2, 4)) != selected):
+                    raise CustodyJournalError("consume completion prefix changed during bounded read")
+                self._require_ready()
+                current()
+                return tuple(result)
+            except BaseException:
+                self._io.poison()
+                raise
+
     def load_oidc_session_activation_completion_recovery_controls(self, finalization_digest, *,
             phase, work, current, maximum_original_bytes=None):
         """Return fixed tuple10 historical DATA or ordinary unavailable None."""

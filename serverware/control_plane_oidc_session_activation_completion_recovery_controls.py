@@ -17,7 +17,9 @@ from serverware import authority_oidc_session_activation_consume_input_productio
 from serverware import authority_oidc_session_activation_delivery_execution_authorization as consume
 from serverware import authority_oidc_session_activation_reservation_records as activation_reservations
 from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actors
+from serverware import control_plane_oidc_session_activation_completion_recovery_consume_selection as consume_selection
 from serverware import control_plane_oidc_session_activation_consume_dispatch as consume_dispatch
+from serverware import control_plane_oidc_session_activation_consume_history as consume_history
 from serverware import control_plane_oidc_session_activation_consume_records as consume_records
 from serverware import control_plane_oidc_session_activation_records as activation_records
 
@@ -62,6 +64,7 @@ class _CompletionControls:
     prior_response: tuple | None
     prior_completion: tuple | None
     authority: object
+    consume_authority: object | None
     _live: object
     _seal: tuple | None = None
 
@@ -75,7 +78,7 @@ class _CompletionControls:
 _SEALED_FIELDS = ("_actor", "profile", "originals", "before_bytes", "after_bytes", "marker",
     "enrollment_bytes", "root_public_key", "current_pending", "endpoint", "packet_digest",
     "authorization_digest", "finalization_digest", "work", "window", "deadline_ns",
-    "original_reservation_bytes", "prior_response", "prior_completion", "authority", "_live")
+    "original_reservation_bytes", "prior_response", "prior_completion", "authority", "consume_authority", "_live")
 
 
 def _identity(value):
@@ -96,6 +99,18 @@ def _identity(value):
             or actor._work is not value.work or actor._profile != value.profile
             or actor._target.authority is not value.authority):
         _fail("completion controls outlived their exact fresh actor")
+    selection = actor._consume_recovery_selection
+    if selection is None:
+        if value.consume_authority is not None:
+            _fail("completion controls invented a separate consume authority")
+    else:
+        if (value.profile != "consume" or actor._purpose != "completion"
+                or type(value.consume_authority) is not consume_history._SelectedConsumeHistory):
+            _fail("completion controls changed their separate consume purpose")
+        consume_selection._require_selection(selection, owner=actor._owner,
+            target=actor._target, work=value.work)
+        if selection.authority is not value.consume_authority:
+            _fail("completion controls changed their independently selected consume authority")
 
 
 def _require_controls(value):
@@ -215,12 +230,25 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     if type(authority) is not history.historical._SelectedActivationHistory:
         _fail("completion controls lack their original authenticated historical authority")
     authority.live()
-    policy = authority.activation_execution if phase == "activation" else authority.consume_execution
+    selected_consume = actor._consume_recovery_selection
+    consume_authority = None
+    inherited_reservation = target.original_reservation_bytes
+    if selected_consume is not None:
+        if phase != "consume" or actor._purpose != "completion":
+            _fail("completion controls received consume history for another purpose")
+        consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
+        consume_authority = selected_consume.authority
+        if type(consume_authority) is not consume_history._SelectedConsumeHistory:
+            _fail("completion controls require genuine independently selected consume history")
+        inherited_reservation = selected_consume.original_reservation_bytes
+    evidence_authority = authority if consume_authority is None else consume_authority
+    policy = (evidence_authority.activation_execution if phase == "activation"
+        else evidence_authority.consume_execution)
     policy_type = (execution.configured._ActivationExecutionMaterial if phase == "activation"
         else consume_dispatch.configured._ConsumeExecutionMaterial)
     if type(policy) is not policy_type:
         _fail("completion controls lack the selected historical execution lane")
-    recovery = authority.completion_recovery
+    recovery = evidence_authority.completion_recovery
     if type(recovery) is not actors.configured._CompletionRecoveryMaterial:
         _fail("completion controls have no independently configured historical completion pins")
     recovery_scope = recovery.activation if phase == "activation" else recovery.consume
@@ -231,8 +259,8 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     for name in ("packet_digest", "authorization_digest", "current_pending"):
         plan._same(getattr(configured, name), getattr(recovery_scope, name), work,
             "completion recovery exact selected historical " + name)
-    root, configuration_digest = authority.root_public_key, authority.configuration_digest
-    authority_interval = authority.authority_interval
+    root, configuration_digest = evidence_authority.root_public_key, evidence_authority.configuration_digest
+    authority_interval = evidence_authority.authority_interval
     if type(authority_interval) is not tuple or len(authority_interval) != 2:
         _fail("completion controls lack their original historical interval")
     for value in authority_interval:
@@ -245,7 +273,12 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     # Eight selected-original footprints cover the loader's three plus the
     # bounded canonical/signature/control captures below; fixed outputs are
     # reserved before any selected body is read. This is not a heap estimate.
-    held = (target.original_reservation_bytes + _additional_original_bytes + cold
+    if (type(inherited_reservation) is not int
+            or not 0 < inherited_reservation <= MAX_ORIGINAL_BYTES):
+        _fail("completion controls lost their original inherited reservation")
+    # Consume preselection already includes the target and future reservations.
+    # Replace that base once; this fresh tuple10 read/capture is additional.
+    held = (inherited_reservation + _additional_original_bytes + cold
         + 8 * _METADATA_BYTES + 4 * state.vector.MAX_BYTES
         + 4 * max(caller.expectations_wire.MAX_BYTES, consume.expectations_wire.MAX_BYTES))
     if held >= MAX_ORIGINAL_BYTES:
@@ -258,13 +291,16 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     def identity():
         if (actor._owner is not owner or actor._work is not work or actor._target is not target
                 or actor._configuration is not configured or actor._profile != phase
+                or actor._consume_recovery_selection is not selected_consume
                 or owner._material is not parent or owner._binding is not binding or owner._custody is not custody
-                or target.authority is not authority or authority.completion_recovery is not recovery
-                or authority.authority_interval is not authority_interval
-                or authority.configuration_digest is not configuration_digest
+                or target.authority is not authority or evidence_authority.completion_recovery is not recovery
+                or evidence_authority.authority_interval is not authority_interval
+                or evidence_authority.configuration_digest is not configuration_digest
+                or (selected_consume is not None and selected_consume.authority is not consume_authority)
                 or (recovery.activation if phase == "activation" else recovery.consume) is not recovery_scope
-                or (authority.activation_execution if phase == "activation" else authority.consume_execution) is not policy
-                or any(actual is not expected for actual, expected in zip((authority.root_public_key,
+                or (evidence_authority.activation_execution if phase == "activation"
+                    else evidence_authority.consume_execution) is not policy
+                or any(actual is not expected for actual, expected in zip((evidence_authority.root_public_key,
                     policy.planner_public_key, policy.operation_public_key, policy.caller_public_key), keys_pin))
                 or any(actual is not expected for actual, expected in zip((policy.authorization_enrollment_bytes,
                     policy.current_root_enrollment_bytes, policy.grant_enrollment_bytes), enrollment_originals))):
@@ -273,6 +309,8 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     def ancestor(epoch, monotonic):
         identity()
         authority.live()
+        if selected_consume is not None:
+            consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
         now = actor.current()
         mono = caller.production._callback(work, time.monotonic_ns)
         if type(now) is not int or now < epoch or type(mono) is not int or mono < monotonic:
@@ -291,6 +329,9 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
         _fail("completion recovery has no complete retained dispatched control prefix")
     if type(selected) is not tuple or len(selected) != 10:
         _fail("completion recovery control inventory differs from the fixed source")
+    if selected_consume is not None:
+        consume_selection._match_controls_on_selection(selected_consume, selected)
+        lifetime.current()
     activation_claim, consume_claim, prepared, exported, authorized, granted, reserved, completed, hints, sql_claim = selected
     if (type(activation_claim) is not activation_records.attempts.ActivationDispatchAttemptRecord
             or activation_claim.finalization_digest != finalization
@@ -470,7 +511,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     result = _CompletionControls(_CONSTRUCTION, actor, phase, originals, before, after, marker,
         enrollment_originals[1], root, configured.current_pending, configured.endpoint, configured.packet_digest,
         configured.authorization_digest, finalization, work, lifetime.window, lifetime.bound, reservation, prior_response,
-        prior_completion, authority, lifetime.current)
+        prior_completion, authority, consume_authority, lifetime.current)
     object.__setattr__(result, "_seal", (tuple(getattr(result, name) for name in _SEALED_FIELDS),
         tuple(marker[name] for name in pending._MARKER_COLUMNS)))
     return _require_controls(result)

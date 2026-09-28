@@ -72,11 +72,13 @@ original intervals are algebraic evidence, not current launch deadlines.
 
 ## Remaining execution boundary
 
-The public historical consume action remains closed. Although the same-call
-worker chain now has separate role-specific bridges, interrupted public recovery
-still selects consume execution/completion pins from activation authority R0
-instead of independently admitted consume evidence R1. A genuine selector and
-matching pins are required; records cannot supply their own root authority.
+At `.225`, the public historical consume action remained closed despite the
+role-specific workers: interrupted recovery still selected R0 instead of original
+consume authority R1. The `.226`
+[independent selector](control-plane-consume-completion-history-selection.md)
+connects genuine R1 selection before fresh actor binding, exact retained-prefix
+matching, controls and receiving. Fresh consume now uses its explicit signed
+bridge; records cannot supply their own root authority.
 Planning v7 cannot impersonate a receiving purpose. Later historical
 intent/proof/release and explicit older-source adapters remain open, and no
 production readiness follows from these sources.

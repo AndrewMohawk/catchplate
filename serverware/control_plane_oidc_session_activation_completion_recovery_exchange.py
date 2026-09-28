@@ -62,6 +62,8 @@ def _held(controls):
     work = controls.work
     state.capture._SharedLedger(work)
     authority = controls.authority
+    if wire is not activation_wire and controls.consume_authority is not None:
+        authority = controls.consume_authority
     policy = (authority.activation_execution if wire is activation_wire
         else authority.consume_execution)
     recovery = authority.completion_recovery

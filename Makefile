@@ -1174,6 +1174,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_recovery_http.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_selection.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery_consume_selection.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_history.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_actor.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_controls.py \
@@ -1211,6 +1212,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_registration_finalization_history.py \
 	serverware/control_plane_oidc_session_activation_history_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_history.py \
+	serverware/control_plane_oidc_session_activation_consume_history.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 	serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
@@ -3394,6 +3396,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_recovery_http.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_selection.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery_consume_selection.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_history.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_actor.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_controls.py \
@@ -3431,6 +3434,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_registration_finalization_history.py \
 				serverware/control_plane_oidc_session_activation_history_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_history.py \
+				serverware/control_plane_oidc_session_activation_consume_history.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 				serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \

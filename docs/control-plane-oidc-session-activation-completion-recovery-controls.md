@@ -19,15 +19,26 @@ scope, public key, profile selector or previously admitted controls object.
 The actor owns the original work/window, genuinely admitted historical target,
 old-token possession and independent completion-recovery configuration.
 
-The target retains its actual selected historical `authority`. With history
-enabled, packet identity, caller-authorization identity and pending
-`(sequence, headDigest, fence)` come from that scope's separately root-admitted
-completion pins. The current parent must independently enable the profile;
+The target retains its actual selected historical activation `authority` (R0).
+Activation completion and existing non-completion purposes keep that authority.
+Consume-profile completion instead uses the actor's exact preselected consume
+history (R1), independently admitted before fresh actor binding. Its selected
+execution policy, root, configuration, original interval and completion pins
+are separate from the target's activation association. Packet identity,
+caller-authorization identity and pending `(sequence, headDigest, fence)` come
+from the selected completion scope. The current parent independently enables the profile;
 only its current endpoint supplies routing. Old endpoint metadata cannot grant
 transport access. Without history, the existing current material is unchanged.
 The exact caller-original identity is compared before deeper control admission.
 The packet pin remains an independent expectation: these public records and
 the activation raw4 response do not attest a private packet's identity.
+
+The controls preserve `authority` as R0 and retain `consume_authority` as the
+exact selected R1 object only for this distinct completion path. Neither is an
+incoming result accepted instead of originals: caller, plan, grant and reserve
+signatures are still genuinely verified under R1 below. The activation claim's
+authorization-enrollment association is still checked against R0. Missing or
+ambiguous cold authority cannot fall back to a root from a journal record.
 
 ## Exact retained inventory
 
@@ -38,6 +49,13 @@ activation claim, consume claim or None, prepared, exported or None,
 authorized or None, grant, reserved, completion or None, hints or None,
 SQL claim
 ```
+
+For separately selected consume completion, this fresh tuple10 must match the
+pre-actor selector's immutable activation-claim association and consume
+claim/prepared/authorized record commitments at positions 0/1/2/4. The source
+matcher also checks source, finalization and global consume-slot associations.
+Selection is not a cache of successful control admission; the subsequent
+signature and target checks remain mandatory on these freshly loaded originals.
 
 Activation requires its prepared raw5, grant raw1, reserve raw3 and irreversible
 SQL claim. Consume additionally requires its own claim, prepared raw6, exported
@@ -67,9 +85,10 @@ user/session/credential/challenge and old/new token commitments. Neither old
 nor recovered plaintext token is returned or retained here.
 
 Original plan/caller/grant/reserve issue and expiry remain ordered and contained
-within the selected authority's original archive interval. Both completion
-profiles must join that authenticated target cohort; a consume original from a
-different cohort fails rather than borrowing the activation target's keys.
+within the selected evidence authority's original archive interval. Activation
+controls use R0; separately selected consume controls use R1 without borrowing
+the activation target's keys. The independently pinned target identity and
+activation authorization still join the same original global consume slot.
 Unknown, ambiguous or absent archived completion pins have no current fallback;
 source/enrollment age ceilings and future-issue restrictions still apply.
 The existing processing window is only narrowed to the genuine caller, grant
@@ -91,15 +110,16 @@ source marker. This does not establish that this is today's latest pending head.
 
 The private frozen `_CompletionControls` retains the actual actor, SQL raw8
 controls, before/after bytes, marker, enrolled state original/root key,
-configuration pins, exact historical authority, work/window/deadline, total reservation and prior response
+configuration pins, exact activation authority and optional separate consume
+authority, work/window/deadline, total reservation and prior response
 originals. Consume's expectation field is canonically regenerated from its
 retained typed-request/scope/journal originals and authenticated commitments;
 it is not a caller-supplied authority template.
 
 `_require_controls(value)` and `value.current()` check the exact private
 construction, immutable field references, every marker scalar and the still-live
-authorized actor and its identical target authority. That authority's live guard
-remains a sibling of genuine admission children, preserving archive authorization
+authorized actor, identical target authority and exact sealed consume selection.
+Both selected authority guards remain siblings of genuine admission children, preserving archive authorization
 without feedback into their ancestors. Original owner/key/enrollment identities, work limits and
 both clock floors remain guarded. Child historical guards receive only the
 base ancestor; the response guard is never fed back into its own parent.
@@ -107,8 +127,10 @@ Closed actors cannot use this continuation. The orchestrator separately owns
 the durable phase-only attempt and sole socket latch; controls alone cannot
 authorize a network call.
 
-Before the first selected body read, the helper subtracts the actor target's
-existing reservation, caller-supplied additive transport/journal reservation,
+Before the full control body read, the helper subtracts the actor target's
+existing reservation, or replaces it once with the consume selector's total
+reservation (which already includes that target and upstream future capacity).
+It then reserves caller-supplied additive transport/journal capacity,
 four cold-enrollment representations, fixed metadata, vector and expectation
 headroom from the existing 64 MiB bound. It passes three eighths of the remainder
 to the loader, whose exact metadata preflight covers three selected encoded
@@ -120,13 +142,22 @@ existing cold-original reservation; that inventory is not counted as a new
 allowance here. Coordinator transport/publication headroom must reach the
 actor before its target's first historical body read.
 
+The receiving helper chooses the explicit R1 root/state/completion pins when
+`consume_authority` is present, while preserving current endpoint routing. Its
+actual raw4/raw6 verifiers already consume those explicit enrolled originals,
+pending tuple and marker. Configuration-digest framing and durable phase-only
+attempt slots are unchanged; changing authority cannot create another attempt.
+
 New completion statements are independently signed historical reconciliation,
 not renewed execution. Their issue time need not fall inside the old execution
 interval: the receiving helper checks its genuine state enrollment, exact old
 marker/pending binding, observation and current processing/future-clock guards.
-This slice does not enable old-authority fresh consume, intent/proof signing,
-grant acquisition or token release; those separate consumers must make their
-own independent original joins.
+These controls alone authorize no fresh effect. The fresh consume action still
+requires its separate explicitly configured parent-v21 input bridge and fresh
+WebAuthn/approval-bound actor; the actor can now admit that distinct purpose
+without borrowing this completion permission. Historical intent/proof signing,
+release-grant acquisition and token release retain their current-only gate and
+need their own independent original joins.
 
 See the [parent configuration](control-plane-oidc-session-activation-completion-recovery-bootstrap.md)
 for fixed profiles. Completion-only exchange, genuine response admission and

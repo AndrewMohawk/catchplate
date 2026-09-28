@@ -11,6 +11,7 @@ use super::{b64, config::TrustRoots, decode_b64, digest, digest_text, ensure, ex
 use rustls::{ClientConnection, HandshakeKind, ProtocolVersion};
 use serde_json::{json, Value};
 use serverware_decision_gate::native_ingress_challenge_v1::{derive_nonce, EXPORTER_LABEL};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_INPUT: usize = 96 * 1024;
 const MAX_PUBLIC_IDENTITY: usize = 64 * 1024;
@@ -19,6 +20,74 @@ const MAX_CERTIFICATE: usize = 16 * 1024;
 enum SessionExpectations<'a> {
     PinnedNonce { expected: &'a Expectations, original: &'a [u8] },
     ClientChallenge { scope: &'a SessionScope, original: &'a [u8], challenge: [u8; 32] },
+}
+
+struct VerifiedSession {
+    public_identity: Vec<u8>,
+    ingress: ingress::VerifiedIngress,
+    workload: Option<ingress::VerifiedClientIssuer>,
+    exporter: [u8; 32],
+    peer_leaf_sha256: [u8; 32],
+}
+
+/// Private, same-call facts for the original-only enrollment receiver. No
+/// external API accepts this object or a serialized summary as authority.
+/// Certificate intervals and the supplied original deadline are never renewed.
+pub(super) struct VerifiedEnrollmentSession {
+    pub(super) scope: SessionScope,
+    pub(super) roots: TrustRoots,
+    pub(super) ca_certificate_sha256: [u8; 32],
+    pub(super) ca_spki_sha256: [u8; 32],
+    pub(super) leaf_certificate_sha256: [u8; 32],
+    pub(super) issuer_certificate_sha256: [u8; 32],
+    pub(super) issuer_spki_sha256: [u8; 32],
+    pub(super) client_certificate_sha256: [u8; 32],
+    pub(super) client_spki_sha256: [u8; 32],
+    pub(super) challenge: [u8; 32],
+    pub(super) quote_nonce: [u8; 32],
+    pub(super) quote_issued_unix_seconds: u64,
+    pub(super) valid_until_unix_seconds: u64,
+    valid_from_unix_seconds: u64,
+    deadline: u64,
+    owner_pid: libc::pid_t,
+    last_wall_ns: u64,
+    last_boot_ns: u64,
+    failed: bool,
+}
+
+fn clocks() -> Result<(u64, u64), String> {
+    let wall = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|_| "native enrollment session wall clock is invalid")?.as_nanos();
+    let wall = u64::try_from(wall).map_err(|_| "native enrollment session wall clock overflow")?;
+    let mut observed: libc::timespec = unsafe { std::mem::zeroed() };
+    ensure(unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut observed) } == 0
+        && observed.tv_sec >= 0 && (0..1_000_000_000).contains(&observed.tv_nsec),
+        "native enrollment session boottime is invalid")?;
+    let boot = u64::try_from(observed.tv_sec as u128 * 1_000_000_000 + observed.tv_nsec as u128)
+        .map_err(|_| "native enrollment session boottime overflow")?;
+    ensure(wall > 0 && boot > 0, "native enrollment session clock must be positive")?;
+    Ok((wall, boot))
+}
+
+impl VerifiedEnrollmentSession {
+    pub(super) fn check(&mut self, deadline: u64) -> Result<u64, String> {
+        ensure(!std::mem::replace(&mut self.failed, true), "native enrollment session is poisoned")?;
+        self.deadline = self.deadline.min(deadline);
+        ensure(unsafe { libc::getpid() } == self.owner_pid,
+            "native enrollment session crossed its creating process")?;
+        let (wall, boot) = clocks()?;
+        let now = wall / 1_000_000_000;
+        ensure(wall >= self.last_wall_ns && boot >= self.last_boot_ns && boot < self.deadline
+            && self.valid_from_unix_seconds <= now && now < self.valid_until_unix_seconds
+            && self.quote_issued_unix_seconds <= now.checked_add(self.scope.future_skew)
+                .ok_or("native enrollment session quote age overflow")?
+            && now.saturating_sub(self.quote_issued_unix_seconds) <= self.scope.max_age,
+            "native enrollment session expired or a clock moved backwards")?;
+        self.last_wall_ns = wall;
+        self.last_boot_ns = boot;
+        self.failed = false;
+        Ok(now)
+    }
 }
 
 pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8],
@@ -53,13 +122,50 @@ pub(super) fn verify_client_trust_with_challenge(raw: &[u8], scope_raw: &[u8],
     }, trust_roots_raw, client, Some((issuer_der, client_certificate_pem)))
 }
 
-fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw: &[u8],
-    client: &ClientConnection, workload: Option<(&[u8], &[u8])>) -> Result<Value, String> {
+/// Re-authenticate originals on the actual retained TLS connection. No prior
+/// ingress summary or assignment material is accepted. The caller retains its
+/// original operation deadline and the actual client certificate/key owner.
+pub(super) fn verify_enrollment_with_challenge(raw: &[u8], scope_raw: &[u8],
+    trust_roots_raw: &[u8], challenge: [u8; 32], client: &ClientConnection,
+    issuer_der: &[u8], client_certificate_pem: &[u8], deadline: u64)
+    -> Result<VerifiedEnrollmentSession, String> {
+    let owner_pid = unsafe { libc::getpid() };
+    let (wall, boot) = clocks()?;
+    ensure(owner_pid > 0 && boot < deadline && challenge != [0; 32],
+        "native enrollment session original deadline/challenge is invalid")?;
+    let scope = SessionScope::parse(scope_raw)?;
     let roots = TrustRoots::parse(trust_roots_raw)?;
-    let (expected, challenge) = match &profile {
-        SessionExpectations::PinnedNonce { expected, .. } => (&expected.scope, expected.nonce),
-        SessionExpectations::ClientChallenge { scope, challenge, .. } => (*scope, *challenge),
+    let checked = verify_session_original(raw, &scope, &roots, challenge, client,
+        Some((issuer_der, client_certificate_pem)))?;
+    let workload = checked.workload.ok_or("native enrollment requires original client trust")?;
+    let checked_wall = workload.verified_at.checked_mul(1_000_000_000)
+        .ok_or("native enrollment session verification time overflow")?;
+    let quote_valid_until = checked.ingress.issued.checked_add(scope.max_age)
+        .and_then(|value| value.checked_add(1))
+        .ok_or("native enrollment session quote interval overflow")?;
+    let mut result = VerifiedEnrollmentSession {
+        ca_certificate_sha256: digest(&checked.ingress.ca),
+        ca_spki_sha256: checked.ingress.ca_spki_sha,
+        leaf_certificate_sha256: digest(&checked.ingress.leaf),
+        issuer_certificate_sha256: workload.issuer_certificate_sha256,
+        issuer_spki_sha256: workload.issuer_spki_sha256,
+        client_certificate_sha256: workload.client_certificate_sha256,
+        client_spki_sha256: workload.client_spki_sha256,
+        challenge, quote_nonce: checked.ingress.nonce,
+        quote_issued_unix_seconds: checked.ingress.issued,
+        valid_until_unix_seconds: checked.ingress.valid_until.min(workload.valid_until)
+            .min(checked.ingress.quote_valid_until).min(quote_valid_until),
+        valid_from_unix_seconds: checked.ingress.verified_at.max(workload.valid_from),
+        scope, roots, deadline, owner_pid, last_wall_ns: wall.max(checked_wall),
+        last_boot_ns: boot, failed: false,
     };
+    result.check(deadline)?;
+    Ok(result)
+}
+
+fn verify_session_original(raw: &[u8], expected: &SessionScope, roots: &TrustRoots,
+    challenge: [u8; 32], client: &ClientConnection, workload: Option<(&[u8], &[u8])>)
+    -> Result<VerifiedSession, String> {
     ensure(!client.is_handshaking()
         && client.protocol_version() == Some(ProtocolVersion::TLSv1_3)
         && matches!(client.handshake_kind(),
@@ -96,7 +202,7 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
     let evidence_profile = if workload.is_some() {
         EvidenceProfile::SessionClientTrust
     } else { EvidenceProfile::Session };
-    let checked = ingress::verify_original(&public_identity, expected, &roots,
+    let checked = ingress::verify_original(&public_identity, expected, roots,
         evidence_profile, &quote_nonce)?;
     ensure(peer_chain[0].as_ref() == checked.leaf.as_slice()
         && peer_chain[1].as_ref() == checked.ca.as_slice(),
@@ -105,6 +211,21 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
         Some((issuer, chain)) => Some(checked.verify_client_issuer(issuer, chain, expected)?),
         None => None,
     };
+
+    Ok(VerifiedSession { public_identity, ingress: checked, workload: workload_verification,
+        exporter, peer_leaf_sha256: digest(peer_chain[0].as_ref()) })
+}
+
+fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw: &[u8],
+    client: &ClientConnection, workload: Option<(&[u8], &[u8])>) -> Result<Value, String> {
+    let roots = TrustRoots::parse(trust_roots_raw)?;
+    let (expected, challenge) = match &profile {
+        SessionExpectations::PinnedNonce { expected, .. } => (&expected.scope, expected.nonce),
+        SessionExpectations::ClientChallenge { scope, challenge, .. } => (*scope, *challenge),
+    };
+    let VerifiedSession { public_identity, ingress: checked, workload: workload_verification,
+        exporter, peer_leaf_sha256 } = verify_session_original(raw, expected, &roots, challenge,
+            client, workload)?;
 
     let (version, quote_verification) = match profile {
         SessionExpectations::PinnedNonce { expected, original } => (
@@ -122,10 +243,11 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
         "evidenceSha256":digest_text(&digest(raw)),
         "clientChallengeBase64url":b64(&challenge),
         "tlsExporterSha256":digest_text(&digest(&exporter)),
-        "peerCertificateSha256":digest_text(&digest(peer_chain[0].as_ref())),
+        "peerCertificateSha256":digest_text(&peer_leaf_sha256),
         "quoteVerification":quote_verification,
     });
     if let Some(verified) = workload_verification {
+        let verified = verified.summary();
         result["apiVersion"] = json!("serverware.nativeIngressSessionVerification/v3");
         for field in ["clientIssuerCertificateSha256", "clientIssuerSpkiSha256",
             "clientLeafCertificateSha256"] {

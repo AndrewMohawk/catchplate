@@ -52,7 +52,7 @@ pub(super) fn verify(
     now: u64,
     signed: &[u8],
     signature: &[u8],
-) -> Result<(), String> {
+) -> Result<u64, String> {
     if !(1..=MAX_CERTIFICATES).contains(&bundle.len())
         || !(1..=MAX_CERTIFICATES).contains(&roots.len())
         || signed.is_empty() || signed.len() > MAX_SIGNED_BYTES
@@ -137,9 +137,15 @@ pub(super) fn verify(
     }
     let root = &certificates[root_index].parsed;
     verify_certificate_signature(root, root)?;
+    let mut valid_until = u64::MAX;
     for (depth, index) in chain.iter().enumerate() {
         validate_profile(&certificates[*index].parsed, depth, allowed_leaf_eku,
             timestamp_ms, now)?;
+        // Only the authenticated selected chain limits subsequent use. An
+        // unrelated independently pinned rollover root is not part of it.
+        valid_until = valid_until.min(u64::try_from(
+            certificates[*index].parsed.validity().not_after.timestamp())
+            .map_err(|_| "native selected certificate expiry is invalid")?);
     }
 
     let leaf = certificates[0].parsed.public_key();
@@ -152,7 +158,8 @@ pub(super) fn verify(
         &signature::ECDSA_P384_SHA384_FIXED,
         leaf.subject_public_key.data.as_ref(),
     ).verify(signed, signature)
-        .map_err(|_| "native Nitro COSE ES384 signature is invalid".to_owned())
+        .map_err(|_| "native Nitro COSE ES384 signature is invalid".to_owned())?;
+    Ok(valid_until)
 }
 
 fn parse_certificate(original: &[u8]) -> Result<Certificate<'_>, String> {

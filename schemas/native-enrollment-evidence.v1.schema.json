@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-enrollment-evidence.v1.schema.json",
+  "title": "Serverware native enrollment public evidence v1",
+  "description": "Unverified public originals for the explicit native enrollment receiver. The complete wire original must be canonical compact sorted UTF-8 JSON plus exactly one LF, at most 1048576 bytes. Runtime verification enforces those byte/canonicalization limits, strict decoded bounds, independently pinned assignment authority, exact packet signature and genuine Nitro role-3/role-5 evidence on the caller's actual retained TLS connection. Schema shape alone verifies none of those properties. A successful diagnostic still has okForAction=false: no packet-semantic approval, installation permission, durable one-use claim, signing route or production enrollment receipt follows.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "evidenceScope",
+    "okForAction",
+    "assignmentBase64url",
+    "packetBase64url",
+    "ingressSessionEvidenceBase64url",
+    "enrollmentSignatureBase64url",
+    "enrollmentPublicKeyBase64url",
+    "enrollmentQuoteBase64url"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.nativeEnrollmentEvidence/v1"
+    },
+    "evidenceScope": {
+      "const": "unverified-enrollment-public-material"
+    },
+    "okForAction": {
+      "const": false
+    },
+    "assignmentBase64url": {
+      "$ref": "#/$defs/originalBase64url",
+      "maxLength": 21846,
+      "description": "Exact signedNativeEnrollmentAssignment/v1 original including its final LF, 1..16384 decoded bytes. The receiver must independently authenticate the authorizer PEM and its exact pin; this original cannot supply its own trusted root. JSON Schema does not decode or authenticate the assignment."
+    },
+    "packetBase64url": {
+      "$ref": "#/$defs/originalBase64url",
+      "maxLength": 699051,
+      "description": "Exact unsigned packet original, 1..524288 decoded bytes. Runtime hashes these actual bytes for the independent assignment join and verifies the purpose-specific enrollment signature over them; it does not interpret them as approved commands or installation instructions."
+    },
+    "ingressSessionEvidenceBase64url": {
+      "$ref": "#/$defs/originalBase64url",
+      "maxLength": 131072,
+      "description": "Exact nativeIngressSessionEvidence/v2 original including its final LF, 1..98304 decoded bytes, with paired nativeIngressPublicEvidence/v2. Genuine role-3 quote, runtime-root inventory and issuer/client-chain verification use the actual retained TLS connection and independently supplied expectations. No v1 fallback or copied verification summary is allowed."
+    },
+    "enrollmentSignatureBase64url": {
+      "type": "string",
+      "minLength": 86,
+      "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])",
+      "description": "Canonical unpadded URL-safe base64 of the raw 64-byte Ed25519 signature over the fixed NUL-terminated serverware/native-enrollment-packet-signature/v1 domain, SHA256(exact assignment including LF), unsigned packet byte count as u64BE, and the exact packet bytes. No ed25519: prefix."
+    },
+    "enrollmentPublicKeyBase64url": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^(?!A{43}(?![\\s\\S]))[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])",
+      "description": "Canonical unpadded URL-safe base64 of the nonzero raw 32-byte enrollment Ed25519 public key, not SPKI or PEM. Runtime must authenticate this exact key through the original purpose-role-5 Nitro quote; presence in this envelope is not authority."
+    },
+    "enrollmentQuoteBase64url": {
+      "$ref": "#/$defs/originalBase64url",
+      "maxLength": 16384,
+      "description": "Original role-5 Nitro COSE evidence, 1..12288 decoded bytes. The receiver verifies the genuine original using independent Nitro roots, expected runtime/PCR scope and the same actual TLS challenge/exporter binding; role-4 response signing or a diagnostic DTO cannot substitute."
+    }
+  },
+  "$defs": {
+    "originalBase64url": {
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])"
+    }
+  }
+}

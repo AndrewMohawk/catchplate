@@ -5,6 +5,12 @@ enrollment endpoint or usable signing API is enabled by this foundation.**
 The complete native enrollment, verifier-mediated trust installation, egress and
 canary workflow remains required.
 
+The separate [original-evidence receiver](native-enrollment-verification.md) now
+joins independently signed assignment, role-3/role-5 quotes and purpose-specific
+packet signature to the actual retained client TLS connection. Its bounded
+result is diagnostic only, with `okForAction: false`; it does not enable this
+private signer, construct a packet or authorize installation.
+
 ## Why a separate purpose is needed
 
 The existing role-4 native key signs only the closed response-proof families
@@ -104,8 +110,12 @@ SHA-256, actual ingress-leaf DER SHA-256 and actual ordered framed root-set
 SHA-256, each digest exactly 32 bytes. The NSM public key is the generated raw
 32-byte Ed25519 key. The nonce uses the existing native challenge/exporter
 recipe with the assigned challenge and the actual retained `ServerConnection`.
-The eventual receiver must authenticate all originals; no role-5 receiver or
-accepted public evidence envelope is supplied by this private foundation.
+The `.236` private foundation supplied no role-5 receiver or accepted public
+evidence envelope. The separate [receiver increment](native-enrollment-verification.md)
+now authenticates those originals through a closed evidence-v1 envelope and
+independent expectations on an actual retained client TLS stream. It does not
+provide the missing producer gates or treat matching packet bytes as approved
+runtime policy.
 
 ## Required next connections
 
@@ -122,14 +132,16 @@ accepted public evidence envelope is supplied by this private foundation.
 4. Supply challenge/exporter and client identity from the actual retained native
    TLS owner, then produce purpose-specific signature and original role-5 NSM
    evidence without changing the existing role-4 response authority.
-5. Add genuine original-only client verification and an explicit packet/SDK
-   version, joining role-3 and role-5 runtime, policy, signer and session scope.
-   Preserve the meaning of existing `runtimeManifestDigest`; a native scope hash
-   cannot be relabeled as that legacy manifest. Finish verifier-mediated scoped
-   installation, proxy/egress setup and allow/deny canaries before claiming N05.
+5. Connect actual acquisition and an explicit packet/SDK version around the
+   [original-only receiver](native-enrollment-verification.md), which now joins
+   role-3 and role-5 runtime, policy, signer and actual session scope. Preserve the
+   meaning of existing `runtimeManifestDigest`; a native scope hash cannot be
+   relabeled as that legacy manifest. Diagnostic verification is not installation
+   authority. Finish verifier-mediated scoped installation, proxy/egress setup
+   and allow/deny canaries before claiming N05.
 
-The authority foundation does not close any of those integration gates. Legacy
-enrollment stays unchanged, the private signer cannot service it, and `.235`
+The authority foundation and receiver do not close N05's remaining integration
+gates. Legacy enrollment stays unchanged, the private signer cannot service it, and `.235`
 [native trust checks](native-workload-trust.md) remain supporting components.
 No build, test, runtime, NSM invocation, deployment or paid resource ran for this
 source work. Independent production acceptance remains **0/6 verified**.

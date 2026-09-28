@@ -3653,6 +3653,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/workload_identity_trust_crypto.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_assignment_v1.rs \
 				data-plane/decision-gate-rs/src/enclave_enrollment_key_v1.rs \
+				data-plane/decision-gate-rs/src/native_verifier/enrollment.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
 				ops/systemd/serverware-launch-authority-relay.socket \
@@ -3661,6 +3662,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-ingress-session-evidence.v2.schema.json \
 				schemas/native-proxy-ingress.v2.schema.json \
 				schemas/native-enrollment-assignment.v1.schema.json \
+				schemas/native-enrollment-evidence.v1.schema.json \
 				schemas/release-completion-verification.v1.schema.json \
 				schemas/release-completion-result-signing-request.v1.schema.json \
 				schemas/release-completion-result-signing-response.v1.schema.json \

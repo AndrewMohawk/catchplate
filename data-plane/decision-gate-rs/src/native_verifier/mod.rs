@@ -1,6 +1,6 @@
-//! Original native response/ingress verification and an in-process TLS join.
+//! Original native response/ingress/enrollment verification and a TLS join.
 //!
-//! No network, subprocess, environment configuration, private key or copied
+//! No network acquisition, subprocess, environment configuration, private key or copied
 //! verifier result participates. Successful output proves only the fixed local
 //! signature/quote profile; it is not an actionable production admission.
 
@@ -17,12 +17,18 @@ mod ingress_cli;
 mod ingress_config;
 mod ingress_session;
 mod ingress_client;
+mod enrollment;
+// Reuse the assignment parser/signature/lifetime implementation without
+// exporting its private owner as a cross-boundary authorization carrier.
+#[path = "../native_enrollment_assignment_v1.rs"]
+mod native_enrollment_assignment_v1;
 
 pub(crate) use ingress_client::IngressClientBootstrap;
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use serverware_decision_gate::{canonical_json_bytes, decode_canonical_json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run() -> Result<(), String> { cli::run() }
@@ -79,6 +85,25 @@ pub(crate) fn verify_ingress_session_client_trust_with_challenge(raw: &[u8], sco
     let bytes = serde_json::to_vec(&result).map_err(|_| "encode native workload ingress verdict")?;
     ensure(!bytes.is_empty() && bytes.len() < 4096, "native workload ingress verdict exceeds its bound")?;
     Ok(bytes)
+}
+
+/// Authenticate original enrollment signatures/quotes against the retained
+/// outer TLS connection and that owned stream's actual connected endpoint.
+/// The fixed acquisition owner must have used the supplied retained client
+/// chain and a reviewed TLS verifier on this stream. This function cannot infer
+/// that configuration history, independent pin provenance, semantic packet
+/// authorization or one-use claims from public evidence. It returns a local
+/// diagnostic only, never an installation decision or usable signing API.
+pub(crate) fn verify_native_enrollment_on_stream(raw: &[u8], authorizer_pem: &[u8],
+    expected_authorizer_pem_sha256: &str, scope_raw: &[u8], roots_raw: &[u8],
+    challenge: [u8; 32], outer: &rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>,
+    issuer_der: &[u8], client_certificate_pem: &[u8], expected_principal: &str,
+    original_deadline: u64) -> Result<Vec<u8>, String> {
+    let endpoint = outer.sock.peer_addr()
+        .map_err(|_| "native enrollment actual connected endpoint is unavailable")?;
+    enrollment::verify(raw, authorizer_pem, expected_authorizer_pem_sha256,
+        scope_raw, roots_raw, challenge, &outer.conn, issuer_der,
+        client_certificate_pem, expected_principal, endpoint, original_deadline)
 }
 
 pub(super) fn verify_ingress(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])

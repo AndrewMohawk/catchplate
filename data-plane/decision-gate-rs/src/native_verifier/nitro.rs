@@ -25,6 +25,13 @@ pub(super) struct NitroExpectationsV1<'a> {
     pub(super) future_skew: u64,
 }
 
+/// Facts obtained only after the actual selected certificate chain and COSE
+/// signature verify. Not serialized and never accepted as verifier input.
+pub(super) struct VerifiedNitro {
+    pub(super) issued_unix_seconds: u64,
+    pub(super) valid_until_unix_seconds: u64,
+}
+
 fn bytes<'a>(value: &Value<'a>) -> Result<&'a [u8], String> {
     match value {
         Value::Bytes(bytes) => Ok(*bytes),
@@ -89,6 +96,7 @@ pub(super) fn verify(
         future_skew: expected.future_skew,
     };
     verify_core(document, &scope, roots, expected_public_key, expected_user_data, challenge, now)
+        .map(|verified| verified.issued_unix_seconds)
 }
 
 /// Check exact original ingress SPKI/request bytes under the same Nitro
@@ -105,6 +113,36 @@ pub(super) fn verify_ingress(
 ) -> Result<u64, String> {
     verify_core(document, expected, roots, expected_public_key_spki,
         expected_user_data, challenge, now)
+        .map(|verified| verified.issued_unix_seconds)
+}
+
+pub(super) fn verify_ingress_detailed(
+    document: &[u8], expected: &NitroExpectationsV1<'_>, roots: &TrustRoots,
+    expected_public_key_spki: &[u8], expected_user_data: &[u8], challenge: &[u8; 32], now: u64,
+) -> Result<VerifiedNitro, String> {
+    verify_core(document, expected, roots, expected_public_key_spki,
+        expected_user_data, challenge, now)
+}
+
+/// Fixed role-5 key shape, not a generic key-role widening. The original-only
+/// enrollment receiver reconstructs its exact role-5 user-data and TLS nonce.
+pub(super) fn verify_enrollment(
+    document: &[u8],
+    expected: &NitroExpectationsV1<'_>,
+    roots: &TrustRoots,
+    expected_public_key: &[u8; 32],
+    expected_user_data: &[u8],
+    challenge: &[u8; 32],
+    now: u64,
+) -> Result<VerifiedNitro, String> {
+    const DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
+    if expected_public_key == &[0; 32] || challenge == &[0; 32]
+        || expected_user_data.len() != DOMAIN.len() + 1 + 7 * 32
+        || !expected_user_data.starts_with(DOMAIN)
+        || expected_user_data[DOMAIN.len()] != 5 {
+        return Err("native enrollment Nitro key/role binding is invalid".to_owned());
+    }
+    verify_core(document, expected, roots, expected_public_key, expected_user_data, challenge, now)
 }
 
 fn verify_core(
@@ -115,7 +153,7 @@ fn verify_core(
     expected_user_data: &[u8],
     challenge: &[u8; 32],
     now: u64,
-) -> Result<u64, String> {
+) -> Result<VerifiedNitro, String> {
     if now == 0 || !(1..=300).contains(&expected.max_age) || expected.future_skew > 30
         || expected_public_key.is_empty() || expected_public_key.len() > MAX_ATTESTATION_FIELD
         || expected_user_data.is_empty()
@@ -200,7 +238,8 @@ fn verify_core(
         bundle.push(original.to_vec());
     }
     let signed = signature1(protected, payload_original)?;
-    super::certificates::verify(leaf, &bundle, &roots.certificates, &roots.allowed_leaf_eku,
+    let valid_until_unix_seconds = super::certificates::verify(leaf, &bundle,
+        &roots.certificates, &roots.allowed_leaf_eku,
         *timestamp_ms, now, &signed, signature)?;
-    Ok(issued)
+    Ok(VerifiedNitro { issued_unix_seconds: issued, valid_until_unix_seconds })
 }

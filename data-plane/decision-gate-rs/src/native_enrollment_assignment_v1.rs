@@ -7,6 +7,9 @@
 //! TLS possession, a durable nonce claim or a production enrollment endpoint.
 //! No cloning, serialization, private key, file access or public signer exists.
 
+// Both private compilation sites use the same canonical implementation: the
+// custody library directly and the native receiver through its library imports.
+use super::{canonical_json_bytes, decode_canonical_json};
 use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine as _};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -254,13 +257,13 @@ pub(crate) fn verify_original(assignment_original: &[u8], authorizer_pem_origina
     let deadline = deadline.min(boot.checked_add(PROCESSING_NS).ok_or("native assignment deadline overflow")?);
     require(!packet_original.is_empty() && packet_original.len() <= MAX_PACKET_BYTES,
         "native assignment packet original exceeds its bound")?;
-    let envelope: Envelope = crate::decode_canonical_json(framing(assignment_original)?)
+    let envelope: Envelope = decode_canonical_json(framing(assignment_original)?)
         .map_err(|_| "native assignment violates its closed canonical envelope")?;
     require(envelope.api_version == ENVELOPE_VERSION && envelope.assignment.api_version == ASSIGNMENT_VERSION,
         "native assignment version differs")?;
     let (key, key_id) = authorizer(authorizer_pem_original, expected_authorizer_pem_sha256)?;
     let p = envelope.assignment;
-    let canonical = crate::canonical_json_bytes(&p).map_err(|_| "native assignment payload encoding failed")?;
+    let canonical = canonical_json_bytes(&p).map_err(|_| "native assignment payload encoding failed")?;
     let signature = Signature::from_bytes(&fixed_base64::<64>(&envelope.signature_base64url)?);
     let mut signed = Vec::with_capacity(DOMAIN.len() + canonical.len());
     signed.extend_from_slice(DOMAIN);

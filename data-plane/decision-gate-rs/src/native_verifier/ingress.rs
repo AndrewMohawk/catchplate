@@ -31,13 +31,35 @@ pub(super) struct VerifiedIngress {
     pub(super) leaf: Vec<u8>,
     pub(super) ca: Vec<u8>,
     leaf_spki_sha: [u8; 32],
-    ca_spki_sha: [u8; 32],
+    pub(super) ca_spki_sha: [u8; 32],
     document_sha: [u8; 32],
-    nonce: [u8; 32],
-    issued: u64,
-    verified_at: u64,
-    valid_until: u64,
+    pub(super) nonce: [u8; 32],
+    pub(super) issued: u64,
+    pub(super) verified_at: u64,
+    pub(super) valid_until: u64,
+    pub(super) quote_valid_until: u64,
     client_trust_certificates: Option<Vec<Vec<u8>>>,
+}
+
+/// Same-call facts from the original-only issuer/chain verifier. This private
+/// type has no deserializer, Clone or Debug implementation and is never input
+/// to an admission API. Public summaries remain diagnostic projections only.
+pub(super) struct VerifiedClientIssuer {
+    pub(super) issuer_certificate_sha256: [u8; 32],
+    pub(super) issuer_spki_sha256: [u8; 32],
+    pub(super) client_certificate_sha256: [u8; 32],
+    pub(super) client_spki_sha256: [u8; 32],
+    pub(super) valid_from: u64,
+    pub(super) valid_until: u64,
+    pub(super) verified_at: u64,
+}
+
+impl VerifiedClientIssuer {
+    pub(super) fn summary(&self) -> Value {
+        json!({"clientIssuerCertificateSha256":digest_text(&self.issuer_certificate_sha256),
+            "clientIssuerSpkiSha256":digest_text(&self.issuer_spki_sha256),
+            "clientLeafCertificateSha256":digest_text(&self.client_certificate_sha256)})
+    }
 }
 
 pub(super) fn verify(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])
@@ -132,8 +154,9 @@ pub(super) fn verify_original(raw: &[u8], expected: &SessionScope, roots: &Trust
     };
     // This verifies the original COSE signature, certificate chain and signed
     // fields. Matching the exported quote-input copies above is insufficient.
-    let issued = nitro::verify_ingress(&document, &scope, roots, &certificates.leaf_spki,
+    let quote = nitro::verify_ingress_detailed(&document, &scope, roots, &certificates.leaf_spki,
         &expected_binding, quote_nonce, opening)?;
+    let issued = quote.issued_unix_seconds;
     let closing = now_seconds()?;
     ensure(closing >= opening && closing < certificates.valid_until_unix_seconds
         && issued <= closing.checked_add(expected.future_skew).ok_or("native ingress age overflow")?
@@ -142,7 +165,8 @@ pub(super) fn verify_original(raw: &[u8], expected: &SessionScope, roots: &Trust
 
     Ok(VerifiedIngress { leaf, ca, leaf_spki_sha, ca_spki_sha,
         document_sha: digest(&document), nonce, issued, verified_at: opening,
-        valid_until: certificates.valid_until_unix_seconds, client_trust_certificates })
+        valid_until: certificates.valid_until_unix_seconds,
+        quote_valid_until: quote.valid_until_unix_seconds, client_trust_certificates })
 }
 
 // Preserve the producer's original order and framing. This is the native DER
@@ -209,7 +233,7 @@ impl VerifiedIngress {
     /// for the same ClientConnection already joined by ingress_session.
     pub(super) fn verify_client_issuer(&self, issuer_der: &[u8], client_certificate_pem: &[u8],
         expected: &SessionScope)
-        -> Result<Value, String> {
+        -> Result<VerifiedClientIssuer, String> {
         let inventory = self.client_trust_certificates.as_ref()
             .ok_or("native workload issuer requires authenticated v2 trust originals")?;
         ensure(!issuer_der.is_empty() && issuer_der.len() <= MAX_CERTIFICATE
@@ -229,6 +253,9 @@ impl VerifiedIngress {
             && i128::from(opening) < i128::from(issuer.validity().not_after.timestamp()),
             "native workload issuer is outside its original validity")?;
         let issuer_spki = issuer.public_key().raw;
+        let mut valid_from = issuer.validity().not_before.timestamp().max(0) as u64;
+        let mut valid_until = u64::try_from(issuer.validity().not_after.timestamp())
+            .map_err(|_| "native workload issuer expiry is invalid")?;
         let chain = client_chain(client_certificate_pem)?;
         ensure(!chain.is_empty() && chain[0].as_slice() != issuer_der,
             "native workload client leaf cannot be its issuer")?;
@@ -240,6 +267,7 @@ impl VerifiedIngress {
         ensure(trailing.is_empty() && !leaf_basic.is_some_and(|value| value.value.ca)
             && leaf_usage.value.digital_signature(),
             "native workload client leaf must be a signing end entity")?;
+        let client_spki_sha256 = digest(leaf.public_key().raw);
         let mut intermediates = Vec::new();
         for (index, certificate) in chain.iter().enumerate().skip(1) {
             if certificate.as_slice() == issuer_der {
@@ -272,10 +300,15 @@ impl VerifiedIngress {
             ensure(i128::from(certificate.validity().not_before.timestamp()) <= i128::from(closing)
                 && i128::from(closing) < i128::from(certificate.validity().not_after.timestamp()),
                 "native workload client chain expired during verification")?;
+            valid_until = valid_until.min(u64::try_from(certificate.validity().not_after.timestamp())
+                .map_err(|_| "native workload client certificate expiry is invalid")?);
+            valid_from = valid_from.max(certificate.validity().not_before.timestamp().max(0) as u64);
         }
-        Ok(json!({"clientIssuerCertificateSha256":digest_text(&digest(issuer_der)),
-            "clientIssuerSpkiSha256":digest_text(&digest(issuer_spki)),
-            "clientLeafCertificateSha256":digest_text(&digest(&chain[0]))}))
+        Ok(VerifiedClientIssuer {
+            issuer_certificate_sha256: digest(issuer_der), issuer_spki_sha256: digest(issuer_spki),
+            client_certificate_sha256: digest(&chain[0]), client_spki_sha256,
+            valid_from, valid_until, verified_at: closing,
+        })
     }
 
     // Hash the complete input originals, including the public evidence's LF.

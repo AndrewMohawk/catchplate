@@ -113,7 +113,7 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
                     "consume-planning", "consume-planned", "consume-authorizing", "consume-authorized",
                     "consume-dispatching", "consume-sql", "consume-dispatched",
                     "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized",
-                    "release-proof-requesting", "release-proof-verified")
+                    "release-proof-requesting", "release-proof-verified", "release-handoff-requesting")
                 or permission._request.cookies.get(application.OIDC_SESSION_COOKIE_NAME) != cookie):
             execution._fail("consume planning replaced its actual original context or possession")
         now = guard()

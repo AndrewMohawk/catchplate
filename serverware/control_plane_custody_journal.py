@@ -183,8 +183,8 @@ class CustodyJournal:
     the unchanged physical/quota ceilings, without reserving legacy markers.
     An activation claim has exactly six possible stage siblings: seven total
     files, exhausting its unchanged allowance. No stage adds another slot.
-    Consume uses a separately counted logical claim with at most fourteen files.
-    Only that namespace adds seven physical allowances; other codecs remain strict.
+    Consume uses a separately counted logical claim with at most fifteen files.
+    Only that namespace adds eight physical allowances; other codecs remain strict.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -264,9 +264,9 @@ class CustodyJournal:
         return (metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns, metadata.st_ctime_ns)
 
     def _physical_limit(self):
-        # Only a separately counted, admitted consume claim may use its seven
+        # Only a separately counted, admitted consume claim may use its eight
         # suffix files beyond seven. Older families retain their fixed inventories.
-        return 7 * self._maximum_records + 7 * len(self._consume_claims)
+        return 7 * self._maximum_records + 8 * len(self._consume_claims)
 
     def _require_process(self):
         if os.getpid() != self._pid:
@@ -333,7 +333,7 @@ class CustodyJournal:
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
                 count += 1
-                if count > 14 * self._maximum_records:
+                if count > 15 * self._maximum_records:
                     raise CustodyJournalError("journal physical file limit exceeded")
                 name = entry.name
                 if name.startswith("prepared-"):
@@ -491,7 +491,7 @@ class CustodyJournal:
                         uncertain_completions.add(digest)
         # Directory order is not authority: first bound the scan by the worst
         # possible inventory, then require the exact admitted consume allowance.
-        if count > 7 * self._maximum_records + 7 * len(consume_claims):
+        if count > 7 * self._maximum_records + 8 * len(consume_claims):
             raise CustodyJournalError("journal physical inventory exceeds its consume-specific allowance")
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
@@ -1696,6 +1696,13 @@ class CustodyJournal:
         return self._append_consume_record(finalization_digest=finalization_digest,
             activation_authorization_digest=activation_authorization_digest,
             kind="release-proof", originals=originals)
+
+    def append_oidc_session_activation_consume_release_grants(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain opaque client/server originals; storage is not release authority."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-grants", originals=originals)
 
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):

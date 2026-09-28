@@ -3,13 +3,14 @@
 Source integrated, unbuilt and unexecuted. These dedicated local records retain
 only token-free claims and exact consume planning, authorization, grant,
 reservation, unsigned SQL and completion-response originals, unsigned hints
-and the exact signed release intent and public proof response. They are not
+and the exact signed release intent, public proof response and incoming release
+client/server grant originals. They are not
 permission, signed-plan admission, private replay, committed SQL or authenticated
 completion evidence, token release, a public route or a retry mechanism.
 
 ## Closed inventory and association
 
-One separate logical consume claim has at most fourteen physical files:
+One separate logical consume claim has at most fifteen physical files:
 
 | Fixed kind | Exact retained content | Ordering |
 | --- | --- | --- |
@@ -27,6 +28,7 @@ One separate logical consume claim has at most fourteen physical files:
 | `release-intent` | raw1: exact original signed release intent | After `release-intent-claimed`; durably retained before the caller returns the original |
 | `release-proof-claimed` | raw0 | After `release-intent`; irreversible and durable before any proof request I/O |
 | `release-proof` | raw4: opaque status, original signed release custody, signed proof and proof enrollment | After `release-proof-claimed`; retained before status, content-shape or signature interpretation |
+| `release-grants` | raw2: client authorization and server bootstrap originals | After `release-proof`; retained before semantic admission, never a dispatch claim or stored token |
 
 The fixed slot identity frames both the finalization locator and the genuine
 activation authorization identity under
@@ -91,6 +93,14 @@ status, root-authenticates custody and verifies the proof/enrollment. The
 maximum framed response is 8,470,897 bytes and its maximum append precharge is
 25,413,384 bytes. These original commitments are token-free; the old token in
 the proof request is never a retained frame. Earlier encodings are unchanged.
+Profile 14 appends incoming release-grant raw2. Its bodies are opaque immutable
+bytes bounded independently to the actual release client authorization's
+`MAX_BYTES` (16 KiB) and `MAX_SERVER_BOOTSTRAP_BYTES` (16 MiB). Empty or malformed
+bounded originals remain retainable data; the caller subsequently authenticates
+their signatures, freshness and exact independent bindings. The maximum framed
+record is 16,793,947 bytes and maximum append precharge is 50,382,534 bytes.
+No client/server admission result, returned token, release response or outcome
+is retained by this suffix.
 New publication requires the current source cohort;
 decode accepts historical source metadata only as ordinary data. There is no
 generic prepared/forwarding-family extension.
@@ -117,12 +127,13 @@ is an original ciphertext, not plaintext or authority.
 - `append_oidc_session_activation_consume_release_intent(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
 - `claim_oidc_session_activation_consume_release_proof_attempt(finalization_digest=..., activation_authorization_digest=...) -> None`
 - `append_oidc_session_activation_consume_release_proof(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
+- `append_oidc_session_activation_consume_release_grants(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
 - `load_oidc_session_activation_consume_records(finalization_digest=..., activation_authorization_digest=...) -> ConsumeRecords`
 
 `ConsumeRecords(claim, prepared, exported, authorized=None, grant=None,
 reservation=None, sql_attempt=None, sql_outcome=None, completion_outcome=None,
 completion_hints=None, release_intent_attempt=None, release_intent=None,
-release_proof_attempt=None, release_proof=None)`
+release_proof_attempt=None, release_proof=None, release_grants=None)`
 is ordinary retained data, with optional stage records. Each `ConsumeRecord` contains source revision,
 finalization and authorization digests, slot digest, kind, original tuple and
 content digest. None is a successful-admission carrier.
@@ -132,14 +143,15 @@ Before the stable native custody callback, the genuine caller precharges
 for the planning claim, or `_append_io_bytes(kind, originals)` for each fixed
 stage: `prepared`, `exported`, `authorized`, `grant`, `reserved`, `sql-claimed`,
 `sql-outcome`, `completion-outcome`, `completion-hints`, `release-intent-claimed`,
-`release-intent`, `release-proof-claimed` or `release-proof`. SQL, intent and proof
+`release-intent`, `release-proof-claimed`, `release-proof` or `release-grants`. SQL, intent and proof
 claims pass the exact empty tuple `()` to
 the meter; signed intent retention passes `(signed_intent_bytes,)`.
 `MAX_AUTHORIZED_BYTES`, `MAX_GRANT_BYTES`, `MAX_RESERVATION_BYTES`,
 `MAX_SQL_CLAIM_BYTES`, `MAX_SQL_OUTCOME_BYTES`,
 `MAX_COMPLETION_OUTCOME_BYTES`, `MAX_COMPLETION_HINTS_BYTES`,
 `MAX_RELEASE_INTENT_CLAIM_BYTES`, `MAX_RELEASE_INTENT_BYTES`,
-`MAX_RELEASE_PROOF_CLAIM_BYTES` and `MAX_RELEASE_PROOF_BYTES` expose their framed bounds;
+`MAX_RELEASE_PROOF_CLAIM_BYTES`, `MAX_RELEASE_PROOF_BYTES` and
+`MAX_RELEASE_GRANTS_BYTES` expose their framed bounds;
 `MAX_LOAD_IO_BYTES` includes the complete optional suffix. Old prefixes load
 with absent suffix fields set to `None` and gain no publication, signing or
 SQL permission. The exact work ledger and actual current guard remain around
@@ -154,7 +166,7 @@ clock, creates a work allowance or restores continuation authority.
 ## Durability, quota and terminal uncertainty
 
 The existing no-replace publication, file and directory synchronization, normal
-close, exact readback and immutable identity checks apply to all fourteen files.
+close, exact readback and immutable identity checks apply to all fifteen files.
 An identical response append is only first-exact local retention, never
 permission to repeat a network request. A different original poisons the owner.
 An uncertain prepared response cannot acquire an export sibling, and an
@@ -190,6 +202,14 @@ uncertain/missing response cannot authorize another request. Separate private
 proof admission remains necessary; neither successful storage nor the returned
 status proves consumption, release or current session state.
 
+Incoming client/server grant originals are retained after the exact proof
+prefix and before their semantic admission. First-exact publication preserves
+the actual bounded raw2, including invalid originals; changed replacement data
+poisons the owner. This adds no redundant attempt marker. The existing dedicated
+release claim keyed by genuinely admitted client-authorization digest remains
+the irreversible gate before release socket I/O. Retention alone cannot reach
+that gate, authorize a retry, restore a recovered context or prove release.
+
 Recovery validates the fixed prefix, claim/source/target association and
 original response shapes, but deliberately does not restore the volatile
 same-owner continuation set. Historical originals can only be read. Missing
@@ -201,12 +221,13 @@ their exact current-source prefix and successful exported predecessor.
 Every consume claim counts as one additional logical record alongside legacy
 prepared records, release claims and activation claims, at every capacity gate
 and during recovery. The activation claim still has at most seven files; the
-separate consume claim now has fourteen, including the required SQL, intent and
-proof claims, completion response and opaque hints. Live physical accounting is exactly
-`7 * maximum_records + 7 * admitted_consume_claim_count`: only that separately
-counted namespace contributes seven extra possible files. This does not widen
-other codecs or give every old record fourteen slots. Unordered recovery first
-limits scanning to the worst-case `14 * maximum_records`, then enforces the
+separate consume claim now has fifteen, including the required SQL, intent and
+proof claims, completion response, opaque hints and incoming release grants.
+Live physical accounting is exactly
+`7 * maximum_records + 8 * admitted_consume_claim_count`: only that separately
+counted namespace contributes eight extra possible files. This does not widen
+other codecs or give every old record fifteen slots. Unordered recovery first
+limits scanning to the worst-case `15 * maximum_records`, then enforces the
 tighter consume-specific ceiling and complete fixed prefix before admission.
 The 4,096 logical-record limit, byte quota and 8 GiB maximum are unchanged.
 Legacy marker byte reservations remain subtracted before new publication.

@@ -1,7 +1,7 @@
-# Optional production source overlay for an explicitly enabled v5 release client.
+# Optional production source overlay for a v5 cold release client or v11 handoff.
 # Provision the finite release worker and searchable socket directory separately.
 # This read-only bind grants no root authority, key custody or public endpoint.
-# The signed v5 bootstrap uses the existing authority-trust directory mount.
+# The signed parent bootstrap uses the existing authority-trust directory mount.
 services:
   serverware:
     volumes:

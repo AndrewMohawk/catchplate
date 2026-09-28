@@ -53,6 +53,8 @@ V9_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v9"
 V9_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v9"
 V10_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v10"
 V10_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v10"
+V11_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v11"
+V11_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v11"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_NODES = capture.MAX_TOTAL_JSON_NODES
 MAX_DEPTH = capture.MAX_JSON_DEPTH
@@ -69,6 +71,7 @@ _V7_PAYLOAD_FIELDS = _V6_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationPlann
 _V8_PAYLOAD_FIELDS = _V7_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationConsumeExecution"})
 _V9_PAYLOAD_FIELDS = _V8_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationReleaseIntent"})
 _V10_PAYLOAD_FIELDS = _V9_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationReleaseProof"})
+_V11_PAYLOAD_FIELDS = _V10_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationReleaseHandoff"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _GENERATION_FIELDS = frozenset(configuration._GENERATION_FIELDS)
 _NUMBER_BYTES = frozenset(b"0123456789.eE+-")
@@ -102,6 +105,7 @@ class _EnrollmentMaterial:
     release_intent: object | None = None
     intent_slot_reserved: bool = False
     release_proof: object | None = None
+    release_handoff: object | None = None
 
 
 def _preflight(raw, work):
@@ -398,6 +402,28 @@ def _v10_shape(value):
     _v10_payload_shape(value["payload"])
 
 
+def _v11_payload_shape(value):
+    from serverware import control_plane_oidc_session_activation_release_handoff_bootstrap as handoff
+
+    capability.shape._object(value, _V11_PAYLOAD_FIELDS, "v11 enrollment bootstrap payload")
+    capability.shape._literal(value["schema"], V11_PAYLOAD_SCHEMA)
+    prior = {name: value[name] for name in _V10_PAYLOAD_FIELDS}
+    prior["schema"] = V10_PAYLOAD_SCHEMA
+    _v10_payload_shape(prior)
+    selected = value["oidcSessionActivationReleaseHandoff"]
+    handoff._shape(selected)
+    if selected is not None and (value["oidcSessionActivationReleaseIntent"] is None
+            or value["oidcSessionActivationReleaseProof"] is None):
+        raise EnrollmentBootstrapError("v11 release handoff requires enabled intent and proof")
+
+
+def _v11_shape(value):
+    capability.shape._object(value, _ENVELOPE_FIELDS, "v11 enrollment bootstrap envelope")
+    capability.shape._literal(value["schema"], V11_SCHEMA)
+    capability.shape._base64url(value["signatureBase64Url"], signature=True)
+    _v11_payload_shape(value["payload"])
+
+
 def _canonical(raw, value, work):
     encoded = configuration._configuration_wire(value, capture._SharedLedger(work))
     work.charge(input_bytes=len(raw) + len(encoded))
@@ -608,6 +634,23 @@ def _v10_material(payload, expected_digest, root_public_key, work):
         material.intent_slot_reserved, held_proof)
 
 
+def _v11_material(payload, expected_digest, root_public_key, work):
+    from serverware import control_plane_oidc_session_activation_release_handoff_bootstrap as handoff
+
+    material = _v10_material(payload, expected_digest, root_public_key, work)
+    held_handoff = handoff._admit_on_work(
+        release_handoff=payload["oidcSessionActivationReleaseHandoff"],
+        release_intent=material.release_intent, release_proof=material.release_proof, work=work)
+    return _EnrollmentMaterial(material.configuration_payload, material.generation,
+        material.runtime_role_identities, material.configuration_digest,
+        material.issuer_private_key_fd, material.issuer_policy, material.issuer_public_key,
+        material.signer_endpoint, material.execution, material.finalization,
+        material.finalization_slot_reserved, material.release_client,
+        material.activation_execution, material.activation_slot_reserved, material.activation_planning,
+        material.consume_execution, material.consume_slot_reserved, material.release_intent,
+        material.intent_slot_reserved, material.release_proof, held_handoff)
+
+
 def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         expected_configuration_digest, work):
     """Authenticate exact originals before using their configuration or FD."""
@@ -628,7 +671,10 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         is_v8 = type(envelope) is dict and envelope.get("schema") == V8_SCHEMA
         is_v9 = type(envelope) is dict and envelope.get("schema") == V9_SCHEMA
         is_v10 = type(envelope) is dict and envelope.get("schema") == V10_SCHEMA
-        if is_v10:
+        is_v11 = type(envelope) is dict and envelope.get("schema") == V11_SCHEMA
+        if is_v11:
+            _v11_shape(envelope)
+        elif is_v10:
             _v10_shape(envelope)
         elif is_v9:
             _v9_shape(envelope)
@@ -650,10 +696,11 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         payload = envelope["payload"]
         payload_bytes = configuration._configuration_wire(payload, capture._SharedLedger(work))
         capability._signature(key, envelope["signatureBase64Url"],
-            V10_SCHEMA if is_v10 else V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
+            V11_SCHEMA if is_v11 else V10_SCHEMA if is_v10 else V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
             payload_bytes, capture._SharedLedger(work))
         _canonical(original, envelope, work)
-        material = (_v10_material(payload, expected, key, work) if is_v10
+        material = (_v11_material(payload, expected, key, work) if is_v11
+            else _v10_material(payload, expected, key, work) if is_v10
             else _v9_material(payload, expected, key, work) if is_v9
             else _v8_material(payload, expected, key, work) if is_v8
             else _v7_material(payload, expected, key, work) if is_v7
@@ -1195,3 +1242,65 @@ def _produce_v10_on_work(*, configuration_payload, generation, runtime_role_iden
         if isinstance(exc, EnrollmentBootstrapError):
             raise
         raise EnrollmentBootstrapError("v10 enrollment bootstrap production failed") from exc
+
+
+def _produce_v11_on_work(*, configuration_payload, generation, runtime_role_identities,
+        configuration_digest, issuer_private_key_fd, signer_endpoint, registration_execution,
+        registration_finalization, oidc_session_activation_release, oidc_session_activation_execution,
+        oidc_session_activation_planning, oidc_session_activation_consume_execution,
+        oidc_session_activation_release_intent, oidc_session_activation_release_proof,
+        oidc_session_activation_release_handoff, runtime_root_private_key, runtime_root_public_key, work):
+    """Sign separate static handoff pins after actual parent original admission."""
+    try:
+        ledger = capture._SharedLedger(work)
+        private_key, public_key = runtime_root_private_key, runtime_root_public_key
+        digest, descriptor = configuration_digest, issuer_private_key_fd
+        if not isinstance(private_key, Ed25519PrivateKey) or not isinstance(public_key, Ed25519PublicKey):
+            raise EnrollmentBootstrapError("v11 bootstrap production requires the actual admitted root pair")
+        capability.shape._digest(digest)
+        capability.shape._bounded_object(generation, 24, "v11 bootstrap provisioner launch context")
+        payload = configuration._ConfigurationCapture(ledger, maximum_bytes=MAX_BYTES).visit({
+            "schema": V11_PAYLOAD_SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
+            "configurationDigest": digest, "configurationPayload": configuration_payload,
+            "generation": {name: generation[name] for name in configuration._GENERATION_FIELDS},
+            "runtimeRoleIdentities": runtime_role_identities, "issuerPrivateKeyFd": descriptor,
+            "signerEndpoint": signer_endpoint, "registrationExecution": registration_execution,
+            "registrationFinalization": registration_finalization,
+            "oidcSessionActivationRelease": oidc_session_activation_release,
+            "oidcSessionActivationExecution": oidc_session_activation_execution,
+            "oidcSessionActivationPlanning": oidc_session_activation_planning,
+            "oidcSessionActivationConsumeExecution": oidc_session_activation_consume_execution,
+            "oidcSessionActivationReleaseIntent": oidc_session_activation_release_intent,
+            "oidcSessionActivationReleaseProof": oidc_session_activation_release_proof,
+            "oidcSessionActivationReleaseHandoff": oidc_session_activation_release_handoff})
+        _v11_payload_shape(payload)
+        envelope = {"schema": V11_SCHEMA, "payload": payload, "signatureBase64Url": "A" * 86}
+        _v11_shape(envelope)
+        original = configuration._configuration_wire(payload, capture._SharedLedger(work))
+        _v11_material(payload, digest, public_key, work)
+        keys._pair_on_work(private_key, public_key, work)
+        _canonical(original, payload, work)
+        payload_size, payload_nodes = _measure(payload, work)
+        envelope_size, envelope_nodes = _measure(envelope, work)
+        work.charge(input_bytes=3 * payload_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
+            json_nodes=payload_nodes + envelope_nodes)
+        frame_bytes = 2 * len(V11_SCHEMA) + 9 + payload_size + 2 * 71
+        if (work.limits.max_hashes - work.hash_work < 1
+                or work.limits.max_input_bytes - work.input_bytes < frame_bytes + payload_size
+                or work.limits.max_json_nodes - work.json_nodes < 4 + payload_nodes):
+            raise EnrollmentBootstrapError("v11 bootstrap cannot reserve its signature output")
+        message = plan._ascii(plan._frame(V11_SCHEMA, (original,), work), work)
+        signature = production._sign_and_verify(private_key, public_key, message, work)
+        if _measure(payload, work) != (payload_size, payload_nodes) or _encode(payload) != original:
+            raise EnrollmentBootstrapError("v11 bootstrap payload changed during signing")
+        encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+        capability.shape._base64url(encoded, signature=True)
+        envelope["signatureBase64Url"] = encoded
+        result = _encode(envelope)
+        if len(result) != envelope_size:
+            raise EnrollmentBootstrapError("v11 bootstrap output changed after reservation")
+        return result
+    except (KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, EnrollmentBootstrapError):
+            raise
+        raise EnrollmentBootstrapError("v11 enrollment bootstrap production failed") from exc

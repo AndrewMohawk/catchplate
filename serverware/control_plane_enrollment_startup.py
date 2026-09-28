@@ -382,6 +382,24 @@ class _EnrollmentOwner:
         return permission.prove_release()
 
     @property
+    def release_handoff_enabled(self):
+        """Independent cold client pins only, never a release permission."""
+        _continuity(self)
+        return self._material is not None and self._material.release_handoff is not None
+
+    def _release_oidc_session_activation_token(self, *, client_authorization_bytes,
+            server_bootstrap_bytes):
+        """Receive a verified token only through this actual active permission."""
+        from serverware import control_plane_oidc_session_activation_execution as execution
+
+        _require_pid()
+        permission = self._activation_permission
+        if type(permission) is not execution._ActivationPermission or permission._owner is not self:
+            raise EnrollmentStartupError("release handoff requires the actual active parent permission")
+        return permission.release_token(client_authorization_bytes=client_authorization_bytes,
+            server_bootstrap_bytes=server_bootstrap_bytes)
+
+    @property
     def finalization_reservation_enabled(self):
         _live(self)
         finalization = None if self._material is None else self._material.finalization
@@ -884,7 +902,7 @@ def initialize_from_environment():
             activation_key, activation_fd, activation_identity = None, None, None
             consume_key, consume_fd, consume_identity = None, None, None
             intent_key, intent_fd, intent_identity = None, None, None
-            if material.release_client is not None and identity != (65532, 65532):
+            if (material.release_client is not None or material.release_handoff is not None) and identity != (65532, 65532):
                 raise EnrollmentStartupError("release caller requires the fixed control-plane identity")
             if (material.finalization_slot_reserved and material.finalization is None
                     and 204 in inventory):

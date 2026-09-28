@@ -243,6 +243,32 @@ and completion sockets; mounting it does not authorize or perform a request.
 The enrollment-only offline preparer is unchanged. Source remains unbuilt and
 unexecuted, and production acceptance remains 0/6.
 
+## Same-permission protected release extension
+
+Explicit parent `/v11` adds nullable public-only
+[`oidcSessionActivationReleaseHandoff`](control-plane-oidc-session-activation-release-handoff-bootstrap.md).
+It pins the client ID, client identity and fixed live release endpoint separately
+from the old cold `oidcSessionActivationRelease` originals. The actual intent
+and proof configurations are required; no new private key or descriptor is
+delivered. Earlier parent shapes and the old release client remain unchanged.
+
+`release_handoff_enabled` reports configuration only. The private
+`_release_oidc_session_activation_token(client_authorization_bytes=...,
+server_bootstrap_bytes=...)` facade selects this owner's actual still-active
+proof-verified permission. The
+[handoff continuation](control-plane-oidc-session-activation-release-handoff.md)
+retains the bounded grant originals, authenticates their exact target against
+the same-call signed evidence, and spends the existing irreversible release
+claim before its only socket exchange. The original response verifier returns
+the token directly; neither request possession nor the new token is journaled.
+
+The permission's spent handoff phase remains an attempt marker, not a cached
+success object. A rejected grant, uncertain claim, lost response or failed
+verification cannot reopen it. This is a private continuation, not a public
+route, cookie writer, recovery permission or present-session check. The existing
+release socket overlay supplies the preprovisioned endpoint; no infrastructure
+or production acceptance is implied. Source remains unbuilt and unexecuted.
+
 ## Private proof continuation extension
 
 Explicit parent `/v10` adds nullable public-only

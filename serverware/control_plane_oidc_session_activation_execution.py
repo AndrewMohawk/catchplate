@@ -176,7 +176,8 @@ class _ActivationPermission:
         "_consume_completion_hints", "_consume_completion_hints_seal", "_release_intent_spent",
         "_release_intent_signing", "_release_intent_signing_seal", "_release_intent_original", "_release_intent_seal",
         "_release_intent_context", "_release_intent_context_seal", "_release_proof_spent",
-        "_release_proof_originals", "_release_proof_seal", "_release_proof_context", "_release_proof_context_seal")
+        "_release_proof_originals", "_release_proof_seal", "_release_proof_context", "_release_proof_context_seal",
+        "_release_handoff_spent")
 
     def __init__(self, owner, request, permission_bytes, live_window, transport_deadline_ns, work):
         from serverware import control_plane_oidc_session_activation_permission as permission
@@ -216,6 +217,7 @@ class _ActivationPermission:
         self._consume_completion_hints = self._consume_completion_hints_seal = None
         self._release_intent_spent = False
         self._release_proof_spent = False
+        self._release_handoff_spent = False
         self._release_proof_originals = self._release_proof_seal = None
         self._release_proof_context = self._release_proof_context_seal = None
         self._release_intent_signing = self._release_intent_signing_seal = None
@@ -241,9 +243,9 @@ class _ActivationPermission:
                 or type(self._owner) is not startup._EnrollmentOwner
                 or self._owner._activation_permission is not self or not self._locked):
             _fail("activation permission context is no longer the active parent-owned call")
-        # Proof phases retain every intent and predecessor invariant below.
+        # Proof and handoff phases retain every intent/predecessor invariant.
         phase = ("release-intent-authorized" if self._dispatch_phase in (
-            "release-proof-requesting", "release-proof-verified") else self._dispatch_phase)
+            "release-proof-requesting", "release-proof-verified", "release-handoff-requesting") else self._dispatch_phase)
         if phase not in ("new", "preparing", "preparing-completion",
                 "sql", "sql-completion", "completed", "consume-planning", "consume-planned",
                 "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
@@ -357,11 +359,11 @@ class _ActivationPermission:
                 or type(self._release_intent_context[0]) is not bytes
                 or type(self._release_intent_context[3]) is not int or self._release_intent_context[3] < 1):
             _fail("release intent lost its exact retained original or live continuation")
-        if self._dispatch_phase in ("release-proof-requesting", "release-proof-verified") and self._release_proof_spent is not True:
+        if self._dispatch_phase in ("release-proof-requesting", "release-proof-verified", "release-handoff-requesting") and self._release_proof_spent is not True:
             _fail("release proof did not spend its one-use continuation")
         if self._release_proof_originals is not self._release_proof_seal:
             _fail("release proof replaced its retained response originals")
-        if self._dispatch_phase == "release-proof-verified" and (
+        if self._dispatch_phase in ("release-proof-verified", "release-handoff-requesting") and (
                 type(self._release_proof_originals) is not tuple or len(self._release_proof_originals) != 4
                 or any(type(raw) is not bytes for raw in self._release_proof_originals)
                 or self._release_proof_originals[0] != b"proved"
@@ -370,6 +372,8 @@ class _ActivationPermission:
                 or type(self._release_proof_context[0]) is not bytes
                 or type(self._release_proof_context[3]) is not int or self._release_proof_context[3] < 1):
             _fail("release proof lost its exact admitted originals or live continuation")
+        if self._dispatch_phase == "release-handoff-requesting" and self._release_handoff_spent is not True:
+            _fail("release handoff did not spend its one-use continuation")
 
     def _current(self, epoch_floor=None, monotonic_floor=None):
         self._identity()
@@ -387,7 +391,7 @@ class _ActivationPermission:
                 "sql", "sql-completion", "completed", "consume-planning", "consume-planned",
                 "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
                 "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized",
-                "release-proof-requesting", "release-proof-verified"):
+                "release-proof-requesting", "release-proof-verified", "release-handoff-requesting"):
             from serverware import control_plane_registration_finalization_completion_pending as pending
 
             application, session_scope, binding, credential, count = self._target
@@ -481,6 +485,7 @@ class _ActivationPermission:
         self._consume_completion_hints = self._consume_completion_hints_seal = None
         self._release_intent_spent = True
         self._release_proof_spent = True
+        self._release_handoff_spent = True
         self._release_proof_originals = self._release_proof_seal = None
         self._release_proof_context = self._release_proof_context_seal = None
         self._release_intent_signing = self._release_intent_signing_seal = None
@@ -769,6 +774,29 @@ class _ActivationPermission:
             self._release_proof_spent = True
             self._dispatch_phase = "release-proof-requesting"
             return release._prove_on_permission(self)
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+
+    def release_token(self, *, client_authorization_bytes, server_bootstrap_bytes):
+        """One original-bound token handoff on this call's verified proof lane."""
+        from serverware import control_plane_oidc_session_activation_release_handoff as release
+
+        try:
+            self._identity()
+            if (self._state != "active" or self._dispatch_phase != "release-proof-verified"
+                    or self._release_handoff_spent is not False):
+                _fail("release handoff requires the unspent actual proof continuation")
+            # Even rejected or uncertain grants spend this in-memory call.
+            # Durable original retention and the existing grant claim are
+            # enforced by the continuation before its only socket exchange.
+            self._release_handoff_spent = True
+            self._dispatch_phase = "release-handoff-requesting"
+            return release._release_on_permission(self,
+                client_authorization_bytes=client_authorization_bytes,
+                server_bootstrap_bytes=server_bootstrap_bytes)
         except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:
                 self._revoke()

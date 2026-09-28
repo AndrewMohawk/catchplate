@@ -30,17 +30,17 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 authorized recovery, is active; portal steps 24–26 remain todo. Public actions
 stay 2/3 source-landed—recovery is not an automatic SQL retry.
 
-Latest source: [`.209` / dbd99f6](https://github.com/example/private-deployment)
-lands HTTP: the recovery route connects fresh current-auth, normal cleanup and
-the final signed cookie-send guard. Pre-send uncertainty preserves the existing
-cookie; no automatic retry. Next is COMPLETE: earlier-stage completion recovery.
-Resources and portal remain open.
+Latest source: [`.210` / 598b513](https://github.com/example/private-deployment)
+connects COMPLETE prerequisites: cold configuration, bounded pre-intent target
+admission and a distinct fresh actor. COMPLETE remains partial: historical
+controls, attempt, completion exchange, reconciliation and the public earlier-stage
+action are still open. Resources and portal remain open.
 Source is unbuilt, unexecuted and unprovisioned.
-Previous source: [`.208` protected exchange and genuine response verification](https://github.com/example/private-deployment).
+Previous source: [`.209` recovery HTTP, fresh current-auth and guarded cookie delivery](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-recovery-detail)
 live in the tracker.
 
-[![Step 23 recovery is active. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY independent original admission and same-PID worker staging is source-landed in 097ce54. EXCHANGE—one claimed RECOVERY socket and genuine response verification—is source-landed in 272a40e. HTTP—the recovery route, fresh current-auth, normal cleanup and final signed cookie-send guard—is source-landed in dbd99f6. COMPLETE prior-stage recovery remains todo. These six facets are not new milestones or effort percentages. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
+[![Step 23 recovery is active. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY independent original admission and same-PID worker staging is source-landed in 097ce54. EXCHANGE—one claimed RECOVERY socket and genuine response verification—is source-landed in 272a40e. HTTP—the recovery route, fresh current-auth, normal cleanup and final signed cookie-send guard—is source-landed in dbd99f6. COMPLETE is partial in 598b513: cold configuration, bounded pre-intent target admission and a distinct fresh actor are connected; historical controls, attempt, completion exchange, reconciliation and the public earlier-stage action remain open. These six facets are not new milestones or effort percentages. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-recovery-detail).
@@ -50,7 +50,7 @@ Nested counts are not additive and are not effort estimates.
 <details>
 <summary>Full 26-step workflow and completed step 22 history</summary>
 
-[![Session activation: 22 of 26 source steps landed; step 23 recovery is active and steps 24–26 are todo. TARGET and ACTOR are source-landed in 9f03664, AUTHORITY in 097ce54, EXCHANGE in 272a40e and HTTP in dbd99f6. The recovery route connects fresh current-auth, normal cleanup and the final signed cookie-send guard. COMPLETE prior-stage recovery remains todo. Project 34/46, public actions 2/3 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation: 22 of 26 source steps landed; step 23 recovery is active and steps 24–26 are todo. TARGET and ACTOR are source-landed in 9f03664, AUTHORITY in 097ce54, EXCHANGE in 272a40e and HTTP in dbd99f6. COMPLETE is partial in 598b513: cold configuration, bounded pre-intent target admission and a distinct fresh actor are connected. Historical controls, attempt, completion exchange, reconciliation and the public earlier-stage action remain open. Project 34/46, public actions 2/3 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 The completed dispatch graphic below preserves the **historical .201 checkpoint**,
 including its then-current 0 active / 4 todo rollup; current step 23 is active.
@@ -61,7 +61,7 @@ including its then-current 0 active / 4 todo rollup; current step 23 is active.
 | --- | --- | --- |
 | 21 · F08.5.1 | Fresh authorization for the exact user/session/credential target | [Landed · d3f8469](https://github.com/example/private-deployment) |
 | 22 · F08.5.2 | Public activation with durable dispatch/outcome tracking and truthful responses | [Landed · 0bffe70](https://github.com/example/private-deployment) |
-| 23 · F08.5.3 | Separately authorized recovery; no automatic activation retry | Active · HTTP landed in .209; prior-stage COMPLETE todo |
+| 23 · F08.5.3 | Separately authorized recovery; no automatic activation retry | Active · five facets landed; COMPLETE partial in .210 |
 | 24 · F08.6.1 | Explicit portal activate/recover controls bound to the retained target | Todo |
 | 25 · F08.6.2 | Fresh action-bound approval; discard prompts when actor or target changes | Todo |
 | 26 · F08.6.3 | Confirm the session only after exact delivery and a fresh current-auth check | Todo |

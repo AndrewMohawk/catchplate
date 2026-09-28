@@ -137,8 +137,9 @@ turn an uncertain result into successful delivery.
 
 ## Still required
 
-Issuer trust distribution, rotation/revocation/retirement, authenticated service
-channels and local sidecar integration remain open. Real acceptance must exercise
+The [public trust publisher and standard ingress admission](workload-identity-trust-distribution.md)
+are now source-connected. Deployed issuer trust, native/client trust-pin integration,
+rotation/revocation/retirement, authenticated service channels and local sidecar integration remain open. Real acceptance must exercise
 the complete workload flow, negative identity cases, interruption/recovery, mandatory proxy mTLS and
 unchanged upstream TLS/egress controls. Software-key custody and a local journal
 prefix do not satisfy measured custody or independent rollback witnessing.

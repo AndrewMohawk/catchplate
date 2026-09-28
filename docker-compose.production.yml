@@ -1094,6 +1094,10 @@ services:
       SERVERWARE_PROXY_TLS_CERT: /run/serverware/proxy-ingress/server-cert.pem
       SERVERWARE_PROXY_TLS_KEY: /run/serverware/proxy-ingress/server-key.pem
       SERVERWARE_PROXY_CLIENT_CA_BUNDLE: /run/serverware/proxy-ingress/client-ca.pem
+      SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZATION: /run/serverware/proxy-ingress/trust-authorization.json
+      SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_PUBLIC_KEY: /run/serverware/proxy-ingress/trust-authorizer-public-key.pem
+      SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_SHA256: ${SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_SHA256:?set independently approved exact trust-authorizer PEM SHA-256}
+      SERVERWARE_WORKLOAD_IDENTITY_TRUST_DEPLOYMENT_ID: ${SERVERWARE_WORKLOAD_IDENTITY_TRUST_DEPLOYMENT_ID:?set independently selected workload trust deployment ID}
       SERVERWARE_DECISION_GATE_MANAGEMENT_HOST: 127.0.0.1
       SERVERWARE_DECISION_GATE_MANAGEMENT_PORT: "9091"
       SERVERWARE_RELEASE_PROVENANCE: /run/serverware/release/release-provenance.json
@@ -1120,6 +1124,11 @@ services:
       - ${SERVERWARE_PROXY_TLS_CERT_FILE:?set root-owned proxy ingress certificate file}:/run/serverware/proxy-ingress/server-cert.pem:ro
       - ${SERVERWARE_PROXY_TLS_KEY_FILE:?set root-owned proxy ingress private key file}:/run/serverware/proxy-ingress/server-key.pem:ro
       - ${SERVERWARE_PROXY_CLIENT_CA_BUNDLE_FILE:?set root-owned proxy ingress client CA bundle file}:/run/serverware/proxy-ingress/client-ca.pem:ro
+      # Public trust authorization is separate from CA issuance authority.
+      # Deploy these exact public originals as root:root 0444; the immutable
+      # publisher's owner-only staging directory is not a runtime installation.
+      - ${SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZATION_FILE:?set root-owned signed workload trust authorization file}:/run/serverware/proxy-ingress/trust-authorization.json:ro
+      - ${SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_PUBLIC_KEY_FILE:?set independently provisioned root-owned trust-authorizer public key}:/run/serverware/proxy-ingress/trust-authorizer-public-key.pem:ro
       - ${SERVERWARE_CONTROL_PLANE_TLS_DIR:?set control-plane TLS directory}/ca.pem:/run/serverware/tls/ca.pem:ro
       - ${SERVERWARE_ATTESTATION_HELPER_DIR:?set attestation helper directory}:/opt/serverware/bin:ro
       - ${SERVERWARE_NITRO_ROOT_CERT:?set Nitro root certificate}:/run/serverware/nitro/nitro-root.pem:ro

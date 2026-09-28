@@ -1,10 +1,11 @@
-# Workload issuer trust distribution: next source boundary
+# Workload issuer trust distribution: source and remaining boundary
 
-This is a bounded implementation plan, not implemented distribution, rotation or
-deployment evidence. The local identity client, issuer worker and caller work
-do not install a workload CA into ingress trust. N04 and production acceptance
-remain open. No trust files, keys, policies or running services were changed
-for this plan.
+The [independently authorized publisher and standard Rust startup admission](workload-identity-trust-distribution.md)
+now connect the initial single-issuer profile in source. They remain unbuilt,
+unexecuted and unprovisioned; this is not rotation or deployment evidence.
+The local identity client and issuer still do not install workload trust.
+N04 and production acceptance remain open. No deployed trust files, keys,
+policies or running services were changed for this source work.
 
 ## Existing source and distinct pins
 
@@ -39,17 +40,29 @@ the proxy has loaded that issuer.
 
 ## Chosen initial implementation
 
-Implement independently authorized, immutable **public bundle publication and
-explicit startup/restart admission**, using the existing standard ingress
-snapshot boundary. Do not describe an unimplemented hot swap as available.
-The publisher/admitter must join:
+The initial source connects independently authorized, immutable **public bundle
+publication and explicit startup/restart admission**, using the existing
+standard ingress snapshot boundary. No live trust replacement is implemented.
+The publisher/admitter joins:
 
 - The genuine configured workload issuer CA original and its DER/SPKI identity.
 - The exact independently authorized PEM bundle contents and resulting digest.
 - The signed principal SAN and issuer-SPKI selectors, plus the client-held
-  issuer trust needed to admit the issued certificate.
+  issuer identity needed to admit the issued certificate. Client-facing loaded
+  trust-pin/enrollment integration is still separate remaining work.
 - The actual restarted ingress's retained bundle digest and mandatory mTLS
-  profile, rather than merely the desired file or policy configuration.
+  profile, rather than merely the desired file or policy configuration. Actual
+  restarted behavior still requires later frozen-source execution evidence.
+
+The authorization's configuration scope binds the actual running binary rather
+than a self-referential runtime-manifest digest. It also binds the loaded server
+key, independently selected deployment ID, exact bundle and signed policy hash.
+The source verifies the actual policy key's separation from the trust authorizer.
+Its complete mTLS principal inventory is bounded to 64 canonical ASCII entries
+and every issuer selector must match the one authorized CA. Original trust
+authority lasts at most 24 hours, within CA validity; processing uses a separate
+bounded original window. Neither policy refresh nor artifact republication
+renews that original authority.
 
 The worker's CA private key and the grant authorizer remain outside this public
 distribution operation. Neither a CSR, issuance reply, CA-install capability

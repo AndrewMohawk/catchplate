@@ -1227,6 +1227,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_release_grant_issuer_launcher.py \
 	serverware/oidc_session_activation_release_grant_issuer_runner.py \
 	serverware/workload_identity_issuance_authorization.py \
+	serverware/workload_identity_trust_authorization.py \
+	serverware/workload_identity_trust_publication.py \
+	scripts/publish_workload_identity_trust.py \
 	serverware/workload_identity_issuer_bootstrap.py \
 	serverware/workload_identity_issuer_entrypoint.py \
 	serverware/workload_identity_issuer_startup.py \
@@ -3471,6 +3474,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_release_grant_issuer_launcher.py \
 				serverware/oidc_session_activation_release_grant_issuer_runner.py \
 				serverware/workload_identity_issuance_authorization.py \
+				serverware/workload_identity_trust_authorization.py \
+				serverware/workload_identity_trust_publication.py \
+				scripts/publish_workload_identity_trust.py \
 				serverware/workload_identity_issuer_bootstrap.py \
 				serverware/workload_identity_issuer_entrypoint.py \
 				serverware/workload_identity_issuer_startup.py \
@@ -3639,6 +3645,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/Dockerfile \
 				data-plane/decision-gate-rs/Dockerfile.production \
 				data-plane/decision-gate-rs/Cargo.lock \
+				data-plane/decision-gate-rs/src/workload_identity_trust.rs \
+				data-plane/decision-gate-rs/src/workload_identity_trust_crypto.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
 				ops/systemd/serverware-launch-authority-relay.socket \

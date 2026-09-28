@@ -19,6 +19,8 @@ mod native_startup;
 mod native_startup_config;
 mod native_public_identity;
 mod native_ingress_attestation;
+mod workload_identity_trust;
+mod workload_identity_trust_crypto;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};
@@ -765,6 +767,7 @@ struct Snapshot {
     trust_generation: u64,
     compiled_behavior_sha256: String,
     policy_signing_key_id: String,
+    policy_verifying_key: VerifyingKey,
     response_verifying_key: Option<VerifyingKey>,
     response_signing_key_id: Option<String>,
     attested_response_context: Option<AttestedResponseContext>,
@@ -956,6 +959,8 @@ struct TrustedMtlsEvidence {
 struct ProxyIngressTlsConfig {
     server_config: Arc<ServerConfig>,
     client_trust_certificates: Arc<Vec<CertificateDer<'static>>>,
+    client_trust_bundle_original: Option<Arc<[u8]>>,
+    workload_identity_trust: Option<Arc<workload_identity_trust::AdmittedTrust>>,
     native_owner: Option<Arc<QuotedMutualTlsIngressV1>>,
 }
 
@@ -974,6 +979,7 @@ struct ProxyIngressAttestation {
     server_leaf_spki_sha256: Option<String>,
     server_certificate_chain_sha256: Option<String>,
     client_trust_bundle_sha256: Option<String>,
+    workload_identity_trust: Option<Arc<workload_identity_trust::AdmittedTrust>>,
 }
 
 impl ProxyIngressAttestation {
@@ -986,6 +992,7 @@ impl ProxyIngressAttestation {
             "server_leaf_spki_sha256":self.server_leaf_spki_sha256,
             "server_certificate_chain_sha256":self.server_certificate_chain_sha256,
             "client_trust_bundle_sha256":self.client_trust_bundle_sha256,
+            "workload_identity_trust":self.workload_identity_trust.as_ref().map(|trust| trust.public_value()),
             "request_headers_are_mtls_evidence":false,
         })
     }
@@ -14823,6 +14830,7 @@ fn compile_signed_snapshot_with_expected_key(
         trust_generation: 0,
         compiled_behavior_sha256,
         policy_signing_key_id: signing_key_id,
+        policy_verifying_key: trust_root.verifying_key,
         response_verifying_key: trust_root.response_verifying_key,
         response_signing_key_id: trust_root.response_signing_key_id,
         attested_response_context,
@@ -14998,7 +15006,8 @@ fn current_snapshot(state: &GateState) -> Arc<Snapshot> {
 }
 
 fn policy_trust_is_fresh(state: &GateState) -> bool {
-    !matches!(
+    state.proxy_ingress_attestation.workload_identity_trust.as_ref()
+        .map_or(true, |trust| trust.is_live()) && (!matches!(
         state.policy_trust_root_source,
         PolicyTrustRootSource::AttestedControlPlane { .. }
     ) || state
@@ -15006,10 +15015,14 @@ fn policy_trust_is_fresh(state: &GateState) -> bool {
         .lock()
         .expect("policy trust last-success mutex poisoned")
         .elapsed()
-        <= POLICY_TRUST_MAX_AGE
+        <= POLICY_TRUST_MAX_AGE)
 }
 
 fn policy_trust_supports_publication_window(state: &GateState, window: Duration) -> bool {
+    if state.proxy_ingress_attestation.workload_identity_trust.as_ref()
+        .is_some_and(|trust| !trust.supports_window(window)) {
+        return false;
+    }
     if !matches!(
         state.policy_trust_root_source,
         PolicyTrustRootSource::AttestedControlPlane { .. }
@@ -15147,6 +15160,9 @@ fn clear_local_grants_if_signed_policy_changed(
 }
 
 fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, String> {
+    if let Some(trust) = &state.proxy_ingress_attestation.workload_identity_trust {
+        trust.require_live()?;
+    }
     let (mtime, evidence_mtimes) = if state.native_policy_bytes.is_some() {
         (None, (None, None))
     } else {
@@ -15189,6 +15205,20 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
     };
     match loaded {
         Ok(mut snapshot) => {
+            if let Some(trust) = &state.proxy_ingress_attestation.workload_identity_trust {
+                if let Err(err) = trust.check_snapshot(&snapshot) {
+                    state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
+                    enqueue_audit(state, "data_plane.policy.reload_failed", json!({
+                        "component":"serverware-decision-gate-rs", "error":err.clone(),
+                        "candidate_policy_id":snapshot.policy_id,
+                        "candidate_sequence":snapshot.policy_sequence,
+                        "candidate_rollback_epoch":snapshot.rollback_epoch,
+                    }));
+                    // Do not poison the retained authorization merely because
+                    // a changed policy needs a separately authorized restart.
+                    return Err(err);
+                }
+            }
             if let Err(err) = validate_response_proof_signer_policy_binding(
                 &snapshot,
                 &state.response_proof_signer,
@@ -15260,6 +15290,9 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 return Err(err);
             }
             let high_water_update = (|| -> Result<(), String> {
+                if let Some(trust) = &state.proxy_ingress_attestation.workload_identity_trust {
+                    trust.check_snapshot(&snapshot)?;
+                }
                 let mut high_water = state
                     .policy_high_water
                     .lock()
@@ -15288,6 +15321,9 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     }),
                 );
                 return Err(err);
+            }
+            if let Some(trust) = &state.proxy_ingress_attestation.workload_identity_trust {
+                trust.check_snapshot(&snapshot)?;
             }
             let next = Arc::new(snapshot);
             *state
@@ -48268,6 +48304,62 @@ fn establish_direct_listener_stream(
     establish_gate_listener_stream(GateSocket::Tcp(stream), state, management_listener, proxy_ingress)
 }
 
+fn require_workload_ingress_trust(
+    state: &GateState,
+    ingress: &ProxyIngressConfig,
+) -> Result<(), String> {
+    let retained = state.proxy_ingress_attestation.workload_identity_trust.as_ref();
+    match ingress {
+        ProxyIngressConfig::DevelopmentRaw if retained.is_none() => Ok(()),
+        ProxyIngressConfig::MutualTls(config) => match (retained, config.workload_identity_trust.as_ref()) {
+            (None, None) => Ok(()),
+            (Some(expected), Some(actual)) if Arc::ptr_eq(expected, actual) => actual.check_ingress(config),
+            _ => Err("workload ingress lost its exact retained trust admission".to_owned()),
+        },
+        _ => Err("workload trust cannot use development raw ingress".to_owned()),
+    }
+}
+
+// Borrow only the actual handshake socket. The TLS configuration and its
+// source-owned guard stay separate, with checks around each native I/O call.
+struct WorkloadTrustHandshakeIo<'a> {
+    inner: &'a mut DeadlineIo<GateSocket>,
+    state: &'a GateState,
+    ingress: &'a ProxyIngressConfig,
+}
+
+impl WorkloadTrustHandshakeIo<'_> {
+    fn current(&self) -> io::Result<()> {
+        require_workload_ingress_trust(self.state, self.ingress)
+            .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))
+    }
+}
+
+impl Read for WorkloadTrustHandshakeIo<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.current()?;
+        let result = self.inner.read(buffer);
+        self.current()?;
+        result
+    }
+}
+
+impl Write for WorkloadTrustHandshakeIo<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.current()?;
+        let result = self.inner.write(buffer);
+        self.current()?;
+        result
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.current()?;
+        let result = self.inner.flush();
+        self.current()?;
+        result
+    }
+}
+
 fn establish_gate_listener_stream(
     stream: GateSocket,
     state: &GateState,
@@ -48280,6 +48372,7 @@ fn establish_gate_listener_stream(
         && (management_listener || !matches!(proxy_ingress, ProxyIngressConfig::MutualTls(_))) {
         return Err("vsock proxy requires mutual TLS and cannot serve management".to_owned());
     }
+    require_workload_ingress_trust(state, proxy_ingress)?;
     let deadline_stream = DeadlineIo::new(
         stream,
         state.request_head_deadline,
@@ -48295,10 +48388,14 @@ fn establish_gate_listener_stream(
         .map_err(|_| "initialize outer proxy TLS connection".to_string())?;
     let mut tls = StreamOwned::new(connection, deadline_stream);
     while tls.conn.is_handshaking() {
+        require_workload_ingress_trust(state, proxy_ingress)?;
+        let mut guarded = WorkloadTrustHandshakeIo { inner: &mut tls.sock, state, ingress: proxy_ingress };
         tls.conn
-            .complete_io(&mut tls.sock)
+            .complete_io(&mut guarded)
             .map_err(|_| "complete outer proxy TLS handshake".to_string())?;
+        require_workload_ingress_trust(state, proxy_ingress)?;
     }
+    require_workload_ingress_trust(state, proxy_ingress)?;
     if tls.conn.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
         return Err("outer proxy TLS did not negotiate TLS 1.3".to_string());
     }
@@ -48310,6 +48407,7 @@ fn establish_gate_listener_stream(
         peer_certificates,
         config.client_trust_certificates.as_ref(),
     )?;
+    require_workload_ingress_trust(state, proxy_ingress)?;
     tls.sock.reset_read_deadline(state.request_head_deadline);
     tls.sock.reset_write_deadline(state.response_write_deadline);
     Ok((DirectProxyStream::MutualTls(tls), Some(evidence)))
@@ -48352,6 +48450,12 @@ fn handle_gate_connection(
             return;
         }
     };
+    if require_workload_ingress_trust(&state, &proxy_ingress).is_err() {
+        let response = http_response("403 Forbidden", json!({"error":"workload_ingress_trust_unavailable"}));
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    }
     // Public routes, including native /attestation, bypass principal lookup.
     // They still require any authenticated transport evidence to remain live.
     if trusted_mtls_evidence.as_ref()
@@ -49440,11 +49544,14 @@ fn materialize_native_proxy_ingress(
         server_leaf_spki_sha256: Some(sha256_prefixed(tls.leaf_public_key_spki_der())),
         server_certificate_chain_sha256: Some(format!("sha256:{}", hex::encode(chain_digest.finalize()))),
         client_trust_bundle_sha256: Some(format!("sha256:{}", hex::encode(tls.client_trust_sha256()))),
+        workload_identity_trust: None,
     };
     let config = ProxyIngressConfig::MutualTls(Arc::new(ProxyIngressTlsConfig {
         server_config: tls.server_config(),
         client_trust_certificates: Arc::new(tls.client_trust_certificates().iter()
             .cloned().map(CertificateDer::from).collect()),
+        client_trust_bundle_original: None,
+        workload_identity_trust: None,
         native_owner: None,
     }));
     ingress.verify_live(deadline)?;
@@ -49472,6 +49579,7 @@ fn serve_native_vsock_proxy(
 
 fn load_proxy_ingress_config(
     is_production: bool,
+    workload_trust_configured: bool,
 ) -> Result<(ProxyIngressConfig, ProxyIngressAttestation), String> {
     let mode = env::var("SERVERWARE_PROXY_INGRESS_MODE")
         .unwrap_or_else(|_| {
@@ -49485,9 +49593,9 @@ fn load_proxy_ingress_config(
         return Err("SERVERWARE_PROXY_INGRESS_MODE is not canonical".to_string());
     }
     if mode == "development-raw" {
-        if is_production {
+        if is_production || workload_trust_configured {
             return Err(
-                "production forbids development-raw proxy ingress and requires mTLS"
+                "production or configured workload trust requires mTLS proxy ingress"
                     .to_string(),
             );
         }
@@ -49512,6 +49620,7 @@ fn load_proxy_ingress_config(
                 server_leaf_spki_sha256: None,
                 server_certificate_chain_sha256: None,
                 client_trust_bundle_sha256: None,
+                workload_identity_trust: None,
             },
         ));
     }
@@ -49539,7 +49648,8 @@ fn load_proxy_ingress_config(
     let client_ca_bytes = read_proxy_tls_file_snapshot(
         &client_ca_path,
         "proxy TLS client CA bundle",
-        MAX_PROXY_TLS_CLIENT_CA_BUNDLE_BYTES,
+        if workload_trust_configured { workload_identity_trust::MAX_BUNDLE }
+            else { MAX_PROXY_TLS_CLIENT_CA_BUNDLE_BYTES },
         false,
     )?;
     let certificate_chain = CertificateDer::pem_slice_iter(&certificate_bytes)
@@ -49587,11 +49697,14 @@ fn load_proxy_ingress_config(
         )),
         server_certificate_chain_sha256: Some(sha256_prefixed(&certificate_bytes)),
         client_trust_bundle_sha256: Some(sha256_prefixed(&client_ca_bytes)),
+        workload_identity_trust: None,
     };
     Ok((
         ProxyIngressConfig::MutualTls(Arc::new(ProxyIngressTlsConfig {
             server_config: Arc::new(server_config),
             client_trust_certificates: Arc::new(client_trust_certificates),
+            client_trust_bundle_original: Some(Arc::from(client_ca_bytes)),
+            workload_identity_trust: None,
             native_owner: None,
         })),
         attestation,
@@ -50077,6 +50190,7 @@ fn start_response_proof_custody_health_probe(state: Arc<GateState>) -> Result<()
 
 fn main() -> Result<(), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    workload_identity_trust::reject_native_namespace()?;
     if native_startup_config::run_from_process_arguments()?.is_some() {
         return Ok(());
     }
@@ -50084,8 +50198,9 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|_| "/data/policy-bundle.json".to_string());
     let release_channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();
     let is_production = production_mode(release_channel.as_deref());
-    let (proxy_ingress, proxy_ingress_attestation) =
-        load_proxy_ingress_config(is_production)?;
+    let pending_workload_trust = workload_identity_trust::prepare(is_production)?;
+    let (mut proxy_ingress, mut proxy_ingress_attestation) =
+        load_proxy_ingress_config(is_production, pending_workload_trust.is_some())?;
     let allow_insecure_dev_credential_leases =
         env::var("SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES").as_deref() == Ok("1");
     if is_production && allow_insecure_dev_credential_leases {
@@ -50605,6 +50720,18 @@ fn main() -> Result<(), String> {
         is_production,
         atomic_release_authorization_enabled,
     )?;
+    if let Some(pending) = pending_workload_trust {
+        let ProxyIngressConfig::MutualTls(config) = &mut proxy_ingress else {
+            return Err("workload trust requires actual mutual TLS ingress".to_owned());
+        };
+        let bundle = config.client_trust_bundle_original.as_ref()
+            .map(Arc::clone).ok_or("workload trust lost its loaded CA original")?;
+        let trust = pending.admit(&initial_snapshot, &binary_digest, config,
+            &proxy_ingress_attestation, bundle)?;
+        Arc::get_mut(config).ok_or("workload ingress configuration was shared before admission")?
+            .workload_identity_trust = Some(Arc::clone(&trust));
+        proxy_ingress_attestation.workload_identity_trust = Some(trust);
+    }
     if let Some(control) =
         policy_shadow_generation_control.as_ref()
     {
@@ -50623,6 +50750,9 @@ fn main() -> Result<(), String> {
         )?;
     let response_observation_v2_probe =
         response_observation_v2_client.clone();
+    if let Some(trust) = &proxy_ingress_attestation.workload_identity_trust {
+        trust.check_snapshot(&initial_snapshot)?;
+    }
     let policy_high_water = initialize_policy_high_water_after_response_proof_binding(
         &initial_snapshot,
         &response_proof_signer,
@@ -50773,12 +50903,15 @@ fn main() -> Result<(), String> {
         audit_enabled(&state)
     );
     let management_state = Arc::clone(&state);
+    // Management remains its existing plaintext authenticated listener, but
+    // retains the same admitted ingress authority for current-request guards.
+    let management_ingress = proxy_ingress.clone();
     thread::spawn(move || {
         if let Err(err) = serve_listener(
             management_listener,
             management_state,
             true,
-            ProxyIngressConfig::DevelopmentRaw,
+            management_ingress,
             management_workers,
             management_queue_capacity,
         ) {
@@ -51731,6 +51864,7 @@ mod tests {
             compiled_behavior_sha256:
                 format!("sha256:{:064x}", epoch.max(1)),
             policy_signing_key_id: "sha256:policy-key".to_string(),
+            policy_verifying_key: SigningKey::from_bytes(&[7u8; 32]).verifying_key(),
             response_verifying_key: None,
             response_signing_key_id: None,
             attested_response_context: None,
@@ -52050,6 +52184,7 @@ mod tests {
                 server_leaf_spki_sha256: None,
                 server_certificate_chain_sha256: None,
                 client_trust_bundle_sha256: None,
+                workload_identity_trust: None,
             },
             mitm_authority: None,
             leaf_configs: Mutex::new(HashMap::new()),

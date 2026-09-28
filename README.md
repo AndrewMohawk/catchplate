@@ -26,13 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: historical recovery
 
-[`.222` historical completion recovery](https://github.com/example/private-deployment)
-extends [activation recovery targets](https://github.com/example/private-deployment)
-through original-control verification, durable responses and genuine completion
-receiving. Archived keys and expectations stay separate from current permission
-and service endpoints.
-**H05 remains in progress:** fresh consume/proof/grant/release authority and
-explicit older-source replay are still open.
+[`.223` historical consume-input bridge](https://github.com/example/private-deployment)
+builds on [historical completion recovery](https://github.com/example/private-deployment).
+It separates old evidence keys from current input-issuance authority and requires
+identical authenticated state contents. The normal-auth configuration is unchanged.
+This connects input production and worker intake, **not the complete recovery
+action**: protected planner/caller integration remains open and the historical
+effect actor stays disabled. H05 also retains fresh proof/grant/release authority
+and explicit older-source replay work.
 [Details and remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation

@@ -342,6 +342,9 @@ class CustodyJournal:
         # The guarded completion path shares the existing recovery-policy slot,
         # but only this exact work may publish after its own successful claim.
         self._completion_retained_grant_live_claims = {}
+        # A fresh completion continuation may publish only this work's fixed
+        # inputs/prepared/exported sequence. Restart never restores it.
+        self._completion_consume_live_claims = {}
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -2099,7 +2102,25 @@ class CustodyJournal:
                 and response[3:] == (claim.finalization_digest, "consume", recovered.authorization_digest,
                     recovered.packet_digest, recovered.recovery_configuration_digest,
                     recovered.predecessor_completion_digest))
-        if ("completion-outcome" not in activation
+        activation_reconciled = False
+        if "completion-outcome" not in activation:
+            activation_slot = completion_recovery._slot_digest(claim.finalization_digest, "activation")
+            recovered = self._completion_recovery_claims.get(activation_slot)
+            response = self._completion_recovery_responses.get(activation_slot)
+            activation_reconciled = (
+                all(kind in activation for kind in ("prepared", "grant", "reserved", "sql-claimed"))
+                and type(recovered) is completion_recovery.CompletionRecoveryRecord
+                and recovered.kind == "claimed" and recovered.originals == ()
+                and recovered.slot_digest == activation_slot
+                and recovered.finalization_digest == claim.finalization_digest and recovered.phase == "activation"
+                and recovered.source_revision == claim.source_revision
+                and recovered.authorization_digest == claim.activation_authorization_digest
+                and recovered.predecessor_completion_digest is None
+                and type(response) is tuple and len(response) == 9
+                and response[0] == recovered.source_revision
+                and response[3:] == (claim.finalization_digest, "activation", recovered.authorization_digest,
+                    recovered.packet_digest, recovered.recovery_configuration_digest, None))
+        if (("completion-outcome" not in activation and not activation_reconciled)
                 or predecessor.source_revision != claim.source_revision
                 or len(by_kind) > len(consume_records.KINDS) - 1
                 or not (normal_prefix or recovery_prefix)
@@ -2196,6 +2217,221 @@ class CustodyJournal:
             except BaseException:
                 self._io.poison()
                 raise
+
+    def _completion_consume_inventory(self, target, reconciliation_digest, current):
+        inventory = self._completion_control_inventory(target, "activation", current)
+        if inventory is None:
+            return None
+        activation, _unused, stages, controls = inventory
+        selected = [(position, name, self._file_identities[name], decoder)
+            for position, name, decoder in controls if position != 7 or reconciliation_digest is None]
+        if reconciliation_digest is None:
+            if "completion-outcome" not in stages:
+                return None
+        else:
+            recovery_slot = completion_recovery._slot_digest(target, "activation")
+            if (recovery_slot not in self._completion_recovery_claims
+                    or recovery_slot not in self._completion_recovery_responses):
+                return None
+            self._completion_recovery_scope(recovery_slot)
+            for index, kind in enumerate(completion_recovery.KINDS):
+                name = _name(completion_recovery.FILE_KINDS[index], recovery_slot)
+                identity = self._file_identities.get(name)
+                self._completion_history_metadata(name, completion_recovery._maximum("activation", kind), identity, current)
+                if kind == "response" and identity[6] != self._completion_recovery_responses[recovery_slot][2]:
+                    raise CustodyJournalError("consume continuation reconciliation size changed")
+                selected.append(("reconciliation-" + kind, name, identity, completion_recovery.decode))
+        previous_slot = self._consume_targets.get(target)
+        consume, consume_stages = None, {}
+        if previous_slot is not None:
+            consume_stages = self._consume_records.get(previous_slot, {})
+            consume = self._consume_scope(previous_slot, consume_stages)
+            name = _name("activation-consume-claimed", previous_slot)
+            identity = self._file_identities.get(name)
+            self._completion_history_metadata(name, consume_records.MAX_CLAIM_BYTES, identity, current)
+            selected.append(("consume-claimed", name, identity, consume_records.decode))
+            for kind in consume_records.KINDS[1:]:
+                name = _name("activation-consume-" + kind, previous_slot)
+                if (name in self._file_identities) != (kind in consume_stages):
+                    raise CustodyJournalError("consume continuation stage file inventory differs")
+                if kind in consume_stages:
+                    identity = self._file_identities[name]
+                    self._completion_history_metadata(name, consume_records._maximum(kind), identity, current)
+                    if identity[6] != consume_stages[kind][2]:
+                        raise CustodyJournalError("consume continuation stage size differs")
+        return activation, stages, consume, consume_stages, tuple(selected)
+
+    def _completion_consume_operation(self, *, finalization_digest, activation_authorization_digest,
+            activation_completion_originals, reconciliation_digest, work, current,
+            maximum_original_bytes, kind, originals=()):
+        """One guarded existing consume slot; opaque replies grant no execution."""
+        from serverware.authority_query_read_work import _ValidationWork
+        from serverware import authority_oidc_session_activation_execution_authorization as authorization
+
+        target, authorization_digest = _digest(finalization_digest), _digest(activation_authorization_digest)
+        slot = consume_records._slot_digest(target, authorization_digest)
+        if reconciliation_digest is not None:
+            reconciliation_digest = _digest(reconciliation_digest)
+        completed = completion_recovery._originals("activation", activation_completion_originals)
+        activation_records.completion._originals(completed, response=True)
+        if completed[0] != b"acknowledged":
+            raise CustodyJournalError("consume continuation requires acknowledged activation completion DATA")
+        if type(kind) is not str or kind not in ("claimed", "inputs", "prepared", "exported"):
+            raise CustodyJournalError("consume continuation publication kind is not source fixed")
+        held = consume_records._originals(consume_records._profile(kind), originals)
+        publication_bytes = 3 * (consume_records._MAX_HEADER_BYTES + 8 * len(held) + sum(map(len, held)))
+        maximum = completion_recovery.MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
+        _integer(maximum, minimum=0, maximum=completion_recovery.MAX_ORIGINAL_BYTES,
+            label="consume continuation remaining original capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("consume continuation requires original work and resource guard")
+        work.charge(json_nodes=512)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            try:
+                inventory = self._completion_consume_inventory(target, reconciliation_digest, current)
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if inventory is None:
+                raise CustodyJournalError("consume continuation acknowledged activation history is unavailable")
+            activation, stages, consume, consume_stages, selected = inventory
+            total = sum(item[2][6] for item in selected)
+            if 3 * total + publication_bytes + consume_records.COMPLETION_RECOVERY_METADATA_BYTES > maximum:
+                raise CustodyJournalError("consume continuation exceeds remaining preallocation capacity")
+            scans = 3 * (len(self._file_identities) + 1)
+            work.charge(input_bytes=3 * total + len(selected) + publication_bytes + scans * 512,
+                hashes=2 * len(selected) + 17, json_nodes=scans * 16)
+            loaded = {}
+            try:
+                for label, name, identity, decoder in selected:
+                    raw = self._read_completion_history_file(name, identity, current)
+                    record = decoder(raw)
+                    if label == 0:
+                        valid = record == activation
+                    elif label == "consume-claimed":
+                        valid = record == consume
+                    elif label == "reconciliation-claimed":
+                        recovery_slot = completion_recovery._slot_digest(target, "activation")
+                        valid = record == self._completion_recovery_claims[recovery_slot]
+                    elif label == "reconciliation-response":
+                        recovery_slot = completion_recovery._slot_digest(target, "activation")
+                        valid = (record.slot_digest == recovery_slot and record.kind == "response"
+                            and self._completion_recovery_response_metadata(record, len(raw))
+                            == self._completion_recovery_responses[recovery_slot])
+                    else:
+                        stage = {2: "prepared", 5: "grant", 6: "reserved", 7: "completion-outcome", 9: "sql-claimed"}[label]
+                        valid = (record.finalization_digest == target and record.kind == stage
+                            and (record.source_revision, record.digest, len(raw)) == stages[stage])
+                    if not valid:
+                        raise CustodyJournalError("consume continuation original association changed")
+                    loaded[label] = record
+                    del raw
+                    current()
+                refreshed = self._completion_consume_inventory(target, reconciliation_digest, current)
+                if refreshed is None or refreshed[4] != selected:
+                    raise CustodyJournalError("consume continuation immutable inventory changed")
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if reconciliation_digest is None:
+                retained = loaded[7].originals
+            else:
+                response = loaded["reconciliation-response"]
+                if (response.digest != reconciliation_digest
+                        or response.authorization_digest != authorization_digest):
+                    raise CustodyJournalError("consume continuation reconciliation locator or caller differs")
+                retained = response.originals
+            if retained != completed:
+                raise CustodyJournalError("consume continuation completion differs from retained acknowledged DATA")
+            actual_authorization = consume_records._framed_digest(
+                authorization.REQUEST_IDENTITY_DOMAIN, (loaded[2].originals[0],))
+            current()
+            if actual_authorization != authorization_digest:
+                raise CustodyJournalError("consume continuation caller differs from the retained original")
+            if activation.source_revision != consume_records.authority.SOURCE_REVISION:
+                raise CustodyJournalError("consume continuation cannot migrate a different source cohort")
+            if kind == "claimed":
+                if consume is not None:
+                    raise CustodyJournalError("consume target was already claimed; acquisition cannot repeat")
+            else:
+                saved = self._completion_consume_live_claims.get(slot)
+                required = {"inputs": set(), "prepared": {"inputs"}, "exported": {"inputs", "prepared"}}[kind]
+                if (consume is None or consume.slot_digest != slot
+                        or consume.activation_authorization_digest != authorization_digest
+                        or saved is None or saved[0] is not work or saved[1:] != (reconciliation_digest, kind)
+                        or set(consume_stages) != required
+                        or (kind == "exported" and consume_stages["prepared"][3] != b"prepared")):
+                    raise CustodyJournalError("consume continuation lacks this work's exact next-stage claim")
+            record, encoded = consume_records.encode(kind, finalization_digest=target,
+                activation_authorization_digest=authorization_digest, originals=held,
+                source_revision=activation.source_revision)
+            logical = (len(self._entries) + len(self._release_attempts) + len(self._activation_dispatch_attempts)
+                + len(self._consume_claims) + len(self._recovery_grant_claims) + len(self._completion_recovery_claims))
+            if ((kind == "claimed" and logical >= self._maximum_records)
+                    or len(self._file_identities) >= self._physical_limit()
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("consume continuation journal capacity is exhausted")
+            try:
+                self._publish_guarded_completion_name(_name("activation-consume-" + kind, slot), encoded, current)
+                self._used_bytes += len(encoded)
+                if kind == "claimed":
+                    self._consume_claims[slot] = record
+                    self._consume_targets[target] = slot
+                else:
+                    self._consume_records.setdefault(slot, {})[kind] = (
+                        record.source_revision, record.digest, len(encoded),
+                        record.originals[0] if kind in ("prepared", "exported") else b"")
+                self._consume_scope(slot, self._consume_records.get(slot, {}))
+                self._require_ready()
+                current()
+                if kind == "exported":
+                    del self._completion_consume_live_claims[slot]
+                else:
+                    following = {"claimed": "inputs", "inputs": "prepared", "prepared": "exported"}[kind]
+                    self._completion_consume_live_claims[slot] = (work, reconciliation_digest, following)
+                return slot if kind == "claimed" else record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def claim_oidc_session_activation_completion_recovery_consume_attempt(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            work, current, maximum_original_bytes=None):
+        return self._completion_consume_operation(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="claimed")
+
+    def append_oidc_session_activation_completion_recovery_consume_inputs(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        return self._completion_consume_operation(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="inputs", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_prepared(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        return self._completion_consume_operation(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="prepared", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_exported(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        return self._completion_consume_operation(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="exported", originals=originals)
 
     def _append_consume_record(self, *, finalization_digest,
             activation_authorization_digest, kind, originals):

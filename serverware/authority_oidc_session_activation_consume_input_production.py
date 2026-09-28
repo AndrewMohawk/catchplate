@@ -294,8 +294,26 @@ def _activation_controls(raw, expected, before, policy, root, lifetime, work):
     return arguments, activation_scope, after
 
 
+def _derivation_reservation(request_lengths, policy_bytes, activation_bytes):
+    """Length-only capture inventory, before decoding any candidate original.
+
+    Signing output is a separate producer-only reservation. Read-only receiving
+    still holds the historical captures, wrapped request and canonical graphs.
+    This bounds source-defined representations, not interpreter heap overhead.
+    """
+    if (type(request_lengths) is not tuple or len(request_lengths) != 16
+            or type(policy_bytes) is not int or not 2 <= policy_bytes <= issuer.MAX_BYTES
+            or type(activation_bytes) is not int
+            or not 2 <= activation_bytes <= issuer.MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES):
+        _fail("consume input derivation requires bounded original lengths")
+    transport._request_lengths((len(transport.PURPOSE), *request_lengths))
+    return (16 * activation_bytes + 8 * (sum(request_lengths) + policy_bytes)
+        + 8 * history.MAX_CONSUME_REQUEST_BYTES + 8 * state.vector.MAX_BYTES + 64 * 1024)
+
+
 def _derive_on_work(*, request_originals, issuer_policy_bytes, activation_planner_bootstrap_bytes,
-        root_public_key, live_window, transport_deadline_ns, work, _continuity=None):
+        root_public_key, live_window, transport_deadline_ns, work, _continuity=None,
+        _additional_original_bytes=0):
     """Re-admit originals and derive payloads; no signing key or result ingress.
 
     The returned private lifetime and payload data are same-call outputs only.
@@ -313,8 +331,11 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, activation_planne
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(window[4], transport_deadline_ns)
     total = sum(map(len, request)) + len(policy_raw) + len(activation_raw)
-    if total + _OUTPUT_RESERVATION + transport.REQUEST_HEADER_BYTES > MAX_ORIGINAL_BYTES:
-        _fail("consume input complete originals and derived output inventory exceeds 64 MiB")
+    reservation = _derivation_reservation(tuple(map(len, request)), len(policy_raw), len(activation_raw))
+    if (type(_additional_original_bytes) is not int
+            or not 0 <= _additional_original_bytes < MAX_ORIGINAL_BYTES
+            or _additional_original_bytes + reservation > MAX_ORIGINAL_BYTES):
+        _fail("consume input held and derived original inventory exceeds 64 MiB")
     capture._SharedLedger(work)
     work.charge(input_bytes=total + transport.REQUEST_HEADER_BYTES)
     authorization._public(root)
@@ -331,7 +352,7 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, activation_planne
     lifetime.adopt(policy.live_window, policy.deadline_ns)
     material = policy.activation_planner
     embedded = len(material.complete_root_vector_bytes) + len(material.state_enrollment_bytes)
-    if total + embedded + _OUTPUT_RESERVATION + 2 * len(activation_raw) > MAX_ORIGINAL_BYTES:
+    if total + embedded + 2 * len(activation_raw) > reservation:
         _fail("consume input decoded and wrapped originals exceed the held inventory")
     work.charge(input_bytes=embedded)
     issued = policy.payload["issuedAtEpochNs"]
@@ -419,7 +440,8 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, activation_plann
     policy, lifetime, history_payload, planner_payload = _derive_on_work(
         request_originals=request_originals, issuer_policy_bytes=issuer_policy_bytes,
         activation_planner_bootstrap_bytes=activation_planner_bootstrap_bytes, root_public_key=root,
-        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity)
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+        _continuity=_continuity, _additional_original_bytes=_OUTPUT_RESERVATION)
     current = lifetime.current
     current()
     keys._pair_on_work(private, root, work)

@@ -33,6 +33,9 @@ DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recovery/releas
 RETAINED_DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1"
 RETAINED_DELIVERY_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryOptions/v1"
 RETAINED_DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recovery/retained-release"
+CONSUME_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryConsumeIntent/v1"
+CONSUME_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryConsumeOptions/v1"
+CONSUME_PATH = "/api/auth/session/activation/completion/recovery/consume"
 
 
 def _configuration(owner, profile):
@@ -110,6 +113,11 @@ class _CompletionActorScope(actor._ActorScope):
             # Retained-outcome authority is a separate fresh action, never a
             # fallback selected by a LIVE failure or preparation permission.
             self._binding["schema"] = RETAINED_DELIVERY_SCHEMA
+            self._binding["recoveryPurpose"] = purpose
+        elif purpose == "consume":
+            # Fresh consume continuation from acknowledged activation is not
+            # activation execution permission or a completion-only assertion.
+            self._binding["schema"] = CONSUME_SCHEMA
             self._binding["recoveryPurpose"] = purpose
         self._binding_pin = actor._snapshot(self._binding, work)
         self._payload_digest = None
@@ -190,7 +198,7 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
 
     actor._request(request, recovery_bytes)
     if (type(_purpose) is not str
-            or _purpose not in ("completion", "release-intent-proof", "release", "retained-release")
+            or _purpose not in ("completion", "release-intent-proof", "release", "retained-release", "consume")
             or type(_additional_original_bytes) is not int
             or not 0 <= _additional_original_bytes < history.MAX_ORIGINAL_BYTES):
         actor._deny("completion recovery purpose or held capacity differs", 503)
@@ -206,6 +214,12 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
                 or request.scope.get("path") != path
                 or request.scope.get("query_string", b"") != b""):
             actor._deny("completion recovery purpose requires its distinct fixed action", 400)
+    elif _purpose == "consume":
+        path = CONSUME_PATH + "/options" if options else CONSUME_PATH
+        if (profile != "activation" or request.method != "POST"
+                or request.scope.get("path") != path
+                or request.scope.get("query_string", b"") != b""):
+            actor._deny("fresh consume requires its fixed activation-profile action", 400)
     if (type(owner) is not startup._EnrollmentOwner or _ACTIVE is not None
             or actor._ACTIVE is not None or owner._activation_permission is not None):
         actor._deny("completion recovery requires a non-overlapping actual owner", 409)
@@ -320,6 +334,9 @@ def _options_on_owner(owner, *, profile, request, recovery_bytes, live_window,
                     result["recoveryPurpose"] = _purpose
                 elif _purpose == "retained-release":
                     result["schema"] = RETAINED_DELIVERY_OPTIONS_SCHEMA
+                    result["recoveryPurpose"] = _purpose
+                elif _purpose == "consume":
+                    result["schema"] = CONSUME_OPTIONS_SCHEMA
                     result["recoveryPurpose"] = _purpose
                 scope.current()
             scope._guard()

@@ -42,7 +42,7 @@ class _InputMaterial:
 
 def _verify_on_work(*, response_originals, request_originals, issuer_policy_bytes,
         activation_planner_bootstrap_bytes, root_public_key, live_window,
-        transport_deadline_ns, work, _continuity=None):
+        transport_deadline_ns, work, _continuity=None, _additional_original_bytes=0):
     """Re-admit independent policy/evidence before comparing the actual reply."""
     response = transport._originals(response_originals, response=True)
     if type(request_originals) is not tuple or len(request_originals) != 16:
@@ -56,8 +56,12 @@ def _verify_on_work(*, response_originals, request_originals, issuer_policy_byte
         issuer.MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES, "independent activation planner")
     root, continuation = root_public_key, _continuity
     original_bytes = sum(map(len, (*request, original, custody_original, policy_original, activation_original)))
-    if original_bytes > MAX_ORIGINAL_BYTES:
-        _fail("consume input response exceeds its whole original inventory")
+    captures = production._derivation_reservation(tuple(map(len, request)),
+        len(policy_original), len(activation_original)) + 24 * (len(original) + len(custody_original))
+    if (type(_additional_original_bytes) is not int
+            or not 0 <= _additional_original_bytes < MAX_ORIGINAL_BYTES
+            or _additional_original_bytes + captures > MAX_ORIGINAL_BYTES):
+        _fail("consume input response and held captures exceed their whole inventory")
     capture._SharedLedger(work)
     work.charge(input_bytes=original_bytes)
     # This helper performs actual original policy, caller/grant, reservation,
@@ -66,7 +70,9 @@ def _verify_on_work(*, response_originals, request_originals, issuer_policy_byte
         request_originals=request, issuer_policy_bytes=policy_original,
         activation_planner_bootstrap_bytes=activation_original, root_public_key=root,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns,
-        work=work, _continuity=continuation)
+        work=work, _continuity=continuation,
+        _additional_original_bytes=_additional_original_bytes
+            + 24 * (len(original) + len(custody_original)))
     current = lifetime.current
     current()
     expected_planner = production._bind_history_on_work(expected_planner,
@@ -96,7 +102,7 @@ def _verify_on_work(*, response_originals, request_originals, issuer_policy_byte
         material.history_material.planner.state_enrollment_bytes)
     # Reserve comparison encodings as well as the retained graph originals
     # before making either pair of canonical byte buffers.
-    if original_bytes + 2 * graph_bytes + sum(map(len, decoded)) > MAX_ORIGINAL_BYTES:
+    if original_bytes + 2 * graph_bytes + sum(map(len, decoded)) > captures:
         _fail("consume input decoded and compared originals exceed the whole inventory")
     current()
     for actual, expected, encode, label in (

@@ -32,15 +32,39 @@ startup, evidence, clock = caller.startup, caller.evidence, caller.clock
 custody_client, custody_startup = caller.custody_client, caller.custody_startup
 journal, wire = custody_client.journal, completion.transport
 # Source-defined byte representations, not an interpreter heap-size assertion.
-# The cold parent is capped at one authority request. Retain its original and
-# known captures separately from two regenerated typed-request representations.
-_PARENT_REPRESENTATION_BYTES = 8 * evidence.authority.MAX_REQUEST_BYTES
+# Retain the actual sealed cold parent and its known captures separately from
+# two regenerated typed-request representations; never substitute a posted size.
+_PARENT_REPRESENTATIONS = 8
 _REPLAY_HEADROOM_BYTES = 2 * evidence.authority.MAX_REQUEST_BYTES + 2 * 8192
 _HISTORY_REPRESENTATIONS = 8
 
 
 class FinalizationCompletionSubjectError(ValueError):
     pass
+
+
+def _parent_representation_bytes_on_owner(owner, *, work, current):
+    """Measure only the original admitted sealed descriptor, under its owner."""
+    if type(owner) is not startup._EnrollmentOwner or not callable(current):
+        raise FinalizationCompletionSubjectError("parent measurement requires its actual owner and guard")
+    callback = evidence.production._callback
+    current()
+    callback(work, lambda: startup._continuity(owner))
+    material, binding, custody = owner._material, owner._binding, owner._custody
+    descriptor, identity = owner._bootstrap_fd, owner._bootstrap_identity
+    if (type(descriptor) is not int or descriptor < 0
+            or type(identity) is not tuple or len(identity) != 11
+            or type(identity[6]) is not int or not 2 <= identity[6] <= startup.MAX_BOOTSTRAP_BYTES):
+        raise FinalizationCompletionSubjectError("parent descriptor has no bounded admitted original size")
+    actual = callback(work, lambda: startup._descriptor_identity(descriptor, private=False))
+    if actual != identity:
+        raise FinalizationCompletionSubjectError("parent original descriptor changed during measurement")
+    callback(work, lambda: startup._continuity(owner))
+    current()
+    if (owner._material is not material or owner._binding is not binding or owner._custody is not custody
+            or owner._bootstrap_fd != descriptor or owner._bootstrap_identity is not identity):
+        raise FinalizationCompletionSubjectError("parent original owner changed during measurement")
+    return _PARENT_REPRESENTATIONS * identity[6]
 
 
 def _open_on_work(work):
@@ -134,6 +158,7 @@ def _inspect_on_owner(owner, local_digest, *, live_window, transport_deadline_ns
             or not 0 <= _additional_original_bytes < completion.MAX_ORIGINAL_BYTES
             or completion.MAX_ORIGINAL_BYTES != 64 * 1024 * 1024):
         raise FinalizationCompletionSubjectError("additional retained history bytes exceed the fixed allowance")
+    parent_reservation = _parent_representation_bytes_on_owner(owner, work=work, current=current)
     # All six enrollment originals come from the already admitted cold owner,
     # before any journal body. They cannot be replaced by historical records.
     evidence_common = dict(common,
@@ -149,7 +174,7 @@ def _inspect_on_owner(owner, local_digest, *, live_window, transport_deadline_ns
             for raw, maximum in zip(enrollments, enrollment_limits)):
         raise FinalizationCompletionSubjectError("historical enrollment originals exceed their independent bounds")
     remaining = (completion.MAX_ORIGINAL_BYTES - _additional_original_bytes
-        - _PARENT_REPRESENTATION_BYTES - _REPLAY_HEADROOM_BYTES - 4 * sum(map(len, enrollments)))
+        - parent_reservation - _REPLAY_HEADROOM_BYTES - 4 * sum(map(len, enrollments)))
     # The combined reader charges/reserves three encoded-body footprints plus
     # 16 KiB before body1. Tightening its allowance to 3/8 leaves five additional
     # selected-byte footprints for original replay, capture and canonical work.

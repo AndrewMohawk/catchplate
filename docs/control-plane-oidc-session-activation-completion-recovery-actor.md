@@ -77,6 +77,22 @@ continuation must independently admit its original release authority while this
 new actor is live; the existing private acquisition API remains exact-type
 incompatible.
 
+The distinct source-fixed `consume` purpose instead requires the **activation**
+profile and exact path
+`/api/auth/session/activation/completion/recovery/consume` (or `/options` for
+the private challenge API). `CONSUME_SCHEMA` is
+`serverware.oidcSessionActivationCompletionRecoveryConsumeIntent/v1` and
+`CONSUME_OPTIONS_SCHEMA` is
+`serverware.oidcSessionActivationCompletionRecoveryConsumeOptions/v1`.
+The binding includes `recoveryPurpose: consume`; completion, preparation and
+release assertions cannot substitute. It authorizes only the future same-call
+consume continuation after genuinely acknowledged activation. It never permits
+activation SQL retry, old execution renewal or an `_ActivationPermission`
+substitute. The [original-only extractor](control-plane-oidc-session-activation-completion-recovery-consume-inputs.md)
+feeds the independent consume-input issuer under this actual fresh owner.
+This source slice adds no public consume options/action route or success HTTP;
+protected consume completion must be connected first.
+
 ## Current checks and lifecycle
 
 The actor reuses the existing sole-credential, current trust, explicit RBAC and

@@ -25,7 +25,6 @@ caller, planner, assertion = planning.caller, planning.planner, planning.asserti
 authorization, shape, plan = caller.authorization, caller.shape, caller.plan
 capture, production, clock = caller.capture, caller.production, caller.clock
 MAX_ORIGINAL_BYTES = caller.grants.replay.MAX_ORIGINAL_BYTES
-_PARENT_RESERVATION = finalization._PARENT_REPRESENTATION_BYTES
 _METADATA_RESERVATION = 16 * 1024
 
 
@@ -90,7 +89,9 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     cold_original_bytes = len(bootstrap) + sum(map(len, enrollment_originals))
     cold_reservation = (8 * len(bootstrap) + 4 * sum(map(len, enrollment_originals))
         + 8 * (len(old) + 4 * 32) + _METADATA_RESERVATION)
-    held_reservation = _additional_original_bytes + _PARENT_RESERVATION + cold_reservation
+    parent_reservation = finalization._parent_representation_bytes_on_owner(
+        owner, work=work, current=current)
+    held_reservation = _additional_original_bytes + parent_reservation + cold_reservation
     if held_reservation >= MAX_ORIGINAL_BYTES:
         _fail("completion recovery cold representations exhaust the original bound")
     window = clock._validate(live_window)

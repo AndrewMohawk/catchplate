@@ -73,11 +73,20 @@ def _request_lengths(lengths):
     planner.completion.transport._response_lengths(lengths[1:5])
 
 
-def _response_lengths(lengths):
+def _response_limit(maximum_response_bytes):
+    maximum = MAX_RESPONSE_BYTES if maximum_response_bytes is None else maximum_response_bytes
+    if type(maximum) is not int or not 2 <= maximum <= MAX_RESPONSE_BYTES:
+        _fail("consume input response capacity may only tighten the original bound")
+    return maximum
+
+
+def _response_lengths(lengths, *, maximum_response_bytes=None):
     _exchange_bound()
+    maximum = _response_limit(maximum_response_bytes)
     if (type(lengths) is not tuple or len(lengths) != len(RESPONSE_LIMITS)
             or any(type(size) is not int or not 0 <= size <= maximum
-                for size, maximum in zip(lengths, RESPONSE_LIMITS))):
+                for size, maximum in zip(lengths, RESPONSE_LIMITS))
+            or sum(lengths) > maximum):
         _fail("consume input response exceeds its opaque original raw2 bounds")
 
 
@@ -136,8 +145,10 @@ def _send_response(connection, originals, *, deadline_ns, work, current):
     chunks._guard(work, current, deadline_ns)
 
 
-def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current):
-    """One original-work exchange returning unverified planner/history raw2."""
+def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
+    """One original-work exchange with a tightening pre-body raw2 cap."""
     from serverware import authority_oidc_session_activation_caller_transport as guarded
     return guarded._consume_inputs_on_work(endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current,
+        maximum_response_bytes=_response_limit(maximum_response_bytes))

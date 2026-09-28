@@ -859,6 +859,73 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller or consume target changed after planning claim")
         return slot
 
+    def _completion_consume_operation(self, *, finalization_digest, activation_authorization_digest,
+            activation_completion_originals, reconciliation_digest, work, current,
+            maximum_original_bytes, kind, originals=()):
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+        from serverware import control_plane_oidc_session_activation_completion_recovery_records as completion
+
+        target, authorization_digest = journal._digest(finalization_digest), journal._digest(activation_authorization_digest)
+        slot = consume._slot_digest(target, authorization_digest)
+        if reconciliation_digest is not None:
+            reconciliation_digest = journal._digest(reconciliation_digest)
+        completed = completion._originals("activation", activation_completion_originals)
+        if type(kind) is not str or kind not in ("claimed", "inputs", "prepared", "exported"):
+            raise CustodyClientError("consume continuation publication kind is not source fixed")
+        held = consume._originals(consume._profile(kind), originals)
+        if not callable(current):
+            raise CustodyClientError("consume continuation requires its original resource guard")
+        current()
+        binding = _snapshot(self)
+        result = journal.CustodyJournal._completion_consume_operation(binding.journal,
+            finalization_digest=target, activation_authorization_digest=authorization_digest,
+            activation_completion_originals=completed, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind=kind, originals=held)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed during guarded consume continuation")
+        journal._digest(result)
+        if kind == "claimed" and result != slot:
+            raise CustodyClientError("consume continuation returned a different target slot")
+        return result
+
+    def claim_oidc_session_activation_completion_recovery_consume_attempt(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            work, current, maximum_original_bytes=None):
+        """Spend the existing global consume target before input issuer contact."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="claimed")
+
+    def append_oidc_session_activation_completion_recovery_consume_inputs(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain raw2 DATA before admission under this work's new consume claim."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="inputs", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_prepared(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain prepare raw6 before semantic admission; uncertainty cannot export."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="prepared", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_exported(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain export raw7 before admission, then end this work's append sequence."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="exported", originals=originals)
+
     def _append_consume_stage(self, *, finalization_digest,
             activation_authorization_digest, kind, originals):
         """Token-free response retention; actual caller precharges and guards I/O."""

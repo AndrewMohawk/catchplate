@@ -37,9 +37,11 @@ Unsigned SQL and authenticated completion controls do not prove present session
 state. Consume/release integration is active; the bar below now breaks it into
 five named connections so partial progress stays visible. Prepare/export is
 source-landed in [fbdb646](https://github.com/example/private-deployment).
-The other four consume connections and the public route/cookie boundary remain todo.
+Authorization is **source-landed** in [93e0142](https://github.com/example/private-deployment). Consume
+grant/reserve/SQL, completion, protected handoff and the public route/cookie
+boundary remain todo.
 
-[![Inside step 22: permission/planning, durable records, guarded transports, activation SQL and activation completion are source-landed. Consume/release is in progress: prepare/export is source-landed in fbdb646; consume authorization, grant/reserve/SQL, consume completion and protected handoff remain todo. Public route/cookie remains todo. Named connections, not effort percentages; production acceptance remains 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Inside step 22: permission/planning, durable records, guarded transports, activation SQL and activation completion are source-landed. Consume/release is in progress: prepare/export is source-landed in fbdb646; Authorization is source-landed in 93e0142. Consume grant/reserve/SQL, completion and protected handoff remain todo. Public route/cookie remains todo. Named connections, not effort percentages; production acceptance remains 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 Read left to right: **green/check = committed source · amber = in progress ·
 gray = still to do**. Each named connection has a

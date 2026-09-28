@@ -34,9 +34,18 @@ source-landed in [8f1b9a1](https://github.com/example/private-deployment).
 The [completion continuation](docs/control-plane-oidc-session-activation-completion.md)
 is source-landed in [829064f](https://github.com/example/private-deployment).
 Unsigned SQL and authenticated completion controls do not prove present session
-state. Consume/release continuation and the public route/cookie boundary remain todo.
+state. Consume/release integration is active; the bar below now breaks it into
+five named connections so partial progress stays visible. Prepare/export is
+source-landed in [fbdb646](https://github.com/example/private-deployment).
+The other four consume connections and the public route/cookie boundary remain todo.
 
-[![Inside active step 22: PLAN Permission + planning landed; RECORDS Durable stage records, IO Guarded transports and SQL Grant / reserve / SQL source-landed in 8f1b9a1; COMPLETE Completion continuation source-landed in 829064f; RELEASE Consume / release continuation and HTTP Public route + cookie todo. Public completion controls do not prove present currentness or release a token. Named connection facets, not additional milestones or a completion percentage. Source only; production remains 0/6 verified.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Inside step 22: permission/planning, durable records, guarded transports, activation SQL and activation completion are source-landed. Consume/release is in progress: prepare/export is source-landed in fbdb646; consume authorization, grant/reserve/SQL, consume completion and protected handoff remain todo. Public route/cookie remains todo. Named connections, not effort percentages; production acceptance remains 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+
+Read left to right: **green/check = committed source · amber = in progress ·
+gray = still to do**. Each named connection has a
+[completion criterion and commit evidence](docs/production-status.md#activation-dispatch-detail).
+The consume SQL/completion connections are separate from the completed
+activation SQL/completion steps.
 
 <details>
 <summary>All 26 activation steps: 21 landed, 1 active, 4 todo</summary>
@@ -122,7 +131,7 @@ Full verification follows source freeze.
 [Full tracker and remaining-work criteria →](docs/production-status.md#remaining-work-breakdown)
 · [Six production acceptance gates →](docs/production-status.md#remaining-production-gates)
 
-<!-- Keep README, docs/production-status.md and affected progress SVGs synchronized. Use the existing 46 project / 26 activation / 16 token-release inventories; release-handoff-progress.svg expands units 15/16 into 15.1–15.6 and 16.1–16.5, not new milestones. activation-dispatch-progress.svg names connections inside step 22 without adding a denominator. Every segment needs a visible ID, name, status and linked criterion/evidence. Mark active uncommitted work amber, queued work blue, todo gray; green requires its actual implementation commit. Never add children to parents, infer an ETA from counts, or combine source progress with production acceptance. -->
+<!-- Keep README, docs/production-status.md and affected progress SVGs synchronized. Use the existing 46 project / 26 activation / 16 token-release inventories; release-handoff-progress.svg expands units 15/16 into 15.1–15.6 and 16.1–16.5, not new milestones. activation-dispatch-progress.svg names seven connections inside step 22 and five connections inside RELEASE without adding a denominator. Every segment needs a visible ID/name, written status and linked criterion/evidence. Mark active uncommitted work amber, queued work blue, todo gray; green requires its actual implementation commit. Never add children to parents, infer an ETA from counts, or combine source progress with production acceptance. -->
 
 ## Why Serverware?
 

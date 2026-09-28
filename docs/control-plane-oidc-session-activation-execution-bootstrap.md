@@ -78,7 +78,7 @@ The endpoint has the same exact `socketPath`, `requestTimeoutSeconds`,
 `listenerUid` and `listenerGid` fields. Its only path is
 `/run/serverware/oidc-session-activation/completion.sock`; timeout is an exact
 integer from 1 through 30 and the independently expected listener peer is 0:0.
-`_ActivationExecutionMaterial` appends `completion_endpoint=None`; only v3
+`_ActivationExecutionMaterial` appends `completion_endpoint=None`; v3 and v4
 populates it. The stdlib-only FD205 selector recognizes the identical v3 shape
 before reading any key, while actual child admission still authenticates all
 root/enrollment originals. The descriptor inventory is unchanged.
@@ -92,6 +92,35 @@ packet. This caller configuration carries no guessed future packet identity or
 authorization-digest pin. It neither imports the service's historical keys nor
 replaces its original packet/commit admission. Endpoint configuration alone
 does not prove completion, release a token, update a cookie or admit recovery.
+
+## Explicit consume-planner endpoint profile
+
+Source `.185` adds nested
+`serverware.controlPlaneOidcSessionActivationExecution/v4`: exactly the v3
+fields plus `consumePlannerEndpoint` and `consumePlannerKey`. Earlier versions
+stay closed. The endpoint uses the same timeout/peer fields, root listener 0:0,
+and the fixed `/run/serverware/oidc-session-activation/delivery-planner.sock`.
+The public key object has exactly `publicKeyBase64Url`, `spkiDigest`, and
+`measurementDigest`. Admission separates its key from the actual runtime root,
+activation planner/caller, state/computation/completion, and other configured
+purposes. The stdlib selector recognizes the same shape. No private key, FD,
+top-level bootstrap version, or processing allowance is added.
+
+Cold configuration pins only stable endpoint/key/measurement identity. The
+consume request, signed activation reservation and post-activation root vector
+do not exist before activation, so they must not be guessed or embedded in this
+pre-activation envelope. Independently issued root-signed consume-planner and
+history originals are admitted afterward, inside the still-active original
+permission context. The actual root verifier checks their signatures and
+lifetimes; the caller joins the real parent configuration, runtime cohort,
+planner key, measurement and state enrollment before the exact target joins.
+Derived bootstrap material is ordinary same-call data, not admission authority.
+
+The [private continuation](control-plane-oidc-session-activation-consume-planning.md)
+can prepare and export encrypted execution originals, not consume or release a
+token. Independent per-request root issuance and the matching UID/GID 65501
+planner service remain unprovisioned prerequisites. The existing read-only
+planning socket-directory mount covers the endpoint but does not create it.
 
 The stdlib-only cold selector explicitly recognizes v6 without importing
 repository crypto. Its actual entrypoint calls the fixed activation-key

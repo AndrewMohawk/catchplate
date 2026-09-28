@@ -285,6 +285,24 @@ class _EnrollmentOwner:
             return permission.dispatch_completion(assertion_bytes=assertion,
                 expected_challenge_id=challenge)
 
+    def _prepare_oidc_session_activation_consume(self, *, planner_bootstrap_bytes,
+            history_custody_bytes):
+        """Prepare/export only inside this parent's actual live completion call.
+
+        Independently issued per-request root originals arrive after activation.
+        This facade cannot create or reopen a permission context or allowance;
+        callers must still hold its original completion context. No token is
+        released and no externally supplied completion result is accepted.
+        """
+        from serverware import control_plane_oidc_session_activation_execution as execution
+
+        _require_pid()
+        permission = self._activation_permission
+        if type(permission) is not execution._ActivationPermission or permission._owner is not self:
+            raise EnrollmentStartupError("consume preparation requires the actual active parent permission")
+        return permission.prepare_consume(planner_bootstrap_bytes=planner_bootstrap_bytes,
+            history_custody_bytes=history_custody_bytes)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

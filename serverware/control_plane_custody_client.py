@@ -696,6 +696,77 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while reading activation originals")
         return retained
 
+    def claim_oidc_session_activation_consume_planning(self, *, finalization_digest,
+            activation_authorization_digest, source_revision):
+        """Burn one consume preparation under this owner's actual activation target."""
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+
+        record, _encoded = consume.encode("claimed", finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            originals=(), source_revision=source_revision)
+        binding = _snapshot(self)
+        slot = journal.CustodyJournal.claim_oidc_session_activation_consume_planning(binding.journal,
+            finalization_digest=record.finalization_digest,
+            activation_authorization_digest=record.activation_authorization_digest,
+            source_revision=record.source_revision)
+        if slot != record.slot_digest or _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller or consume target changed after planning claim")
+        return slot
+
+    def _append_consume_stage(self, *, finalization_digest,
+            activation_authorization_digest, kind, originals):
+        """Token-free response retention; actual caller precharges and guards I/O."""
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+
+        target = journal._digest(finalization_digest)
+        authorization_digest = journal._digest(activation_authorization_digest)
+        held = consume._originals(consume._profile(kind), originals)
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal._append_consume_record(binding.journal,
+            finalization_digest=target, activation_authorization_digest=authorization_digest,
+            kind=kind, originals=held)
+        journal._digest(digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed after consume response retention")
+        return digest
+
+    def append_oidc_session_activation_consume_prepared(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain original raw6 before interpretation, never a plan admission DTO."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="prepared", originals=originals)
+
+    def append_oidc_session_activation_consume_exported(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain original raw7 before interpretation without a token or retry."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="exported", originals=originals)
+
+    def load_oidc_session_activation_consume_records(self, *, finalization_digest,
+            activation_authorization_digest):
+        """Read bounded ordinary history, not a recovered permission to continue."""
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+
+        target = journal._digest(finalization_digest)
+        authorization_digest = journal._digest(activation_authorization_digest)
+        slot = consume._slot_digest(target, authorization_digest)
+        binding = _snapshot(self)
+        retained = journal.CustodyJournal.load_oidc_session_activation_consume_records(binding.journal,
+            finalization_digest=target, activation_authorization_digest=authorization_digest)
+        if (type(retained) is not consume.ConsumeRecords
+                or type(retained.claim) is not consume.ConsumeRecord
+                or retained.claim.slot_digest != slot
+                or retained.claim.finalization_digest != target
+                or retained.claim.activation_authorization_digest != authorization_digest):
+            raise CustodyClientError("consume retained original scope differs")
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while reading consume originals")
+        return retained
+
     def append_registration_finalization_sql_outcome(self, finalization_digest, originals):
         """Retain first unsigned raw4 without a renewed clock or success assertion."""
         local = journal._digest(finalization_digest)

@@ -137,10 +137,23 @@ class _PlannerOwner:
         from serverware import authority_oidc_session_activation_delivery_planner_transport as transport
 
         exporting = originals[0] == transport.EXPORT_PURPOSE
+        bounded_prepare = originals[0] == transport.BOUNDED_PREPARE_PURPOSE
+        if bounded_prepare:
+            ceiling = transport._bounded_prepare_deadline_on_work(originals, work)
+            # Retain the actual pre-read opening samples, policy and monotonic
+            # bound. The unsigned caller ceiling only tightens this invocation;
+            # it neither admits authority nor substitutes a historical clock.
+            live_window = cold.processing._narrow(live_window,
+                deadline_epoch_ns=ceiling, maximum_lifetime_ns=live_window[5],
+                maximum_clock_skew_ns=live_window[6])
+            deadline = min(deadline, live_window[4])
+            cold.clock._check_on_work(live_window, work=work)
+            transport._check_deadline(deadline)
         try:
-            if originals[0] == transport.PREPARE_PURPOSE:
+            if originals[0] in (transport.PREPARE_PURPOSE, transport.BOUNDED_PREPARE_PURPOSE):
                 prepared = cold._ColdPlanner.prepare(self._planner, old_token_bytes=originals[1],
-                    activation_originals=originals[2:], live_window=live_window,
+                    activation_originals=originals[2:-1] if bounded_prepare else originals[2:],
+                    live_window=live_window,
                     transport_deadline_ns=deadline, work=work)
                 status = b"prepared"
             elif originals[0] == transport.RETAINED_PURPOSE:

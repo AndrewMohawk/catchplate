@@ -24,6 +24,8 @@ Separate token-free activation claims burn the retained finalization locator
 before the planner request; even exact recovered claims prohibit dispatch.
 Six fixed activation stage records retain only opaque public/cipher originals
 beneath that claim. Recovery permits reads, never resumed stage publication.
+Separate consume-planning claims count as additional logical records with only
+prepared/exported response siblings, never an eighth activation-stage file.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -51,6 +53,7 @@ from serverware import control_plane_registration_outcome_records as outcome_rec
 from serverware import control_plane_oidc_session_activation_release_attempt as release_attempts
 from serverware import control_plane_oidc_session_activation_dispatch_attempt as activation_attempts
 from serverware import control_plane_oidc_session_activation_records as activation_records
+from serverware import control_plane_oidc_session_activation_consume_records as consume_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -64,11 +67,14 @@ _READ_CHUNK = 1024 * 1024
 _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES,
     signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES,
     finalization_reservations.MAX_RECORD_BYTES, finalization_outcomes.MAX_RECORD_BYTES,
-    activation_attempts.MAX_RECORD_BYTES, activation_records.MAX_RECORD_BYTES)
+    activation_attempts.MAX_RECORD_BYTES, activation_records.MAX_RECORD_BYTES,
+    consume_records.MAX_RECORD_BYTES)
 _FINALIZATION_OUTCOME_FILES = {
     "finalization-" + kind: kind for kind in finalization_outcomes.KINDS}
 _ACTIVATION_RECORD_FILES = {
     "activation-" + kind: kind for kind in activation_records.KINDS}
+_CONSUME_RECORD_FILES = {
+    "activation-consume-" + kind: kind for kind in consume_records.KINDS}
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
     finalization_records.FAMILY})
 
@@ -177,6 +183,8 @@ class CustodyJournal:
     the unchanged physical/quota ceilings, without reserving legacy markers.
     An activation claim has exactly six possible stage siblings: seven total
     files, exhausting its unchanged allowance. No stage adds another slot.
+    Consume planning uses a separately counted logical claim with at most three
+    files; it never appends an eighth file to the activation claim.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -207,6 +215,10 @@ class CustodyJournal:
         # Only successful claims made by this owner may continue publication.
         # Recovery intentionally never populates this in-memory set.
         self._activation_live_claims = set()
+        self._consume_claims = {}
+        self._consume_targets = {}
+        self._consume_records = {}
+        self._consume_live_claims = set()
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -307,6 +319,9 @@ class CustodyJournal:
         release_claims = {}
         activation_claims = {}
         activation_stages = {}
+        consume_claims = {}
+        consume_targets = {}
+        consume_stages = {}
         uncertain_completions = set()
         uncertain_finalization_completions = set()
         count = 0
@@ -343,6 +358,9 @@ class CustodyJournal:
                 elif any(name.startswith(prefix + "-") for prefix in _ACTIVATION_RECORD_FILES):
                     kind = next(prefix for prefix in _ACTIVATION_RECORD_FILES
                         if name.startswith(prefix + "-"))
+                elif any(name.startswith(prefix + "-") for prefix in _CONSUME_RECORD_FILES):
+                    kind = next(prefix for prefix in _CONSUME_RECORD_FILES
+                        if name.startswith(prefix + "-"))
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -366,6 +384,8 @@ class CustodyJournal:
                     activation_attempts.MAX_RECORD_BYTES if kind == activation_attempts.KIND else
                     activation_records._maximum(_ACTIVATION_RECORD_FILES[kind])
                         if kind in _ACTIVATION_RECORD_FILES else
+                    consume_records._maximum(_CONSUME_RECORD_FILES[kind])
+                        if kind in _CONSUME_RECORD_FILES else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -378,21 +398,21 @@ class CustodyJournal:
                         raise CustodyJournalError("prepared filename differs from its original content")
                     prepared[digest] = JournalEntry(digest, record.family, record.selector,
                         record.source_revision, len(encoded), False)
-                    if len(prepared) + len(release_claims) + len(activation_claims) > self._maximum_records:
+                    if len(prepared) + len(release_claims) + len(activation_claims) + len(consume_claims) > self._maximum_records:
                         raise CustodyJournalError("journal prepared record limit exceeded")
                 elif kind == release_attempts.KIND:
                     claim = release_attempts.decode(encoded)
                     if claim.client_authorization_digest != digest or digest in release_claims:
                         raise CustodyJournalError("release claim filename differs from its authorization")
                     release_claims[digest] = claim
-                    if len(prepared) + len(release_claims) + len(activation_claims) > self._maximum_records:
+                    if len(prepared) + len(release_claims) + len(activation_claims) + len(consume_claims) > self._maximum_records:
                         raise CustodyJournalError("journal release claim record limit exceeded")
                 elif kind == activation_attempts.KIND:
                     claim = activation_attempts.decode(encoded)
                     if claim.finalization_digest != digest or digest in activation_claims:
                         raise CustodyJournalError("activation claim filename differs from its finalization locator")
                     activation_claims[digest] = claim
-                    if len(prepared) + len(release_claims) + len(activation_claims) > self._maximum_records:
+                    if len(prepared) + len(release_claims) + len(activation_claims) + len(consume_claims) > self._maximum_records:
                         raise CustodyJournalError("journal activation claim record limit exceeded")
                 elif kind in _ACTIVATION_RECORD_FILES:
                     stage = activation_records.decode(encoded)
@@ -402,6 +422,24 @@ class CustodyJournal:
                             or stage_kind in by_kind):
                         raise CustodyJournalError("activation stage differs from its fixed filename")
                     by_kind[stage_kind] = (stage.source_revision, stage.digest, len(encoded))
+                elif kind in _CONSUME_RECORD_FILES:
+                    record = consume_records.decode(encoded)
+                    stage_kind = _CONSUME_RECORD_FILES[kind]
+                    if record.slot_digest != digest or record.kind != stage_kind:
+                        raise CustodyJournalError("consume record differs from its fixed slot filename")
+                    if stage_kind == "claimed":
+                        if digest in consume_claims or record.finalization_digest in consume_targets:
+                            raise CustodyJournalError("consume target has more than one irreversible claim")
+                        consume_claims[digest] = record
+                        consume_targets[record.finalization_digest] = digest
+                        if len(prepared) + len(release_claims) + len(activation_claims) + len(consume_claims) > self._maximum_records:
+                            raise CustodyJournalError("journal consume claim logical limit exceeded")
+                    else:
+                        by_kind = consume_stages.setdefault(digest, {})
+                        if stage_kind in by_kind:
+                            raise CustodyJournalError("consume response stage repeats its slot")
+                        by_kind[stage_kind] = (record.source_revision, record.digest,
+                            len(encoded), record.originals[0])
                 elif kind == "attempted":
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
@@ -465,6 +503,11 @@ class CustodyJournal:
         for digest, by_kind in activation_stages.items():
             self._activation_scope(digest, by_kind)
         self._activation_records = activation_stages
+        self._consume_claims = consume_claims
+        self._consume_targets = consume_targets
+        for digest in consume_stages.keys() | consume_claims.keys():
+            self._consume_scope(digest, consume_stages.get(digest, {}))
+        self._consume_records = consume_stages
         for association in associated.values():
             _association_scope(association, self._entries)
         self._associations = associated
@@ -687,7 +730,7 @@ class CustodyJournal:
         marker_reserve = (0 if record.family in _RETENTION_ONLY_FAMILIES else
             _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
         if (len(self._entries) + len(self._release_attempts)
-                + len(self._activation_dispatch_attempts) >= self._maximum_records
+                + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
                 or len(self._file_identities) >= 7 * self._maximum_records
                 or len(encoded) + marker_reserve
                     > self._quota - self._used_bytes - self._reserved_bytes):
@@ -768,7 +811,7 @@ class CustodyJournal:
                 if digest not in self._entries)
             required_bytes = sum(len(encoded) for _, encoded in missing) + len(association_encoded)
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) + len(missing) > self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) + len(missing) > self._maximum_records
                     or len(self._file_identities) + len(missing) + 1 > 7 * self._maximum_records
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete preparation capacity is exhausted")
@@ -850,7 +893,7 @@ class CustodyJournal:
             missing = int(digest not in self._entries)
             required_bytes = missing * len(encoded) + len(marker)
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) + missing > self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) + missing > self._maximum_records
                     or len(self._file_identities) + missing + 1 > 7 * self._maximum_records
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete finalization retention capacity is exhausted")
@@ -1206,7 +1249,7 @@ class CustodyJournal:
                     raise
                 raise CustodyJournalError("release client authorization was already claimed; repeat is forbidden")
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) >= self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
                     or len(self._file_identities) >= 7 * self._maximum_records
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal release claim capacity is exhausted")
@@ -1381,7 +1424,7 @@ class CustodyJournal:
                     raise
                 raise CustodyJournalError("activation target was already claimed; repeat dispatch is forbidden")
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) >= self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
                     or len(self._file_identities) >= 7 * self._maximum_records
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal activation claim capacity is exhausted")
@@ -1394,6 +1437,195 @@ class CustodyJournal:
                 self._activation_dispatch_attempts[digest] = record
                 self._require_ready()
                 self._activation_live_claims.add(digest)
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def _consume_scope(self, slot, by_kind):
+        claim = self._consume_claims.get(slot)
+        if (claim is None or claim.slot_digest != slot
+                or self._consume_targets.get(claim.finalization_digest) != slot):
+            raise CustodyJournalError("consume response lacks its irreversible target claim")
+        activation = self._activation_records.get(claim.finalization_digest, {})
+        predecessor = self._activation_scope(claim.finalization_digest, activation)
+        if ("completion-outcome" not in activation
+                or predecessor.source_revision != claim.source_revision
+                or len(by_kind) > 2
+                or set(by_kind) != set(consume_records.KINDS[1:1 + len(by_kind)])
+                or any(value[0] != claim.source_revision for value in by_kind.values())
+                or ("exported" in by_kind and by_kind["prepared"][3] != b"prepared")):
+            raise CustodyJournalError("consume stages differ from completed predecessor, prefix or source")
+        return claim
+
+    def _read_consume_claim(self, slot):
+        held = self._consume_claims.get(slot)
+        if held is None:
+            raise CustodyJournalError("consume target has no original claim")
+        name = _name("activation-consume-claimed", slot)
+        original, identity = self._read_file(name, maximum_bytes=consume_records.MAX_CLAIM_BYTES)
+        if (identity != self._file_identities.get(name)
+                or consume_records.decode(original) != held):
+            raise CustodyJournalError("consume claim changed after admission")
+        return held
+
+    def _consume_metadata_current(self, slot, by_kind):
+        claim = self._consume_scope(slot, by_kind)
+        self._activation_metadata_current(claim.finalization_digest,
+            self._activation_records.get(claim.finalization_digest, {}))
+        for kind in consume_records.KINDS[1:]:
+            if kind in by_kind:
+                name = _name("activation-consume-" + kind, slot)
+                metadata = os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)
+                if _identity(metadata) != self._file_identities.get(name):
+                    raise CustodyJournalError("consume response immutable identity changed")
+
+    def _read_consume_record(self, slot, kind, *, maximum_bytes):
+        claim = self._consume_claims[slot]
+        metadata = self._consume_records[slot][kind]
+        name = _name("activation-consume-" + kind, slot)
+        original, identity = self._read_file(name, maximum_bytes=maximum_bytes)
+        record = consume_records.decode(original)
+        if (identity != self._file_identities.get(name) or record.slot_digest != slot
+                or record.finalization_digest != claim.finalization_digest
+                or record.activation_authorization_digest != claim.activation_authorization_digest
+                or record.kind != kind
+                or (record.source_revision, record.digest, len(original), record.originals[0]) != metadata):
+            raise CustodyJournalError("consume response changed after admitted recovery")
+        return record
+
+    def claim_oidc_session_activation_consume_planning(self, *, finalization_digest,
+            activation_authorization_digest, source_revision):
+        """Burn preparation once, independent of plan identity; never admit authority."""
+        record, encoded = consume_records.encode("claimed", finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            originals=(), source_revision=source_revision)
+        target, slot = record.finalization_digest, record.slot_digest
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if target not in self._activation_live_claims:
+                raise CustodyJournalError("consume preparation requires this owner's live activation claim")
+            try:
+                predecessor = self._read_activation_claim(target)
+                activation = self._activation_records.get(target, {})
+                self._activation_metadata_current(target, activation)
+                if ("completion-outcome" not in activation
+                        or predecessor.source_revision != record.source_revision):
+                    raise CustodyJournalError("consume claim lacks its retained completion and current source")
+                previous = self._consume_targets.get(target)
+                if previous is not None:
+                    self._read_consume_claim(previous)
+                    self._consume_metadata_current(previous, self._consume_records.get(previous, {}))
+                    self._require_ready()
+            except BaseException:
+                self._io.poison()
+                raise
+            if previous is not None:
+                raise CustodyJournalError("consume target was already claimed; preparation cannot repeat")
+            if (len(self._entries) + len(self._release_attempts)
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
+                    or len(self._file_identities) >= 7 * self._maximum_records
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal consume claim capacity is exhausted")
+            try:
+                self._require_ready()
+                self._publish("activation-consume-claimed", slot, encoded)
+                self._used_bytes += len(encoded)
+                self._consume_claims[slot] = record
+                self._consume_targets[target] = slot
+                self._consume_scope(slot, {})
+                self._require_ready()
+                self._consume_live_claims.add(slot)
+                return slot
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def _append_consume_record(self, *, finalization_digest,
+            activation_authorization_digest, kind, originals):
+        profile = consume_records._profile(kind)
+        if profile == 0:
+            raise CustodyJournalError("consume claim has a separate non-repeatable API")
+        held = consume_records._originals(profile, originals)
+        target = _digest(finalization_digest)
+        authorization_digest = _digest(activation_authorization_digest)
+        slot = consume_records._slot_digest(target, authorization_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if slot not in self._consume_live_claims or target not in self._activation_live_claims:
+                raise CustodyJournalError("recovered consume claims are read-only; continuation is forbidden")
+            try:
+                self._read_activation_claim(target)
+                claim = self._read_consume_claim(slot)
+                by_kind = self._consume_records.get(slot, {})
+                self._consume_metadata_current(slot, by_kind)
+                if (claim.finalization_digest != target
+                        or claim.activation_authorization_digest != authorization_digest):
+                    raise CustodyJournalError("consume response target differs from its claim")
+                record, encoded = consume_records.encode(kind, finalization_digest=target,
+                    activation_authorization_digest=authorization_digest, originals=held,
+                    source_revision=claim.source_revision)
+                if kind in by_kind:
+                    existing = self._read_consume_record(slot, kind, maximum_bytes=len(encoded))
+                    if existing.originals != record.originals or existing.digest != record.digest:
+                        raise CustodyJournalError("consume cannot replace first exact response originals")
+                    self._require_ready()
+                    return existing.digest
+                if (profile != len(by_kind) + 1
+                        or (kind == "exported" and by_kind["prepared"][3] != b"prepared")):
+                    raise CustodyJournalError("consume publication skipped its fixed prepared predecessor")
+                if (len(self._file_identities) >= 7 * self._maximum_records
+                        or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                    raise CustodyJournalError("journal consume response capacity is exhausted")
+                self._require_ready()
+                self._publish("activation-consume-" + kind, slot, encoded)
+                self._used_bytes += len(encoded)
+                self._consume_records.setdefault(slot, {})[kind] = (
+                    record.source_revision, record.digest, len(encoded), record.originals[0])
+                self._consume_scope(slot, self._consume_records[slot])
+                self._require_ready()
+                return record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def append_oidc_session_activation_consume_prepared(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain raw6 before interpretation; the caller verifies before export."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="prepared", originals=originals)
+
+    def append_oidc_session_activation_consume_exported(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain raw7 before interpretation, with no permission to resend."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="exported", originals=originals)
+
+    def load_oidc_session_activation_consume_records(self, *, finalization_digest,
+            activation_authorization_digest):
+        """Read original history only; never restore a live continuation allowance."""
+        target = _digest(finalization_digest)
+        authorization_digest = _digest(activation_authorization_digest)
+        slot = consume_records._slot_digest(target, authorization_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            try:
+                self._read_activation_claim(target)
+                claim = self._read_consume_claim(slot)
+                if (claim.finalization_digest != target
+                        or claim.activation_authorization_digest != authorization_digest):
+                    raise CustodyJournalError("consume history target differs from its original claim")
+                by_kind = self._consume_records.get(slot, {})
+                self._consume_metadata_current(slot, by_kind)
+                retained = tuple(self._read_consume_record(slot, kind,
+                    maximum_bytes=consume_records._maximum(kind)) if kind in by_kind else None
+                    for kind in consume_records.KINDS[1:])
+                self._require_ready()
+                return consume_records.ConsumeRecords(claim, *retained)
             except BaseException:
                 self._io.poison()
                 raise

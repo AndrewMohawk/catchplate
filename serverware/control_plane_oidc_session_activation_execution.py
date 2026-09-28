@@ -163,7 +163,9 @@ class _ActivationPermission:
         "_pid", "_thread", "_state", "_locked", "_trust", "_scope", "_target", "_spent",
         "_permission_epoch", "_session_expiry", "_inputs", "_seal",
         "_planning_spent", "_planning_bounds", "_planning_observed",
-        "_dispatch_phase", "_sql_originals", "_sql_seal")
+        "_dispatch_phase", "_sql_originals", "_sql_seal", "_completion_originals", "_completion_seal",
+        "_completion_context", "_completion_context_seal", "_consume_spent",
+        "_consume_lifetimes", "_consume_lifetimes_seal")
 
     def __init__(self, owner, request, permission_bytes, live_window, transport_deadline_ns, work):
         from serverware import control_plane_oidc_session_activation_permission as permission
@@ -183,6 +185,10 @@ class _ActivationPermission:
         self._planning_spent, self._planning_bounds = False, None
         self._planning_observed = None
         self._dispatch_phase, self._sql_originals, self._sql_seal = "new", None, None
+        self._completion_originals = self._completion_seal = None
+        self._completion_context = self._completion_context_seal = None
+        self._consume_spent = False
+        self._consume_lifetimes = self._consume_lifetimes_seal = None
         self._inputs = _PermissionInputs(owner, request, self._original, self._window,
             self._deadline, work, self._pid, self._thread)
         self._seal = self._inputs
@@ -204,14 +210,25 @@ class _ActivationPermission:
                 or self._owner._activation_permission is not self or not self._locked):
             _fail("activation permission context is no longer the active parent-owned call")
         if self._dispatch_phase not in ("new", "preparing", "preparing-completion",
-                "sql", "sql-completion", "closed"):
+                "sql", "sql-completion", "completed", "consume-planning", "consume-planned", "closed"):
             _fail("activation permission dispatch phase is not source fixed")
-        if self._dispatch_phase in ("sql", "sql-completion") and (
+        if self._dispatch_phase in ("sql", "sql-completion", "completed", "consume-planning", "consume-planned") and (
                 self._spent is not True or self._planning_spent is not True
                 or type(self._sql_originals) is not tuple or len(self._sql_originals) != 8
                 or self._sql_originals is not self._sql_seal
                 or any(type(raw) is not bytes for raw in self._sql_originals)):
             _fail("activation SQL continuation replaced its exact admitted originals")
+        if self._dispatch_phase in ("completed", "consume-planning", "consume-planned") and (
+                type(self._completion_originals) is not tuple or len(self._completion_originals) != 4
+                or self._completion_originals is not self._completion_seal
+                or self._completion_originals[0] != b"acknowledged"
+                or any(type(raw) is not bytes for raw in self._completion_originals)
+                or type(self._completion_context) is not tuple or len(self._completion_context) != 3
+                or self._completion_context is not self._completion_context_seal
+                or type(self._completion_context[0]) is not bytes):
+            _fail("consume planning lost the actual same-call completion continuation")
+        if self._consume_lifetimes is not self._consume_lifetimes_seal:
+            _fail("consume planning replaced its admitted root-original lifetimes")
 
     def _current(self, epoch_floor=None, monotonic_floor=None):
         self._identity()
@@ -225,7 +242,8 @@ class _ActivationPermission:
             epoch_floor = max(self._planning_observed[0], epoch_floor or 0)
             monotonic_floor = max(self._planning_observed[1], monotonic_floor or 0)
         scope.current(epoch_floor, monotonic_floor)
-        if self._target is not None and self._dispatch_phase not in ("sql", "sql-completion"):
+        if self._target is not None and self._dispatch_phase not in (
+                "sql", "sql-completion", "completed", "consume-planning", "consume-planned"):
             from serverware import control_plane_registration_finalization_completion_pending as pending
 
             application, session_scope, binding, credential, count = self._target
@@ -236,6 +254,18 @@ class _ActivationPermission:
         now = scope.current()
         if self._session_expiry is not None and now >= self._session_expiry:
             _fail("activation permission pending session expired")
+        if self._consume_lifetimes is not None:
+            from serverware import oidc_session_activation_delivery_planner_bootstrap as consume_bootstrap
+
+            # These exact immutable brackets were obtained by genuine root
+            # admission in this call. Keep their stricter launch clocks even
+            # through context exit; the final narrowed clock check stays last.
+            for interval, opening in self._consume_lifetimes:
+                prior = scope.continuity(now, self._planning_observed[1])
+                sampled = consume_bootstrap.shared._fresh(interval, self._work, opening=opening)
+                if sampled[0] < prior[1] or sampled[1] < prior[0]:
+                    _fail("consume root-original clock reversed across the actual owner")
+                now, _monotonic = scope.continuity(sampled[1], sampled[2])
         if self._planning_bounds is not None:
             window, bound = self._planning_bounds
             observed = scope.continuity(now, self._planning_observed[1])
@@ -287,6 +317,10 @@ class _ActivationPermission:
         self._planning_bounds = None
         self._planning_observed = None
         self._dispatch_phase, self._sql_originals, self._sql_seal = "closed", None, None
+        self._completion_originals = self._completion_seal = None
+        self._completion_context = self._completion_context_seal = None
+        self._consume_spent = True
+        self._consume_lifetimes = self._consume_lifetimes_seal = None
         try:
             if trust is not None:
                 trust.__exit__(None, None, None)
@@ -459,6 +493,26 @@ class _ActivationPermission:
             self._dispatch_phase = "preparing-completion"
             return dispatch._dispatch_completion_on_permission(self,
                 assertion_bytes=original, expected_challenge_id=challenge)
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+    def prepare_consume(self, *, planner_bootstrap_bytes, history_custody_bytes):
+        """Consume only new root originals on this still-active completed call."""
+        from serverware import control_plane_oidc_session_activation_consume_planning as consume
+
+        try:
+            self._identity()
+            if self._state != "active" or self._dispatch_phase != "completed" or self._consume_spent:
+                _fail("consume preparation requires the unspent same-call acknowledged completion")
+            originals = consume._inputs(planner_bootstrap_bytes, history_custody_bytes)
+            self._consume_spent = True
+            self._dispatch_phase = "consume-planning"
+            result = consume._prepare_on_permission(self,
+                planner_bootstrap_bytes=originals[0], history_custody_bytes=originals[1])
+            self._dispatch_phase = "consume-planned"
+            return result
         except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:
                 self._revoke()

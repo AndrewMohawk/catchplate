@@ -17,16 +17,20 @@ from serverware import oidc_session_activation_planner_bootstrap as planner_boot
 SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v1"
 V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v2"
 V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v3"
+V4_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v4"
 CALLER_KEY_FD = 205
 AUTHORIZER_SOCKET_PATH = "/run/serverware/oidc-session-activation-execution/authorizer.sock"
 RESERVER_SOCKET_PATH = "/run/serverware/oidc-session-activation-execution/reserver.sock"
 SQL_SOCKET_PATH = "/run/serverware/oidc-session-activation-execution/sql.sock"
 COMPLETION_SOCKET_PATH = "/run/serverware/oidc-session-activation/completion.sock"
+CONSUME_PLANNER_SOCKET_PATH = "/run/serverware/oidc-session-activation/delivery-planner.sock"
 _FIELDS = frozenset({"schema", "activationCallerPrivateKeyFd", "plannerKey",
     "currentRootEnrollment", "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"})
 _V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "sqlEndpoint", "statePredecessor"})
 _V3_FIELDS = _V2_FIELDS | frozenset({"completionEndpoint"})
+_V4_FIELDS = _V3_FIELDS | frozenset({"consumePlannerEndpoint", "consumePlannerKey"})
 _PLANNER_FIELDS = frozenset({"publicKeyBase64Url", "spkiDigest"})
+_CONSUME_PLANNER_FIELDS = _PLANNER_FIELDS | frozenset({"measurementDigest"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ORIGINAL_LIMITS = (("currentRootEnrollment", caller.authorization.MAX_ENROLLMENT_BYTES),
     ("grantEnrollment", caller.grants.MAX_ENROLLMENT_BYTES),
@@ -58,11 +62,15 @@ class _ActivationExecutionMaterial:
     reservation_predecessor: tuple | None = None
     sql_endpoint: tuple | None = None
     completion_endpoint: tuple | None = None
+    consume_planner_endpoint: tuple | None = None
+    consume_planner_public_key: object | None = None
+    consume_planner_measurement_digest: str | None = None
 
 
 def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
     if type(_path) is not str or _path not in (
-            AUTHORIZER_SOCKET_PATH, RESERVER_SOCKET_PATH, SQL_SOCKET_PATH, COMPLETION_SOCKET_PATH):
+            AUTHORIZER_SOCKET_PATH, RESERVER_SOCKET_PATH, SQL_SOCKET_PATH, COMPLETION_SOCKET_PATH,
+            CONSUME_PLANNER_SOCKET_PATH):
         raise OidcSessionActivationExecutionBootstrapError("activation endpoint profile is not source fixed")
     shape._object(value, _ENDPOINT_FIELDS, "activation caller endpoint")
     shape._literal(value["socketPath"], _path)
@@ -79,9 +87,10 @@ def _shape(value):
     if value is None:
         return
     if (type(value) is not dict or type(value.get("schema")) is not str
-            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA)):
+            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA, V4_SCHEMA)):
         raise OidcSessionActivationExecutionBootstrapError("activation execution purpose version differs")
-    fields = (_V3_FIELDS if value["schema"] == V3_SCHEMA else
+    fields = (_V4_FIELDS if value["schema"] == V4_SCHEMA else
+        _V3_FIELDS if value["schema"] == V3_SCHEMA else
         _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS)
     shape._object(value, fields,
         "control-plane activation execution purpose")
@@ -98,7 +107,7 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
-    if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
+    if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
         _endpoint(value["reserverEndpoint"], _path=RESERVER_SOCKET_PATH)
         _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
         predecessor = value["statePredecessor"]
@@ -109,8 +118,15 @@ def _shape(value):
         shape._integer(predecessor["nextFence"], minimum=1)
         if predecessor["sequence"] == 0 and predecessor["nextFence"] != 1:
             raise OidcSessionActivationExecutionBootstrapError("activation genesis requires fence one")
-    if value["schema"] == V3_SCHEMA:
+    if value["schema"] in (V3_SCHEMA, V4_SCHEMA):
         _endpoint(value["completionEndpoint"], _path=COMPLETION_SOCKET_PATH)
+    if value["schema"] == V4_SCHEMA:
+        _endpoint(value["consumePlannerEndpoint"], _path=CONSUME_PLANNER_SOCKET_PATH)
+        selected = value["consumePlannerKey"]
+        shape._object(selected, _CONSUME_PLANNER_FIELDS, "dedicated consume planner public key")
+        caller.authorization.transport._transport_shape(selected["publicKeyBase64Url"], 32, 32)
+        shape._digest(selected["spkiDigest"])
+        shape._digest(selected["measurementDigest"])
 
 
 def _purpose_pins(configured, root, other_keys, work):
@@ -196,7 +212,8 @@ def _admit_on_work(*, activation_execution, configuration_payload, configuration
                     raise OidcSessionActivationExecutionBootstrapError(
                         "activation caller or planner key reuses another configured purpose")
         reservation_endpoint = reservation_predecessor = sql_endpoint = completion_endpoint = None
-        if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
+        consume_endpoint = consume_key = consume_measurement = None
+        if value["schema"] in (V2_SCHEMA, V3_SCHEMA, V4_SCHEMA):
             current = caller.authorization._admit_enrollment_on_work(
                 enrollment_bytes=current_raw, root_public_key=root, work=work)
             for actual, expected in (
@@ -216,13 +233,28 @@ def _admit_on_work(*, activation_execution, configuration_payload, configuration
             reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
                 predecessor["nextFence"])
             sql_endpoint = _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
-        if value["schema"] == V3_SCHEMA:
+        if value["schema"] in (V3_SCHEMA, V4_SCHEMA):
             completion_endpoint = _endpoint(value["completionEndpoint"], _path=COMPLETION_SOCKET_PATH)
+        if value["schema"] == V4_SCHEMA:
+            consume = value["consumePlannerKey"]
+            consume_key = configuration._key(consume["publicKeyBase64Url"], work,
+                expected_spki=consume["spkiDigest"])
+            purpose_pins = (*forbidden, selected["spkiDigest"], policy["callerKey"]["spkiDigest"],
+                *(caller.keys._spki_on_work(key, work) for key in (
+                    current.computation_public_key, current.completion_public_key, current.state_public_key)))
+            for pin in purpose_pins:
+                work.prepare_comparison(consume["spkiDigest"], pin)
+                if consume["spkiDigest"] == pin:
+                    raise OidcSessionActivationExecutionBootstrapError(
+                        "consume planner key reuses another independently configured purpose")
+            consume_endpoint = _endpoint(value["consumePlannerEndpoint"], _path=CONSUME_PLANNER_SOCKET_PATH)
+            consume_measurement = consume["measurementDigest"]
         return _ActivationExecutionMaterial(CALLER_KEY_FD, admitted.caller_public_key, planner, root,
             current_raw, grant_raw, caller_raw, admitted.enrollment_digest, policy["callerId"],
             policy["callerKey"]["measurementDigest"], policy["maximumAgeNs"],
             policy["maximumClockSkewNs"], _endpoint(value["authorizerEndpoint"]),
-            reservation_endpoint, reservation_predecessor, sql_endpoint, completion_endpoint)
+            reservation_endpoint, reservation_predecessor, sql_endpoint, completion_endpoint,
+            consume_endpoint, consume_key, consume_measurement)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, OidcSessionActivationExecutionBootstrapError):
             raise

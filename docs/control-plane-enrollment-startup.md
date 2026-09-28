@@ -156,6 +156,29 @@ socket, key or service, activates nothing, and changes no live deployment.
 Public dispatch, consume/release continuation and the cookie boundary remain
 open; source is unbuilt/unexecuted and production acceptance stays 0/6.
 
+## Same-context consume preparation
+
+Source `.185` adds `_prepare_oidc_session_activation_consume(*,
+planner_bootstrap_bytes, history_custody_bytes)`, under explicit nested
+[execution/v4](control-plane-oidc-session-activation-execution-bootstrap.md#explicit-consume-planner-endpoint-profile).
+It selects only this owner's actual active permission. The permission must
+still hold the same acknowledged completion, original target, work, clock
+window and dispatcher guards. The result is `(prepared_raw6, exported_raw7)`;
+no completion DTO, new request context or execution permission is accepted.
+
+This facade cannot be called after `_dispatch_oidc_session_activation_completion`
+returns: that convenience method closes its context on return. A future public
+composition must keep the original context alive through completion, independent
+per-request root-original delivery and consume preparation. Reopening permission
+or passing a retained result cannot substitute for that same call. The root
+issuance and matching cold services are not provisioned by this method.
+
+The [consume continuation](control-plane-oidc-session-activation-consume-planning.md)
+retains only token-free control originals in a separate counted custody claim;
+the original old cookie is used only for the bounded private prepare exchange.
+This remains partial RELEASE integration, not consume execution, protected
+handoff, a public route, cookie issuance or current-session confirmation.
+
 ## Decision and trust boundary
 
 The runtime root has one additional, explicitly domain-separated bootstrap

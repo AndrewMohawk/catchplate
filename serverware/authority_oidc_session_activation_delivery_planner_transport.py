@@ -1,6 +1,7 @@
 """Fixed consume prepare/retained/export wire originals, not planning authority.
 
-Distinct request magics carry raw15 prepare or raw4 known-plan replay/export.
+Distinct request magics carry raw15 prepare, bounded raw16 prepare or raw4
+known-plan replay/export.
 Prepare/replay retain raw6; export has a distinct ciphertext-only raw7 response.
 Every exchange uses the supplied work/window/deadline; no allowance, endpoint,
 retry, policy, key, successful proof carrier or operation is selected by input.
@@ -22,9 +23,11 @@ assertion, evidence, clock = consume.assertion, consume.evidence, consume.clock
 completion, bundle = consume.provenance.response, consume.bundle
 OPERATION = consume.contract.OPERATION
 PREPARE_PURPOSE = b"prepare-oidc-session-activation-delivery-plan"
+BOUNDED_PREPARE_PURPOSE = b"prepare-bounded-oidc-session-activation-delivery-plan"
 RETAINED_PURPOSE = b"verify-retained-oidc-session-activation-delivery-plan"
 EXPORT_PURPOSE = b"export-oidc-session-activation-delivery-plan"
 PREPARE_REQUEST_MAGIC, RETAINED_REQUEST_MAGIC = b"SWODPQ01", b"SWODVQ01"
+BOUNDED_PREPARE_REQUEST_MAGIC = b"SWODPQ02"
 RESPONSE_MAGIC = b"SWODPR01"
 EXPORT_REQUEST_MAGIC, EXPORT_RESPONSE_MAGIC = b"SWODXQ01", b"SWODXR01"
 LISTENER_PATH = "/run/serverware/oidc-session-activation/delivery-planner.sock"
@@ -38,11 +41,13 @@ ACTIVATION_LIMITS = (*completion.transport.RESPONSE_LIMITS, consume.activation_p
     completion.grants.MAX_GRANT_BYTES, completion.admission.caller.MAX_ENROLLMENT_BYTES,
     completion.grants.MAX_ENROLLMENT_BYTES)
 PREPARE_REQUEST_LIMITS = (len(PREPARE_PURPOSE), 64, *ACTIVATION_LIMITS)
+BOUNDED_PREPARE_REQUEST_LIMITS = (len(BOUNDED_PREPARE_PURPOSE), 64, *ACTIVATION_LIMITS, 19)
 RETAINED_REQUEST_LIMITS = (len(RETAINED_PURPOSE), consume.contract.MAX_BYTES, 20, 71)
 EXPORT_REQUEST_LIMITS = (len(EXPORT_PURPOSE), consume.contract.MAX_BYTES, 20, 71)
 RESPONSE_LIMITS = (len(b"uncertain"), history.MAX_CONSUME_REQUEST_BYTES,
     assertion.MAX_CONTEXT_BYTES, consume.contract.MAX_BYTES, 71, 71)
 PREPARE_REQUEST_HEADER_BYTES = len(PREPARE_REQUEST_MAGIC) + 8 * len(PREPARE_REQUEST_LIMITS)
+BOUNDED_PREPARE_REQUEST_HEADER_BYTES = len(BOUNDED_PREPARE_REQUEST_MAGIC) + 8 * len(BOUNDED_PREPARE_REQUEST_LIMITS)
 RETAINED_REQUEST_HEADER_BYTES = len(RETAINED_REQUEST_MAGIC) + 8 * len(RETAINED_REQUEST_LIMITS)
 RESPONSE_HEADER_BYTES = len(RESPONSE_MAGIC) + 8 * len(RESPONSE_LIMITS)
 EXPORT_REQUEST_HEADER_BYTES = len(EXPORT_REQUEST_MAGIC) + 8 * len(EXPORT_REQUEST_LIMITS)
@@ -52,6 +57,7 @@ MAX_RESPONSE_BYTES = sum(RESPONSE_LIMITS)
 # Reserve the entire maximum response and both headers before reading a body.
 # Individual ciphertext limits cannot enlarge the existing 64 MiB exchange.
 MAX_PREPARE_REQUEST_BYTES = MAX_BYTES - PREPARE_REQUEST_HEADER_BYTES - RESPONSE_HEADER_BYTES - MAX_RESPONSE_BYTES
+MAX_BOUNDED_PREPARE_REQUEST_BYTES = MAX_BYTES - BOUNDED_PREPARE_REQUEST_HEADER_BYTES - RESPONSE_HEADER_BYTES - MAX_RESPONSE_BYTES
 MAX_RETAINED_REQUEST_BYTES = min(sum(RETAINED_REQUEST_LIMITS),
     MAX_BYTES - RETAINED_REQUEST_HEADER_BYTES - RESPONSE_HEADER_BYTES - MAX_RESPONSE_BYTES)
 MAX_EXPORT_REQUEST_BYTES = sum(EXPORT_REQUEST_LIMITS)
@@ -74,10 +80,12 @@ def _fail(message):
 
 def _source_bounds():
     if (len(ACTIVATION_LIMITS) != 13 or len(PREPARE_REQUEST_LIMITS) != 15
+            or len(BOUNDED_PREPARE_REQUEST_LIMITS) != 16
             or len(RETAINED_REQUEST_LIMITS) != 4 or len(RESPONSE_LIMITS) != 6
             or len(EXPORT_REQUEST_LIMITS) != 4 or len(EXPORT_RESPONSE_LIMITS) != 7
             or MAX_BYTES != 64 * 1024 * 1024 or MAX_BYTES > io.MAX_REQUEST_BYTES
             or MAX_PREPARE_REQUEST_BYTES <= 0 or MAX_RETAINED_REQUEST_BYTES <= 0
+            or MAX_BOUNDED_PREPARE_REQUEST_BYTES <= 0
             or not execution_bundle.OVERHEAD_BYTES + 2 <= MAX_EXPORT_BUNDLE_BYTES <= execution_bundle.MAX_BYTES
             or (MAX_EXPORT_REQUEST_BYTES + MAX_EXPORT_RESPONSE_BYTES
                 + EXPORT_REQUEST_HEADER_BYTES + EXPORT_RESPONSE_HEADER_BYTES > MAX_BYTES)
@@ -107,6 +115,9 @@ def _profile(purpose):
         _fail("consume planner purpose is not a fixed original")
     if purpose == PREPARE_PURPOSE:
         return PREPARE_REQUEST_MAGIC, PREPARE_REQUEST_LIMITS, MAX_PREPARE_REQUEST_BYTES, PREPARE_REQUEST_HEADER_BYTES
+    if purpose == BOUNDED_PREPARE_PURPOSE:
+        return (BOUNDED_PREPARE_REQUEST_MAGIC, BOUNDED_PREPARE_REQUEST_LIMITS,
+            MAX_BOUNDED_PREPARE_REQUEST_BYTES, BOUNDED_PREPARE_REQUEST_HEADER_BYTES)
     if purpose == RETAINED_PURPOSE:
         return RETAINED_REQUEST_MAGIC, RETAINED_REQUEST_LIMITS, MAX_RETAINED_REQUEST_BYTES, RETAINED_REQUEST_HEADER_BYTES
     if purpose == EXPORT_PURPOSE:
@@ -121,8 +132,11 @@ def _request_lengths(lengths, purpose):
             or any(type(size) is not int or not 0 <= size <= cap for size, cap in zip(lengths, limits))
             or lengths[0] != len(purpose) or sum(lengths) > maximum):
         _fail("consume planner request exceeds its fixed frame/aggregate bounds")
-    if purpose == PREPARE_PURPOSE:
-        if lengths[1] != 64 or any(size < 2 for size in lengths[6:]) or lengths[7] < bundle.OVERHEAD_BYTES + 2:
+    if purpose in (PREPARE_PURPOSE, BOUNDED_PREPARE_PURPOSE):
+        activation_end = 15
+        if (lengths[1] != 64 or any(size < 2 for size in lengths[6:activation_end])
+                or lengths[7] < bundle.OVERHEAD_BYTES + 2
+                or purpose == BOUNDED_PREPARE_PURPOSE and not 1 <= lengths[-1] <= 19):
             _fail("consume prepare original inventory differs")
         # Closed original completion shape only, never signature admission.
         completion.transport._response_lengths(lengths[2:6])
@@ -164,12 +178,17 @@ def _deadline_original(raw):
     return 1 <= len(raw) <= 20 and raw[0] in b"123456789" and all(item in b"0123456789" for item in raw)
 
 
+def _bounded_deadline_original(raw):
+    return (_deadline_original(raw) and len(raw) <= 19
+        and (len(raw) < 19 or raw <= b"9223372036854775807"))
+
+
 def _originals(values, *, response, export=False):
     """Closed byte shape only; no request, plan or completion proof is admitted."""
     if (type(response) is not bool or type(export) is not bool or type(values) is not tuple
             or (export and not response)):
         _fail("consume planner requires source-fixed immutable originals")
-    counts = ((7,) if export else (6,)) if response else (15, 4)
+    counts = ((7,) if export else (6,)) if response else (15, 16, 4)
     if len(values) not in counts or any(type(raw) is not bytes for raw in values):
         _fail("consume planner original frame inventory differs")
     lengths = tuple(len(raw) for raw in values)
@@ -187,7 +206,7 @@ def _originals(values, *, response, export=False):
     else:
         purpose = values[0]
         _request_lengths(lengths, purpose)
-        if purpose == PREPARE_PURPOSE:
+        if purpose in (PREPARE_PURPOSE, BOUNDED_PREPARE_PURPOSE):
             if any(item not in _URLSAFE for item in values[1]):
                 _fail("consume prepare token is not its exact original grammar")
             completion.transport._originals(values[2:6], response=True)
@@ -195,6 +214,8 @@ def _originals(values, *, response, export=False):
                 bundle._bounded_frame(values[7])
             except bundle.ActivationExecutionBundleError as exc:
                 raise AuthorityTransportError("consume prepare encrypted original frame differs") from exc
+            if purpose == BOUNDED_PREPARE_PURPOSE and not _bounded_deadline_original(values[-1]):
+                _fail("consume bounded prepare deadline is not canonical positive i64")
         elif not _deadline_original(values[2]) or not _digest(values[3]):
             _fail("consume retained deadline or journal identity is not canonical")
     return values
@@ -208,6 +229,16 @@ def _retained_scope(originals, work):
         _fail("consume retained decoding requires its fixed request branch")
     work.charge(input_bytes=2 * (len(held[2]) + len(held[3])))
     return int(held[2].decode("ascii")), held[3].decode("ascii")
+
+
+def _bounded_prepare_deadline_on_work(originals, work):
+    """The caller's untrusted ceiling can only shorten real server processing."""
+    evidence.capture._SharedLedger(work)
+    held = _originals(originals, response=False)
+    if held[0] != BOUNDED_PREPARE_PURPOSE:
+        _fail("consume bounded deadline requires the explicit raw16 profile")
+    work.charge(input_bytes=2 * len(held[-1]))
+    return int(held[-1].decode("ascii"))
 
 
 def _guard(live_window, deadline_ns, work):
@@ -262,6 +293,8 @@ def _recv_request(connection, *, live_window, deadline_ns, work):
     magic = _recv_exact(connection, 8, bound, work, live)
     if magic == PREPARE_REQUEST_MAGIC:
         purpose = PREPARE_PURPOSE
+    elif magic == BOUNDED_PREPARE_REQUEST_MAGIC:
+        purpose = BOUNDED_PREPARE_PURPOSE
     elif magic == RETAINED_REQUEST_MAGIC:
         purpose = RETAINED_PURPOSE
     elif magic == EXPORT_REQUEST_MAGIC:
@@ -298,6 +331,8 @@ def _socket_request(endpoint, *, originals, live_window, deadline_ns, work):
     # All originals, endpoint scalars and the original window are held before
     # the first native/clock callback. No callback or received proof is input.
     held = _originals(originals, response=False)
+    if held[0] == BOUNDED_PREPARE_PURPOSE:
+        _fail("bounded consume prepare requires its guarded caller entrypoint")
     exporting = held[0] == EXPORT_PURPOSE
     response_magic = EXPORT_RESPONSE_MAGIC if exporting else RESPONSE_MAGIC
     response_header = EXPORT_RESPONSE_HEADER_BYTES if exporting else RESPONSE_HEADER_BYTES
@@ -393,3 +428,193 @@ def _socket_export_retained(endpoint, *, envelope_bytes, expected_deadline_epoch
     return _socket_retained(endpoint, purpose=EXPORT_PURPOSE, envelope_bytes=envelope_bytes,
         expected_deadline_epoch_ns=expected_deadline_epoch_ns, expected_journal_digest=expected_journal_digest,
         live_window=live_window, deadline_ns=deadline_ns, work=work)
+
+
+def _socket_request_on_work(endpoint, *, originals, live_window, deadline_ns,
+        work, current, maximum_response_bytes=None):
+    """Only bounded prepare/export; retain actual parent and window guards."""
+    held = _originals(originals, response=False)
+    if held[0] not in (BOUNDED_PREPARE_PURPOSE, EXPORT_PURPOSE):
+        _fail("guarded consume caller requires its fixed prepare or export profile")
+    path, timeout, uid, gid = _endpoint(endpoint)
+    window = clock._validate(live_window)
+    evidence.capture._SharedLedger(work)
+    if type(deadline_ns) is not int or deadline_ns <= 0 or not callable(current):
+        _fail("guarded consume caller requires its original deadline and parent guard")
+    if (held[0] == BOUNDED_PREPARE_PURPOSE
+            and _bounded_prepare_deadline_on_work(held, work) != window[3]):
+        _fail("consume prepare epoch ceiling differs from its original caller window")
+    exporting = held[0] == EXPORT_PURPOSE
+    request_magic, _limits, _maximum, request_header = _profile(held[0])
+    response_magic = EXPORT_RESPONSE_MAGIC if exporting else RESPONSE_MAGIC
+    response_header = EXPORT_RESPONSE_HEADER_BYTES if exporting else RESPONSE_HEADER_BYTES
+    response_limits = EXPORT_RESPONSE_LIMITS if exporting else RESPONSE_LIMITS
+    source_response_maximum = MAX_EXPORT_RESPONSE_BYTES if exporting else MAX_RESPONSE_BYTES
+    response_maximum = source_response_maximum if maximum_response_bytes is None else maximum_response_bytes
+    if type(response_maximum) is not int or not 1 <= response_maximum <= source_response_maximum:
+        _fail("consume caller response ceiling is not a source-bounded tightening")
+    # This creates no opening sample or allowance. Both closures retain the
+    # actual supplied window; the parent additionally owns its original scope.
+    window, window_live = lifetime._window(window, deadline_ns, work)
+    bound = min(window[4], deadline_ns)
+    limits = work.limits
+    observed_epoch = window[0]
+    connection = None
+
+    def check():
+        nonlocal observed_epoch
+        evidence.capture._SharedLedger(work)
+        if work.limits is not limits:
+            _fail("consume caller changed its inherited work limits")
+        io._check_deadline(bound)
+        # Sandwich the genuine local epoch/monotonic observation in the actual
+        # parent guard. Every observed epoch remains a floor for later stages.
+        for guard in (current, window_live, current):
+            before = work.metrics
+            try:
+                epoch = guard()
+            finally:
+                evidence.capture._SharedLedger(work)
+                after = work.metrics
+                if (work.limits is not limits or after.hash_work < before.hash_work
+                        or after.input_bytes < before.input_bytes or after.json_nodes < before.json_nodes):
+                    _fail("consume caller guard changed its original work")
+                io._check_deadline(bound)
+            if type(epoch) is not int or epoch <= 0 or epoch < observed_epoch:
+                _fail("consume caller current epoch reversed")
+            observed_epoch = epoch
+        return observed_epoch
+
+    def call(operation):
+        check()
+        try:
+            return evidence.production._callback(work,
+                lambda: io._call_until(connection, bound, operation))
+        finally:
+            check()
+
+    def send_precharged(raw):
+        for offset in range(0, len(raw), io._CHUNK_BYTES):
+            check()
+            chunk = raw[offset:offset + io._CHUNK_BYTES]
+            call(lambda: connection.sendall(chunk))
+        check()
+
+    def receive_precharged(size):
+        if type(size) is not int or not 0 <= size <= MAX_BYTES:
+            _fail("consume caller response allocation exceeds its source bound")
+        check()
+        if size == 0:
+            return b""
+        buffer = bytearray(size)
+        offset = 0
+        while offset < size:
+            count = min(size - offset, io._CHUNK_BYTES)
+            chunk = call(lambda: connection.recv(count))
+            if type(chunk) is not bytes or not 1 <= len(chunk) <= count:
+                _fail("consume caller response closed early or over-read")
+            buffer[offset:offset + len(chunk)] = chunk
+            offset += len(chunk)
+        result = bytes(buffer)
+        check()
+        return result
+
+    check()
+    timeout_bound = evidence.production._callback(work, lambda: io._deadline_ns(timeout))
+    check()
+    bound = min(bound, timeout_bound)
+    check()
+    request_bytes = sum(len(raw) for raw in held)
+    work.charge(input_bytes=4096 + 2 * request_bytes + 4 * request_header + 4 * response_header)
+    header = request_magic + b"".join(len(raw).to_bytes(8, "big") for raw in held)
+
+    def allocate():
+        nonlocal connection
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+
+    try:
+        check()
+        try:
+            # Keep the allocation cleanup-owned even if the stable callback
+            # suffix or parent/current suffix rejects immediately afterward.
+            evidence.production._callback(work, allocate)
+        finally:
+            check()
+        call(lambda: connection.connect(path))
+        actual_uid, actual_gid, _pid = call(lambda: authority_transport._peer_identity(connection))
+        if (actual_uid, actual_gid) != (uid, gid):
+            _fail("consume caller root-created listener peer differs")
+        send_precharged(header)
+        for raw in held:
+            send_precharged(raw)
+        call(lambda: connection.shutdown(socket.SHUT_WR))
+        if receive_precharged(len(response_magic)) != response_magic:
+            _fail("consume caller response magic differs")
+        length_header = receive_precharged(8 * len(response_limits))
+        lengths = tuple(int.from_bytes(length_header[offset:offset + 8], "big")
+            for offset in range(0, len(length_header), 8))
+        _response_lengths(lengths, export=exporting)
+        response_bytes = sum(lengths)
+        if (response_bytes > response_maximum
+                or request_bytes + response_bytes + request_header + response_header > MAX_BYTES):
+            _fail("consume caller response exceeds its held aggregate ceiling")
+        # Reserve all response buffers, chunks and immutable bodies together,
+        # before any response body allocation, plus the exact-EOF read.
+        work.charge(input_bytes=3 * response_bytes + 1)
+        received = tuple(receive_precharged(size) for size in lengths)
+        if call(lambda: connection.recv(1)) != b"":
+            _fail("consume caller response contains trailing bytes")
+        result = _originals(received, response=True, export=exporting)
+        expected_status = b"exported" if exporting else b"prepared"
+        if result[0] not in (expected_status, b"uncertain"):
+            _fail("consume caller response belongs to another fixed branch")
+        check()
+    finally:
+        if connection is not None:
+            try:
+                check()
+            finally:
+                # Close the actual owned socket once even when a guard or
+                # ledger is already invalid. No numeric descriptor retry.
+                try:
+                    connection.close()
+                finally:
+                    check()
+    check()
+    return result
+
+
+def _socket_prepare_on_work(endpoint, *, old_token_bytes, activation_originals,
+        live_window, deadline_ns, work, current, maximum_response_bytes=None):
+    """Guarded raw16 prepare; old_token64 is sent only, never retained here."""
+    if type(activation_originals) is not tuple or len(activation_originals) != 13:
+        _fail("guarded consume prepare needs the exact original activation tuple13")
+    window = clock._validate(live_window)
+    ceiling = window[3]
+    if type(ceiling) is not int or not 1 <= ceiling <= 2**63 - 1:
+        _fail("consume caller original epoch ceiling exceeds positive i64")
+    evidence.capture._SharedLedger(work)
+    work.charge(input_bytes=2 * 19)
+    original_ceiling = str(ceiling).encode("ascii")
+    originals = (BOUNDED_PREPARE_PURPOSE, old_token_bytes, *activation_originals, original_ceiling)
+    return _socket_request_on_work(endpoint, originals=originals, live_window=window,
+        deadline_ns=deadline_ns, work=work, current=current, maximum_response_bytes=maximum_response_bytes)
+
+
+def _socket_export_retained_on_work(endpoint, *, envelope_bytes, expected_deadline_epoch_ns,
+        expected_journal_digest, live_window, deadline_ns, work, current, maximum_response_bytes=None):
+    """Guarded existing raw4 export; return unverified ciphertext-only raw7."""
+    evidence.capture._SharedLedger(work)
+    deadline, digest = expected_deadline_epoch_ns, expected_journal_digest
+    if type(deadline) is not int or not 1 <= deadline < 10**20:
+        _fail("consume independently retained deadline is outside its fixed grammar")
+    if type(digest) is not str or len(digest) != 71:
+        _fail("consume independently retained journal identity is not bounded")
+    work.charge(input_bytes=2 * (20 + 71))
+    try:
+        original_deadline, original_digest = str(deadline).encode("ascii"), digest.encode("ascii")
+    except UnicodeError as exc:
+        raise AuthorityTransportError("consume retained selector is not ASCII") from exc
+    originals = (EXPORT_PURPOSE, envelope_bytes, original_deadline, original_digest)
+    return _socket_request_on_work(endpoint, originals=originals, live_window=live_window,
+        deadline_ns=deadline_ns, work=work, current=current, maximum_response_bytes=maximum_response_bytes)

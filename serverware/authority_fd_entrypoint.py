@@ -34,12 +34,14 @@ CONTROL_PLANE_ACTIVATION_PLANNER_SOCKET = "/run/serverware/oidc-session-activati
 CONTROL_PLANE_ACTIVATION_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v1"
 CONTROL_PLANE_ACTIVATION_V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v2"
 CONTROL_PLANE_ACTIVATION_V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v3"
+CONTROL_PLANE_ACTIVATION_V4_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v4"
 CONTROL_PLANE_ACTIVATION_KEY_FD = 205
 CONTROL_PLANE_ACTIVATION_KEY_NAME = "serverware-oidc-session-activation-execution-caller-key"
 CONTROL_PLANE_ACTIVATION_SOCKET = "/run/serverware/oidc-session-activation-execution/authorizer.sock"
 CONTROL_PLANE_ACTIVATION_RESERVER_SOCKET = "/run/serverware/oidc-session-activation-execution/reserver.sock"
 CONTROL_PLANE_ACTIVATION_SQL_SOCKET = "/run/serverware/oidc-session-activation-execution/sql.sock"
 CONTROL_PLANE_ACTIVATION_COMPLETION_SOCKET = "/run/serverware/oidc-session-activation/completion.sock"
+CONTROL_PLANE_ACTIVATION_CONSUME_PLANNER_SOCKET = "/run/serverware/oidc-session-activation/delivery-planner.sock"
 CONTROL_PLANE_RELEASE_SCHEMA = "serverware.controlPlaneOidcSessionActivationRelease/v1"
 CONTROL_PLANE_RELEASE_SOCKET = "/run/serverware/oidc-session-activation-token-release/release.sock"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
@@ -748,14 +750,18 @@ def _control_plane_activation_key_slot(value, *, issuer_descriptor, bootstrap_de
         return None
     if (type(value) is not dict or type(value.get("schema")) is not str
             or value["schema"] not in (CONTROL_PLANE_ACTIVATION_SCHEMA,
-                CONTROL_PLANE_ACTIVATION_V2_SCHEMA, CONTROL_PLANE_ACTIVATION_V3_SCHEMA)):
+                CONTROL_PLANE_ACTIVATION_V2_SCHEMA, CONTROL_PLANE_ACTIVATION_V3_SCHEMA,
+                CONTROL_PLANE_ACTIVATION_V4_SCHEMA)):
         raise RuntimeError("activation caller delivery schema differs")
     fields = {"schema", "activationCallerPrivateKeyFd", "plannerKey", "currentRootEnrollment",
         "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
-    if value["schema"] in (CONTROL_PLANE_ACTIVATION_V2_SCHEMA, CONTROL_PLANE_ACTIVATION_V3_SCHEMA):
+    if value["schema"] in (CONTROL_PLANE_ACTIVATION_V2_SCHEMA, CONTROL_PLANE_ACTIVATION_V3_SCHEMA,
+            CONTROL_PLANE_ACTIVATION_V4_SCHEMA):
         fields |= {"reserverEndpoint", "sqlEndpoint", "statePredecessor"}
-    if value["schema"] == CONTROL_PLANE_ACTIVATION_V3_SCHEMA:
+    if value["schema"] in (CONTROL_PLANE_ACTIVATION_V3_SCHEMA, CONTROL_PLANE_ACTIVATION_V4_SCHEMA):
         fields.add("completionEndpoint")
+    if value["schema"] == CONTROL_PLANE_ACTIVATION_V4_SCHEMA:
+        fields |= {"consumePlannerEndpoint", "consumePlannerKey"}
     if (set(value) != fields or type(value["activationCallerPrivateKeyFd"]) is not int
             or value["activationCallerPrivateKeyFd"] != CONTROL_PLANE_ACTIVATION_KEY_FD
             or bootstrap_descriptor == CONTROL_PLANE_ACTIVATION_KEY_FD):
@@ -771,6 +777,20 @@ def _control_plane_activation_key_slot(value, *, issuer_descriptor, bootstrap_de
             or type(pin) is not str or len(pin) != 71 or not pin.startswith("sha256:")
             or any(character not in "0123456789abcdef" for character in pin[7:])):
         raise RuntimeError("activation planner public key encoding is not bounded canonical data")
+    if value["schema"] == CONTROL_PLANE_ACTIVATION_V4_SCHEMA:
+        consume = value["consumePlannerKey"]
+        if type(consume) is not dict or set(consume) != {"publicKeyBase64Url", "spkiDigest", "measurementDigest"}:
+            raise RuntimeError("consume planner public key delivery shape is not closed")
+        encoded = consume["publicKeyBase64Url"]
+        if (type(encoded) is not str or len(encoded) != 43
+                or any(character not in alphabet for character in encoded)
+                or alphabet.index(encoded[-1]) & 3):
+            raise RuntimeError("consume planner public key encoding is not canonical")
+        for name in ("spkiDigest", "measurementDigest"):
+            pin = consume[name]
+            if (type(pin) is not str or len(pin) != 71 or not pin.startswith("sha256:")
+                    or any(character not in "0123456789abcdef" for character in pin[7:])):
+                raise RuntimeError("consume planner public identity is not canonical SHA256")
     for name, maximum in (("currentRootEnrollment", 128 * 1024),
             ("grantEnrollment", 16 * 1024), ("authorizationEnrollment", 16 * 1024)):
         original = value[name]
@@ -785,7 +805,8 @@ def _control_plane_activation_key_slot(value, *, issuer_descriptor, bootstrap_de
         if unused and alphabet.index(encoded[-1]) & ((1 << unused) - 1):
             raise RuntimeError("activation caller enrollment encoding is not canonical")
     endpoints = (("authorizerEndpoint", CONTROL_PLANE_ACTIVATION_SOCKET),)
-    if value["schema"] in (CONTROL_PLANE_ACTIVATION_V2_SCHEMA, CONTROL_PLANE_ACTIVATION_V3_SCHEMA):
+    if value["schema"] in (CONTROL_PLANE_ACTIVATION_V2_SCHEMA, CONTROL_PLANE_ACTIVATION_V3_SCHEMA,
+            CONTROL_PLANE_ACTIVATION_V4_SCHEMA):
         endpoints += (("reserverEndpoint", CONTROL_PLANE_ACTIVATION_RESERVER_SOCKET),
             ("sqlEndpoint", CONTROL_PLANE_ACTIVATION_SQL_SOCKET))
         predecessor = value["statePredecessor"]
@@ -798,8 +819,10 @@ def _control_plane_activation_key_slot(value, *, issuer_descriptor, bootstrap_de
         if (type(pin) is not str or len(pin) != 71 or not pin.startswith("sha256:")
                 or any(character not in "0123456789abcdef" for character in pin[7:])):
             raise RuntimeError("activation predecessor head is not canonical SHA256")
-    if value["schema"] == CONTROL_PLANE_ACTIVATION_V3_SCHEMA:
+    if value["schema"] in (CONTROL_PLANE_ACTIVATION_V3_SCHEMA, CONTROL_PLANE_ACTIVATION_V4_SCHEMA):
         endpoints += (("completionEndpoint", CONTROL_PLANE_ACTIVATION_COMPLETION_SOCKET),)
+    if value["schema"] == CONTROL_PLANE_ACTIVATION_V4_SCHEMA:
+        endpoints += (("consumePlannerEndpoint", CONTROL_PLANE_ACTIVATION_CONSUME_PLANNER_SOCKET),)
     for field, path in endpoints:
         endpoint = value[field]
         if (type(endpoint) is not dict

@@ -285,9 +285,16 @@ def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_chall
     if include_completion:
         from serverware import control_plane_oidc_session_activation_completion as completion
 
-        return response, completion._complete_on_permission(permission,
+        complete_originals = completion._complete_on_permission(permission,
             before_vector_bytes=held.before, current=current, narrow=narrow_completion,
             deadline_ns=bound)
+        if complete_originals[0] == b"acknowledged":
+            # Only the actual original-verifying same-call suffix reaches this
+            # branch. Public facades still cannot restore an escaped context.
+            permission._completion_originals = permission._completion_seal = complete_originals
+            permission._completion_context = permission._completion_context_seal = (held.before, current, narrow_completion)
+            permission._dispatch_phase = "completed"
+        return response, complete_originals
     # Exact unsigned raw4 only. The durable claim prevents automatic replay;
     # completion, recovery and token handoff require separate original authority.
     return response

@@ -26,14 +26,18 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: historical recovery and workload identity
 
-[`.231` source / eccad1a](https://github.com/example/private-deployment)
-connects the [cold-admitted control-plane caller and public issuance action](docs/control-plane-workload-identity-issuance.md):
-a cookie-only requester, fresh action-bound WebAuthn and a different approver.
-The independent issuance grant and [`.230` issuer worker](https://github.com/example/private-deployment)
-remain required, including durable claim before signing and retained certificate
-re-admission. Production now requires a signed enabled-or-disabled caller
-bootstrap. Explicit CLI/portal submission, trust distribution, issuer lifecycle
-and authenticated channels remain open.
+[`.232` source / 3718394](https://github.com/example/private-deployment)
+adds [explicit SDK/CLI options and one-shot submission](docs/workload-identity-submission.md),
+portal issuance with mandatory fresh WebAuthn and a different approver, and an
+imported-options-receipt → passkey → assertion-download handoff. Successful CLI
+submission genuinely admits the leaf and retained local key under the same
+original budget. Sticky attempt claims and exact response retention do not
+authorize automatic retry; approval continuation is explicit.
+
+Earlier [`.231` caller/public action](https://github.com/example/private-deployment)
+and [`.230` issuer worker](https://github.com/example/private-deployment)
+retain their separate credits and independent issuance-grant requirement.
+Production requires a signed enabled-or-disabled caller bootstrap.
 
 [`.229` source / fcbe181](https://github.com/example/private-deployment)
 is separately credited for:
@@ -49,6 +53,8 @@ is separately credited for:
 
 This is source integration, not a tested pilot or new landed checkpoint.
 Source remains unbuilt, unexecuted and unprovisioned.
+Trust distribution, issuer lifecycle, authenticated channels, sidecar integration,
+H05 historical recovery and O04 approval integration debt remain open.
 [Remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation

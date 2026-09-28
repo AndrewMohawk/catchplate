@@ -160,3 +160,10 @@ def _socket_request(endpoint, *, originals, deadline_ns):
     connection.close()
     _check_deadline(bound)
     return received
+
+
+def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current):
+    """Guarded consume raw8/raw4 exchange; return unsigned outcome originals."""
+    from serverware import authority_oidc_session_activation_caller_transport as guarded
+    return guarded._consume_sql_on_work(endpoint, originals=originals,
+        deadline_ns=deadline_ns, work=work, current=current)

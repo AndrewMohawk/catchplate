@@ -24,8 +24,8 @@ Separate token-free activation claims burn the retained finalization locator
 before the planner request; even exact recovered claims prohibit dispatch.
 Six fixed activation stage records retain only opaque public/cipher originals
 beneath that claim. Recovery permits reads, never resumed stage publication.
-Separate consume-planning claims count as additional logical records with only
-prepared/exported/authorized siblings, never an eighth activation-stage file.
+Separate consume claims count as additional logical records with seven fixed
+stage siblings, including an irreversible SQL claim and unsigned observation.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -174,7 +174,7 @@ class CustodyJournal:
     their separate association is published last. Each may retain one opaque
     reservation raw3, one SQL claim, one SQL outcome, one completion outcome
     and one completion reconciliation under that association.
-    At most seven times maximum_records published files are admitted, including associations and
+    Seven times maximum_records plus one per consume claim bounds published files, including associations and
     fixed registration outcomes: legacy records use at most three, evidence
     grants seven, signer records one and finalization grants seven each.
     Old records are never rewritten or removed; legacy marker byte
@@ -183,8 +183,8 @@ class CustodyJournal:
     the unchanged physical/quota ceilings, without reserving legacy markers.
     An activation claim has exactly six possible stage siblings: seven total
     files, exhausting its unchanged allowance. No stage adds another slot.
-    Consume planning uses a separately counted logical claim with at most four
-    files; it never appends an eighth file to the activation claim.
+    Consume uses a separately counted logical claim with at most eight files.
+    Only that namespace adds one physical allowance; other codecs remain strict.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -263,6 +263,11 @@ class CustodyJournal:
         metadata = self._directory_metadata(self._directory_fd)
         return (metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns, metadata.st_ctime_ns)
 
+    def _physical_limit(self):
+        # Only a separately counted, admitted consume claim may use its eighth
+        # file. This is not a generic eight-file allowance for older families.
+        return 7 * self._maximum_records + len(self._consume_claims)
+
     def _require_process(self):
         if os.getpid() != self._pid:
             raise CustodyJournalError("journal cannot be used or closed by a forked process")
@@ -328,7 +333,7 @@ class CustodyJournal:
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
                 count += 1
-                if count > 7 * self._maximum_records:
+                if count > 8 * self._maximum_records:
                     raise CustodyJournalError("journal physical file limit exceeded")
                 name = entry.name
                 if name.startswith("prepared-"):
@@ -439,7 +444,8 @@ class CustodyJournal:
                         if stage_kind in by_kind:
                             raise CustodyJournalError("consume response stage repeats its slot")
                         by_kind[stage_kind] = (record.source_revision, record.digest,
-                            len(encoded), record.originals[0] if stage_kind != "authorized" else b"")
+                            len(encoded), record.originals[0]
+                            if stage_kind in ("prepared", "exported", "sql-outcome") else b"")
                 elif kind == "attempted":
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
@@ -483,6 +489,10 @@ class CustodyJournal:
                     by_kind[kind] = (outcome.source_revision, outcome.digest)
                     if kind == "completion-outcome" and outcome.originals[0] == b"uncertain":
                         uncertain_completions.add(digest)
+        # Directory order is not authority: first bound the scan by the worst
+        # possible inventory, then require the exact admitted consume allowance.
+        if count > 7 * self._maximum_records + len(consume_claims):
+            raise CustodyJournalError("journal physical inventory exceeds its consume-specific allowance")
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
         retention_only = {digest for digest, entry in prepared.items()
@@ -731,7 +741,7 @@ class CustodyJournal:
             _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
         if (len(self._entries) + len(self._release_attempts)
                 + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
-                or len(self._file_identities) >= 7 * self._maximum_records
+                or len(self._file_identities) >= self._physical_limit()
                 or len(encoded) + marker_reserve
                     > self._quota - self._used_bytes - self._reserved_bytes):
             raise CustodyJournalError("journal preparation capacity is exhausted")
@@ -812,7 +822,7 @@ class CustodyJournal:
             required_bytes = sum(len(encoded) for _, encoded in missing) + len(association_encoded)
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims) + len(missing) > self._maximum_records
-                    or len(self._file_identities) + len(missing) + 1 > 7 * self._maximum_records
+                    or len(self._file_identities) + len(missing) + 1 > self._physical_limit()
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete preparation capacity is exhausted")
             try:
@@ -894,7 +904,7 @@ class CustodyJournal:
             required_bytes = missing * len(encoded) + len(marker)
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims) + missing > self._maximum_records
-                    or len(self._file_identities) + missing + 1 > 7 * self._maximum_records
+                    or len(self._file_identities) + missing + 1 > self._physical_limit()
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete finalization retention capacity is exhausted")
             try:
@@ -961,7 +971,7 @@ class CustodyJournal:
             except BaseException:
                 self._io.poison()
                 raise
-            if (len(self._file_identities) >= 7 * self._maximum_records
+            if (len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal finalization reservation capacity is exhausted")
             try:
@@ -1028,7 +1038,7 @@ class CustodyJournal:
                     raise CustodyJournalError("finalization SQL outcome cannot replace its first exact originals")
                 self._require_ready()
                 return existing.digest
-            if (len(self._file_identities) >= 7 * self._maximum_records
+            if (len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal finalization SQL outcome capacity is exhausted")
             try:
@@ -1129,7 +1139,7 @@ class CustodyJournal:
                     raise CustodyJournalError("registration outcome cannot replace its first exact originals")
                 self._require_ready()
                 return existing.digest
-            if (len(self._file_identities) >= 7 * self._maximum_records
+            if (len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal registration outcome capacity is exhausted")
             try:
@@ -1250,7 +1260,7 @@ class CustodyJournal:
                 raise CustodyJournalError("release client authorization was already claimed; repeat is forbidden")
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
-                    or len(self._file_identities) >= 7 * self._maximum_records
+                    or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal release claim capacity is exhausted")
             try:
@@ -1335,7 +1345,7 @@ class CustodyJournal:
                     return existing.digest
                 if profile != len(by_kind):
                     raise CustodyJournalError("activation stage publication skipped its fixed predecessor")
-                if (len(self._file_identities) >= 7 * self._maximum_records
+                if (len(self._file_identities) >= self._physical_limit()
                         or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                     raise CustodyJournalError("journal activation stage capacity is exhausted")
                 self._require_ready()
@@ -1425,7 +1435,7 @@ class CustodyJournal:
                 raise CustodyJournalError("activation target was already claimed; repeat dispatch is forbidden")
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
-                    or len(self._file_identities) >= 7 * self._maximum_records
+                    or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal activation claim capacity is exhausted")
             try:
@@ -1450,7 +1460,7 @@ class CustodyJournal:
         predecessor = self._activation_scope(claim.finalization_digest, activation)
         if ("completion-outcome" not in activation
                 or predecessor.source_revision != claim.source_revision
-                or len(by_kind) > 3
+                or len(by_kind) > len(consume_records.KINDS) - 1
                 or set(by_kind) != set(consume_records.KINDS[1:1 + len(by_kind)])
                 or any(value[0] != claim.source_revision for value in by_kind.values())
                 or ("exported" in by_kind and by_kind["prepared"][3] != b"prepared")
@@ -1491,7 +1501,7 @@ class CustodyJournal:
                 or record.activation_authorization_digest != claim.activation_authorization_digest
                 or record.kind != kind
                 or (record.source_revision, record.digest, len(original),
-                    record.originals[0] if kind != "authorized" else b"") != metadata):
+                    record.originals[0] if kind in ("prepared", "exported", "sql-outcome") else b"") != metadata):
             raise CustodyJournalError("consume response changed after admitted recovery")
         return record
 
@@ -1526,7 +1536,7 @@ class CustodyJournal:
                 raise CustodyJournalError("consume target was already claimed; preparation cannot repeat")
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
-                    or len(self._file_identities) >= 7 * self._maximum_records
+                    or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal consume claim capacity is exhausted")
             try:
@@ -1557,10 +1567,12 @@ class CustodyJournal:
             self._require_ready()
             if slot not in self._consume_live_claims or target not in self._activation_live_claims:
                 raise CustodyJournalError("recovered consume claims are read-only; continuation is forbidden")
+            by_kind = self._consume_records.get(slot, {})
+            if kind == "sql-claimed" and kind in by_kind:
+                raise CustodyJournalError("consume SQL dispatch was already claimed; repeat is forbidden")
             try:
                 self._read_activation_claim(target)
                 claim = self._read_consume_claim(slot)
-                by_kind = self._consume_records.get(slot, {})
                 self._consume_metadata_current(slot, by_kind)
                 if (claim.finalization_digest != target
                         or claim.activation_authorization_digest != authorization_digest):
@@ -1578,7 +1590,7 @@ class CustodyJournal:
                         or (kind == "exported" and by_kind["prepared"][3] != b"prepared")
                         or (kind == "authorized" and by_kind["exported"][3] != b"exported")):
                     raise CustodyJournalError("consume publication skipped its fixed successful predecessor")
-                if (len(self._file_identities) >= 7 * self._maximum_records
+                if (len(self._file_identities) >= self._physical_limit()
                         or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                     raise CustodyJournalError("journal consume response capacity is exhausted")
                 self._require_ready()
@@ -1586,7 +1598,7 @@ class CustodyJournal:
                 self._used_bytes += len(encoded)
                 self._consume_records.setdefault(slot, {})[kind] = (
                     record.source_revision, record.digest, len(encoded),
-                    record.originals[0] if kind != "authorized" else b"")
+                    record.originals[0] if kind in ("prepared", "exported", "sql-outcome") else b"")
                 self._consume_scope(slot, self._consume_records[slot])
                 self._require_ready()
                 return record.digest
@@ -1614,6 +1626,34 @@ class CustodyJournal:
         return self._append_consume_record(finalization_digest=finalization_digest,
             activation_authorization_digest=activation_authorization_digest,
             kind="authorized", originals=originals)
+
+    def append_oidc_session_activation_consume_grant(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain raw1 before grant interpretation; no replay or reservation authority."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="grant", originals=originals)
+
+    def append_oidc_session_activation_consume_reservation(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain exact signed reserve/snapshot/ACK before interpretation and SQL."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="reserved", originals=originals)
+
+    def claim_oidc_session_activation_consume_sql_attempt(self, *, finalization_digest,
+            activation_authorization_digest):
+        """Durably burn SQL once, even for an identical same-owner repeat."""
+        self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="sql-claimed", originals=())
+
+    def append_oidc_session_activation_consume_sql_outcome(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain unsigned raw4 before interpretation; never a commit or retry proof."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="sql-outcome", originals=originals)
 
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):

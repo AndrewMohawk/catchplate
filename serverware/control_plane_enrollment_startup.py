@@ -324,6 +324,16 @@ class _EnrollmentOwner:
             raise EnrollmentStartupError("consume authorization requires the actual active parent permission")
         return permission.authorize_consume()
 
+    def _dispatch_oidc_session_activation_consume(self):
+        """Dispatch once on the exact still-live consume-authorized context."""
+        from serverware import control_plane_oidc_session_activation_execution as execution
+
+        _require_pid()
+        permission = self._activation_permission
+        if type(permission) is not execution._ActivationPermission or permission._owner is not self:
+            raise EnrollmentStartupError("consume dispatch requires the actual active parent permission")
+        return permission.dispatch_consume()
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

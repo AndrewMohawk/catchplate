@@ -1,14 +1,14 @@
-# Durable consume-planning originals
+# Durable consume originals
 
 Source integrated, unbuilt and unexecuted. These dedicated local records retain
-only a token-free planning claim, the exact consume planner responses and the
-original signed consume caller authorization. They are not permission,
-signed-plan admission, private replay, SQL/commit evidence,
-token release, a public route or a retry mechanism.
+only token-free claims and exact consume planning, authorization, grant,
+reservation and unsigned SQL originals. They are not permission, signed-plan
+admission, private replay, committed SQL evidence, token release, a public route
+or a retry mechanism.
 
 ## Closed inventory and association
 
-One separate logical consume-planning claim has at most four physical files:
+One separate logical consume claim has at most eight physical files:
 
 | Fixed kind | Exact retained content | Ordering |
 | --- | --- | --- |
@@ -16,6 +16,10 @@ One separate logical consume-planning claim has at most four physical files:
 | `prepared` | raw6: `prepared`, canonical consume request, canonical scope, signed consume plan, plan digest, journal digest; or `uncertain` and five empty frames | Retained before interpreting the response; genuine plan admission must also finish before export |
 | `exported` | raw7: `exported`, the same request/scope/plan, encrypted execution bundle, plan digest, journal digest; or `uncertain` and six empty frames | Only after the retained `prepared` response; retained before interpreting or returning the export |
 | `authorized` | raw1: original signed consume caller authorization | Only after a successful `exported` predecessor and actual same-call signing; durably retained before return |
+| `grant` | raw1: original signed consume grant | After `authorized`; retained before independent control interpretation and reservation |
+| `reserved` | raw3: signed consume reserve request, computation snapshot, state ACK | After `grant`; retained before interpretation and the one-use SQL claim |
+| `sql-claimed` | raw0 | After `reserved`; durable before the sole SQL request, never idempotent permission to resend |
+| `sql-outcome` | raw4: actual unsigned `observed-commit` or `uncertain` response, bounded IDs/marker | After `sql-claimed`; retained before status, ID or marker interpretation; not a commit proof |
 
 The fixed slot identity frames both the finalization locator and the genuine
 activation authorization identity under
@@ -44,6 +48,11 @@ Earlier profile indices, domains and byte encodings are unchanged. The new
 profile stores only the signed source-control original, not separate request,
 expectations or private inputs. Its shape/content digest does not authenticate
 the signature, permit another signing attempt or confer grant authority.
+Profiles 4–7 append grant, reserved, SQL claim and SQL outcome. Their fixed
+raw1/raw3/raw0/raw4 counts use the actual dedicated consume authorizer,
+reservation and SQL response grammars and aggregate limits. The raw0 claim has
+no selectable payload. Earlier profile bytes remain unchanged; no generic
+grant, reservation or SQL family is widened.
 New publication requires the current source cohort;
 decode accepts historical source metadata only as ordinary data. There is no
 generic prepared/forwarding-family extension.
@@ -60,20 +69,28 @@ is an original ciphertext, not plaintext or authority.
 - `append_oidc_session_activation_consume_prepared(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
 - `append_oidc_session_activation_consume_exported(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
 - `append_oidc_session_activation_consume_authorized(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
+- `append_oidc_session_activation_consume_grant(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
+- `append_oidc_session_activation_consume_reservation(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
+- `claim_oidc_session_activation_consume_sql_attempt(finalization_digest=..., activation_authorization_digest=...) -> None`
+- `append_oidc_session_activation_consume_sql_outcome(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
 - `load_oidc_session_activation_consume_records(finalization_digest=..., activation_authorization_digest=...) -> ConsumeRecords`
 
-`ConsumeRecords(claim, prepared, exported, authorized=None)` is ordinary retained data, with
-optional response records. Each `ConsumeRecord` contains source revision,
+`ConsumeRecords(claim, prepared, exported, authorized=None, grant=None,
+reservation=None, sql_attempt=None, sql_outcome=None)` is ordinary retained data,
+with optional stage records. Each `ConsumeRecord` contains source revision,
 finalization and authorization digests, slot digest, kind, original tuple and
 content digest. None is a successful-admission carrier.
 
 Before the stable native custody callback, the genuine caller precharges
 `control_plane_oidc_session_activation_consume_records.MAX_CLAIM_IO_BYTES`
-for the claim, or `_append_io_bytes("prepared"/"exported"/"authorized", originals)`
-for a retained original stage. `MAX_AUTHORIZED_BYTES` exposes the bounded raw1
-record including framing; `MAX_LOAD_IO_BYTES` includes that optional suffix.
-Old three-file prefixes load with `authorized=None` and gain no publication or
-signing permission. The exact work ledger and actual current guard remain around
+for the planning claim, or `_append_io_bytes(kind, originals)` for each fixed
+stage: `prepared`, `exported`, `authorized`, `grant`, `reserved`, `sql-claimed`
+or `sql-outcome`. SQL claim passes the exact empty tuple `()` to the meter.
+`MAX_AUTHORIZED_BYTES`, `MAX_GRANT_BYTES`, `MAX_RESERVATION_BYTES`,
+`MAX_SQL_CLAIM_BYTES` and `MAX_SQL_OUTCOME_BYTES` expose their framed bounds;
+`MAX_LOAD_IO_BYTES` includes the complete optional suffix. Old prefixes load
+with absent suffix fields set to `None` and gain no publication, signing or
+SQL permission. The exact work ledger and actual current guard remain around
 each callback. The charge includes the fixed activation-claim read, the consume
 claim read where needed, and bounded publication/readback or existing-slot
 comparison. The append helper uses actual body sizes plus maximum framing, not
@@ -85,30 +102,39 @@ clock, creates a work allowance or restores continuation authority.
 ## Durability, quota and terminal uncertainty
 
 The existing no-replace publication, file and directory synchronization, normal
-close, exact readback and immutable identity checks apply to all four files.
+close, exact readback and immutable identity checks apply to all eight files.
 An identical response append is only first-exact local retention, never
 permission to repeat a network request. A different original poisons the owner.
 An uncertain prepared response cannot acquire an export sibling, and an
 uncertain export cannot acquire an authorization sibling. The caller
 also treats every uncertain response or failed guard as terminal. A claim is
 never repeatable, including after restart or with another authorization.
+The fixed SQL claim is independently non-repeatable even within the same live
+owner; it is durably published before network I/O. An identical old SQL claim,
+missing outcome or unsigned uncertainty cannot authorize another SQL request.
+An exact SQL outcome may be retained once after the actual call; storage does
+not authenticate its commit marker or prove nonexecution.
 
 Recovery validates the fixed prefix, claim/source/target association and
 original response shapes, but deliberately does not restore the volatile
 same-owner continuation set. Historical originals can only be read. Missing
 responses, successful decode and exact old bytes cannot authorize prepare,
-export, repeat signing, automatic recovery or a resend. The authorization
-stage still requires this live owner's original activation and consume claims,
+export, repeat signing, SQL, automatic recovery or a resend. Every dispatch-suffix
+stage requires this live owner's original activation and consume claims,
 their exact current-source prefix and successful exported predecessor.
 
 Every consume claim counts as one additional logical record alongside legacy
 prepared records, release claims and activation claims, at every capacity gate
-and during recovery. Its four files do not become an eighth activation file.
-The activation logical claim still has at most seven files; this distinct
-logical claim has at most four. Therefore the existing
-`7 * maximum_records` physical ceiling remains sufficient without increasing
-the 4,096 logical-record limit, byte quota or 8 GiB maximum. Legacy marker byte
-reservations are unchanged and still subtracted before new publication.
+and during recovery. The activation claim still has at most seven files; the
+separate consume claim now has eight, including the required SQL claim. Live
+physical accounting is therefore exactly
+`7 * maximum_records + admitted_consume_claim_count`: only that separately
+counted namespace contributes one extra possible file. This does not widen
+other codecs or give every old record eight slots. Unordered recovery first
+limits scanning to the worst-case `8 * maximum_records`, then enforces the
+tighter consume-specific ceiling and complete fixed prefix before admission.
+The 4,096 logical-record limit, byte quota and 8 GiB maximum are unchanged.
+Legacy marker byte reservations remain subtracted before new publication.
 Capacity failure may leave a terminal partial prefix; no later storage or
 effect is silently promised, and no record is removed to enable a retry.
 

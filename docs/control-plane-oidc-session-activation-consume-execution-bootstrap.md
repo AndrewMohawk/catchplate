@@ -20,6 +20,43 @@ contains exactly `socketPath`, `requestTimeoutSeconds`, `listenerUid`, and
 an integer timeout of 1–30 seconds, and root-created listener peer 0:0.
 Configuration is not permission to contact that endpoint.
 
+## Explicit downstream profile
+
+Source `.187` adds the distinct nested
+`serverware.controlPlaneOidcSessionActivationConsumeExecution/v2` under the
+same parent v8. It contains exactly the v1 fields plus `reservationEndpoint`,
+`reservationPredecessor`, and `sqlEndpoint`. Nested v1 remains closed and
+authorization-only. No parent version, key, descriptor or processing allowance
+is added.
+
+The two new endpoints use the same closed timeout/peer grammar. Their only
+paths are `/run/serverware/oidc-session-activation-delivery-execution/reserver.sock`
+and `/run/serverware/oidc-session-activation-delivery-execution/sql.sock`,
+respectively, with integer timeouts of 1–30 seconds and root listener peers
+0:0. The existing read-only socket-directory overlay already covers all three
+fixed paths. It creates no listener and does not choose or authorize a profile.
+
+`reservationPredecessor` contains exactly `sequence`, `headDigest`, and
+`nextFence`. The actual consume reservation `_predecessor_scope` checks a
+sequence from zero through `MAX_RECORDS - 2` (1022), a canonical SHA256 head,
+and a positive signed-i64 fence. The mapper additionally authenticates the
+original current-root enrollment, joins its identity/database/generation,
+requires room for both reservation and completion under its enrolled record
+limit, and joins a zero-sequence predecessor to the enrollment genesis head
+and fence one. The stdlib delivery selector recognizes the same closed scalar
+shape but supplies no cryptographic admission.
+
+`_ConsumeExecutionMaterial` appends `reservation_endpoint`,
+`reservation_predecessor`, and `sql_endpoint`, all defaulting to `None` under
+v1. Endpoints are `(path, timeout, 0, 0)`; the predecessor is
+`(sequence, headDigest, nextFence)`. These are independent root-signed caller
+pins, never synthesized from a returned acknowledgment. They do not establish
+current pending state or replace the reserve/SQL services' separately admitted
+original scope, actual private replay and durable state transition. Future
+returned originals still require genuine admission under the caller's same
+live permission and original work/window/deadline. No recovery retry, AES
+custody, token release or current-session claim follows from configuration.
+
 ## Original admission and purpose separation
 
 Enabling this lane requires actual activation execution v4 and enabled

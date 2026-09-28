@@ -205,6 +205,17 @@ uses the same call's prepared/exported originals and original processing bounds,
 retains the signed authorization before return, and cannot reopen an escaped
 context. It grants no automatic grant dispatch, SQL, token release or retry.
 
+Explicit nested consume execution `/v2` additionally admits fixed reservation
+and SQL endpoints and an independently root-configured predecessor scope.
+The `/v1` lane remains authorization-only. The private no-argument
+`_dispatch_oidc_session_activation_consume()` facade selects only this owner's
+actual still-active, consume-authorized permission and its one-use dispatch
+continuation. It accepts no returned record, successful result, replacement
+window or work ledger. The [consume dispatcher](control-plane-oidc-session-activation-consume-dispatch.md)
+must authenticate and durably retain the actual grant/reserve originals and
+claim the SQL attempt before I/O; its unsigned SQL result is not completion,
+token release or present session authority.
+
 The optional
 [`docker-compose.oidc-session-activation-consume-execution.yml`](../docker-compose.oidc-session-activation-consume-execution.yml)
 source overlay adds a read-only key bind at
@@ -214,8 +225,9 @@ read-only socket-directory bind at
 inputs are `SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_CALLER_KEY_FILE` and
 `SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_EXECUTION_SOCKET_DIR`; both reject
 automatic host-path creation. They are packaging inputs, not runtime path
-overrides. No key, listener, account or infrastructure is created; the
-independently provisioned authorizer endpoint is not called by this slice.
+overrides. No key, listener, account or infrastructure is created. The same
+directory bind covers the independently provisioned authorizer, reserver and
+SQL sockets; mounting it does not authorize or perform a request.
 The enrollment-only offline preparer is unchanged. Source remains unbuilt and
 unexecuted, and production acceptance remains 0/6.
 

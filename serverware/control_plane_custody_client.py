@@ -754,6 +754,38 @@ class ControlPlaneCustodyClient:
             activation_authorization_digest=activation_authorization_digest,
             kind="authorized", originals=originals)
 
+    def append_oidc_session_activation_consume_grant(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain the raw signed grant before independent original admission."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="grant", originals=originals)
+
+    def append_oidc_session_activation_consume_reservation(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain signed reserve/snapshot/ACK originals before interpretation."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="reserved", originals=originals)
+
+    def claim_oidc_session_activation_consume_sql_attempt(self, *, finalization_digest,
+            activation_authorization_digest):
+        """Burn the SQL attempt before I/O; identical and recovered claims deny."""
+        ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="sql-claimed", originals=())
+
+    def append_oidc_session_activation_consume_sql_outcome(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain unsigned raw4 before interpretation without claiming a commit."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="sql-outcome", originals=originals)
+
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):
         """Read bounded ordinary history, not a recovered permission to continue."""

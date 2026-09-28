@@ -32,9 +32,12 @@ CONTROL_PLANE_ENROLLMENT_V7_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentB
 CONTROL_PLANE_ENROLLMENT_V8_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v8"
 CONTROL_PLANE_ENROLLMENT_V8_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v8"
 CONTROL_PLANE_CONSUME_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v1"
+CONTROL_PLANE_CONSUME_V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v2"
 CONTROL_PLANE_CONSUME_KEY_FD = 206
 CONTROL_PLANE_CONSUME_KEY_NAME = "serverware-oidc-session-activation-consume-caller-key"
 CONTROL_PLANE_CONSUME_SOCKET = "/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock"
+CONTROL_PLANE_CONSUME_RESERVATION_SOCKET = "/run/serverware/oidc-session-activation-delivery-execution/reserver.sock"
+CONTROL_PLANE_CONSUME_SQL_SOCKET = "/run/serverware/oidc-session-activation-delivery-execution/sql.sock"
 CONTROL_PLANE_ACTIVATION_PLANNING_SCHEMA = "serverware.controlPlaneOidcSessionActivationPlanning/v1"
 CONTROL_PLANE_ACTIVATION_PLANNER_SOCKET = "/run/serverware/oidc-session-activation/planner.sock"
 CONTROL_PLANE_ACTIVATION_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v1"
@@ -880,10 +883,13 @@ def _control_plane_consume_key_slot(value, *, issuer_descriptor, bootstrap_descr
         raise RuntimeError("v8 reserves the consume key slot independently of enablement")
     if value is None:
         return None
-    if (type(value) is not dict or set(value) != {"schema", "callerPrivateKeyFd",
-            "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
-            or value["schema"] != CONTROL_PLANE_CONSUME_SCHEMA
-            or type(value["callerPrivateKeyFd"]) is not int
+    if (type(value) is not dict or type(value.get("schema")) is not str
+            or value["schema"] not in (CONTROL_PLANE_CONSUME_SCHEMA, CONTROL_PLANE_CONSUME_V2_SCHEMA)):
+        raise RuntimeError("consume caller delivery schema differs")
+    fields = {"schema", "callerPrivateKeyFd", "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
+    if value["schema"] == CONTROL_PLANE_CONSUME_V2_SCHEMA:
+        fields |= {"reservationEndpoint", "reservationPredecessor", "sqlEndpoint"}
+    if (set(value) != fields or type(value["callerPrivateKeyFd"]) is not int
             or value["callerPrivateKeyFd"] != CONTROL_PLANE_CONSUME_KEY_FD
             or type(activation_value) is not dict
             or activation_value.get("schema") != CONTROL_PLANE_ACTIVATION_V4_SCHEMA
@@ -902,15 +908,30 @@ def _control_plane_consume_key_slot(value, *, issuer_descriptor, bootstrap_descr
         unused = 4 if size % 3 == 1 else 2 if size % 3 == 2 else 0
         if unused and alphabet.index(encoded[-1]) & ((1 << unused) - 1):
             raise RuntimeError("consume caller enrollment encoding is not canonical")
-    endpoint = value["authorizerEndpoint"]
-    if (type(endpoint) is not dict
-            or set(endpoint) != {"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"}
-            or endpoint["socketPath"] != CONTROL_PLANE_CONSUME_SOCKET
-            or type(endpoint["requestTimeoutSeconds"]) is not int
-            or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
-            or any(type(endpoint[name]) is not int or endpoint[name] != 0
-                for name in ("listenerUid", "listenerGid"))):
-        raise RuntimeError("consume authorizer endpoint differs from its fixed delivery contract")
+    endpoints = (("authorizerEndpoint", CONTROL_PLANE_CONSUME_SOCKET),)
+    if value["schema"] == CONTROL_PLANE_CONSUME_V2_SCHEMA:
+        endpoints += (("reservationEndpoint", CONTROL_PLANE_CONSUME_RESERVATION_SOCKET),
+            ("sqlEndpoint", CONTROL_PLANE_CONSUME_SQL_SOCKET))
+        predecessor = value["reservationPredecessor"]
+        if (type(predecessor) is not dict or set(predecessor) != {"sequence", "headDigest", "nextFence"}
+                or type(predecessor["sequence"]) is not int or not 0 <= predecessor["sequence"] <= 1022
+                or type(predecessor["nextFence"]) is not int or not 1 <= predecessor["nextFence"] <= 2**63 - 1
+                or predecessor["sequence"] == 0 and predecessor["nextFence"] != 1):
+            raise RuntimeError("consume independent predecessor delivery shape differs")
+        head = predecessor["headDigest"]
+        if (type(head) is not str or len(head) != 71 or not head.startswith("sha256:")
+                or any(character not in "0123456789abcdef" for character in head[7:])):
+            raise RuntimeError("consume predecessor head is not canonical SHA256")
+    for name, path in endpoints:
+        endpoint = value[name]
+        if (type(endpoint) is not dict
+                or set(endpoint) != {"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"}
+                or endpoint["socketPath"] != path
+                or type(endpoint["requestTimeoutSeconds"]) is not int
+                or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
+                or any(type(endpoint[field]) is not int or endpoint[field] != 0
+                    for field in ("listenerUid", "listenerGid"))):
+            raise RuntimeError("consume endpoint differs from its fixed delivery contract")
     return CONTROL_PLANE_CONSUME_KEY_FD
 
 

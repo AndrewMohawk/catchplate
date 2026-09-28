@@ -1,6 +1,6 @@
-# Guarded activation caller transports
+# Guarded activation and consume caller transports
 
-The five fixed activation transport profiles expose the same private
+The five fixed activation and three fixed consume transport profiles expose the same private
 caller API:
 
 ```text
@@ -16,11 +16,20 @@ and older helpers are unchanged. SQL's existing uncertainty and empty-frame
 grammar is not widened.
 
 `authority_oidc_session_activation_caller_transport.py` shares only the bounded
-I/O implementation. Five literal entry functions select the exact five
+I/O implementation. Eight literal entry functions select the exact eight
 existing transport modules; its private engine rejects any other module. It
 does not accept request-selected profiles, framing callbacks or arbitrary
 endpoints. Shape-valid response bytes and a matching local socket peer are not
 authorization, replay, commit, completion, currentness or token-release proof.
+
+The consume authorizer, reserver and SQL wrappers retain their separate
+`/run/serverware/oidc-session-activation-delivery-execution/` socket paths,
+magic bytes and role admission. They exchange raw4/raw1, raw5/raw3 and raw8/raw4
+respectively. Their dedicated literal entry functions cannot select an
+activation operation, and only the operation-neutral unsigned SQL response
+grammar is shared. Original signature, enrollment, exact-plan and ancestry
+admission belong to the [same-context consume dispatcher](control-plane-oidc-session-activation-consume-dispatch.md),
+not this framing engine. Private consume replay remains in the isolated service.
 
 ## Original allowance and owned I/O
 

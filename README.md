@@ -39,12 +39,13 @@ five named connections so partial progress stays visible. Prepare/export is
 source-landed in [fbdb646](https://github.com/example/private-deployment).
 Authorization is **source-landed** in [93e0142](https://github.com/example/private-deployment).
 Consume Grant/reserve/SQL is **source-landed** in [f3b7781](https://github.com/example/private-deployment).
-Consume completion, protected handoff and the public route/cookie boundary remain todo.
+Consume Completion is **source-landed** in [ac569c8](https://github.com/example/private-deployment) (`.188`).
+Protected handoff and the public route/cookie boundary remain todo.
 
-[![Inside step 22: permission/planning, durable records, guarded transports, activation SQL and activation completion are source-landed. Consume/release is in progress: prepare/export source-landed in fbdb646; Authorization source-landed in 93e0142; Grant/reserve/SQL source-landed in f3b7781. Consume completion and protected handoff remain todo. Public route/cookie remains todo. Named connections, not effort percentages; production acceptance remains 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Inside step 22: permission/planning, durable records, guarded transports, activation SQL and activation completion are source-landed. Consume/release is in progress: prepare/export source-landed in fbdb646; Authorization source-landed in 93e0142; Grant/reserve/SQL source-landed in f3b7781; Completion source-landed in ac569c8. Protected handoff and the public route/cookie remain todo. Named connections, not effort percentages; production acceptance remains 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 Read left to right: **green/check = committed source · amber = in progress ·
-gray = still to do**. Each named connection has a
+blue = next/open · gray = still to do**. Each named connection has a
 [completion criterion and commit evidence](docs/production-status.md#activation-dispatch-detail).
 The consume SQL/completion connections are separate from the completed
 activation SQL/completion steps.

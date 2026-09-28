@@ -24,12 +24,13 @@ def _fail(message):
     acquisition._fail(message)
 
 
-def _exchange_on_active(active):
+def _exchange_on_active(active, *, _delivery=None):
     """Only the source-owned spent/in-progress context can invoke this path.
 
     No caller target, successful material, raw request, token, scope or allowance
-    is an argument. A retained verifier remains usable only while this same
-    context is active; no post-cleanup HTTP/cookie authority is created here.
+    is an argument. The private path retains its live-context-only guard.
+    Public delivery selects one actual source-owned terminal before any fresh
+    derivation, so its genuine verifier can survive only normal cleanup.
     """
     if (type(active) is not acquisition._RecoveryAcquisition
             or acquisition._ACTIVE is not active
@@ -59,7 +60,7 @@ def _exchange_on_active(active):
     held_references = (scope, parent_lifetime, work, config, root, local_custody,
         selected, selected_pin, originals, result, capacity)
 
-    def identity():
+    def active_identity():
         observed = (active._scope, active._lifetime, active._work, active._config,
             active._root, active._custody, active._selected, active._selected_pin,
             active._originals, active._result, active._capacity)
@@ -77,11 +78,29 @@ def _exchange_on_active(active):
         # In-progress is required at entry, not forever: the full retained
         # response guard also checks the completed but still active context.
 
-    def ancestor(epoch, monotonic):
-        identity()
+    def original_parent_continuity(epoch, monotonic):
+        active_identity()
         # This parent contains original actor/grant guards only. It never calls
         # the response child retained separately by the acquisition context.
         return acquisition._RecoveryAcquisition._parent_continuity(active, epoch, monotonic)
+
+    identity = active_identity
+    ancestor = original_parent_continuity
+    retain_current = active._retain_receiving_current
+    delivery_reservation = 0
+    if _delivery is not None:
+        from serverware import control_plane_oidc_session_activation_recovery_delivery as delivery
+
+        if (type(_delivery) is not delivery._StagedRecoveryResponse
+                or active._delivery is not _delivery or active._delivery_seal is not _delivery
+                or _delivery._active is not active):
+            _fail("recovery exchange terminal is not its actual source-owned association")
+        active_identity()
+        ancestor = delivery._StagedRecoveryResponse._exchange_on_active(
+            _delivery, active, original_parent_continuity)
+        identity = lambda: delivery._StagedRecoveryResponse._identity(_delivery)
+        retain_current = _delivery._retain_receiver
+        delivery_reservation = delivery._AUTH_RESERVATION
 
     identity()
     acquisition._RecoveryAcquisition._parent_current(active)
@@ -95,7 +114,7 @@ def _exchange_on_active(active):
     client_raw, server_raw, retained_outcome = originals
     # Existing retained parent/actor/grant representations remain reserved.
     # Hint decoding and the token-free claim have fixed separate headroom.
-    extra = (capacity[0] + 8 * hints.MAX_DESCRIPTOR_BYTES + attempts.MAX_CLAIM_IO_BYTES
+    extra = (capacity[0] + delivery_reservation + 8 * hints.MAX_DESCRIPTOR_BYTES + attempts.MAX_CLAIM_IO_BYTES
         + 4 * (transport.RECOVERY_REQUEST_HEADER_BYTES + transport.RESPONSE_HEADER_BYTES)
         + 2 * transport.MAX_RESPONSE_BYTES)
     if MAX_ORIGINAL_BYTES != 64 * 1024 * 1024 or extra >= MAX_ORIGINAL_BYTES:
@@ -214,4 +233,4 @@ def _exchange_on_active(active):
         client_authorization_bytes=client_raw, server_bootstrap_bytes=server_raw,
         root_public_key=root, expected_client_scope=expected_scope, live_window=lifetime.window,
         transport_deadline_ns=lifetime.bound, work=work, _continuity=receiving_continuity,
-        _retain_current=active._retain_receiving_current, _additional_original_bytes=receiving_extra)
+        _retain_current=retain_current, _additional_original_bytes=receiving_extra)

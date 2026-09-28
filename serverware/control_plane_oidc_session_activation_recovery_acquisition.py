@@ -56,7 +56,7 @@ class _RecoveryAcquisition:
         "_stage_spent", "_staged", "_capacity", "_capacity_seal",
         "_scope_seal", "_lifetime_seal", "_exchange_spent", "_exchange_in_progress",
         "_exchange_complete", "_exchange_failed", "_receiving_current", "_receiving_seal",
-        "_token", "_token_seal")
+        "_token", "_token_seal", "_delivery", "_delivery_seal", "_normal_exit")
 
     def __init__(self, construction, scope):
         if construction is not _CONSTRUCTION or type(scope) is not actor._ActorScope:
@@ -81,6 +81,8 @@ class _RecoveryAcquisition:
         self._exchange_complete, self._exchange_failed = False, False
         self._receiving_current, self._receiving_seal = None, None
         self._token, self._token_seal = None, None
+        self._delivery, self._delivery_seal = None, None
+        self._normal_exit = False
         self._lifetime = production._Lifetime(scope._window, scope._bound,
             self._work, self._ancestor)
         self._lifetime_seal = self._lifetime
@@ -91,6 +93,7 @@ class _RecoveryAcquisition:
                 or scope is not self._scope_seal or self._lifetime is not self._lifetime_seal
                 or self._receiving_current is not self._receiving_seal
                 or self._token is not self._token_seal
+                or self._delivery is not self._delivery_seal
                 or actor._ACTIVE is not scope or scope._active is not True
                 or scope._authorized is not True or scope._recovery_acquisition_spent is not True
                 or os.getpid() != self._pid or threading.get_ident() != self._thread
@@ -134,6 +137,7 @@ class _RecoveryAcquisition:
         return lifetime.epoch, lifetime.monotonic
 
     def _invalidate_exchange(self):
+        self._normal_exit = False
         self._exchange_failed = True
         self._exchange_complete = False
         self._token, self._token_seal = None, None
@@ -220,19 +224,29 @@ class _RecoveryAcquisition:
         # Deliberately no readiness flag, permission carrier or ACK result.
         return None
 
-    def exchange_token(self):
+    def exchange_token(self, *, _delivery=None):
         """One private protected exchange; expose no token in the method result."""
         from serverware import control_plane_oidc_session_activation_recovery_exchange as exchange
 
         self.current()
         if (self._staged is not True or self._stage_spent is not True
-                or self._exchange_spent is not False or self._exchange_in_progress is not False):
+                or self._exchange_spent is not False or self._exchange_in_progress is not False
+                or self._delivery is not None or self._delivery_seal is not None):
             self._invalidate_exchange()
             _fail("recovery exchange requires one successfully staged, unspent context")
+        if _delivery is not None:
+            from serverware import control_plane_oidc_session_activation_recovery_delivery as delivery
+
+            if type(_delivery) is not delivery._StagedRecoveryResponse or _delivery._active is not self:
+                self._invalidate_exchange()
+                _fail("recovery exchange terminal differs from its actual source-owned context")
+            # Select the exact source-owned terminal before any exchange
+            # derivation. Plain private callers keep the original None path.
+            self._delivery, self._delivery_seal = _delivery, _delivery
         self._exchange_spent = True
         self._exchange_in_progress = True
         try:
-            token = exchange._exchange_on_active(self)
+            token = exchange._exchange_on_active(self, _delivery=_delivery)
             if (type(token) is not bytes or len(token) != 64
                     or self._receiving_current is None
                     or self._receiving_current is not self._receiving_seal):
@@ -270,6 +284,8 @@ class _RecoveryAcquisition:
         self._scope = None
         self._scope_seal, self._lifetime_seal = None, None
         self._capacity, self._capacity_seal = None, None
+        # Keep only the exact terminal association for its normal-exit proof.
+        # This does not retain the revoked live scope, token or receiving guard.
         if _ACTIVE is self:
             _ACTIVE = None
 
@@ -400,6 +416,8 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
 
     if type(owner) is not startup._EnrollmentOwner or _ACTIVE is not None:
         _fail("recovery acquisition requires the non-overlapping actual owner")
+    active = None
+    completed = False
     with actor._authorize_on_owner(owner, request=request, recovery_bytes=recovery_bytes,
             live_window=live_window, transport_deadline_ns=transport_deadline_ns,
             work=work, current=current) as scope:
@@ -415,8 +433,15 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
             active.current()
             yield active
             active.current()
+            completed = True
         finally:
             active._close()
+    # Both contexts have now exited normally, including the actor's trust and
+    # startup locks. Any failure before here leaves this marker False.
+    if (active is None or completed is not True or scope._normal_exit is not True
+            or active._closed is not True):
+        _fail("recovery acquisition lacks its normal original cleanup")
+    active._normal_exit = True
 
 
 @contextmanager

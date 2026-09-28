@@ -136,7 +136,7 @@ class _ActorScope:
         "_policy_pin", "_request_pin", "_old_token", "_target_pin", "_binding",
         "_binding_pin", "_payload_digest", "_credential", "_count", "_roles",
         "_rbac_pin", "_session_pin", "_trust_pin", "_window", "_bound", "_epoch", "_monotonic",
-        "_pid", "_thread", "_active", "_authorized", "_recovery_acquisition_spent")
+        "_pid", "_thread", "_active", "_authorized", "_recovery_acquisition_spent", "_normal_exit")
 
     def __init__(self, construction, *, application, owner, request, original,
             payload, work, current, owner_scope, target, policy, policy_pin,
@@ -164,6 +164,7 @@ class _ActorScope:
         self._pid, self._thread = os.getpid(), threading.get_ident()
         self._active, self._authorized = True, False
         self._recovery_acquisition_spent = False
+        self._normal_exit = False
 
     @property
     def binding(self):
@@ -287,6 +288,7 @@ class _ActorScope:
     def _close(self):
         global _ACTIVE
 
+        self._normal_exit = False
         self._active, self._authorized = False, False
         self._old_token = None
         if _ACTIVE is self:
@@ -417,7 +419,8 @@ def _authorize_on_owner(owner, *, request, recovery_bytes, live_window,
     """Private recovery acquisition consumes this live context, never its result.
 
     Its source-owned one-use latch is never reset, including on failure or exit.
-    No public recovery exchange or token delivery follows in this source slice.
+    A separately selected source-owned terminal may retain genuine originals;
+    this actor itself never remains live after cleanup or carries a token out.
     A fresh assertion can claim a challenge and advance its authenticator CAS;
     rejection is not a claim that those permission-side effects were absent.
     """
@@ -425,8 +428,9 @@ def _authorize_on_owner(owner, *, request, recovery_bytes, live_window,
 
     _request(request, recovery_bytes)
     current()
+    scope = None
+    completed = False
     with _startup_scope():
-        scope = None
         try:
             with application.trust_bundle_lock(exclusive=False):
                 scope = _prepare_on_owner(owner, request=request, recovery_bytes=recovery_bytes,
@@ -447,7 +451,14 @@ def _authorize_on_owner(owner, *, request, recovery_bytes, live_window,
                 scope._authorized = True
                 yield scope
                 scope.current()
+                completed = True
             scope._guard()
         finally:
             if scope is not None:
                 scope._close()
+    # Reaching this point proves normal trust-context exit, the final guard,
+    # actor cleanup and startup-lock release. A finally-closed actor alone
+    # never proves any of those successful suffixes.
+    if scope is None or completed is not True:
+        _deny("recovery actor lacks its completed original context", 503)
+    scope._normal_exit = True

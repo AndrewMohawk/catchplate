@@ -73,8 +73,9 @@ policy and response guards remain attached under the same original work,
 PID/thread, owner resources and narrowing clocks. The ancestor callback invokes
 only the actual actor guard; it never cycles through a child guard or recursively
 selects records under the journal I/O lock. Normal or exceptional context exit
-revokes the continuation and clears its actor reference before the actor's own
-cleanup. Byte copies alone provide no recovery authorization.
+revokes the live continuation and clears its actor reference before the actor's
+own cleanup. The separately selected terminal path below does not make those
+closed guards usable again. Byte copies alone provide no recovery authorization.
 
 ## Separate protected recovery context
 
@@ -110,10 +111,40 @@ increase its deadline or allowance.
 Any exchange or retained-guard failure poisons the context and clears its token
 and receiving guard. Repeated exchange is forbidden. Normal or exceptional exit
 also clears them and revokes access before actor cleanup; keeping an immutable
-byte copy cannot carry this authority beyond the live context. This source path
-does not perform fresh current-auth, replace a cookie, send an HTTP success or
-make a recipient-acknowledgment claim. Those require a separate guarded public
-delivery integration.
+byte copy cannot carry this authority beyond the live context. The plain private
+path does not perform fresh current-auth, replace a cookie, send an HTTP success
+or make a recipient-acknowledgment claim.
+
+## Source-selected terminal and normal cleanup
+
+The separate [recovery delivery owner](control-plane-oidc-session-activation-recovery-delivery.md)
+constructs its exact `_StagedRecoveryResponse` before calling
+`active.exchange_token(_delivery=terminal)`. Only that source-owned class,
+holding this exact active context, is accepted. The acquisition records the
+one-use `_delivery`/`_delivery_seal` identity before the exchange coordinator
+begins derivation, not merely before response verification. It is not a caller
+callback or admitted authority DTO. The coordinator can therefore select the
+terminal's original-preserving ancestors before any derived child retains them.
+Omitting `_delivery` preserves the ordinary private exchange and token-access
+behavior.
+
+Both actor and acquisition initialize `_normal_exit=False`. The acquisition's
+post-yield full guard must succeed before its close clears token, receiver,
+selected originals, live scope and child guards. The enclosing actor must then
+pass its final current guard, leave the trust context normally, pass its final
+source guard, close, and release the startup lock normally. Only afterward is
+the actor marker set, followed by the acquisition marker. Exception cleanup or
+an object merely being closed never sets either successful suffix marker.
+Failures preserve poisoning; no latch is reset and no automatic retry follows.
+
+Only the exact terminal association remains on the closed acquisition so the
+terminal can join its retained original references to both normal-exit markers.
+The terminal, not this context, owns any post-cleanup genuine receiver and
+independent-original continuation, fresh current-auth, cookie construction and
+guarded send. It cannot fall back to `active.current()`, the closed actor, or a
+copied token when cleanup fails. The ordinary parent/current methods remain
+strictly live-only. Normal cleanup proves neither worker readiness nor browser
+delivery.
 
 ## Capacity and remaining boundary
 
@@ -159,9 +190,10 @@ The staged ACK does not establish worker readiness or genuine checkpoint-one
 private outcome observation. The separate recovery context now connects the
 protected exchange and genuine response verifier; this is source integration,
 not observed store recovery, runtime delivery or recipient acknowledgment.
-Fresh current-auth/cookie completion and a public recovery dispatch route remain
-open. A reconstructed canonical outcome and its fresh signed expectations are
-not proof that the private store contains it.
+The separate terminal/HTTP integration supplies its own current-auth, cleanup
+and final-send boundary; these private context APIs alone do not prove that a
+cookie reached a browser. A reconstructed canonical outcome and its fresh signed
+expectations are not proof that the private store contains it.
 Prior-stage completion recovery remains separate; neither activation nor SQL
 may be repeated. See the [full public recovery boundaries](oidc-session-activation-public-recovery.md).
 Source only: unbuilt, unexecuted and unprovisioned.

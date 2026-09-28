@@ -401,14 +401,14 @@ async def _run_bounded_blocking(
 async def csrf_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
 
-    if request.scope.get("path") == recovery_routes.OPTIONS_PATH:
+    if request.scope.get("path") in {recovery_routes.OPTIONS_PATH, recovery_routes.POST_PATH}:
         # The old cookie is possession evidence only on this route. Do not
         # send it through generic current-session authentication even to
         # choose a CSRF branch; the actor repeats this exact cookie check.
         try:
             _require_registration_execution_session_csrf(request)
         except HTTPException as exc:
-            return recovery_routes.error(exc.status_code)
+            return recovery_routes.error(exc.status_code, path=request.scope.get("path"))
         return await call_next(request)
     try:
         validate_csrf_request(request)
@@ -440,7 +440,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
 
-    if request.scope.get("path") == recovery_routes.OPTIONS_PATH:
+    if request.scope.get("path") in {recovery_routes.OPTIONS_PATH, recovery_routes.POST_PATH}:
         refusal = await recovery_routes._frame_request(request)
         if refusal is not None:
             return refusal
@@ -1138,16 +1138,21 @@ class _SignedControlPlaneASGI:
                 proof_headers=proof_headers,
             )
             from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
+            from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
 
-            await activation_delivery._send_response(scope, receive, send, response,
+            delivery = (recovery_delivery if scope.get("path") == recovery_delivery.POST_PATH
+                else activation_delivery)
+            await delivery._send_response(scope, receive, send, response,
                 before_dispatch=invalid_request_nonce,
                 downstream_failed=downstream_error is not None or buffered.too_large or not buffered.complete)
             if downstream_error is not None:
                 raise downstream_error
         finally:
             from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
+            from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
 
             activation_delivery._discard_scope(scope)
+            recovery_delivery._discard_scope(scope)
             if acquired_buffer_slot:
                 _SIGNED_RESPONSE_BUFFER_SLOTS.release()
 

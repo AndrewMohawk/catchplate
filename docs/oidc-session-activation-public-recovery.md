@@ -8,10 +8,12 @@ configuration, the live private actor and durable acquisition records. The same
 context stages its retained server original through a separate recovery-only
 root receiver and same-process worker continuation. A separate private recovery
 context now connects the protected exchange and genuine token response
-verification while the fresh actor remains live. Public recovery and guarded
-cookie delivery remain open; this does **not** close activation step 23 or
-demonstrate a recovered browser session. Source remains unbuilt, unexecuted and
-unprovisioned.
+verification while the fresh actor remains live. The bounded public recovery
+POST now selects a source-owned terminal before that exchange and joins fresh
+current-authentication checks, normal cleanup and the guarded cookie send.
+Original-bound completion for failures before retained release intent remains
+open; this does **not** close activation step 23 or demonstrate a recovered
+browser session. Source remains unbuilt, unexecuted and unprovisioned.
 
 ## Why the activation permission cannot be reused
 
@@ -47,16 +49,16 @@ flowchart LR
   D --> G[Verified and retained recovery grants]
   G --> S[Independent recovery worker staging]
   S --> X[One claimed protected exchange and verified token]
-  X -. unfinished public completion .-> C[Fresh current-auth and guarded cookie delivery]
+  X --> C[Fresh current-auth and guarded cookie delivery]
 ```
 
-## Public options; no permission-success endpoint
+## Public options and one bounded recovery action
 
 `POST /api/auth/session/activation/recovery/options` accepts only the closed
 [recovery request contract](../serverware/oidc_session_activation_recovery_http_contract.py):
 the fixed schema and purpose plus `localDigest`, within 64 KiB. Options reject
-MFA fields; the private authorization carrier may carry a fresh assertion and
-approval identifier. Neither carrier accepts a user, session, credential,
+MFA fields; `POST /api/auth/session/activation/recovery` may carry a fresh
+assertion and approval identifier. Neither carrier accepts a user, session, credential,
 clock, grant, proof, outcome or token from JSON.
 
 The actual request must pass exact configured-origin and cookie-CSRF checks.
@@ -193,7 +195,7 @@ flowchart LR
   V --> D[Independent root admission and resource staging]
   D --> S[Same-process recovery worker and checkpoint-one reads]
   S --> X[Claimed protected exchange and original response verification]
-  X -. unfinished public completion .-> R[Fresh current-auth and guarded cookie delivery]
+  X --> R[Fresh current-auth and guarded cookie delivery]
 ```
 
 ### Service, storage and public completion
@@ -258,10 +260,10 @@ exchange cannot resume under the same client authorization.
 
 This slice requires a retained release intent. Failures before that stage still
 need a distinct original-bound completion/recovery path; they are not treated
-as safe activation retries. Full recovery still needs a final public
-current-auth/cookie boundary and evidence that the protected path works at
-runtime. The source-connected exchange does not complete those remaining steps
-or demonstrate actual private-store behavior.
+as safe activation retries. Full recovery still needs that original-bound
+completion path and evidence that the protected path works at runtime. The
+source-connected public exchange does not complete those remaining steps or
+demonstrate actual private-store behavior.
 The existing LIVE staging path is not reused
 as recovery admission. A once-checked actor, retained triple or intent result
 cannot replace any of these checks.
@@ -276,6 +278,29 @@ cold-parent/enrollment representations and replay headroom first. Later
 acquisition separately reserves its held actor result and new inputs on the same
 cumulative work. The earlier post-load accounting gap is source-connected;
 this is not a whole-process 64 MiB heap guarantee or execution evidence.
+
+## Final current-authentication and cookie boundary
+
+The [public HTTP core](control-plane-oidc-session-activation-recovery-http.md)
+opens one work/window before parsing and enters the same genuine acquisition
+context. It chooses the [source-owned delivery terminal](control-plane-oidc-session-activation-recovery-delivery.md)
+before exchange derivation and genuine response verification. The terminal
+holds original ancestors, exact target and current-authentication snapshots;
+it does not turn a returned token or prior successful object into authority.
+
+The recovered token must identify the exact active target session, OIDC user
+and bound credential with unchanged authoritative roles, credential trust and
+session/provider expiry. Only then is one bounded secure cookie staged with a
+fixed non-secret success body. The active context still clears its token and
+guard on exit. Explicit markers prove the complete normal cleanup, including
+the original trust/startup lock exits; a finally-closed context is insufficient.
+
+After cleanup the terminal repeats genuine receiving/current-authentication
+checks and guards the actual `http.response.start` after outer response
+signing. Changed state, body, cookie, deadline, downstream response or abnormal
+cleanup discards success and emits only a fixed no-cookie uncertainty response
+when nothing has yet been sent. It does not renew an allowance to sign a new
+success or retry the protected exchange.
 
 No protected activation or consume SQL is repeated here. WebAuthn challenge
 issuance and assertion-counter updates remain their normal authentication

@@ -3,8 +3,9 @@
 Source only, unbuilt and unexecuted. Genuine recovery options and the private
 live actor context now connect to same-context recovery grant acquisition,
 one-shot recovery-worker staging and a separate private protected-exchange
-context. This does **not** prove worker readiness, repeat activation SQL,
-deliver a browser cookie or confirm a session. Step 23 remains incomplete.
+context. The separately selected terminal path retains explicit normal-cleanup
+evidence; the actor itself does **not** prove worker readiness, repeat activation
+SQL, deliver a browser cookie or confirm a session. Step 23 remains incomplete.
 
 ## Actor and target are separate
 
@@ -91,8 +92,24 @@ spends a distinct exchange latch, and delegates to the genuine
 [protected exchange](control-plane-oidc-session-activation-recovery-exchange.md).
 Token access requires the actual retained receiving guard while the actor is
 still live. Response children are excluded from their own ancestor callbacks;
-cleanup invalidates the accessor and retained guards. This is not a public
-success endpoint or an authorization to send after context exit.
+cleanup invalidates the accessor and live guards. The ordinary private path is
+not a public success endpoint or an authorization to send after context exit.
+
+The separate [recovery delivery terminal](control-plane-oidc-session-activation-recovery-delivery.md)
+must be selected before exchange derivation to retain genuine original
+ancestors and the final receiver's exact restrictions. This actor is never
+reactivated for that suffix. Its `_normal_exit` starts False and is cleared by
+`_close`; only the normal authorizer return sets it True, after the final current
+guard, normal trust-context exit, final source guard, actor close and successful
+startup-lock release. The enclosing acquisition sets its own normal-exit marker
+only after that complete actor suffix. A finally-closed object or a copied token
+is not evidence of successful cleanup. Any failed suffix keeps the relevant
+marker False, while the one-use acquisition latch remains spent.
+
+The terminal separately joins those markers and exact original identities
+before post-cleanup current-auth/cookie delivery. The actor's `_guard()` and
+`current()` still require the actual active scope; there is no closed-actor
+fallback, fresh work allowance or relaxed PID/thread check.
 
 Current guards retain original PID/thread, owner/resources, Request/body,
 Origin/CSRF/cookie, policy, RBAC, credential, trust and target-row snapshots.
@@ -110,8 +127,9 @@ It preflights all selected metadata before any body read, replacing the earlier
 post-load aggregate check. These are source-defined representation bounds, not
 a full-call 64 MiB process-heap guarantee or runtime evidence.
 
-The [options route](control-plane-oidc-session-activation-recovery-routes.md)
-remains the only public route. The [source-connected worker handoff](oidc-session-activation-release-recovery-dynamic-delivery.md)
+The [public route contract](control-plane-oidc-session-activation-recovery-routes.md)
+and separate terminal/HTTP integration own the public delivery boundary. The
+[source-connected worker handoff](oidc-session-activation-release-recovery-dynamic-delivery.md)
 does not demonstrate actual retained outcome-store behavior. Private token
-exchange is source-connected; current-auth/cookie completion,
-portal wiring and runtime/provisioning evidence remain open.
+exchange is source-connected; earlier-stage completion recovery, portal wiring
+and runtime/provisioning evidence remain open.

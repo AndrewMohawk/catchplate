@@ -1,8 +1,9 @@
 """Closed recovery request and locator data, never actor or retry authority.
 
-Options and a future separately authorized recovery dispatch share only a
+Options and separately authorized recovery dispatch share only a
 bounded locator/MFA carrier. There is no planning assertion, browser root
-original, token, success projection or route in this module.
+original, token, successful permission or route in this module. Response
+constants and failure projections cannot establish current authentication.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ REQUEST_SCHEMA = "serverware.oidcSessionActivationRecoveryRequest/v1"
 INTENT_SCHEMA = "serverware.oidcSessionActivationRecoveryIntent/v1"
 OPTIONS_SCHEMA = "serverware.oidcSessionActivationRecoveryOptions/v1"
 RESPONSE_SCHEMA = "serverware.oidcSessionActivationRecoveryFailure/v1"
+SUCCESS_SCHEMA = "serverware.oidcSessionActivationRecoveryResponse/v1"
 PURPOSE = "recover-oidc-session-activation"
 ACTION = "webauthn.oidc-session.activation.recover"
 _FIELDS = frozenset({"schema", "purpose", "localDigest"})
@@ -72,3 +74,19 @@ def unavailable(local_digest=None):
     return {"schema": RESPONSE_SCHEMA, "purpose": PURPOSE, "localDigest": digest,
         "status": "recovery-unavailable", "dispatchState": "unknown",
         "sessionState": "unknown", "automaticRetryAllowed": False}
+
+
+def rejected_before_dispatch(local_digest=None):
+    """Only this request's recovery acquisition has not started.
+
+    The source handler must select this before entering private acquisition.
+    It says nothing about prior activation/SQL effects or permission-side work.
+    """
+    value = unavailable(local_digest)
+    return {**value, "status": "recovery-rejected-before-dispatch",
+        "dispatchState": "not-started"}
+
+
+def outcome_unknown(local_digest=None):
+    """Uncertain recovery attempt, never nonexecution or permission to retry."""
+    return {**unavailable(local_digest), "status": "recovery-outcome-unknown"}

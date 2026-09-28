@@ -2,12 +2,14 @@
 
 `control_plane_oidc_session_activation_recovery_exchange._exchange_on_active`
 connects the actual private recovery acquisition context to one RECOVERY release
-exchange. It accepts only that source-owned live context, not posted originals,
-an admitted-result carrier, a target, a clock or a caller-provided scope.
+exchange. It accepts only that source-owned live context and an optional exact
+source-owned public terminal, not posted originals, an admitted-result carrier,
+a target, a clock or a caller-provided scope.
 
 Source only: this path has not been built, executed, provisioned or demonstrated
-to recover a session. Public recovery HTTP and post-cleanup cookie completion
-remain separate. A prior staging ACK is not worker readiness or store proof.
+to recover a session. The separately connected [public delivery owner](control-plane-oidc-session-activation-recovery-delivery.md)
+controls current-authentication checks, normal-cleanup completion and the actual
+cookie send. A prior staging ACK is not worker readiness or store proof.
 
 ## Original-only authority
 
@@ -49,8 +51,11 @@ Its exact token64 is returned only to the actual acquisition context.
 
 The context stores that token privately and exposes `token_bytes` only while it
 remains active. Its public method result is `None`. Failure poisons the context;
-cleanup clears the token and retained response guard. This is not a standalone
-success response, current-session claim or authority to set a cookie after exit.
+cleanup clears the token and retained response guard. Plain private access is
+not a standalone success response, current-session claim or authority to set a
+cookie after exit. Public HTTP selects its exact terminal before derivation;
+that owner separately retains the genuine receiving guard and checks fresh
+current authentication before constructing and sending its one cookie.
 No SQL, outcome append, outcome reconstruction-as-store-evidence or token
 journaling is introduced.
 
@@ -61,7 +66,9 @@ existing held-capacity reservation stays charged to the same 64 MiB aggregate.
 Before derivation/socket contact, length-only reservations cover new hint and
 outcome representations plus both the pre-contact client/server admission and
 later full response admission, including their retained nested original graphs
-and fixed reply buffers. This is conservative byte-representation accounting,
+and fixed reply buffers. Public delivery additionally reserves its fixed fresh
+authentication/response representation headroom before those operations.
+This is conservative byte-representation accounting,
 not a heap, RSS or runtime guarantee.
 
 Read-only `_derive_on_work` now accepts an additive held-byte reservation and
@@ -72,7 +79,7 @@ signing/readback preflight before any genuine decode. Keeping that roughly
 context already reserving roughly 32 MiB of parent representation capacity; no
 aggregate limit or source authority was widened to avoid that conflict.
 
-The receiving guard remains a separate child of the acquisition context. Its
+On the plain private path, the receiving guard remains a separate child of the acquisition context. Its
 ancestor calls only `_parent_current`/`_parent_continuity`, which retain real
 actor/grant guards but never call the receiving child. The coordinator's own
 retained derivation/client guards likewise have base-only nested continuity.
@@ -80,3 +87,13 @@ The genuine response verifier supplies the full final guard through
 `_retain_receiving_current`; it is never attached back to its own ancestor.
 Entry requires the in-progress phase, while subsequent guard checks permit the
 completed, still-active context. Closing that context invalidates the chain.
+
+On the public path, the exact terminal is selected **before** historical
+derivation, client admission and response admission. All these fresh genuine
+guards therefore retain its original ancestor from construction. While live,
+that ancestor calls the unchanged actor/acquisition parent guard. Only after
+both explicit normal-exit markers does it use the captured actual owner and
+historical-target ancestors under unchanged source snapshots, ledger, bounds
+and clock floors. The terminal retains the full receiving child separately and
+registers it with the live acquisition context as well. Neither a closed flag
+alone nor substituting a callback after verification can extend authority.

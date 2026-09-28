@@ -769,6 +769,37 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while reading activation originals")
         return retained
 
+    def load_oidc_session_activation_completion_recovery_target(self, finalization_digest, *,
+            work, current, maximum_original_bytes=None):
+        """Return only original claim/prepared evidence, never recovery authority."""
+        from serverware import control_plane_oidc_session_activation_dispatch_attempt as attempts
+        from serverware import control_plane_oidc_session_activation_records as activation
+
+        target = journal._digest(finalization_digest)
+        if not callable(current):
+            raise CustodyClientError("completion recovery target lacks its original guard")
+        current()
+        binding = _snapshot(self)
+        retained = journal.CustodyJournal.load_oidc_session_activation_completion_recovery_target(
+            binding.journal, target, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while selecting completion recovery target")
+        if retained is None:
+            return None
+        if (type(retained) is not tuple or len(retained) != 2
+                or type(retained[0]) is not attempts.ActivationDispatchAttemptRecord
+                or type(retained[1]) is not activation.ActivationRecord):
+            raise CustodyClientError("completion recovery target original inventory differs")
+        claim, prepared = retained
+        if (claim.finalization_digest != target or prepared.finalization_digest != target
+                or prepared.source_revision != claim.source_revision
+                or prepared.kind != "prepared" or len(prepared.originals) != 5):
+            raise CustodyClientError("completion recovery target originals have a different association")
+        current()
+        return retained
+
     def claim_oidc_session_activation_consume_planning(self, *, finalization_digest,
             activation_authorization_digest, source_revision):
         """Burn one consume preparation under this owner's actual activation target."""

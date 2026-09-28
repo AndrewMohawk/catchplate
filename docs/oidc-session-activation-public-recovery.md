@@ -12,8 +12,11 @@ verification while the fresh actor remains live. The bounded public recovery
 POST now selects a source-owned terminal before that exchange and joins fresh
 current-authentication checks, normal cleanup and the guarded cookie send.
 Original-bound completion for failures before retained release intent remains
-open; this does **not** close activation step 23 or demonstrate a recovered
-browser session. Source remains unbuilt, unexecuted and unprovisioned.
+in progress. Its distinct cold configuration, bounded target reader, historical
+target admission and private fresh actor are connected, but not a completion
+exchange or public reconciliation action. This does **not** close activation
+step 23 or demonstrate a recovered browser session. Source remains unbuilt,
+unexecuted and unprovisioned.
 
 ## Why the activation permission cannot be reused
 
@@ -278,6 +281,39 @@ cold-parent/enrollment representations and replay headroom first. Later
 acquisition separately reserves its held actor result and new inputs on the same
 cumulative work. The earlier post-load accounting gap is source-connected;
 this is not a whole-process 64 MiB heap guarantee or execution evidence.
+
+## Earlier-stage completion prerequisites
+
+Missing release intent cannot be repaired by inventing an intent-stage target
+or reopening the old live permission. A separate
+[completion-recovery parent configuration](control-plane-oidc-session-activation-completion-recovery-bootstrap.md)
+selects fixed activation/consume roles, independent authorization/packet/pending
+pins and existing completion-only endpoints. Parent v16 enables these explicit
+nullable roles; older versions and null leave them disabled. The public app
+receives no private history/AES custody or additional descriptors.
+
+The [bounded exact-target selector](control-plane-oidc-session-activation-completion-recovery-selection.md)
+reads only the dispatch claim and prepared raw5 after reserving actual encoded
+sizes. The [historical inspector](control-plane-oidc-session-activation-completion-recovery-history.md)
+genuinely authenticates caller/planner originals, independently reconstructs
+static expectations and joins the finalization target/ACK and old-cookie
+possession. Signed typed arguments supply the old/new commitments and credential
+record; they do not supply a fabricated delivery identity, timestamp or intent.
+
+The [distinct private actor](control-plane-oidc-session-activation-completion-recovery-actor.md)
+requires current target, sole credential, roles and trust, a fresh assertion
+bound to the independently configured completion profile, and required approval.
+It keeps the same owner/work/clock bounds and startup/trust locks. Sharing the
+existing current-auth checks does not let an exact intent-stage acquisition
+accept this different actor type or turn its output into token permission.
+
+These are connected source prerequisites, not a recovered completion. Historical
+public-control admission, an irreversible completion-only attempt, the actual
+service exchange, genuine response admission and separate durable reconciliation
+still need to be connected before the earlier-stage public action is available.
+Original uncertainty must remain immutable. No SQL, completion-service call,
+token release, cookie replacement or automatic retry follows from this private
+actor foundation. COMPLETE remains partial; all enclosing counts are unchanged.
 
 ## Final current-authentication and cookie boundary
 

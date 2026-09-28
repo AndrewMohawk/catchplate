@@ -221,9 +221,14 @@ class _ActorScope:
     def _native(self, call):
         return permission._native(self._guard, self._work, call)
 
+    def _current_target(self):
+        delivery = self._target.delivery_scope
+        return (self._target.subject, delivery["credentialRecordId"],
+            delivery["oldTokenDigest"], delivery["newTokenDigest"])
+
     def _read_current(self):
         application, work = self._application, self._work
-        subject, delivery = self._target.subject, self._target.delivery_scope
+        subject, credential_record_id, old_token_digest, new_token_digest = self._current_target()
         rbac = self._native(lambda: application.db.get_rbac_role_binding(subject["userId"]))
         if (type(rbac) is not dict or rbac.get("subject_id") != subject["userId"]
                 or rbac.get("status") != "active" or type(rbac.get("roles")) is not list
@@ -232,7 +237,7 @@ class _ActorScope:
         rbac_pin = _snapshot(rbac, work)
         credential = self._native(lambda: pending._history(application,
             subject["userId"], subject["credentialId"]))
-        if credential is None or credential[0] != delivery["credentialRecordId"]:
+        if credential is None or credential[0] != credential_record_id:
             _deny("recovery requires the sole original credential", 403)
         credential_row = self._native(lambda: application.db.get_webauthn_credential(
             subject["credentialId"]))
@@ -249,11 +254,11 @@ class _ActorScope:
             _deny("recovery original session is unavailable", 403)
         status = session.get("status")
         if status == "pending_webauthn":
-            if (session.get("token_digest") != delivery["oldTokenDigest"]
+            if (session.get("token_digest") != old_token_digest
                     or any(session.get(name) is not None for name in pending._UNBOUND_FIELDS)):
                 _deny("recovery pending target binding changed", 403)
         elif status == "active":
-            if (session.get("token_digest") != delivery["newTokenDigest"]
+            if (session.get("token_digest") != new_token_digest
                     or session.get("bound_webauthn_credential_id") != credential[0]):
                 _deny("recovery active target binding changed", 403)
             # A current row check is not actor authentication. It only rejects

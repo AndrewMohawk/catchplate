@@ -451,6 +451,46 @@ class _EnrollmentOwner:
             live_window=live_window, transport_deadline_ns=transport_deadline_ns,
             work=work, current=current)
 
+    def _oidc_session_activation_completion_recovery_options(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Fresh activation-completion challenge, not completion evidence."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actor
+
+        _require_pid()
+        return actor._options_on_owner(self, profile="activation", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
+    def _oidc_session_activation_consume_completion_recovery_options(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Fresh consume-completion challenge; no consume/SQL retry."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actor
+
+        _require_pid()
+        return actor._options_on_owner(self, profile="consume", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
+    def _authorize_oidc_session_activation_completion_recovery(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Return one live pre-intent actor; no result or execution authority."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actor
+
+        _require_pid()
+        return actor._authorize_on_owner(self, profile="activation", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
+    def _authorize_oidc_session_activation_consume_completion_recovery(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Fresh consume-completion actor, never a resumed live SQL permission."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actor
+
+        _require_pid()
+        return actor._authorize_on_owner(self, profile="consume", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

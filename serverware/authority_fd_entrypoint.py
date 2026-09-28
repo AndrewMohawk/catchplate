@@ -45,6 +45,11 @@ CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEn
 CONTROL_PLANE_ENROLLMENT_V14_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v14"
 CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v15"
 CONTROL_PLANE_ENROLLMENT_V15_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v15"
+CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v16"
+CONTROL_PLANE_ENROLLMENT_V16_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v16"
+CONTROL_PLANE_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationCompletionRecovery/v1"
+CONTROL_PLANE_ACTIVATION_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationCompletionRecoveryScope/v1"
+CONTROL_PLANE_CONSUME_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeCompletionRecoveryScope/v1"
 CONTROL_PLANE_RECOVERY_GRANT_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseRecoveryGrantAcquisition/v1"
 CONTROL_PLANE_RECOVERY_GRANT_ACQUISITION_SOCKET = "/run/serverware/oidc-session-activation-token-release/recovery-grants.sock"
 CONTROL_PLANE_PROOF_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseProofAcquisition/v1"
@@ -1202,8 +1207,54 @@ def _control_plane_recovery_grant_acquisition_public_shape(value, *, intent_valu
             raise RuntimeError("recovery acquisition original encoding is not canonical")
 
 
+def _control_plane_completion_recovery_public_shape(value, *, activation_value, consume_value):
+    """Closed v16 public pins only; no new key slot or completion permission."""
+    if value is None:
+        return
+    if (type(value) is not dict or set(value) != {"schema", "activation", "consume"}
+            or value["schema"] != CONTROL_PLANE_COMPLETION_RECOVERY_SCHEMA
+            or value["activation"] is None and value["consume"] is None):
+        raise RuntimeError("completion recovery requires explicit closed role configuration")
+    for name, schema, path, configured, versions, predecessor_name in (
+            ("activation", CONTROL_PLANE_ACTIVATION_COMPLETION_RECOVERY_SCHEMA,
+                CONTROL_PLANE_ACTIVATION_COMPLETION_SOCKET, activation_value,
+                (CONTROL_PLANE_ACTIVATION_V3_SCHEMA, CONTROL_PLANE_ACTIVATION_V4_SCHEMA), "statePredecessor"),
+            ("consume", CONTROL_PLANE_CONSUME_COMPLETION_RECOVERY_SCHEMA,
+                CONTROL_PLANE_CONSUME_COMPLETION_SOCKET, consume_value,
+                (CONTROL_PLANE_CONSUME_V4_SCHEMA,), "reservationPredecessor")):
+        lane = value[name]
+        if lane is None:
+            continue
+        if (type(lane) is not dict
+                or set(lane) != {"schema", "endpoint", "packetDigest", "authorizationDigest", "currentPending"}
+                or lane["schema"] != schema or type(configured) is not dict
+                or configured.get("schema") not in versions):
+            raise RuntimeError("completion recovery role lacks its explicit execution profile")
+        endpoint = lane["endpoint"]
+        if (type(endpoint) is not dict
+                or set(endpoint) != {"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"}
+                or type(endpoint["socketPath"]) is not str or endpoint["socketPath"] != path
+                or type(endpoint["requestTimeoutSeconds"]) is not int
+                or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
+                or any(type(endpoint[key]) is not int or endpoint[key] != 0
+                    for key in ("listenerUid", "listenerGid"))
+                or endpoint != configured["completionEndpoint"]):
+            raise RuntimeError("completion recovery endpoint differs from its actual parent")
+        pending, predecessor = lane["currentPending"], configured[predecessor_name]
+        if (type(pending) is not dict or set(pending) != {"sequence", "headDigest", "fence"}
+                or type(pending["sequence"]) is not int or not 1 <= pending["sequence"] <= 1024
+                or type(pending["fence"]) is not int or not 1 <= pending["fence"] <= 2**63 - 1
+                or pending["sequence"] != predecessor["sequence"] + 1
+                or pending["fence"] != predecessor["nextFence"]):
+            raise RuntimeError("completion recovery pending scope differs from its independent predecessor")
+        for pin in (lane["packetDigest"], lane["authorizationDigest"], pending["headDigest"]):
+            if (type(pin) is not str or len(pin) != 71 or not pin.startswith("sha256:")
+                    or any(character not in "0123456789abcdef" for character in pin[7:])):
+                raise RuntimeError("completion recovery original pin is not canonical SHA256")
+
+
 def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
-    """Project closed v2-v15 slots; child admission alone supplies authority."""
+    """Project closed v2-v16 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -1233,7 +1284,8 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
                     CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
         is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
@@ -1245,9 +1297,10 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
         is_v10 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA
         is_v11 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA
         is_v12 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA
-        is_v15 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA
+        is_v16 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA
+        is_v15 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA or is_v16
         is_v14 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA or is_v15
-        # v14/v15 preserve the exact v13 prefix and all ten purpose slots.
+        # v14-v16 preserve the exact v13 prefix and all ten purpose slots.
         is_v13 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA or is_v14
         payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
             "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
@@ -1277,9 +1330,12 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             payload_fields.add("oidcSessionActivationReleaseProofAcquisition")
         if is_v15:
             payload_fields.add("oidcSessionActivationReleaseRecoveryGrantAcquisition")
+        if is_v16:
+            payload_fields.add("oidcSessionActivationCompletionRecovery")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V15_PAYLOAD_SCHEMA if is_v15
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V16_PAYLOAD_SCHEMA if is_v16
+                    else CONTROL_PLANE_ENROLLMENT_V15_PAYLOAD_SCHEMA if is_v15
                     else CONTROL_PLANE_ENROLLMENT_V14_PAYLOAD_SCHEMA if is_v14
                     else CONTROL_PLANE_ENROLLMENT_V13_PAYLOAD_SCHEMA if is_v13
                     else CONTROL_PLANE_ENROLLMENT_V12_PAYLOAD_SCHEMA if is_v12
@@ -1355,6 +1411,13 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             _control_plane_recovery_grant_acquisition_public_shape(payload["oidcSessionActivationReleaseRecoveryGrantAcquisition"],
                 intent_value=payload["oidcSessionActivationReleaseIntent"],
                 proof_value=payload["oidcSessionActivationReleaseProof"])
+        if is_v16:
+            if (payload["oidcSessionActivationCompletionRecovery"] is not None
+                    and payload["oidcSessionActivationPlanning"] is None):
+                raise RuntimeError("completion recovery requires configured activation planning")
+            _control_plane_completion_recovery_public_shape(payload["oidcSessionActivationCompletionRecovery"],
+                activation_value=payload["oidcSessionActivationExecution"],
+                consume_value=payload["oidcSessionActivationConsumeExecution"])
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:

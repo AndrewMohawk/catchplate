@@ -84,6 +84,8 @@ _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.F
     finalization_records.FAMILY})
 _COMPLETION_HISTORY_MAX_BYTES = 64 * 1024**2
 _COMPLETION_HISTORY_FIXED_BYTES = 16 * 1024
+_COMPLETION_RECOVERY_TARGET_MAX_BYTES = 64 * 1024**2
+_COMPLETION_RECOVERY_TARGET_FIXED_BYTES = 4096
 
 
 class CustodyJournalError(RuntimeError):
@@ -1679,6 +1681,110 @@ class CustodyJournal:
                     for kind in activation_records.KINDS)
                 self._require_ready()
                 return activation_records.ActivationRecords(claim.source_revision, digest, *retained)
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_oidc_session_activation_completion_recovery_target(self, finalization_digest, *,
+            work, current, maximum_original_bytes=None):
+        """Select claim/prepared DATA under a remaining representation cap.
+
+        Three actual encoded-byte footprints plus fixed metadata are reserved
+        before either body. The caller reserves its held and later-admission
+        graphs separately. This directly charges work; current must not reenter
+        selection or acquire this journal's I/O lock.
+        """
+        from serverware.authority_query_read_work import _ValidationWork
+
+        target = _digest(finalization_digest)
+        maximum = (_COMPLETION_RECOVERY_TARGET_MAX_BYTES if maximum_original_bytes is None
+            else maximum_original_bytes)
+        _integer(maximum, minimum=0, maximum=_COMPLETION_RECOVERY_TARGET_MAX_BYTES,
+            label="completion recovery target remaining byte capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("completion recovery target requires original work and guard")
+        work.charge(json_nodes=128)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            claim = self._activation_dispatch_attempts.get(target)
+            by_kind = self._activation_records.get(target, {})
+            claim_name = _name(activation_attempts.KIND, target)
+            try:
+                # Resolve only source-fixed index entries. Even an incomplete
+                # prefix must retain its known metadata; no directory scan or
+                # unsigned SQL/completion body participates in selection.
+                if type(by_kind) is not dict:
+                    raise CustodyJournalError("completion recovery target prefix metadata differs")
+                for kind in activation_records.KINDS:
+                    if ((_name("activation-" + kind, target) in self._file_identities)
+                            != (kind in by_kind)):
+                        raise CustodyJournalError("completion recovery target file index differs")
+                if claim is None:
+                    if by_kind or claim_name in self._file_identities:
+                        raise CustodyJournalError("completion recovery target lacks its retained claim")
+                else:
+                    if (type(claim) is not activation_attempts.ActivationDispatchAttemptRecord
+                            or claim.finalization_digest != target):
+                        raise CustodyJournalError("completion recovery target claim association differs")
+                    self._activation_scope(target, by_kind)
+                    self._completion_history_metadata(claim_name, activation_attempts.MAX_RECORD_BYTES,
+                        self._file_identities.get(claim_name), current)
+                    for kind in activation_records.KINDS:
+                        if kind not in by_kind:
+                            continue
+                        name = _name("activation-" + kind, target)
+                        identity = self._file_identities.get(name)
+                        self._completion_history_metadata(name, activation_records._maximum(kind),
+                            identity, current)
+                        metadata = by_kind[kind]
+                        if (type(metadata) is not tuple or len(metadata) != 3
+                                or type(metadata[2]) is not int or metadata[2] != identity[6]):
+                            raise CustodyJournalError("completion recovery target retained size changed")
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if claim is None or "prepared" not in by_kind:
+                # Expected absence is unavailable, never evidence of no SQL
+                # effect and never a reason to poison otherwise valid storage.
+                self._require_ready()
+                current()
+                return None
+            names = claim_name, _name("activation-prepared", target)
+            identities = tuple(self._file_identities[name] for name in names)
+            sizes = tuple(identity[6] for identity in identities)
+            footprint = 3 * sum(sizes) + _COMPLETION_RECOVERY_TARGET_FIXED_BYTES
+            if footprint > maximum:
+                raise CustodyJournalError("completion recovery target exceeds remaining preallocation capacity")
+            work.charge(input_bytes=3 * sum(sizes) + len(sizes), hashes=2)
+            try:
+                loaded = []
+                for name, identity, decoder in zip(names, identities,
+                        (activation_attempts.decode, activation_records.decode)):
+                    original = self._read_completion_history_file(name, identity, current)
+                    current()
+                    loaded.append(decoder(original))
+                    current()
+                    del original
+                activation, prepared = loaded
+                if (activation != claim or prepared.finalization_digest != target
+                        or prepared.kind != "prepared" or len(prepared.originals) != 5
+                        or prepared.source_revision != activation.source_revision
+                        or (prepared.source_revision, prepared.digest, sizes[1]) != by_kind["prepared"]):
+                    raise CustodyJournalError("completion recovery target original association changed")
+                self._activation_scope(target, by_kind)
+                self._completion_history_metadata(claim_name, sizes[0], identities[0], current)
+                for kind in activation_records.KINDS:
+                    if kind in by_kind:
+                        name = _name("activation-" + kind, target)
+                        self._completion_history_metadata(name, activation_records._maximum(kind),
+                            self._file_identities.get(name), current)
+                self._require_ready()
+                current()
+                return activation, prepared
             except BaseException:
                 self._io.poison()
                 raise

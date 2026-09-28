@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="418" viewBox="0 0 1000 418" role="img" aria-labelledby="project-title project-description">
-  <title id="project-title">Project checkpoints, one segment per task: 35 of 46 source-landed; 0 active and 11 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05 is next, not active. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.</title>
-  <desc id="project-description">All 46 parent checkpoint segments remain visible. The finalization and sessions group is now 8/8, and F08 is source-landed in 170d0ac5d937a127ca5987508d1a0214de2a7492. Project totals are 35/46 landed, zero active and eleven todo. Historical authority H05 is next, not active; workload/native, provider/operations and production acceptance remain open. Activation is 26/26, public actions 3/3 and F08 direct children 6/6. The linked ledger preserves individual criteria and source commits. Counts are nonadditive, not effort or readiness percentages. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
+  <title id="project-title">Project checkpoints, one segment per task: 35 of 46 source-landed; 1 active and 10 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05 is in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.</title>
+  <desc id="project-description">All 46 parent checkpoint segments remain visible. The finalization and sessions group is now 8/8, and F08 is source-landed in 170d0ac5d937a127ca5987508d1a0214de2a7492. Project totals are 35/46 landed, one active and ten todo. Historical authority H05 is in progress; workload/native, provider/operations and production acceptance remain open. Activation is 26/26, public actions 3/3 and F08 direct children 6/6. The linked ledger preserves individual criteria and source commits. Counts are nonadditive, not effort or readiness percentages. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="416" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="34" fill="#f8fafc" font-size="25" font-weight="700">Whole-project source checkpoints</text>
     <text x="976" y="34" text-anchor="end" fill="#fde68a" font-size="15" font-weight="700">0 / 6 production verified</text>
     <text x="24" y="64" fill="#6ee7b7" font-size="21" font-weight="700">35 / 46 landed</text>
-    <text x="220" y="64" fill="#cbd5e1" font-size="17">0 active · 11 todo · NEXT H05</text>
+    <text x="220" y="64" fill="#cbd5e1" font-size="17">1 active · 10 todo · ACTIVE H05</text>
     <text x="24" y="88" fill="#6ee7b7" font-size="13">✓ Landed source</text>
     <text x="190" y="88" fill="#fde68a" font-size="13">→ In progress, still open</text>
     <text x="405" y="88" fill="#e2e8f0" font-size="13">— Open</text>
@@ -45,11 +45,11 @@
         <rect x="560" y="150" width="128" height="32" rx="5"><title>H03 · Historical completion-original checks · LANDED</title></rect>
         <rect x="696" y="150" width="128" height="32" rx="5"><title>H04 · Ownership, permission &amp; reconciliation · LANDED</title></rect>
       </g>
-      <rect x="832" y="150" width="128" height="32" rx="5" fill="#334155" stroke="#94a3b8"><title>H05 · Cross-version historical authority · NEXT / OPEN, not active</title></rect>
+      <rect x="832" y="150" width="128" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>H05 · Cross-version historical authority · IN PROGRESS; registration configuration/key recovery connected, other consumers and older-source replay remain</title></rect>
       <g fill="#052e26" font-size="12" font-weight="700" text-anchor="middle">
         <text x="352" y="171">✓ H01</text><text x="488" y="171">✓ H02</text>
         <text x="624" y="171">✓ H03</text><text x="760" y="171">✓ H04</text>
-        <text x="896" y="171" fill="#e2e8f0">— H05</text>
+        <text x="896" y="171" fill="#451a03">→ H05</text>
       </g>
     </g>
 
@@ -139,6 +139,6 @@
     </g>
 
     <text x="24" y="377" fill="#cbd5e1" font-size="13">Source-only · unbuilt, unexecuted, unprovisioned · landed source is not verified production readiness</text>
-    <text x="24" y="400" fill="#94a3b8" font-size="12">F08 LANDED 170d0ac · direct 6/6 · activation 26/26 · public 3/3 · NEXT H05 historical authority</text>
+    <text x="24" y="400" fill="#94a3b8" font-size="12">F08 LANDED 170d0ac · direct 6/6 · activation 26/26 · public 3/3 · ACTIVE H05 historical authority</text>
   </g>
 </svg>

@@ -39,6 +39,41 @@ activation arguments, exact current target, deterministic delivery ID and
 old-token commitment. Original planner/history launch restrictions remain live
 and only narrow the same window.
 
+## Separate historical evidence and current consume authority
+
+The actual target selects either the unchanged ordinary acquisition lane or
+the separately cold-admitted parent-v21 historical lane. The latter must hold
+the exact archived configuration, original interval, root and execution/planning
+objects selected by that target; an absent or different bridge never falls back
+to ordinary configuration. The source owner seals its old planner original,
+activation policy and historical root separately from the current root signer.
+
+The raw16 keeps the original activation caller/grant enrollments, expectations,
+reserve/ACK, completion and possession. The issuer policy and returned raw2 are
+genuinely re-admitted on the same work/window. Current endpoint and consume keys
+come from the current parent, never from the old activation execution lane.
+The old reserve/ACK is verified with the selected historical state enrollment
+and root; these are not reused as fresh consume authority.
+
+`consume_bootstrap._admit_bridge_on_work` accepts actual planner/history and
+issuer-policy originals, not the earlier `_InputMaterial` as proof. It genuinely
+verifies planner v3/history v7, joins the embedded policy and old planner bytes
+to independently held originals, checks old root/key/state identities, and
+compares current configuration, runtime, consume key/measurement and state to
+the current parent. The ordinary `_admit_on_work` and original permission-based
+request/acquisition APIs are unchanged. Only the source-selected cold bridge
+chooses this admission path; no posted profile or supplied historical root does.
+
+The lower delivery-plan/custody split and the actual worker now support private
+bridged prepare/export. Its source-owned `PrivateInputs/v2` commitment includes
+the signed bridge policy and old state enrollment; it does not substitute a
+purpose-specific custody envelope. The public historical-consume execution gate
+remains closed: grant v3, reservation v4, SQL v5 and completion v6 custody still
+need independently signed role-specific bridges. Historical completion of a
+planner-v3 result is also not enabled. Planning history v7 cannot impersonate
+those roles. These joins do not authorize historical intent/proof or release,
+restore a spent claim, renew original expiry or establish runtime success.
+
 ## Prepare, retain, admit; then export, retain, compare
 
 One bounded prepare call sends the existing private raw16 transport form:
@@ -85,6 +120,10 @@ journal I/O has a separate 2 MiB slice inside the same lane.
 
 Before fresh root decoding, actual original lengths and measured fixed public
 configuration graphs reserve new admission/canonical/vector representations.
+The historical branch also reserves the current consume-state enrollment while
+retaining the distinct old state original. The owner accounts for both possible
+cold acquisition lanes before target body one, then carries only the selected
+original association forward without opening another budget.
 The typed-request reserve uses its actual already-held length, not a second
 unused 2 MiB maximum. The independent scope is a fixed root-payload projection
 with bounded field-name/deadline overhead. Prepare/export caps retain multiple
@@ -95,6 +134,7 @@ reading or writing. No caller double-charges its I/O or wraps it in an opaque
 callback.
 
 Larger valid histories may fail closed. These are conservative representation
-reservations, not Python heap/RSS guarantees. This source slice is private only:
-no public action, authorization grant, SQL dispatch, token or session cookie is
-enabled. It is unbuilt, unexecuted and unprovisioned; no runtime success is claimed.
+reservations, not Python heap/RSS guarantees. This helper creates no public
+success, authorization grant, SQL dispatch, token or cookie itself; the actual
+same-owner continuation must supply each later boundary. It is unbuilt,
+unexecuted and unprovisioned; no runtime success is claimed.

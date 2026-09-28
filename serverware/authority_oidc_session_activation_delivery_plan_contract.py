@@ -20,6 +20,7 @@ IDENTITY_DOMAIN = "serverware.policyAuthorityOidcSessionActivationDeliveryPlanId
 PROOF_DOMAIN = "serverware.policyAuthorityOidcSessionActivationDeliveryProof/v1"
 CONTEXT_DOMAIN = "serverware.policyAuthorityOidcSessionActivationDeliveryContext/v1"
 INPUTS_DOMAIN = "serverware.policyAuthorityOidcSessionActivationDeliveryPrivateInputs/v1"
+BRIDGE_INPUTS_DOMAIN = "serverware.policyAuthorityOidcSessionActivationDeliveryPrivateInputs/v2"
 TRANSITION_DOMAIN = "serverware.policyAuthorityOidcSessionActivationDeliveryTransition/v1"
 MAX_BYTES, MAX_NODES, MAX_DEPTH = 16 * 1024, 128, 4
 MAX_ORIGINAL_BYTES = authority.MAX_RESULT_BYTES
@@ -31,6 +32,8 @@ PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "operation", "requestDig
 ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _BODY_PROFILES = (("proof", PROOF_DOMAIN), ("context", CONTEXT_DOMAIN),
     ("inputs", INPUTS_DOMAIN), ("transition", TRANSITION_DOMAIN))
+_BRIDGE_BODY_PROFILES = (("proof", PROOF_DOMAIN), ("context", CONTEXT_DOMAIN),
+    ("inputs", BRIDGE_INPUTS_DOMAIN), ("transition", TRANSITION_DOMAIN))
 _OPERATION_MANIFEST_DIGEST = authority.OPERATION_MANIFEST_DIGEST
 _QUERY_MANIFEST_DIGEST = primary.source_query_manifest_digest()
 _AUTHORIZATION_MANIFEST_DIGEST = primary.source_authorization_manifest_digest()
@@ -117,13 +120,23 @@ def _decode_on_work(raw, *, envelope=False, work):
 
 def _body_commitments_on_work(*, proof_bytes, context_bytes, inputs_bytes, transition_bytes, work):
     """Commit held originals; inputs_bytes contains only closed digest/count facts."""
+    return _commit_bodies_on_work((proof_bytes, context_bytes, inputs_bytes, transition_bytes),
+        _BODY_PROFILES, work)
+
+
+def _bridge_body_commitments_on_work(*, proof_bytes, context_bytes, inputs_bytes, transition_bytes, work):
+    """Fixed bridge domain; selected only after actual original custody admission."""
+    return _commit_bodies_on_work((proof_bytes, context_bytes, inputs_bytes, transition_bytes),
+        _BRIDGE_BODY_PROFILES, work)
+
+
+def _commit_bodies_on_work(originals, profiles, work):
     evidence.capture._SharedLedger(work)
-    originals = (proof_bytes, context_bytes, inputs_bytes, transition_bytes)
     if (any(type(raw) is not bytes or not 2 <= len(raw) <= MAX_ORIGINAL_BYTES for raw in originals)
             or sum(len(raw) for raw in originals) > MAX_ORIGINAL_BYTES):
         _fail("delivery plan bodies exceed their immutable original bounds")
     result = {}
-    for (prefix, domain), raw in zip(_BODY_PROFILES, originals):
+    for (prefix, domain), raw in zip(profiles, originals):
         result[prefix + "Digest"] = evidence.plan._frame(domain, (raw,), work)
         result[prefix + "ByteCount"] = len(raw)
     return result

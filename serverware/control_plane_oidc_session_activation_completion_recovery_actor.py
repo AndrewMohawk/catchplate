@@ -87,9 +87,11 @@ def _selected_configuration(target, profile, current):
 def _require_current_effect_authority(owner, parent, target):
     """Completion history cannot silently enable a later current-key producer.
 
-    The later consume/intent/proof/release lanes still admit current originals.
-    Until each owns a historical join, accept only the genuine current-mode
-    selection, not equivalent-looking archived fields or coincident keys.
+    The input/private-planner bridge alone cannot authorize consume execution:
+    grant, reservation, SQL and completion need their own signed bridge profiles.
+    Intent/proof/release joins also remain separate. Until each effect path is
+    complete, accept only genuine current-mode selection, not equivalent-looking
+    archived fields or coincident keys.
     """
     selected = target.authority
     if (type(selected) is not history.historical._SelectedActivationHistory
@@ -100,6 +102,29 @@ def _require_current_effect_authority(owner, parent, target):
                 "activation_execution", "activation_planning", "consume_execution",
                 "release_intent", "completion_recovery"))):
         actor._deny("historical completion does not authorize a current effect continuation", 503)
+
+
+def _consume_effect_configuration(owner, parent, target, now):
+    """Select admitted cold data; the real caller must reverify originals.
+
+    Only fresh consumption has a versioned old/current bridge. This helper is
+    not permission for proof, grant or credential-release recovery.
+    """
+    from serverware import control_plane_oidc_session_activation_consume_input_acquisition as acquisition
+
+    if (owner._material is not parent or parent.consume_execution is None
+            or parent.activation_execution is None or parent.activation_planning is None):
+        actor._deny("fresh consume requires actual current execution configuration", 503)
+    config, original = acquisition._configuration_on_target(owner, target)
+    interval = config.bridge_interval
+    if config.historical_scope is not None and (
+            type(interval) is not tuple or len(interval) != 2
+            or any(type(value) is not int or value <= 0 for value in interval)
+            or not interval[0] < interval[1]
+            or interval[0] > now + target.live_window[6] or now >= interval[1]):
+        actor._deny("fresh consume historical bridge is not currently authorized", 503)
+    return config, original, (config.endpoint, config.issuer_policy_bytes,
+        config.historical_scope, interval)
 
 
 def _target_pin(target, work):
@@ -115,7 +140,8 @@ class _CompletionActorScope(actor._ActorScope):
     __slots__ = ("_profile", "_parent", "_recovery", "_configuration", "_configuration_pin",
         "_target_seal", "_completion_recovery_spent", "_completion_receiving_current",
         "_purpose", "_purpose_pin", "_future_original_bytes", "_future_original_bytes_pin",
-        "_current_configuration", "_current_configuration_pin", "_configuration_seal")
+        "_current_configuration", "_current_configuration_pin", "_configuration_seal",
+        "_consume_configuration", "_consume_planner_original", "_consume_configuration_pin")
 
     def __init__(self, construction, *, application, owner, request, original,
             payload, work, current, owner_scope, target, policy, policy_pin,
@@ -137,6 +163,10 @@ class _CompletionActorScope(actor._ActorScope):
         self._current_configuration_pin = _configuration_pin(profile, current_configuration)
         self._configuration = self._configuration_seal = configuration
         self._configuration_pin = _configuration_pin(profile, configuration)
+        self._consume_configuration = self._consume_planner_original = self._consume_configuration_pin = None
+        if purpose == "consume":
+            (self._consume_configuration, self._consume_planner_original,
+                self._consume_configuration_pin) = _consume_effect_configuration(owner, parent, target, target.live())
         self._target_pin = _target_pin(target, work)
         # Shape projection is not evidence: the inspector above genuinely
         # admitted both historical signatures and the actual old possession.
@@ -221,6 +251,11 @@ class _CompletionActorScope(actor._ActorScope):
                 or epoch >= self._window[3] or monotonic >= self._bound):
             actor._deny("completion recovery original allowance expired or reversed", 503)
         self._epoch, self._monotonic = epoch, monotonic
+        if self._purpose == "consume":
+            config, original, pin = _consume_effect_configuration(self._owner, parent, target, epoch)
+            if (config is not self._consume_configuration or original is not self._consume_planner_original
+                    or pin != self._consume_configuration_pin):
+                actor._deny("fresh consume changed its independently selected input authority", 503)
         _policy, policy_pin = actor._policy(application, work)
         request_pin = (tuple(self._request.headers.getlist("origin")),
             tuple(self._request.headers.getlist(application.CSRF_HEADER_NAME)),

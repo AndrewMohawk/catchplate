@@ -55,6 +55,22 @@ class _Configuration:
     historical_root_public_key: object
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _ConsumeContext:
+    """Same-call original-derived facts, never accepted as authority input."""
+
+    root_public_key: object
+    state_enrollment_bytes: bytes
+    configuration_digest: str
+    planner_public_key: object
+    operation_public_key: object
+    window: tuple
+    deadline_ns: int
+    live: object
+    bridge_policy_bytes: bytes | None
+    custody_bytes: bytes
+
+
 def _identity(value, work):
     ledger = evidence.capture._SharedLedger(work)
     owned = evidence.capture._JSONCapture(ledger, maximum_bytes=1024).visit(value)
@@ -403,6 +419,67 @@ class OidcSessionActivationHistoryCustody:
                 "historical receiving state enrollment")
             if self._snapshot_configuration() is not configured:
                 _fail("historical activation custody changed during context binding")
+        finally:
+            lock.release()
+
+    def _consume_context_on_work(self, *, root_public_key, current_root_enrollment_bytes,
+            configuration_digest, live_window, transport_deadline_ns, work, _current=None,
+            _additional_original_bytes=0):
+        """Bind current output to own signed history and derive old evidence authority.
+
+        No caller supplies an old root or admitted policy. The returned guard
+        is base-only: genuine provenance replay may sample it under this lock.
+        """
+        evidence.capture._SharedLedger(work)
+        root = root_public_key
+        caller.authorization._public(root)
+        enrolled = caller.authorization._original(current_root_enrollment_bytes,
+            caller.authorization.MAX_ENROLLMENT_BYTES, "consume current state enrollment")
+        registration._digest(configuration_digest)
+        window = clock._validate(live_window)
+        registration._integer(transport_deadline_ns, "consume context inherited deadline", 1)
+        bound = min(window[4], transport_deadline_ns)
+        configured = self._snapshot_configuration()
+        if configured.consumer_role not in (
+                bootstrap.CONSUME_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE,
+                bootstrap.CONSUME_GRANT_CONSUMER_ROLE, bootstrap.CONSUME_RESERVE_CONSUMER_ROLE,
+                bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE):
+            _fail("consume context requires a fixed live consume history purpose")
+        capture_bytes = 8 * len(configured.custody_bytes) + 4 * len(enrolled) + 64 * 1024
+        if (type(_additional_original_bytes) is not int
+                or not 0 <= _additional_original_bytes < history.MAX_ORIGINAL_BYTES
+                or _additional_original_bytes + capture_bytes > history.MAX_ORIGINAL_BYTES):
+            _fail("consume context captures exceed the existing whole-original ceiling")
+        lock = self._lock
+        if type(lock) is not _LOCK_TYPE or not lock.acquire(blocking=False):
+            _fail("historical activation custody is already in use")
+        try:
+            material, current = self._reauthenticate_locked(configured, window, bound, work, _current)
+            registration._same(evidence.keys._spki_on_work(root, work),
+                evidence.keys._spki_on_work(configured.root_public_key, work), work,
+                "consume independently configured current outer root")
+            policy = material.bridge_policy
+            output = material.planner if policy is None else policy.current_planner
+            registration._same(configuration_digest, output.configuration_digest, work,
+                "consume independently authorized current configuration")
+            history.replay._bytes_equal(enrolled, output.state_enrollment_bytes, work,
+                "consume independently authorized current state original")
+            current()
+            admitted = caller.authorization._admit_enrollment_on_work(
+                enrollment_bytes=enrolled, root_public_key=root, work=work)
+            registration._same(admitted.enrollment_digest, output.state_enrollment_digest, work,
+                "consume genuine current state enrollment identity")
+            if policy is not None:
+                policy.live()
+            current()
+            narrowed, bound = self._bounds(configured, window, bound)
+            current = self._guard(configured, narrowed, bound, work, _current)
+            current()
+            return _ConsumeContext(material.historical_root_public_key,
+                material.planner.state_enrollment_bytes, material.planner.configuration_digest,
+                material.planner.planner_public_key, material.historical_root_public_key,
+                narrowed, bound, current, None if policy is None else policy.policy_bytes,
+                configured.custody_bytes)
         finally:
             lock.release()
 

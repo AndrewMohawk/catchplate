@@ -35,11 +35,34 @@ read-only recovery, not automatic retry. Old-token request bytes are never
 journaled or logged. A returned prepared/exported pair is not consume commit,
 token release or a current authenticated session.
 
+## Distinct fresh recovery caller
+
+The separate recovery owner uses `_configuration_on_target(owner, target)` to
+select cold configuration only. Exact current material identities select the
+ordinary lane. An archived target instead requires the separate parent-v21
+`historical_consume_input_acquisition` and its exact admitted archived scope,
+root, interval and execution/planning objects. Missing or mismatched configuration
+refuses; it never falls back, grants permission or replaces a target guard.
+
+That helper returns the configured policy plus its **old** activation planner
+original. The recovery owner retains its current signing root independently,
+genuinely re-admits policy v2 and raw2 on the same work/window, and uses the
+[bridge-aware prepare/export caller](control-plane-oidc-session-activation-completion-recovery-consume-planning.md).
+The existing `_acquire_on_permission` and `_originals_on_permission` remain
+unchanged and do not accept a historical result or revived permission.
+
+The bridged caller and protected worker support private prepare/export only.
+The public historical-consume gate remains closed until separate signed bridge
+custody is implemented for grant, reservation, SQL and completion, including
+historical completion of the new planner-v3 result. Planning history v7 supplies
+none of those other roles; missing records cannot select a fallback or retry.
+
 This is unbuilt/unexecuted source. Issuer startup and opt-in socket packaging do
 not provision the independently pinned keys/resources. Explicit issuer launch v2
 now stages the exact pair into the matching
 [dynamic consume worker](oidc-session-activation-consume-dynamic-delivery.md)
 before returning it; v1 does not. The public acquisition API cannot select that
-launch version or treat its response as worker readiness. Actual provisioning,
-per-request proof setup, public HTTP/current-auth/cookie, recovery and portal
-integration remain open.
+launch version or treat its response as worker readiness. Actual provisioning
+and production acceptance remain open; existing ordinary public, recovery and
+portal paths are not evidence that the historical bridge is executable end to
+end.

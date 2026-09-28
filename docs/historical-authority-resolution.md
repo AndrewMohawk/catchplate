@@ -2,8 +2,8 @@
 
 Implementation decision after `.218`, connected for registration in `.219`,
 finalization history in `.220`, activation recovery targets in `.221`, and
-activation/consume completion recovery in `.222`, and consume-input bridging
-in `.223`:
+activation/consume completion recovery in `.222`, consume-input bridging
+in `.223`, and protected consume planning/caller preparation in `.224`:
 reuse the existing independently
 root-admitted historical archive and genuine original replay. Do not create a
 second trust catalog, infer retired keys from stored records, or weaken a
@@ -21,8 +21,11 @@ now carries independently archived completion expectations through fresh actor
 binding, actual original-control verification, durable response retention and
 genuine receiving. The [signed consume-input bridge](oidc-session-activation-consume-input-bridge.md)
 now authenticates old activation evidence separately from current input issuance
-and worker intake. The actual protected delivery-plan and caller connection is
-still open. Fresh consume effects, proof, grant and release authorities
+and worker intake. [Protected planning and caller preparation](historical-consume-execution.md)
+now preserve that split through genuine private replay and current state/write
+checks. Grant, reservation, SQL and completion custody still require their own
+bridge profiles, so public historical consume effects remain disabled.
+Fresh consume effects, proof, grant and release authorities
 still need their remaining historical joins. Explicit older-source replay
 implementations also remain open.
 
@@ -93,6 +96,8 @@ the real producer, startup, bounded loader and public recovery continuation.
 `.222` connects actual activation/consume completion controls and receiving.
 `.223` adds signed old/current consume-input bridging and cold intake, with
 same-database/generation complete state-payload equality under independent roots.
+`.224` connects the private protected planner and caller preparation without
+widening the still-unconnected downstream custody purposes.
 Downstream effect/release history and step 5 remain open. None is runtime-verified.
 
 1. Cold-admit the operation-specific historical enrollment originals alongside
@@ -121,10 +126,14 @@ Downstream effect/release history and step 5 remain open. None is runtime-verifi
    enabled endpoint remains separate. The current-root-signed consume-input
    bridge now authenticates both old and current planner/state originals, and
    produces history v7 and planner v3 inputs without renewing original expiry.
-   The next connection is the actual protected delivery-plan old-provenance/
-   current-state split and the real caller using the separate v21 lane. Do not
-   lift the actor gate until those joins exist. Fresh consume effects, proof,
-   grant and release policies still require their remaining historical joins.
+   The protected delivery-plan old-provenance/current-state split and caller
+   preparation now use the separate v21 lane. A distinct private-input commitment
+   authenticates the bridge and old state without binding the plan to one
+   purpose-specific custody envelope. The next joins are separately versioned
+   consume-grant, reserve, SQL and completion bridge profiles, including planner
+   v3 historical completion. Keep the public actor gate closed until these
+   actual issuers and receivers connect. Fresh consume effects, proof, grant and
+   release policies still require their remaining historical joins.
 5. Admit older source revisions only through explicit versioned replay code
    covering their original schemas and semantics. Unsupported revisions and
    unknown or ambiguous cohorts continue to fail closed. Do not rewrite signed
@@ -163,8 +172,9 @@ flowchart TD
     N --> Q[Original controls, durable response and genuine completion receiving]
     Q --> B[Current-root-signed bridge: old evidence and current consume inputs]
     B --> I[History v7 and planner v3 production, receiving and cold intake]
-    I --> D[Protected planner and caller integration still required; actor closed]
-    D --> L[Separate fresh proof, grant and protected-release authority]
+    I --> D[Protected planner and caller preparation: old evidence, current state]
+    D --> G[Grant, reserve, SQL and completion bridge profiles still required]
+    G --> L[Public actor closed; separate proof, grant and protected-release work]
 ```
 
 Retained headers locate admitted entries; signatures and complete semantic replay

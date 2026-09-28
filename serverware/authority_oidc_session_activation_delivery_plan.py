@@ -57,6 +57,7 @@ class _Invocation:
     historical_custody: object
     window: tuple
     monotonic_deadline: int
+    provenance_context: object | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -204,10 +205,48 @@ def _capture_originals(context, *, request, scope, old_token_bytes, business_bef
     transition._arguments(raw["arguments"], work)
     custody.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(owner,
         expected_consume_request=actual, work=work)
-    custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
-        root_public_key=root, current_root_enrollment_bytes=original_state[0], work=work)
-    narrowed, narrowed_bound = custody.OidcSessionActivationHistoryCustody.processing_bounds_on_work(owner,
-        live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
+    configured = custody.OidcSessionActivationHistoryCustody._snapshot_configuration(owner)
+    provenance_context = None
+    if not historical and configured.consumer_role == custody.bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE:
+        # All mutable caller graphs are already detached. Reserve their actual
+        # held representations before custody re-decodes its own bridge originals.
+        query_bytes = sum(len(record.declared_query_json) + len(record.resolved_query_json)
+            + sum(len(address.key_json) for address in record.addresses) for record in records)
+        query_metadata = tuple((record.query_id, record.returned_row_count,
+            tuple((address.table, address.key_digest, address.present) for address in record.addresses))
+            for record in records)
+        original_bytes = sum(map(len, (*original_activation, *original_state, old, write_original)))
+        owned_bytes = work.measure(owned)[0] + work.measure(raw)[0] + work.measure(query_metadata)[0]
+        held_bytes = 4 * (original_bytes + owned_bytes + query_bytes) + 64 * 1024
+        provenance_context = custody.OidcSessionActivationHistoryCustody._consume_context_on_work(owner,
+            root_public_key=root, current_root_enrollment_bytes=original_state[0],
+            configuration_digest=expected["configurationDigest"], live_window=window,
+            transport_deadline_ns=bound, work=work, _current=_current,
+            _additional_original_bytes=held_bytes)
+        if (type(provenance_context) is not custody._ConsumeContext
+                or type(provenance_context.bridge_policy_bytes) is not bytes
+                or len(provenance_context.bridge_policy_bytes) < 2
+                or type(provenance_context.state_enrollment_bytes) is not bytes
+                or len(provenance_context.state_enrollment_bytes) < 2
+                or provenance_context.custody_bytes is not configured.custody_bytes
+                or held_bytes + len(provenance_context.bridge_policy_bytes)
+                    + len(provenance_context.state_enrollment_bytes)
+                    + len(provenance_context.custody_bytes) > contract.MAX_ORIGINAL_BYTES):
+            _fail("consume bridge did not retain its exact bounded original inventory")
+        for supplied, admitted, label in (
+                (old_planner, provenance_context.planner_public_key, "activation planner"),
+                (operation_key, provenance_context.operation_public_key, "activation operation root")):
+            registration._same(evidence.keys._spki_on_work(supplied, work),
+                evidence.keys._spki_on_work(admitted, work), work, "consume historical " + label)
+        narrowed, narrowed_bound = provenance_context.window, provenance_context.deadline_ns
+        provenance_context.live()
+    else:
+        # Legacy live roles and historical completion retain their strict
+        # same-root/state binding; v7 planning cannot authorize those purposes.
+        custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
+            root_public_key=root, current_root_enrollment_bytes=original_state[0], work=work)
+        narrowed, narrowed_bound = custody.OidcSessionActivationHistoryCustody.processing_bounds_on_work(owner,
+            live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     if (narrowed[:3] != window[:3] or narrowed[3] > window[3] or narrowed[4] > window[4]
             or narrowed[5] > window[5] or narrowed[6] > window[6] or narrowed_bound > bound):
         _fail("consume provenance custody renewed the original processing allowance")
@@ -216,7 +255,7 @@ def _capture_originals(context, *, request, scope, old_token_bytes, business_bef
     return _Invocation(actual, expected, held, old, raw, heads, frontiers,
         tuple(owned["countedBeforeHeads"]), write_original, original_state, root,
         original_activation, owned["activationExpectations"], old_scope, old_planner,
-        operation_key, owner, narrowed, min(narrowed_bound, narrowed[4]))
+        operation_key, owner, narrowed, min(narrowed_bound, narrowed[4]), provenance_context)
 
 
 def _live(invocation, work, *, _current=None):
@@ -232,11 +271,22 @@ def _live(invocation, work, *, _current=None):
         epoch, monotonic = now, observed
         return now
 
-    return transition.delivery._join_current(check, _current, work)
+    current = transition.delivery._join_current(check, _current, work)
+    if invocation.provenance_context is not None:
+        # The custody guard is base-only and lock-free. No descendant provenance
+        # or write guard can become its own ancestor during genuine replay.
+        current = transition.delivery._join_current(current, invocation.provenance_context.live, work)
+    return current
 
 
 def _provenance(invocation, work, *, _current=None):
     raw, old, scope = invocation.activation_originals, invocation.activation_scope, invocation.scope
+    inherited = invocation.provenance_context
+    enrollment = invocation.state_originals[0] if inherited is None else inherited.state_enrollment_bytes
+    root = invocation.state_root_public_key if inherited is None else inherited.root_public_key
+    configuration = scope["configurationDigest"] if inherited is None else inherited.configuration_digest
+    planner = invocation.activation_planner_public_key if inherited is None else inherited.planner_public_key
+    operation = invocation.operation_public_key if inherited is None else inherited.operation_public_key
     selected = invocation.context._exact("oidc_session_activation_deliveries",
         {"id": scope["deliveryId"]}, work=work)
     if selected["present"] is not True or type(selected["row"]) is not dict:
@@ -244,11 +294,11 @@ def _provenance(invocation, work, *, _current=None):
     return provenance._verify_on_work(consume_request=invocation.request,
         current_delivery_row=selected["row"], response_originals=raw[:4], plan_originals=raw[4:6],
         reserve_request_bytes=raw[6], reserve_receipt_bytes=raw[7], snapshot_bytes=raw[8],
-        enrollment_bytes=invocation.state_originals[0], authorization_bytes=raw[9],
+        enrollment_bytes=enrollment, authorization_bytes=raw[9],
         authorization_enrollment_bytes=raw[11], grant_bytes=raw[10], grant_enrollment_bytes=raw[12],
-        expectations=invocation.activation_expectations, planner_public_key=invocation.activation_planner_public_key,
-        operation_public_key=invocation.operation_public_key, root_public_key=invocation.state_root_public_key,
-        configuration_digest=scope["configurationDigest"], expected_authorization_digest=old["authorizationDigest"],
+        expectations=invocation.activation_expectations, planner_public_key=planner,
+        operation_public_key=operation, root_public_key=root,
+        configuration_digest=configuration, expected_authorization_digest=old["authorizationDigest"],
         expected_database_id=old["databaseId"], expected_generation_digest=old["generationDigest"],
         expected_pending_sequence=old["pendingSequence"], expected_pending_head_digest=old["pendingHeadDigest"],
         expected_fence=old["fence"], historical_custody=invocation.historical_custody,
@@ -284,11 +334,12 @@ def _authorities(invocation, live, work, *, _current=None):
             (invocation.expected_counted_heads, projected.expected_counted_heads, "seven counted heads")):
         work.prepare_copy(actual)
         registration._same(tuple(actual), expected, work, "observed consume " + label)
-    actual_provenance = _provenance(invocation, work, _current=_current)
+    ancestor = _current if invocation.provenance_context is None else live
+    actual_provenance = _provenance(invocation, work, _current=ancestor)
     first = actual_provenance.live()
     if live() < first:
         _fail("consume processing reversed after completed-activation admission")
-    actual_writes = _replay(invocation, work, _current=_current)
+    actual_writes = _replay(invocation, work, _current=ancestor)
     return observed, actual_provenance, actual_writes
 
 
@@ -339,18 +390,27 @@ def _bodies(invocation, actual_provenance, actual_writes, work):
         "countedBeforeHeads": read_inputs["countedBeforeHeads"],
         "activationExpectations": invocation.activation_expectations, "activationScope": invocation.activation_scope,
         "activationProvenanceDigest": actual_provenance.provenance_digest}
-    inputs = {"schema": contract.INPUTS_DOMAIN}
+    inherited = invocation.provenance_context
+    inputs_domain = contract.INPUTS_DOMAIN if inherited is None else contract.BRIDGE_INPUTS_DOMAIN
+    inputs = {"schema": inputs_domain}
     names = ("oldToken", "stateEnrollment", "completeRootVector", "headQuery", "headObservation",
         "completionStatus", "completionId", "completionRequest", "completionReceipt", "activationPlan",
         "activationBundle", "reserveRequest", "reserveReceipt", "snapshot", "callerAuthorization",
         "executionGrant", "callerEnrollment", "grantEnrollment")
     originals = (invocation.old_token_bytes, *invocation.state_originals, *invocation.activation_originals)
+    if inherited is not None:
+        # Bind the two genuine authority contexts, not a purpose-specific
+        # custody envelope that another independently authorized role cannot use.
+        names += ("activationStateEnrollment", "activationConsumeBridgePolicy")
+        originals += (inherited.state_enrollment_bytes, inherited.bridge_policy_bytes)
     if len(names) != len(originals):
         _fail("consume source original commitment inventory changed")
     for name, raw in zip(names, originals):
-        inputs[name] = {"digest": evidence.plan._frame(contract.INPUTS_DOMAIN + "/" + name, (raw,), work),
+        inputs[name] = {"digest": evidence.plan._frame(inputs_domain + "/" + name, (raw,), work),
             "byteCount": len(raw)}
-    return contract._body_commitments_on_work(proof_bytes=_wire(proof, work),
+    body_commitments = (contract._body_commitments_on_work if inherited is None
+        else contract._bridge_body_commitments_on_work)
+    return body_commitments(proof_bytes=_wire(proof, work),
         context_bytes=_wire(evaluation, work), inputs_bytes=_wire(inputs, work),
         transition_bytes=actual_writes.transition_bytes, work=work)
 

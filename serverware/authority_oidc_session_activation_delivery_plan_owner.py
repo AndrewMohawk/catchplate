@@ -200,32 +200,39 @@ class OidcSessionActivationDeliveryPlanOwner:
         current = planning.transition.delivery._join_current(current, _current, work)
         current()
         observed = expectations._capture_on_work(owned["activationExpectations"], work=work)
-        registration._same(observed["scope"]["configurationDigest"], owned["configuration"], work,
-            "consume and original activation configuration cohort")
+        selected = history.OidcSessionActivationHistoryCustody._consume_context_on_work(
+            historical_custody, root_public_key=root, current_root_enrollment_bytes=enrolled,
+            configuration_digest=owned["configuration"], live_window=window,
+            transport_deadline_ns=bound, work=work, _current=_current,
+            _additional_original_bytes=len(enrolled) + len(vector) + work.measure(owned)[0])
+        if type(selected) is not history._ConsumeContext:
+            _fail("consume constructor requires genuine same-call history context")
+        registration._same(observed["scope"]["configurationDigest"], selected.configuration_digest, work,
+            "consume original activation configuration cohort")
         read_config = planning.OidcSessionActivationDeliveryReadPlanner._snapshot_configuration(read_planner)
         if read_config[3] != owned["skew"]:
             _fail("consume reader and configured clock policy differ")
         evidence.keys._public_binding(public, owned["spki"], work)
         evidence.keys._pair_on_work(private, public, work)
         evidence.keys._public_binding(original_planner, observed["scope"]["plannerSpkiDigest"], work)
+        evidence.keys._public_binding(original_planner,
+            evidence.keys._spki_on_work(selected.planner_public_key, work), work)
         root_spki = evidence.keys._spki_on_work(root, work)
-        registration._same(evidence.keys._spki_on_work(operation_key, work), root_spki, work,
+        original_root_spki = evidence.keys._spki_on_work(selected.operation_public_key, work)
+        registration._same(evidence.keys._spki_on_work(operation_key, work), original_root_spki, work,
             "consume original activation operation root")
         admitted = state.head.authorization._admit_enrollment_on_work(
             enrollment_bytes=enrolled, root_public_key=root, work=work)
         for role in ("state", "computation", "completion"):
             if admitted.payload[role]["spkiDigest"] == owned["spki"]:
                 _fail("consume planner overlaps an enrolled state-purpose key")
-        if owned["spki"] in (root_spki, observed["scope"]["plannerSpkiDigest"]):
+        if owned["spki"] in (root_spki, original_root_spki, observed["scope"]["plannerSpkiDigest"]):
             _fail("consume planner requires a separate root/original-activation signing key")
         state.vector._decode_on_work(vector, work=work)
         history.OidcSessionActivationHistoryCustody._require_consume_planning_on_work(
             historical_custody, work=work)
-        history.OidcSessionActivationHistoryCustody.bind_context_on_work(historical_custody,
-            root_public_key=root, current_root_enrollment_bytes=enrolled, work=work)
-        narrowed, clipped = history.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
-            historical_custody, live_window=window, transport_deadline_ns=bound, work=work,
-            _current=_current)
+        selected.live()
+        narrowed, clipped = selected.window, selected.deadline_ns
         historical_configuration = history.OidcSessionActivationHistoryCustody._snapshot_configuration(historical_custody)
         journal_configuration = custody.DeliveryOriginalJournal._snapshot_configuration(journal)
         if type(journal_configuration) is not tuple or len(journal_configuration) != 8:

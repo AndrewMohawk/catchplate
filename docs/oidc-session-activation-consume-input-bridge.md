@@ -1,6 +1,6 @@
 # Historical activation to current consume inputs
 
-This source slice connects genuine consume-input production, original-only
+The `.223` source slice connects genuine consume-input production, original-only
 receiving and cold worker intake across separately authorized root keys. It
 does not enable the public fresh-consume action for historical authority. The
 actor's explicit refusal remains; the actual delivery-plan provenance/current
@@ -70,3 +70,8 @@ delivery-plan path still couples its old provenance inputs to current state,
 so no historical public consume permission is enabled by these new profiles.
 The source is unbuilt and unexecuted; no runtime or production acceptance is
 claimed.
+
+The subsequent [`.224` protected planning connection](historical-consume-execution.md)
+separates old provenance from current state through the actual private planner
+and caller preparation. Grant/reserve/SQL/completion bridge profiles remain open,
+so the public historical consume execution gate is still closed.

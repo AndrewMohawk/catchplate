@@ -17,6 +17,57 @@ execution, caller, plan = planning.execution, planning.caller, planning.plan
 producer, issuer = receiving.production, receiving.issuer
 
 
+def _configuration_on_target(owner, target):
+    """Select only the actual current lane or its independently cold bridge.
+
+    This returns configuration and an original, not permission or a live policy
+    result. The owner still guards the target and re-admits the policy on its
+    original request work before claiming or contacting any issuer.
+    """
+    from serverware import control_plane_oidc_session_activation_completion_recovery_history as history
+
+    if (type(owner) is not execution.startup._EnrollmentOwner
+            or type(target) is not history._CompletionRecoveryTarget
+            or type(target.authority) is not history.historical._SelectedActivationHistory):
+        execution._fail("consume input configuration requires the actual owner and historical target")
+    parent, binding, authority = owner._material, owner._binding, target.authority
+    if parent is None or binding is None:
+        execution._fail("consume input configuration has no actual cold owner")
+    names = ("activation_execution", "activation_planning", "consume_execution",
+        "release_intent", "completion_recovery")
+    is_current = (authority.configuration_payload is parent.configuration_payload
+        and authority.configuration_digest == parent.configuration_digest
+        and authority.root_public_key is binding.runtime_root_public_key
+        and all(getattr(authority, name) is getattr(parent, name) for name in names))
+    if is_current:
+        policy = parent.consume_input_acquisition
+        if (type(policy) is not configured._ConsumeInputAcquisitionMaterial
+                or policy.historical_scope is not None or policy.bridge_interval is not None):
+            execution._fail("consume input current lane is not independently configured")
+    else:
+        policy = parent.historical_consume_input_acquisition
+        archive = parent.activation_history
+        if (type(policy) is not configured._ConsumeInputAcquisitionMaterial
+                or type(archive) is not configured.historical._ActivationHistoryMaterial
+                or type(policy.historical_scope) is not configured.historical._ActivationHistoryScope
+                or not any(policy.historical_scope is scope for scope in archive.scopes)):
+            execution._fail("consume input historical lane is not independently configured")
+        selected = policy.historical_scope
+        if (selected.configuration_digest != authority.configuration_digest
+                or selected.root_public_key is not authority.root_public_key
+                or (selected.valid_from_epoch_ns, selected.valid_until_epoch_ns) != authority.authority_interval
+                or selected.planner_attestation_interval != authority.planner_attestation_interval
+                or any(getattr(selected, name) is not getattr(authority, name) for name in names)):
+            execution._fail("consume input bridge does not select this exact historical target")
+    original = authority.activation_planning.planner_bootstrap_bytes
+    issuer.authorization._original(original, issuer.MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES,
+        "selected original activation planner")
+    issuer.authorization._original(policy.issuer_policy_bytes, issuer.MAX_BYTES,
+        "selected original consume issuer policy")
+    transport._endpoint(policy.endpoint)
+    return policy, original
+
+
 def _acquire_on_permission(permission):
     """No caller-selected originals, policy, target, endpoint or successful DTO."""
     if type(permission) is not execution._ActivationPermission:

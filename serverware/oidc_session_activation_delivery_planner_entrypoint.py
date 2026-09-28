@@ -100,7 +100,7 @@ def _parent(path):
         raise
 
 
-def _open_material(path, maximum, *, private=False):
+def _open_material(path, maximum, *, private=False, maximum_capture_bytes=None):
     if _MATERIAL.get(path) != (maximum, private):
         raise RuntimeError("consume planner original inventory is not source fixed")
     parent, source = _parent(path), None
@@ -115,6 +115,10 @@ def _open_material(path, maximum, *, private=False):
                 or path in (BUNDLE_KEY_PATH, DELIVERY_KEY_PATH, JOURNAL_KEY_PATH, EXECUTION_BUNDLE_KEY_PATH)
                     and before.st_size != MAX_RAW_KEY_BYTES):
             raise RuntimeError("consume planner original is not protected bounded material")
+        if maximum_capture_bytes is not None and (
+                type(maximum_capture_bytes) is not int or maximum_capture_bytes <= 0
+                or 16 * before.st_size > maximum_capture_bytes):
+            raise RuntimeError("consume planner original exceeds remaining cold capture capacity")
         original = delivery._read_exact_source(source, before.st_size)
         identity = delivery._material_identity(before)
         if (delivery._material_identity(os.fstat(source)) != identity
@@ -362,11 +366,13 @@ def main():
         window, bound = _construction_on_work(work)
         current = bootstrap.shared._processing(window, bound, work)
         original_values = []
+        capture_remaining = bootstrap.authority.MAX_RESULT_BYTES - bootstrap._INTAKE_METADATA_BYTES
         for path, target, maximum in _TRUST_FILES:
             current()
             work.charge(input_bytes=2 * maximum)
             source = bootstrap.configuration.production._callback(work,
-                lambda path=path, maximum=maximum: _open_material(path, maximum))
+                lambda path=path, maximum=maximum: _open_material(path, maximum,
+                    maximum_capture_bytes=capture_remaining))
             owned.add(source)
             _retain(source, target, reservations, owned)
             retained[target] = delivery._material_identity(os.fstat(target))
@@ -375,8 +381,10 @@ def main():
             original, _identity = bootstrap.configuration.production._callback(work,
                 lambda target=target, maximum=maximum: _read_original(target, maximum))
             original_values.append(original)
+            capture_remaining -= 16 * len(original)
             current()
         root_raw, bootstrap_raw, history_raw = original_values
+        bootstrap._intake_reservation(tuple(map(len, original_values)))
         work.charge(input_bytes=len(root_raw))
         root = bootstrap.configuration.production._callback(work, lambda: serialization.load_pem_public_key(root_raw))
         if not isinstance(root, Ed25519PublicKey):

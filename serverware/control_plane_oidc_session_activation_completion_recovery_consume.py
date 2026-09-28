@@ -46,6 +46,36 @@ def _acquisition_capture_bytes(original_lengths, config, activation_original, gr
         len(config.issuer_policy_bytes), len(activation_original)) + 24 * sum(grant_lengths))
 
 
+def _cold_capture_on_owner(owner):
+    """Reserve both configured choices before reading the first target body.
+
+    The genuine target later selects exactly one lane. This is length-only
+    accounting, not an attempt to select history from unauthenticated locators.
+    """
+    parent = owner._material
+    candidates = []
+    if parent.consume_input_acquisition is not None:
+        if parent.activation_planning is None:
+            execution._fail("fresh consume ordinary input lane lacks its planner")
+        candidates.append((parent.consume_input_acquisition,
+            parent.activation_planning.planner_bootstrap_bytes))
+    historical = parent.historical_consume_input_acquisition
+    if historical is not None:
+        archived = historical.historical_scope
+        if (parent.activation_history is None
+                or type(archived) is not actors.history.historical.bootstrap._ActivationHistoryScope
+                or not any(archived is scope for scope in parent.activation_history.scopes)):
+            execution._fail("fresh consume bridge lacks its actual cold archive scope")
+        candidates.append((historical, archived.activation_planning.planner_bootstrap_bytes))
+    if not candidates:
+        execution._fail("fresh consume has no independently configured input lane")
+    cold = 0
+    for config, original in candidates:
+        _configuration(config, original)
+        cold += bookkeeping._cold_derivation_reservation(len(config.issuer_policy_bytes), len(original))
+    return cold + planning._IO_BYTES + 24 * planning.MAX_INPUT_RESPONSE_BYTES
+
+
 class _ConsumeAttempt:
     """Actual private call association; never an external authority carrier."""
 
@@ -57,7 +87,8 @@ class _ConsumeAttempt:
         "_input_material", "_input_material_seal", "_consume_slot", "_consume_slot_seal", "_plan",
         "_authorization", "_authorization_seal", "_dispatch", "_dispatch_seal",
         "_completion", "_completion_seal", "_authorization_spent", "_dispatch_spent", "_completion_spent",
-        "_public_response", "_public_response_seal", "_response_spent")
+        "_public_response", "_public_response_seal", "_response_spent",
+        "_activation_original", "_activation_policy", "_historical_root")
 
     def __init__(self, construction, actor, selected, response, receiving_current, reconciliation):
         if construction is not _CONSTRUCTION:
@@ -67,10 +98,15 @@ class _ConsumeAttempt:
         self._owner, self._work = actor._owner, selected.work
         self._parent, self._binding, self._custody = self._owner._material, self._owner._binding, self._owner._custody
         self._root = self._binding.runtime_root_public_key
-        self._config = self._parent.consume_input_acquisition
-        _configuration(self._config, self._parent.activation_planning.planner_bootstrap_bytes)
+        self._config, self._activation_original = acquisition._configuration_on_target(self._owner, actor._target)
+        self._activation_policy = selected.authority.activation_execution
+        self._historical_root = selected.authority.root_public_key
+        if selected.authority is not actor._target.authority:
+            execution._fail("fresh consume controls changed their selected historical authority")
+        _configuration(self._config, self._activation_original)
         self._cold_seal = (actor, selected, self._owner, self._work, self._parent, self._binding,
-            self._custody, self._root, self._config)
+            self._custody, self._root, self._config, self._activation_original,
+            self._activation_policy, self._historical_root)
         self._config_pin = self._cold_configuration()
         self._response_seal = (response, receiving_current, reconciliation)
         self._phase = "inputs"
@@ -89,19 +125,22 @@ class _ConsumeAttempt:
 
     def _cold_configuration(self):
         return (self._config.endpoint, self._config.issuer_policy_bytes,
-            self._parent.activation_planning.planner_bootstrap_bytes,
-            self._parent.configuration_digest)
+            self._activation_original, self._parent.configuration_digest,
+            self._config.historical_scope, self._config.bridge_interval)
 
     def _identity(self):
         observed = (self.actor, self.controls, self._owner, self._work, self._parent,
-            self._binding, self._custody, self._root, self._config)
+            self._binding, self._custody, self._root, self._config, self._activation_original,
+            self._activation_policy, self._historical_root)
         if (type(self) is not _ConsumeAttempt or self._construction is not _CONSTRUCTION
                 or _ACTIVE is not self or self._closed is not False
                 or any(actual is not held for actual, held in zip(observed, self._cold_seal))
                 or self._owner._material is not self._parent or self._owner._binding is not self._binding
                 or self._owner._custody is not self._custody
                 or self._binding.runtime_root_public_key is not self._root
-                or self._parent.consume_input_acquisition is not self._config
+                or self.controls.authority is not self.actor._target.authority
+                or self.controls.authority.activation_execution is not self._activation_policy
+                or self.controls.authority.root_public_key is not self._historical_root
                 or self._cold_configuration() != self._config_pin
                 or actors._ACTIVE is not self.actor or self.actor._purpose != "consume"
                 or self.actor._profile != "activation" or self.actor._authorized is not True
@@ -121,6 +160,9 @@ class _ConsumeAttempt:
                 or self._phase not in ("inputs", "planning", "prepared", "authorizing", "authorized",
                     "dispatching", "dispatched", "completing", "completion-observed")):
             execution._fail("fresh consume lost its exact owner, originals or purpose")
+        config, original = acquisition._configuration_on_target(self._owner, self.actor._target)
+        if config is not self._config or original is not self._activation_original:
+            execution._fail("fresh consume changed its actual selected acquisition lane")
         lifetime = self._lifetime
         if lifetime is not self._lifetime_seal or lifetime.work is not self._work:
             execution._fail("fresh consume replaced its original lifetime")
@@ -274,7 +316,7 @@ def _acquire(active):
     active._current()
     active._originals = active._originals_seal = inputs._originals_on_active(active)
     raw, config, work = active._originals, active._config, active._work
-    activation_original = active._parent.activation_planning.planner_bootstrap_bytes
+    activation_original = active._activation_original
     held = active.controls.original_reservation_bytes - planning.PLANNING_RESERVATION_BYTES
     # The transport caps the combined raw2 body, not each role separately.
     # Only their sum affects the capture multiplier; no original is fabricated.
@@ -342,12 +384,7 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, live_window,
         execution._fail("fresh consume cannot overlap another source call")
     if type(owner) is not execution.startup._EnrollmentOwner:
         execution._fail("fresh consume requires its actual cold owner")
-    config, activation_original = owner._material.consume_input_acquisition, owner._material.activation_planning.planner_bootstrap_bytes
-    _configuration(config, activation_original)
-    cold = (16 * len(activation_original) + 8 * len(config.issuer_policy_bytes)
-        + 8 * bookkeeping.history.MAX_CONSUME_REQUEST_BYTES
-        + 8 * bookkeeping.state.vector.MAX_BYTES + 64 * 1024 + planning._IO_BYTES
-        + 24 * planning.MAX_INPUT_RESPONSE_BYTES)
+    cold = _cold_capture_on_owner(owner)
     if cold >= planning.PLANNING_RESERVATION_BYTES:
         execution._fail("fresh consume cold originals leave no bounded acquisition lane")
     future = (planning.PLANNING_RESERVATION_BYTES + EXECUTION_RESERVATION_BYTES + inputs.INPUT_RESERVATION_BYTES

@@ -45,6 +45,7 @@ TLS_PATHS = {
 }
 TLS_LIMITS, MIN_TLS_BYTES = shared.TLS_LIMITS, shared.MIN_TLS_BYTES
 MAX_BYTES = 4 * 1024 * 1024
+_INTAKE_METADATA_BYTES = 128 * 1024
 SCHEMA = "serverware.signedOidcSessionActivationDeliveryPlannerBootstrap/v2"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryPlannerBootstrap/v2"
 BRIDGE_SCHEMA = "serverware.signedOidcSessionActivationDeliveryPlannerBootstrap/v3"
@@ -99,6 +100,23 @@ class _HistoricalPlannerMaterial(_PlannerMaterial):
 
 def _fail(message):
     raise OidcSessionActivationDeliveryPlannerBootstrapError(message)
+
+
+def _intake_reservation(original_lengths):
+    """Length-only cold, duplicate-admission and runtime-history captures.
+
+    Actual nested v7 policy/current originals are contained by the original
+    history length. This tightens the existing ceiling, never resets it.
+    """
+    limits = (16 * 1024, MAX_BYTES, history.MAX_BYTES)
+    if (type(original_lengths) is not tuple or len(original_lengths) != 3
+            or any(type(size) is not int or not 2 <= size <= maximum
+                for size, maximum in zip(original_lengths, limits))):
+        _fail("consume planner intake requires exact bounded cold lengths")
+    reserved = 16 * sum(original_lengths) + _INTAKE_METADATA_BYTES
+    if reserved >= authority.MAX_RESULT_BYTES:
+        _fail("consume planner cold captures exhaust the existing original ceiling")
+    return reserved
 
 
 def _sha(raw, work):
@@ -368,6 +386,7 @@ def _verify_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
         if (type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES
                 or type(custody) is not bytes or not 2 <= len(custody) <= history.MAX_BYTES):
             _fail("consume bootstrap/history requires bounded immutable originals")
+        _intake_reservation((16 * 1024, len(original), len(custody)))
         authorization._public(root)
         window = clock._validate(live_window)
         shape._integer(transport_deadline_ns, minimum=1)

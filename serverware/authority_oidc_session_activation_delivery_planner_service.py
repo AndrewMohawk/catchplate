@@ -75,8 +75,16 @@ def _cold_original_reservation(material, *, work, current):
     total = sum(map(len, (material.consume_request_bytes, material.complete_root_vector_bytes,
         material.state_enrollment_bytes, historical.bootstrap_bytes,
         historical.complete_root_vector_bytes, historical.state_enrollment_bytes)))
-    for graph in (material.payload, historical.configuration_payload,
-            historical.generation, historical.runtime_role_identities):
+    graphs = (material.payload, historical.configuration_payload,
+        historical.generation, historical.runtime_role_identities)
+    policy = material.history_material.bridge_policy
+    if policy is not None:
+        output = policy.current_planner
+        total += sum(map(len, (policy.policy_bytes, output.bootstrap_bytes,
+            output.state_enrollment_bytes, output.complete_root_vector_bytes)))
+        graphs += (policy.payload, output.configuration_payload,
+            output.generation, output.runtime_role_identities)
+    for graph in graphs:
         current()
         measured = bootstrap.configuration._ConfigurationCapture(
             bootstrap.capture._SharedLedger(work), maximum_bytes=authority.MAX_RESULT_BYTES, retain=False)
@@ -219,8 +227,9 @@ class _PlannerOwner:
                 status = b"verified"
             elif exporting:
                 original_deadline, journal_digest = transport._retained_scope(originals, work)
-                extra = {} if self._delivery_current is None else {
-                    "maximum_response_bytes": maximum_response_bytes, "current": self._delivery_current}
+                extra = {"maximum_response_bytes": maximum_response_bytes}
+                if self._delivery_current is not None:
+                    extra["current"] = self._delivery_current
                 prepared = cold._ColdPlanner.export_retained(self._planner, envelope_bytes=originals[1],
                     expected_deadline_epoch_ns=original_deadline, expected_journal_digest=journal_digest,
                     live_window=live_window, transport_deadline_ns=deadline, work=work, **extra)
@@ -242,6 +251,8 @@ class _PlannerOwner:
                 deadline_epoch_ns=payload["expiresAtEpochNs"],
                 maximum_lifetime_ns=live_window[5], maximum_clock_skew_ns=live_window[6])
             response_deadline = min(deadline, response_window[4])
+            if maximum_response_bytes is not None and sum(map(len, response)) > maximum_response_bytes:
+                raise DeliveryPlannerRequestError("consume response exceeds its retained-original allowance")
             if self._delivery_current is not None:
                 if (maximum_response_bytes is None
                         or sum(map(len, response)) > maximum_response_bytes):
@@ -271,20 +282,38 @@ class _PlannerOwner:
             maximum_lifetime_ns=self._age, maximum_clock_skew_ns=self._skew, work=work)
         deadline = min(self._deadline, window[4], window[1] + self._request_timeout * 1_000_000_000)
         transport._check_deadline(deadline)
+        def current():
+            self._live()
+            return clock._check_on_work(window, work=work)
+
+        headers = (max(transport.PREPARE_REQUEST_HEADER_BYTES,
+            transport.BOUNDED_PREPARE_REQUEST_HEADER_BYTES, transport.RETAINED_REQUEST_HEADER_BYTES,
+            transport.EXPORT_REQUEST_HEADER_BYTES) + transport.EXPORT_RESPONSE_HEADER_BYTES)
+        maximum_request = transport.MAX_BYTES - self._retained_bytes - headers - transport.MAX_RESPONSE_BYTES
+        if maximum_request <= 0:
+            raise DeliveryPlannerRequestError("consume cold captures exhaust request capacity")
+        current()
+        transport.evidence.production._callback(work, lambda: connection.setblocking(False))
+        current()
         # The transport checks peer 65532 before prefix/length/body reads.
         # It reserves both headers and maximum response before body allocation.
-        originals = transport._recv_request(connection, live_window=window, deadline_ns=deadline, work=work)
+        originals = transport._recv_request_on_work(connection, deadline_ns=deadline,
+            work=work, current=current, maximum_request_bytes=maximum_request)
         self._live()
         clock._check_on_work(window, work=work)
         if self._spent:
             raise DeliveryPlannerStartupError("consume planner cold exchange was already spent")
         self._spent = True
+        maximum_response = transport.MAX_BYTES - self._retained_bytes - headers - sum(map(len, originals))
         response, response_window, response_deadline = self._dispatch(
-            originals, live_window=window, deadline=deadline, work=work)
+            originals, live_window=window, deadline=deadline, work=work,
+            maximum_response_bytes=maximum_response)
         self._live()
         clock._check_on_work(response_window, work=work)
-        transport._send_response(connection, response, live_window=response_window,
-            deadline_ns=response_deadline, work=work, export=originals[0] == transport.EXPORT_PURPOSE)
+        window = response_window
+        transport._send_response_on_work(connection, response,
+            deadline_ns=response_deadline, work=work, current=current,
+            export=originals[0] == transport.EXPORT_PURPOSE)
         self._live()
         clock._check_on_work(response_window, work=work)
         transport._check_deadline(response_deadline)
@@ -492,23 +521,31 @@ def _initialize(continuation=None):
             # One actual bracket precedes all original reads and verification.
             work.charge(input_bytes=delivery.MAX_ROOT_BYTES + delivery.MAX_BOOTSTRAP_BYTES + delivery.MAX_HISTORY_BYTES)
             originals, sealed = [], []
-            for descriptor, maximum in ((delivery.ROOT_FD, delivery.MAX_ROOT_BYTES),
+            inventory = ((delivery.ROOT_FD, delivery.MAX_ROOT_BYTES),
                     (delivery.BOOTSTRAP_FD, delivery.MAX_BOOTSTRAP_BYTES),
-                    (delivery.HISTORY_FD, delivery.MAX_HISTORY_BYTES)):
+                    (delivery.HISTORY_FD, delivery.MAX_HISTORY_BYTES))
+            identities = []
+            for descriptor, maximum in inventory:
+                identity = cold.production._callback(work,
+                    lambda descriptor=descriptor, maximum=maximum: delivery._sealed_identity(descriptor, maximum))
+                identities.append(identity)
+                cold.clock._check_on_work(initial_window, work=work)
                 if delivery_current is not None:
-                    remaining = authority.MAX_RESULT_BYTES - retained
-                    if remaining < 2:
-                        raise DeliveryPlannerStartupError("consume cold original exceeds remaining capacity")
-                    maximum = min(maximum, remaining)
                     delivery_current()
+            cold_reservation = bootstrap._intake_reservation(tuple(value[0][6] for value in identities))
+            if retained + cold_reservation >= authority.MAX_RESULT_BYTES:
+                raise DeliveryPlannerStartupError("consume cold captures exceed the inherited original ceiling")
+            retained += cold_reservation
+            for (descriptor, maximum), expected in zip(inventory, identities):
                 raw, identity = cold.production._callback(work,
                     lambda descriptor=descriptor, maximum=maximum: delivery._read_original(descriptor, maximum))
+                if identity != expected:
+                    raise DeliveryPlannerStartupError("consume cold original changed after aggregate preflight")
                 cold.clock._check_on_work(initial_window, work=work)
                 if delivery_current is not None:
                     delivery_current()
                 originals.append(raw)
                 sealed.append((descriptor, maximum, False, identity))
-                retained += len(raw)
             root_raw, bootstrap_raw, history_raw = originals
             # The delivery continuation reserves its own actual held originals
             # and decoded graphs. These are additional reads owned by this cold
@@ -544,10 +581,9 @@ def _initialize(continuation=None):
                 return now
 
             current()
-            if delivery_current is not None:
-                retained += _cold_original_reservation(material, work=work, current=current)
-                if retained >= authority.MAX_RESULT_BYTES:
-                    raise DeliveryPlannerStartupError("consume decoded originals leave no private recovery capacity")
+            measured_cold = _cold_original_reservation(material, work=work, current=current)
+            if measured_cold + sum(map(len, originals)) > cold_reservation:
+                raise DeliveryPlannerStartupError("consume decoded originals exceed the pre-body capture reservation")
             listener_pins = tuple(launch[name] for name in ("listenerSocketDevice", "listenerSocketInode",
                 "listenerPathDevice", "listenerPathInode"))
             journal_pins = launch["journalDirectoryDevice"], launch["journalDirectoryInode"]

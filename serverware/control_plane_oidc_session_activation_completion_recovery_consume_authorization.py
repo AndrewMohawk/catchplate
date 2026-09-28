@@ -105,6 +105,7 @@ def _authorize_on_active(active):
     actor, owner, work = active.actor, active._owner, active._work
     parent, binding, custody, root = active._parent, active._binding, active._custody, active._root
     policy, activation_policy = parent.consume_execution, parent.activation_execution
+    historical_activation_policy = active._activation_policy
     private, descriptor, descriptor_identity = owner._consume_key, owner._consume_key_fd, owner._consume_key_identity
     response_path, response_pin = owner._response_path, owner._response_pin
     prepared, exported, before = selected.prepared, selected.exported, selected.before
@@ -126,7 +127,7 @@ def _authorize_on_active(active):
         "planner_public_key": policy.planner_public_key, "operation_public_key": policy.operation_public_key}
     common_pin = tuple(common[name] for name in _COMMON_FIELDS)
     key_refs = (policy.caller_public_key, activation_policy.caller_public_key,
-        activation_policy.consume_planner_public_key)
+        activation_policy.consume_planner_public_key, historical_activation_policy.caller_public_key)
     enrollment_originals = common_pin[:3]
     for original, maximum in zip(enrollment_originals, (caller.MAX_ENROLLMENT_BYTES,
             caller.authorization.MAX_ENROLLMENT_BYTES, caller.enrollments.MAX_ENROLLMENT_BYTES)):
@@ -159,6 +160,7 @@ def _authorize_on_active(active):
                 or actor._authorized is not True or owner._activation_permission is not None
                 or owner._material is not parent or owner._binding is not binding or owner._custody is not custody
                 or parent.consume_execution is not policy or parent.activation_execution is not activation_policy
+                or active._activation_policy is not historical_activation_policy
                 or owner._consume_key is not private or owner._consume_key_fd != descriptor
                 or owner._consume_key_identity is not descriptor_identity
                 or owner._response_path != response_path or owner._response_pin != response_pin
@@ -170,7 +172,8 @@ def _authorize_on_active(active):
                 or parent.configuration_digest is not common_pin[4]
                 or policy.planner_public_key is not common_pin[5] or policy.operation_public_key is not common_pin[6]
                 or any(actual is not value for actual, value in zip((policy.caller_public_key,
-                    activation_policy.caller_public_key, activation_policy.consume_planner_public_key), key_refs))):
+                    activation_policy.caller_public_key, activation_policy.consume_planner_public_key,
+                    historical_activation_policy.caller_public_key), key_refs))):
             _fail("changed its actor, dedicated signer, resources or original inputs")
         planning._identity(selected)
         if expectations is not None:
@@ -217,7 +220,8 @@ def _authorize_on_active(active):
         "fresh consume independently configured planner")
     signing_pin = caller.keys._spki_on_work(policy.caller_public_key, work)
     if (signing_pin == response_pin
-            or signing_pin == caller.keys._spki_on_work(activation_policy.caller_public_key, work)):
+            or signing_pin == caller.keys._spki_on_work(activation_policy.caller_public_key, work)
+            or signing_pin == caller.keys._spki_on_work(historical_activation_policy.caller_public_key, work)):
         _fail("reuses the HTTP or activation caller signing key")
     caller.keys._pair_on_work(private, policy.caller_public_key, work)
     current()

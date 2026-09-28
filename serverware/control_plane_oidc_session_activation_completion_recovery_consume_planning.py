@@ -112,11 +112,16 @@ def _prepare_on_active(active):
     actor, selected, response = active.actor, controls_source._require_controls(active.controls), active.response
     owner, work, root = active._owner, active._work, active._root
     parent, binding, custody = active._parent, active._binding, active._custody
+    policy, historical_root = active._activation_policy, active._historical_root
+    activation_original = active._activation_original
     originals, grants, acquired = active._originals, active._input_grants, active._input_material
     parent_lifetime, config, slot = active._lifetime, active._config, active._consume_slot
     if (actor._purpose != "consume" or actor._profile != "activation"
             or selected._actor is not actor or selected.profile != "activation" or selected.work is not work
-            or selected.root_public_key is not root or actor._owner is not owner
+            or selected.root_public_key is not historical_root or actor._owner is not owner
+            or selected.authority.activation_execution is not policy
+            or selected.authority.root_public_key is not historical_root
+            or selected.authority.activation_planning.planner_bootstrap_bytes is not activation_original
             or owner._material is not parent or owner._binding is not binding or owner._custody is not custody
             or binding.runtime_root_public_key is not root
             or originals is not active._originals_seal or grants is not active._input_grants_seal
@@ -139,11 +144,11 @@ def _prepare_on_active(active):
             or acquired.planner_bootstrap_bytes is not root_original
             or acquired.history_custody_bytes is not history_original):
         _fail("completion consume planning lost its bounded genuinely admitted raw2")
-    policy = parent.activation_execution
-    if (policy.consume_planner_endpoint is None or policy.consume_planner_public_key is None
+    current_policy, current_consume = parent.activation_execution, parent.consume_execution
+    if (current_policy.consume_planner_endpoint is None or current_policy.consume_planner_public_key is None
             or parent.activation_planning is None):
         _fail("completion consume planner is not independently configured")
-    endpoint = transport._endpoint(policy.consume_planner_endpoint)
+    endpoint = transport._endpoint(current_policy.consume_planner_endpoint)
     raw = selected.originals
     expected_raw = (*response, raw[1], raw[2], raw[5], raw[7], raw[6], raw[0], raw[4],
         policy.authorization_enrollment_bytes, policy.grant_enrollment_bytes,
@@ -154,19 +159,25 @@ def _prepare_on_active(active):
     expectations_original, activation_before, old = originals[13:]
     target = actor._target
     held = (actor, selected, response, owner, work, root, parent, binding, custody,
-        held_originals, grants, acquired, parent_lifetime, config, slot, target)
+        held_originals, grants, acquired, parent_lifetime, config, slot, target,
+        policy, historical_root, activation_original, current_policy, current_consume)
 
     def identity():
         observed = (active.actor, active.controls, active.response, active._owner, active._work,
             active._root, active._parent, active._binding, active._custody, active._originals,
             active._input_grants, active._input_material, active._lifetime, active._config,
-            active._consume_slot, actor._target)
+            active._consume_slot, actor._target, active._activation_policy,
+            active._historical_root, active._activation_original,
+            parent.activation_execution, parent.consume_execution)
         if (type(active) is not source._ConsumeAttempt or source._ACTIVE is not active
                 or actor._purpose != "consume" or actor._profile != "activation"
                 or actor._old_token is not old or active._originals_seal is not held_originals
                 or active._input_grants_seal is not grants or active._input_material_seal is not acquired
                 or owner._material is not parent or owner._binding is not binding or owner._custody is not custody
-                or parent.activation_execution is not policy or policy.consume_planner_endpoint != endpoint
+                or selected.authority.activation_execution is not policy
+                or selected.authority.root_public_key is not historical_root
+                or selected.authority.activation_planning.planner_bootstrap_bytes is not activation_original
+                or current_policy.consume_planner_endpoint != endpoint
                 or any(actual is not original for actual, original in zip(observed, held))):
             _fail("completion consume planning outlived its original owner or source pins")
 
@@ -208,7 +219,7 @@ def _prepare_on_active(active):
 
     current()
     capture_bytes = source._acquisition_capture_bytes(tuple(map(len, originals)), config,
-        parent.activation_planning.planner_bootstrap_bytes, tuple(map(len, grants)))
+        activation_original, tuple(map(len, grants)))
     acquired_request = acquired.planner_material.consume_request_bytes
     if (type(acquired.planner_material) is not bootstrap._PlannerMaterial
             or type(acquired_request) is not bytes
@@ -231,6 +242,7 @@ def _prepare_on_active(active):
     # must share the originally reserved lane with temporary journal I/O.
     planning_bytes = (16 * sum(map(len, grants)) + 8 * measured.bytes
         + 8 * len(policy.current_root_enrollment_bytes)
+        + (0 if config.historical_scope is None else 8 * len(current_consume.current_root_enrollment_bytes))
         + 8 * (len(activation_before) + len(selected.after_bytes) + len(expectations_original))
         + 8 * len(acquired_request)
         + 8 * scope_bound + 8 * consume.contract.MAX_BYTES
@@ -256,17 +268,26 @@ def _prepare_on_active(active):
     current()
     owned = bootstrap.configuration._ConfigurationCapture(execution.capture._SharedLedger(work),
         maximum_bytes=bootstrap.MAX_BYTES).visit(owned_graph)
-    material = configured._admit_on_work(planner_bootstrap_bytes=root_original,
+    admission = dict(planner_bootstrap_bytes=root_original,
         history_custody_bytes=history_original, configuration_payload=owned["configuration"],
         configuration_digest=parent.configuration_digest, generation=owned["generation"],
         runtime_role_identities=owned["runtime"], runtime_root_public_key=root,
-        activation_execution=policy, live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work)
+        activation_execution=current_policy, live_window=lifetime.window,
+        transport_deadline_ns=lifetime.bound, work=work)
+    if config.historical_scope is None:
+        material = configured._admit_on_work(**admission)
+    else:
+        material = configured._admit_bridge_on_work(**admission,
+            consume_execution=current_consume, historical_activation_execution=policy,
+            historical_root_public_key=historical_root,
+            activation_planner_bootstrap_bytes=activation_original,
+            issuer_policy_bytes=config.issuer_policy_bytes)
     if type(material) is not bootstrap._PlannerMaterial:
         _fail("completion consume planning requires genuine root planner/history admission")
     material_pin = bootstrap.configuration._configuration_wire(material.payload, execution.capture._SharedLedger(work))
     _same(material.consume_request_bytes, acquired_request, work, "re-admitted typed request footprint")
     _same(material.history_material.planner.bootstrap_bytes,
-        parent.activation_planning.planner_bootstrap_bytes, work, "original activation planner")
+        activation_original, work, "original activation planner")
     for nested in (material, material.history_material):
         def launch_guard(nested=nested, previous=[nested.opening_sample]):
             lifetime.base()
@@ -289,7 +310,7 @@ def _prepare_on_active(active):
     predecessor = reservations._predecessor_scope(*policy.reservation_predecessor)
     reserve, _reserve_digest, receipt, receipt_digest = reservations._verify_on_work(
         request_bytes=raw[5], snapshot_bytes=raw[6], receipt_bytes=raw[7],
-        enrollment_bytes=policy.current_root_enrollment_bytes, root_public_key=root,
+        enrollment_bytes=policy.current_root_enrollment_bytes, root_public_key=historical_root,
         expected_predecessor_sequence=predecessor[0], expected_predecessor_head_digest=predecessor[1],
         expected_fence=predecessor[2], work=work)
     if receipt is None or receipt_digest is None:

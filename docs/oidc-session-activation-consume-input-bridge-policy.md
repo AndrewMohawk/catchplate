@@ -67,3 +67,8 @@ integration gate, so the fresh consume actor stays closed to historical effects
 until that connection is genuine. No SQL retry, unknown-attempt retry, old
 permission reuse, cross-source adapter, deployment or runtime acceptance is
 provided. Source remains unbuilt and unexecuted.
+
+The [subsequent protected planning connection](historical-consume-execution.md)
+uses this genuine policy for old/current replay and caller preparation; it does
+not widen the grant, reservation, SQL or completion custody purposes. Their own
+bridge profiles and the public historical execution gate remain unfinished.

@@ -254,7 +254,8 @@ def _join(configured, material, work):
     registration._same(actual.read_configuration, material.reader_configuration, work, "consume read configuration differs")
     evidence.keys._public_binding(actual.planner_public_key, payload["planner"]["spkiDigest"], work)
     evidence.keys._public_binding(actual.activation_planner_public_key, material.history_material.planner.planner_spki_digest, work)
-    evidence.keys._public_binding(actual.operation_public_key, evidence.keys._spki_on_work(configured.root_public_key, work), work)
+    evidence.keys._public_binding(actual.operation_public_key,
+        evidence.keys._spki_on_work(material.history_material.historical_root_public_key, work), work)
     bootstrap._same_bytes(actual.state_enrollment_bytes, material.state_enrollment_bytes, work,
         "consume state enrollment original changed")
     bootstrap._same_bytes(actual.complete_root_vector_bytes, material.complete_root_vector_bytes, work,
@@ -577,7 +578,8 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
             state_root_public_key=root, complete_root_vector_bytes=material.complete_root_vector_bytes,
             historical_custody=historical, activation_expectations=payload["activationExpectations"],
             activation_scope=payload["activationScope"], activation_planner_public_key=material.history_material.planner.planner_public_key,
-            operation_public_key=root, live_window=window, transport_deadline_ns=bound, work=work,
+            operation_public_key=material.history_material.historical_root_public_key,
+            live_window=window, transport_deadline_ns=bound, work=work,
             _current=external)
         current()
         configured = _Configuration(material, root, owner,

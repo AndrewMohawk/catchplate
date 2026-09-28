@@ -31,15 +31,17 @@ Active: **step 22, public activation dispatch — partial**.
 Permission and private planning are [landed](https://github.com/example/private-deployment).
 Durable stage records, guarded transports and grant/reserve/SQL integration are
 source-landed in [8f1b9a1](https://github.com/example/private-deployment).
-The SQL response is unsigned, not activation success. Completion, consume/release
-continuation and the public route/cookie boundary remain todo.
+The [completion continuation](docs/control-plane-oidc-session-activation-completion.md)
+is source-landed in [829064f](https://github.com/example/private-deployment).
+Unsigned SQL and authenticated completion controls do not prove present session
+state. Consume/release continuation and the public route/cookie boundary remain todo.
 
-[![Inside active step 22: PLAN Permission + planning landed; RECORDS Durable stage records, IO Guarded transports and SQL Grant / reserve / SQL source-landed in 8f1b9a1; COMPLETE Completion continuation, RELEASE Consume / release continuation and HTTP Public route + cookie todo. Unsigned SQL is not activation success. Named connection facets, not additional milestones or a completion percentage. Source only; production remains 0/6 verified.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Inside active step 22: PLAN Permission + planning landed; RECORDS Durable stage records, IO Guarded transports and SQL Grant / reserve / SQL source-landed in 8f1b9a1; COMPLETE Completion continuation source-landed in 829064f; RELEASE Consume / release continuation and HTTP Public route + cookie todo. Public completion controls do not prove present currentness or release a token. Named connection facets, not additional milestones or a completion percentage. Source only; production remains 0/6 verified.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 <details>
 <summary>All 26 activation steps: 21 landed, 1 active, 4 todo</summary>
 
-[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch active with committed private planning and .183 grant/reserve/SQL integration; 23–26 recovery and portal work todo. Twenty-one landed, one active and four todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch active with committed private planning, grant/reserve/SQL integration and .184 completion continuation; 23–26 recovery and portal work todo. Twenty-one landed, one active and four todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 </details>
 

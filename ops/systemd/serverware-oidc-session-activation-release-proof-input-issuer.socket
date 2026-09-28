@@ -1,0 +1,22 @@
+# Uninstalled source. Exact policy/completion/enrollment/launch originals and
+# the separate dynamic proof worker must be independently provisioned first.
+[Unit]
+Description=Serverware private proof-input issuer ingress
+Before=serverware-oidc-session-activation-release-proof-input-issuer.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock
+FileDescriptorName=serverware-oidc-session-activation-release-proof-input-issuer
+SocketUser=65494
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=serverware-oidc-session-activation-release-proof-input-issuer.service
+
+[Install]
+WantedBy=sockets.target

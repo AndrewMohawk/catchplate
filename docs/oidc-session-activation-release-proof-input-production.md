@@ -65,6 +65,11 @@ and exact unpadded expansion lengths measure the complete signed custody and
 proof envelopes before output wrapper allocation; the check also reserves
 nested originals and readback copies. Actual output lengths must match those
 reservations. This is tightening-only capacity, not a renewed work allowance.
+Optional `maximum_original_bytes` on production and its private derivation
+helper is an exact integer from 2 bytes to 64 MiB; `None` retains the original
+64 MiB ceiling. An actual owner can subtract its measured cold/resource/wire
+holdings and pass the remainder. Both the initial decoded-input reservation and
+the complete wrapped-output/readback reservation must fit before allocation.
 
 The proof, consume-completion and release-custody bootstrap entry points now
 accept optional `_current=None`. Dynamic callers retain their actual external

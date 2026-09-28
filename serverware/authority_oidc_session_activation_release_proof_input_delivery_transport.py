@@ -2,9 +2,13 @@
 
 The fixed issuer peer supplies only an exact root-signed bootstrap. The actual
 receiver owns the socket and independently authenticates policy/resources.
-The one-shot issuer and its outgoing channel are not implemented by this codec.
+The genuine one-shot issuer owns its outgoing channel; this codec neither
+creates authority nor exempts an arbitrary descriptor from owner checks.
 """
 from __future__ import annotations
+
+import errno
+import socket
 
 from serverware import authority_registration_completion_transport as framing
 from serverware import oidc_session_activation_release_proof_bootstrap as bootstrap
@@ -32,6 +36,17 @@ _timeout, _deadline_ns = framing._timeout, framing._deadline_ns
 
 def _fail(message):
     raise AuthorityTransportError(message)
+
+
+def _endpoint(endpoint):
+    if type(endpoint) is not tuple or len(endpoint) != 4:
+        _fail("proof staging endpoint requires its exact configured tuple")
+    path, timeout, uid, gid = endpoint
+    if (type(path) is not str or path != LISTENER_PATH or type(timeout) is not int
+            or type(uid) is not int or uid != EXPECTED_PEER_UID
+            or type(gid) is not int or gid != EXPECTED_PEER_GID):
+        _fail("proof staging endpoint differs from its fixed root listener")
+    return path, _timeout(timeout), uid, gid
 
 
 def _original_limit(maximum_original_bytes):
@@ -114,3 +129,57 @@ def _send_response(connection, originals, *, deadline_ns, work, current):
     for raw in (header, *held):
         chunks._send_precharged(connection, raw, **kwargs)
     chunks._guard(work, current, deadline_ns)
+
+
+def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current, channel):
+    """One actual issuer channel; return only matched ACK plus normal close."""
+    from serverware import oidc_session_activation_release_proof_input_issuer_startup as issuer
+
+    if type(channel) is not issuer._DeliveryChannel:
+        _fail("proof staging requires the actual proof-input issuer channel")
+    try:
+        channel.check(endpoint=endpoint, deadline_ns=deadline_ns, work=work, current=current)
+        path, timeout, uid, gid = _endpoint(endpoint)
+        held = _originals(originals, response=False)
+        chunks._guard(work, current, deadline_ns)
+        bound = min(deadline_ns, chunks._native(lambda: _deadline_ns(timeout),
+            work=work, current=current, deadline_ns=deadline_ns))
+        kwargs = {"deadline_ns": bound, "work": work, "current": current}
+        expected = _bootstrap_identity_on_work(held[1], **kwargs)
+        connection = channel.open()
+        chunks._connection(connection, **kwargs)
+        connected = chunks._native(lambda: connection.connect_ex(path), **kwargs)
+        if type(connected) is not int or connected not in (0, errno.EINPROGRESS, errno.EALREADY):
+            _fail("proof staging connection was not established")
+        if connected != 0:
+            chunks._ready(connection, writing=True, **kwargs)
+            error = chunks._native(lambda: connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR), **kwargs)
+            if type(error) is not int or error != 0:
+                _fail("proof staging connection failed")
+        channel.connected()
+        chunks._peer(connection, (uid, gid), **kwargs)
+        work.charge(input_bytes=2 * REQUEST_HEADER_BYTES + sum(map(len, held)))
+        header = REQUEST_MAGIC + b"".join(len(raw).to_bytes(8, "big") for raw in held)
+        for raw in (header, *held):
+            chunks._send_precharged(connection, raw, **kwargs)
+        chunks._native(lambda: connection.shutdown(socket.SHUT_WR), **kwargs)
+        if chunks._recv_exact(connection, 8, **kwargs) != RESPONSE_MAGIC:
+            _fail("proof staging ACK magic differs")
+        header = chunks._recv_exact(connection, RESPONSE_HEADER_BYTES - 8, **kwargs)
+        work.charge(input_bytes=len(header))
+        lengths = tuple(int.from_bytes(header[index:index + 8], "big") for index in (0, 8))
+        _response_lengths(lengths)
+        work.charge(input_bytes=2 * sum(lengths))
+        received = tuple(chunks._recv_precharged(connection, size, **kwargs) for size in lengths)
+        chunks._eof(connection, **kwargs)
+        received = _originals(received, response=True)
+        work.charge(input_bytes=2 * 71)
+        if received[1] != expected:
+            _fail("proof staging ACK names another bootstrap original")
+        chunks._guard(work, current, bound)
+    finally:
+        # This source-owned channel unregisters and closes once. Failure or
+        # indeterminate cleanup suppresses the ACK and never renews the attempt.
+        channel.close()
+    chunks._guard(work, current, bound)
+    return received

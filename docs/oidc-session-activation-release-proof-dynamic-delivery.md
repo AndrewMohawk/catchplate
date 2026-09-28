@@ -73,8 +73,10 @@ Failures and uncertain closes are terminal. Cleanup attempts only still-owned
 matching descriptors; it neither retries the exchange nor removes retained
 records or provisions replacement resources. The existing static proof launcher
 continues to use its unchanged entrypoint. Deployment, independently matching
-resources, request-scoped issuer operation and public HTTP/session completion
-remain separate acceptance work.
+resources and public HTTP/session completion remain separate acceptance work.
+Source `.199` connects the [request-scoped issuer](oidc-session-activation-release-proof-input-issuer-service.md)
+to the real bounded packet reader and owned staging channel. The separate grant
+issuer still needs a fresh proof-bootstrap connection instead of its cold pin.
 
 ## Opt-in packaging
 

@@ -1,0 +1,11 @@
+# Optional public-only acquisition socket for explicit parent/v14 config.
+# Creates no issuer/worker resources and exposes no root signer or TLS key.
+services:
+  serverware:
+    volumes:
+      - type: bind
+        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_PROOF_INPUTS_SOCKET:?set preprovisioned proof-input issuer socket}
+        target: /run/serverware/oidc-session-activation-release-proof-inputs/grants.sock
+        read_only: true
+        bind:
+          create_host_path: false

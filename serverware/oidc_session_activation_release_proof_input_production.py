@@ -130,8 +130,12 @@ def _release(packet, material, acknowledged, after, work):
 
 def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_bytes,
         completion_bootstrap_bytes, proof_enrollment_bytes, intent_enrollment_bytes,
-        root_public_key, live_window, transport_deadline_ns, work, _continuity=None):
+        root_public_key, live_window, transport_deadline_ns, work, _continuity=None,
+        maximum_original_bytes=None):
     """Derive ordinary same-call payloads from originals, never caller targets."""
+    maximum = MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
+    if type(maximum) is not int or not 2 <= maximum <= MAX_ORIGINAL_BYTES:
+        _fail("proof setup inventory capacity may only tighten its source bound")
     if type(request_originals) is not tuple or len(request_originals) != 3:
         _fail("proof setup requires exact complete/ACK/intent raw3")
     request = tuple(authorization._original(raw, maximum, "proof setup request original")
@@ -151,7 +155,7 @@ def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_by
     total = sum(map(len, (*request, policy_raw, completed_raw, proof_enrolled, intent_enrolled, packet_raw)))
     # Reserve decoded packet controls and nested cold originals before either
     # decoder allocates. Later exact output sizing can only tighten this bound.
-    if total + 3 * len(completed_raw) + 2 * len(packet_raw) > MAX_ORIGINAL_BYTES:
+    if total + 3 * len(completed_raw) + 2 * len(packet_raw) > maximum:
         _fail("proof setup input and decoded-original reservation exceeds 64 MiB")
     capture._SharedLedger(work)
     work.charge(input_bytes=total)
@@ -226,7 +230,7 @@ def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_by
     held = total + sum(map(len, nested)) + len(after)
     if (custody_size > custody.MAX_BYTES or custody_nodes > custody.MAX_NODES
             or proof_size > bootstrap.MAX_BYTES or proof_nodes > bootstrap.MAX_NODES
-            or held + 3 * (custody_size + proof_size) + sum(sizes) > MAX_ORIGINAL_BYTES):
+            or held + 3 * (custody_size + proof_size) + sum(sizes) > maximum):
         _fail("proof setup exact wrapped output and readback reservation exceeds the source inventory")
     current()
     custody_payload["plannerBootstrap"] = bookkeeping._wrapped(activation.bootstrap_bytes, work, current)
@@ -239,7 +243,8 @@ def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_by
 
 def _produce_on_work(*, request_originals, consume_packet_bytes, issuer_policy_bytes,
         completion_bootstrap_bytes, proof_enrollment_bytes, intent_enrollment_bytes,
-        root_private_key, root_public_key, live_window, transport_deadline_ns, work, _continuity=None):
+        root_private_key, root_public_key, live_window, transport_deadline_ns, work, _continuity=None,
+        maximum_original_bytes=None):
     """Return only the root-signed proof bootstrap raw1, with custody embedded."""
     private, root = root_private_key, root_public_key
     authorization._private(private)
@@ -249,7 +254,7 @@ def _produce_on_work(*, request_originals, consume_packet_bytes, issuer_policy_b
         issuer_policy_bytes=issuer_policy_bytes, completion_bootstrap_bytes=completion_bootstrap_bytes,
         proof_enrollment_bytes=proof_enrollment_bytes, intent_enrollment_bytes=intent_enrollment_bytes,
         root_public_key=root, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
-        work=work, _continuity=_continuity)
+        work=work, _continuity=_continuity, maximum_original_bytes=maximum_original_bytes)
     current = lifetime.current
     current()
     authorization.keys._pair_on_work(private, root, work)

@@ -1,10 +1,11 @@
 # Per-request proof setup policy and receiving
 
-Source `.198`; unbuilt, unexecuted and unprovisioned. This connects independent
-root policy, original-only derivation, public acquisition and private staging
-contracts. The finite issuer service that acquires the actual packet, signs and
-stages the output is still missing. Neither an endpoint setting nor a staged ACK
-means the private proof worker has run.
+Source `.199`; unbuilt, unexecuted and unprovisioned. Independent root policy,
+original-only derivation, public acquisition and private receiving now connect
+to the [finite issuer service](oidc-session-activation-release-proof-input-issuer-service.md).
+It acquires the exact packet, signs the derived bootstrap and stages that original
+within one bounded attempt. Neither an endpoint setting nor a staged ACK means
+the private proof worker has completed its later proof request.
 
 ## Independent policy
 
@@ -63,9 +64,9 @@ The public permission **does not hold the private consume packet**. Unsigned
 SQL hints, digests and encrypted bundle bytes cannot manufacture it. The
 [producer](oidc-session-activation-release-proof-input-production.md) therefore
 requires a separately acquired exact `consume_packet_bytes`, in addition to
-the three request originals and independent policy/enrollments. The future
-issuer must use the real authorized reader and the independent packet/pending
-pins. The reader now accepts optional tightening `maximum_packet_bytes` and
+the three request originals and independent policy/enrollments. The issuer uses
+the actual read-only reader and independent packet/pending pins, not a posted
+packet. The reader accepts optional tightening `maximum_packet_bytes` and
 original `_current` arguments. Its bounded SQL return prevents an oversized
 packet text from reaching the client driver; it repeats the cap before ASCII
 encoding. Default read/write paths remain unchanged.
@@ -78,8 +79,9 @@ The staging wire is distinct: `SWOPDQ01` / `SWOPDR01`, raw2
 `0:0`, and `/run/serverware/oidc-session-activation-token-release/proof-bootstrap.sock`.
 The bootstrap identity uses
 `serverware.oidcSessionActivationReleaseProofInputDeliveryBootstrapIdentity/v1`.
-Length/cap/peer checks precede body allocation. The codec exposes receiving and
-response framing, not an invented issuer channel or resource-delivery service.
+Length/cap/peer checks precede body allocation. The sender requires the actual
+issuer-owned delivery channel, preserves its exact descriptor inventory and
+matches the returned identity to the staged original before normal close.
 
 Receiving independently authenticates the policy and all four signed originals,
 compares exact completion/enrollment bytes, scope, caller, signer and resource
@@ -96,9 +98,10 @@ inside that later proof request. No root signing key is delivered to the worker.
 
 ## Remaining acceptance
 
-Implement and connect the issuer-side fixed reader, finite signing owner and
-actual staging channel; provision the independently admitted resources; then
-connect public HTTP/current-auth/cookie completion, recovery and portal work.
+The grant issuer still cold-pins an exact proof bootstrap; connect it to the
+fresh per-request original under independent authorization. Provision all
+independently admitted resources, then connect public HTTP/current-auth/cookie
+completion, recovery and portal work.
 Full verification follows source freeze. This source checkpoint supplies no
 SQL commit, proof, token delivery, current-session, hardware or production
 acceptance evidence.

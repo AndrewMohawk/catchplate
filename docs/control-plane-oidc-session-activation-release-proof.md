@@ -3,9 +3,10 @@
 The `.190` source connection remains unbuilt, unexecuted and unprovisioned.
 Source `.198` adds optional [per-request proof setup acquisition](control-plane-oidc-session-activation-release-proof-acquisition.md)
 under explicit parent `/v14`, preserving the direct-worker path below. The
-issuer-side packet read, finite signer and staging channel remain unimplemented;
-configuration does not make that endpoint available. Neither path opens the new
-token, issues a cookie or establishes current session state.
+issuer-side packet read, finite signer and staging channel are connected in
+source `.199`, with [separate cold delivery](oidc-session-activation-release-proof-input-issuer-entrypoint.md).
+Resources remain unprovisioned. Neither path opens the new token, issues a cookie
+or establishes current session state.
 
 ## Cold public configuration
 
@@ -71,7 +72,8 @@ The root custody names the actual signed intent. Independent post-intent
 authorization is therefore required; the new [setup policy and producer](oidc-session-activation-release-proof-input-policy.md)
 derive this from authentic originals and a separately acquired private packet.
 Cold public configuration does not guess a future intent or manufacture root
-authority. Source templates are not installed, and the setup issuer is still open.
-Live provisioning of post-intent release server/client grants and protected token
-handoff, plus the public route/cookie connection, remains open. Production
+authority. Source templates are not installed. The grant issuer still independently
+cold-pins an exact proof bootstrap; its fresh per-request connection remains open.
+Live provisioning of post-intent release server/client grants, protected token
+handoff and the public route/cookie connection also remain open. Production
 evidence is unchanged.

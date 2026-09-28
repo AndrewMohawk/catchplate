@@ -45,8 +45,9 @@ trusted-host-local claim, not a hardware measurement.
 The original release custody contains the actual signed intent digest. That
 custody and this proof bootstrap therefore require independent root authorization
 after intent exists. Source `.198` adds the [setup policy and receiving contracts](oidc-session-activation-release-proof-input-policy.md)
-and an opt-in dynamic worker; issuer-side packet acquisition and its finite
-signing/staging service remain open. Neither the public caller nor the worker
+and an opt-in dynamic worker; source `.199` connects [issuer-side packet acquisition
+and finite signing/staging](oidc-session-activation-release-proof-input-issuer-service.md).
+Resources remain unprovisioned. Neither the public caller nor the worker
 manufactures root authority. The original intent signature, root enrollment, target, cohort and
 lifetime are checked before private resource delivery; the request's old token
 is admitted later by the genuine producer, once, with the complete originals.

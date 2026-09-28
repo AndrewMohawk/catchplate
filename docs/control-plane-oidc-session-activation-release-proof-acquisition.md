@@ -2,9 +2,9 @@
 
 Source integrated, unbuilt and unexecuted. This public-only continuation adds
 no packet reader, root signing key, provisioning claim or public HTTP route.
-The independently authorized issuer-side packet reader and one-shot
-signing/staging service remain unfinished. Configuring an endpoint does not
-make that service available.
+Source `.199` connects the separately isolated [issuer service](oidc-session-activation-release-proof-input-issuer-service.md)
+to its authorized packet reader and one-shot signing/staging owner. Its resources
+remain unprovisioned; configuring an endpoint does not make it available.
 
 ## Cold configuration
 

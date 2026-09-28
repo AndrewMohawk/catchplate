@@ -9,7 +9,7 @@ HTTP route, durable attempt claim or token-release operation.
 originals (`issuer_policy_bytes`, `release_custody_bytes`,
 `proof_enrollment_bytes`, `intent_enrollment_bytes`), `root_public_key`,
 `endpoint`, `live_window`, `transport_deadline_ns`, `work`, and optional
-restrictive `_continuity`. The endpoint must independently select the fixed
+restrictive `_continuity` and `_additional_original_bytes=0`. The endpoint must independently select the fixed
 recovery-grants socket and root peer. It is not the policy's separate
 `release.sock` endpoint and cannot be learned from the reply.
 
@@ -40,9 +40,21 @@ derivation/receiver impose their own additional caps and charge all actual work.
 Large individually valid originals may therefore fail closed. No Python
 allocator-overhead or performance guarantee is implied.
 
+`_additional_original_bytes` must be an exact nonnegative integer below 64 MiB.
+It reserves upstream held originals and graphs before either policy admission
+or wire contact, subtracting from the same aggregate and response capacity.
+It can only tighten the existing bound, not supply authority, widen a grammar
+or renew work. The [actor-owned acquisition context](control-plane-oidc-session-activation-recovery-acquisition.md)
+uses it for its held parent, actor/history-result, selected originals and
+additional policy admission. That later-phase integration does not fix the
+separately documented earlier finalization loader preallocation gap.
+
 One call performs at most one exchange, but this helper does not create durable
-cross-call retry authority. Public parent configuration, fresh recovery actor
-integration and durable acquisition/dispatch ownership remain separate work.
+cross-call retry authority. The separate actor-owned context now composes actual
+parent configuration, fresh actor admission and a durable policy-keyed attempt,
+then retains the exact raw3 **after** this helper's genuine admission. This helper
+does not offer a pre-admission retention callback; failure may leave only the
+spent attempt. Recovery dispatch ownership remains separate work.
 The issued server bootstrap is **not staged into a release worker in this
 slice**. A reconstructed outcome or signed checkpoint-one expectation does not
 prove that the private store contains it. Genuine protected-store observation,

@@ -25,9 +25,13 @@ def _fail(message):
 
 def _acquire_on_work(*, request_originals, issuer_policy_bytes, release_custody_bytes,
         proof_enrollment_bytes, intent_enrollment_bytes, root_public_key, endpoint,
-        live_window, transport_deadline_ns, work, _continuity=None):
+        live_window, transport_deadline_ns, work, _continuity=None,
+        _additional_original_bytes=0):
     """Return only the actual original-admission result after one exchange."""
     capture._SharedLedger(work)
+    if (type(_additional_original_bytes) is not int
+            or not 0 <= _additional_original_bytes < MAX_ORIGINAL_BYTES):
+        _fail("recovery acquisition additional held capacity is invalid")
     request = production._request_originals(request_originals)
     policy_raw = authorization._original(issuer_policy_bytes, issuer.MAX_BYTES,
         "independent recovery issuer policy")
@@ -49,7 +53,7 @@ def _acquire_on_work(*, request_originals, issuer_policy_bytes, release_custody_
     # reserve eight reply footprints for native buffers and genuine receiving.
     # This deliberately tightens individual codec maxima rather than borrowing
     # their separate allowances or accepting an oversized reply then rejecting.
-    held = (16 * len(custody_raw)
+    held = (_additional_original_bytes + 16 * len(custody_raw)
         + 8 * receiving._unique_bytes((*request, policy_raw, proof_raw, intent_raw))
         + 4096 + 4 * transport.REQUEST_HEADER_BYTES + 4 * transport.RESPONSE_HEADER_BYTES
         + len(transport.PURPOSE))

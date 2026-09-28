@@ -26,6 +26,9 @@ Six fixed activation stage records retain only opaque public/cipher originals
 beneath that claim. Recovery permits reads, never resumed stage publication.
 Separate consume claims count as additional logical records with seven fixed
 stage siblings, including an irreversible SQL claim and unsigned observation.
+Recovery grant acquisition has a distinct policy-keyed claim and optional raw3
+response. It consumes one logical slot, never resumes a recovered claim, and
+retains no recovery request, token, cookie or WebAuthn assertion.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -54,6 +57,7 @@ from serverware import control_plane_oidc_session_activation_release_attempt as 
 from serverware import control_plane_oidc_session_activation_dispatch_attempt as activation_attempts
 from serverware import control_plane_oidc_session_activation_records as activation_records
 from serverware import control_plane_oidc_session_activation_consume_records as consume_records
+from serverware import control_plane_oidc_session_activation_recovery_records as recovery_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -68,13 +72,14 @@ _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_B
     signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES,
     finalization_reservations.MAX_RECORD_BYTES, finalization_outcomes.MAX_RECORD_BYTES,
     activation_attempts.MAX_RECORD_BYTES, activation_records.MAX_RECORD_BYTES,
-    consume_records.MAX_RECORD_BYTES)
+    consume_records.MAX_RECORD_BYTES, recovery_records.MAX_RECORD_BYTES)
 _FINALIZATION_OUTCOME_FILES = {
     "finalization-" + kind: kind for kind in finalization_outcomes.KINDS}
 _ACTIVATION_RECORD_FILES = {
     "activation-" + kind: kind for kind in activation_records.KINDS}
 _CONSUME_RECORD_FILES = {
     "activation-consume-" + kind: kind for kind in consume_records.KINDS}
+_RECOVERY_RECORD_FILES = dict(zip(recovery_records.FILE_KINDS, recovery_records.KINDS))
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
     finalization_records.FAMILY})
 
@@ -185,6 +190,8 @@ class CustodyJournal:
     files, exhausting its unchanged allowance. No stage adds another slot.
     Consume uses a separately counted logical claim with at most seventeen files.
     Only that namespace adds ten physical allowances; other codecs remain strict.
+    A recovery acquisition claim has only two files within its separately
+    counted seven-file logical allowance; it does not widen consume grammar.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -219,6 +226,10 @@ class CustodyJournal:
         self._consume_targets = {}
         self._consume_records = {}
         self._consume_live_claims = set()
+        self._recovery_grant_claims = {}
+        self._recovery_grant_records = {}
+        # Historical recovery deliberately leaves this continuation set empty.
+        self._recovery_grant_live_claims = set()
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -327,6 +338,8 @@ class CustodyJournal:
         consume_claims = {}
         consume_targets = {}
         consume_stages = {}
+        recovery_claims = {}
+        recovery_grants = {}
         uncertain_completions = set()
         uncertain_finalization_completions = set()
         count = 0
@@ -366,6 +379,9 @@ class CustodyJournal:
                 elif any(name.startswith(prefix + "-") for prefix in _CONSUME_RECORD_FILES):
                     kind = next(prefix for prefix in _CONSUME_RECORD_FILES
                         if name.startswith(prefix + "-"))
+                elif any(name.startswith(prefix + "-") for prefix in _RECOVERY_RECORD_FILES):
+                    kind = next(prefix for prefix in _RECOVERY_RECORD_FILES
+                        if name.startswith(prefix + "-"))
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -391,6 +407,8 @@ class CustodyJournal:
                         if kind in _ACTIVATION_RECORD_FILES else
                     consume_records._maximum(_CONSUME_RECORD_FILES[kind])
                         if kind in _CONSUME_RECORD_FILES else
+                    recovery_records._maximum(_RECOVERY_RECORD_FILES[kind])
+                        if kind in _RECOVERY_RECORD_FILES else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -446,6 +464,22 @@ class CustodyJournal:
                         by_kind[stage_kind] = (record.source_revision, record.digest,
                             len(encoded), record.originals[0]
                             if stage_kind in ("prepared", "exported", "sql-outcome") else b"")
+                elif kind in _RECOVERY_RECORD_FILES:
+                    record = recovery_records.decode(encoded)
+                    record_kind = _RECOVERY_RECORD_FILES[kind]
+                    if record.slot_digest != digest or record.kind != record_kind:
+                        raise CustodyJournalError("recovery acquisition record differs from its fixed filename")
+                    if record_kind == "claimed":
+                        if digest in recovery_claims:
+                            raise CustodyJournalError("recovery acquisition has more than one policy claim")
+                        recovery_claims[digest] = record
+                    else:
+                        if digest in recovery_grants:
+                            raise CustodyJournalError("recovery acquisition grant originals repeat")
+                        recovery_grants[digest] = (record.source_revision, record.digest,
+                            len(encoded), record.intent_record_digest,
+                            record.finalization_digest, record.activation_authorization_digest,
+                            record.release_intent_digest, record.issuer_policy_digest)
                 elif kind == "attempted":
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
@@ -493,6 +527,9 @@ class CustodyJournal:
         # possible inventory, then require the exact admitted consume allowance.
         if count > 7 * self._maximum_records + 10 * len(consume_claims):
             raise CustodyJournalError("journal physical inventory exceeds its consume-specific allowance")
+        if (len(prepared) + len(release_claims) + len(activation_claims)
+                + len(consume_claims) + len(recovery_claims) > self._maximum_records):
+            raise CustodyJournalError("journal recovery acquisition logical limit exceeded")
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
         retention_only = {digest for digest, entry in prepared.items()
@@ -518,6 +555,10 @@ class CustodyJournal:
         for digest in consume_stages.keys() | consume_claims.keys():
             self._consume_scope(digest, consume_stages.get(digest, {}))
         self._consume_records = consume_stages
+        self._recovery_grant_claims = recovery_claims
+        self._recovery_grant_records = recovery_grants
+        for digest in recovery_claims.keys() | recovery_grants.keys():
+            self._recovery_grant_scope(digest)
         for association in associated.values():
             _association_scope(association, self._entries)
         self._associations = associated
@@ -740,7 +781,8 @@ class CustodyJournal:
         marker_reserve = (0 if record.family in _RETENTION_ONLY_FAMILIES else
             _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
         if (len(self._entries) + len(self._release_attempts)
-                + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
+                + len(self._activation_dispatch_attempts) + len(self._consume_claims)
+                + len(self._recovery_grant_claims) >= self._maximum_records
                 or len(self._file_identities) >= self._physical_limit()
                 or len(encoded) + marker_reserve
                     > self._quota - self._used_bytes - self._reserved_bytes):
@@ -821,7 +863,8 @@ class CustodyJournal:
                 if digest not in self._entries)
             required_bytes = sum(len(encoded) for _, encoded in missing) + len(association_encoded)
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) + len(missing) > self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims)
+                    + len(self._recovery_grant_claims) + len(missing) > self._maximum_records
                     or len(self._file_identities) + len(missing) + 1 > self._physical_limit()
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete preparation capacity is exhausted")
@@ -903,7 +946,8 @@ class CustodyJournal:
             missing = int(digest not in self._entries)
             required_bytes = missing * len(encoded) + len(marker)
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) + missing > self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims)
+                    + len(self._recovery_grant_claims) + missing > self._maximum_records
                     or len(self._file_identities) + missing + 1 > self._physical_limit()
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete finalization retention capacity is exhausted")
@@ -1259,7 +1303,8 @@ class CustodyJournal:
                     raise
                 raise CustodyJournalError("release client authorization was already claimed; repeat is forbidden")
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims)
+                    + len(self._recovery_grant_claims) >= self._maximum_records
                     or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal release claim capacity is exhausted")
@@ -1434,7 +1479,8 @@ class CustodyJournal:
                     raise
                 raise CustodyJournalError("activation target was already claimed; repeat dispatch is forbidden")
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims)
+                    + len(self._recovery_grant_claims) >= self._maximum_records
                     or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal activation claim capacity is exhausted")
@@ -1539,7 +1585,8 @@ class CustodyJournal:
             if previous is not None:
                 raise CustodyJournalError("consume target was already claimed; preparation cannot repeat")
             if (len(self._entries) + len(self._release_attempts)
-                    + len(self._activation_dispatch_attempts) + len(self._consume_claims) >= self._maximum_records
+                    + len(self._activation_dispatch_attempts) + len(self._consume_claims)
+                    + len(self._recovery_grant_claims) >= self._maximum_records
                     or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal consume claim capacity is exhausted")
@@ -1845,6 +1892,240 @@ class CustodyJournal:
                 self._require_ready()
                 current()
                 return activation, retained_claim, intent
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_oidc_session_activation_recovery_inputs(self, finalization_digest, *, work, current):
+        """Read just target3 plus proof/hints; no full consume body prefix."""
+        retained = self.load_oidc_session_activation_recovery_target(
+            finalization_digest, work=work, current=current)
+        if retained is None:
+            return None
+        activation, claim, intent = retained
+        slot = claim.slot_digest
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            try:
+                by_kind = self._consume_records.get(slot, {})
+                if (self._consume_scope(slot, by_kind) != claim
+                        or by_kind.get("release-intent", (None, None))[1] != intent.digest):
+                    raise CustodyJournalError("recovery input association changed during selection")
+                self._consume_metadata_current(slot, by_kind)
+                kinds = ("release-proof", "completion-hints")
+                if any(kind not in by_kind for kind in kinds):
+                    current()
+                    self._require_ready()
+                    return None
+                sizes = tuple(by_kind[kind][2] for kind in kinds)
+                if any(type(size) is not int or not 1 <= size <= consume_records._maximum(kind)
+                        for size, kind in zip(sizes, kinds)):
+                    raise CustodyJournalError("recovery selected input size differs from its fixed bound")
+            except BaseException:
+                self._io.poison()
+                raise
+            # Direct metering precedes either body read. Only the selected raw4
+            # proof and raw2 descriptor join the already bounded target raw3.
+            work.charge(input_bytes=3 * sum(sizes) + 2, hashes=4, json_nodes=64)
+            try:
+                selected = []
+                for kind, size in zip(kinds, sizes):
+                    current()
+                    try:
+                        selected.append(self._read_consume_record(slot, kind, maximum_bytes=size))
+                    finally:
+                        current()
+                self._consume_metadata_current(slot, by_kind)
+                self._require_ready()
+                current()
+                return activation, claim, intent, *selected
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def _recovery_grant_scope(self, slot):
+        claim = self._recovery_grant_claims.get(slot)
+        if (type(claim) is not recovery_records.RecoveryGrantRecord
+                or claim.kind != "claimed" or claim.originals != () or claim.slot_digest != slot):
+            raise CustodyJournalError("recovery acquisition lacks its exact irreversible policy claim")
+        consume_slot = consume_records._slot_digest(
+            claim.finalization_digest, claim.activation_authorization_digest)
+        stages = self._consume_records.get(consume_slot, {})
+        predecessor = self._consume_scope(consume_slot, stages)
+        if (predecessor.finalization_digest != claim.finalization_digest
+                or predecessor.activation_authorization_digest != claim.activation_authorization_digest
+                or stages.get("release-intent", (None, None))[1] != claim.intent_record_digest):
+            raise CustodyJournalError("recovery claim differs from its retained activation and intent")
+        metadata = self._recovery_grant_records.get(slot)
+        if metadata is not None and (metadata[0] != claim.source_revision
+                or metadata[3:] != (claim.intent_record_digest, claim.finalization_digest,
+                    claim.activation_authorization_digest, claim.release_intent_digest,
+                    claim.issuer_policy_digest)):
+            raise CustodyJournalError("recovery grant originals differ from their irreversible claim")
+        return claim
+
+    def _recovery_grant_metadata_current(self, slot):
+        claim = self._recovery_grant_scope(slot)
+        consume_slot = consume_records._slot_digest(
+            claim.finalization_digest, claim.activation_authorization_digest)
+        self._consume_metadata_current(consume_slot, self._consume_records.get(consume_slot, {}))
+        for kind in recovery_records.KINDS:
+            if kind == "grants" and slot not in self._recovery_grant_records:
+                continue
+            name = _name(recovery_records.FILE_KINDS[recovery_records.KINDS.index(kind)], slot)
+            if _identity(os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)) != self._file_identities.get(name):
+                raise CustodyJournalError("recovery acquisition immutable record identity changed")
+
+    def _read_recovery_grant_claim(self, slot):
+        held = self._recovery_grant_scope(slot)
+        name = _name(recovery_records.FILE_KINDS[0], slot)
+        raw, identity = self._read_file(name, maximum_bytes=recovery_records.MAX_CLAIM_BYTES)
+        if identity != self._file_identities.get(name) or recovery_records.decode(raw) != held:
+            raise CustodyJournalError("recovery acquisition claim changed after original admission")
+        return held
+
+    def claim_oidc_session_activation_recovery_grant_attempt(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest):
+        """Burn a fresh policy slot before contact, never resume an old claim."""
+        target, authorization, intent_digest, policy_digest = tuple(_digest(value) for value in (
+            finalization_digest, activation_authorization_digest, release_intent_digest, issuer_policy_digest))
+        slot = recovery_records._slot_digest(target, authorization, intent_digest, policy_digest)
+        consume_slot = consume_records._slot_digest(target, authorization)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if slot in self._recovery_grant_claims:
+                try:
+                    self._read_recovery_grant_claim(slot)
+                    self._recovery_grant_metadata_current(slot)
+                    self._require_ready()
+                except BaseException:
+                    self._io.poison()
+                    raise
+                raise CustodyJournalError("recovery issuer policy was already claimed; acquisition cannot repeat")
+            try:
+                self._read_activation_claim(target)
+                predecessor = self._read_consume_claim(consume_slot)
+                stages = self._consume_records.get(consume_slot, {})
+                self._consume_metadata_current(consume_slot, stages)
+                if (predecessor.finalization_digest != target
+                        or predecessor.activation_authorization_digest != authorization
+                        or "release-intent" not in stages):
+                    raise CustodyJournalError("recovery acquisition requires the exact retained intent association")
+                intent = self._read_consume_record(consume_slot, "release-intent",
+                    maximum_bytes=consume_records.MAX_RELEASE_INTENT_BYTES)
+                if recovery_records._intent_identity(intent.originals[0]) != intent_digest:
+                    raise CustodyJournalError("recovery acquisition intent identity differs from retained original")
+                claim, encoded = recovery_records.encode("claimed", finalization_digest=target,
+                    activation_authorization_digest=authorization, release_intent_digest=intent_digest,
+                    issuer_policy_digest=policy_digest, intent_record_digest=intent.digest,
+                    originals=(), source_revision=recovery_records.authority.SOURCE_REVISION)
+                self._require_ready()
+            except BaseException:
+                self._io.poison()
+                raise
+            if (len(self._entries) + len(self._release_attempts) + len(self._activation_dispatch_attempts)
+                    + len(self._consume_claims) + len(self._recovery_grant_claims) >= self._maximum_records
+                    or len(self._file_identities) >= self._physical_limit()
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal recovery acquisition capacity is exhausted")
+            try:
+                self._publish(recovery_records.FILE_KINDS[0], slot, encoded)
+                self._used_bytes += len(encoded)
+                self._recovery_grant_claims[slot] = claim
+                self._recovery_grant_scope(slot)
+                self._require_ready()
+                self._recovery_grant_live_claims.add(slot)
+                return slot
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def append_oidc_session_activation_recovery_grants(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest, originals):
+        """Retain the first exact raw3 only under this owner's new policy claim."""
+        scalars = tuple(_digest(value) for value in (finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest))
+        slot = recovery_records._slot_digest(*scalars)
+        held = recovery_records._originals(originals)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if slot not in self._recovery_grant_live_claims:
+                raise CustodyJournalError("recovered recovery acquisition claims are read-only")
+            if slot in self._recovery_grant_records:
+                raise CustodyJournalError("recovery acquired originals cannot be replaced or appended twice")
+            try:
+                claim = self._read_recovery_grant_claim(slot)
+                self._recovery_grant_metadata_current(slot)
+                record, encoded = recovery_records.encode("grants", finalization_digest=scalars[0],
+                    activation_authorization_digest=scalars[1], release_intent_digest=scalars[2],
+                    issuer_policy_digest=scalars[3], intent_record_digest=claim.intent_record_digest,
+                    originals=held, source_revision=claim.source_revision)
+                if (len(self._file_identities) >= self._physical_limit()
+                        or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                    raise CustodyJournalError("journal recovery original retention capacity is exhausted")
+                self._require_ready()
+                self._publish(recovery_records.FILE_KINDS[1], slot, encoded)
+                self._used_bytes += len(encoded)
+                self._recovery_grant_records[slot] = (record.source_revision, record.digest,
+                    len(encoded), record.intent_record_digest, *scalars)
+                self._recovery_grant_scope(slot)
+                self._require_ready()
+                self._recovery_grant_live_claims.remove(slot)
+                return record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_oidc_session_activation_recovery_grants(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest, work, current):
+        """Read only this policy's claim/raw3; absence never grants a retry."""
+        from serverware.authority_query_read_work import _ValidationWork
+
+        slot = recovery_records._slot_digest(finalization_digest, activation_authorization_digest,
+            release_intent_digest, issuer_policy_digest)
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("recovery acquired-original read requires original work and guard")
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if slot not in self._recovery_grant_claims:
+                current()
+                return None
+            try:
+                self._recovery_grant_metadata_current(slot)
+                metadata = self._recovery_grant_records.get(slot)
+                size = 0 if metadata is None else metadata[2]
+                if type(size) is not int or not 0 <= size <= recovery_records.MAX_GRANTS_BYTES:
+                    raise CustodyJournalError("recovery acquired-original size metadata differs")
+            except BaseException:
+                self._io.poison()
+                raise
+            work.charge(input_bytes=3 * (recovery_records.MAX_CLAIM_BYTES + size), hashes=16, json_nodes=64)
+            try:
+                current()
+                claim = self._read_recovery_grant_claim(slot)
+                current()
+                grants = None
+                if metadata is not None:
+                    name = _name(recovery_records.FILE_KINDS[1], slot)
+                    raw, identity = self._read_file(name, maximum_bytes=size)
+                    current()
+                    grants = recovery_records.decode(raw)
+                    if (identity != self._file_identities.get(name) or grants.kind != "grants"
+                            or (grants.source_revision, grants.digest, len(raw), grants.intent_record_digest,
+                                grants.finalization_digest, grants.activation_authorization_digest,
+                                grants.release_intent_digest, grants.issuer_policy_digest) != metadata
+                            or grants.slot_digest != slot):
+                        raise CustodyJournalError("recovery acquired originals changed after admission")
+                self._recovery_grant_metadata_current(slot)
+                self._require_ready()
+                current()
+                return recovery_records.RecoveryGrantRecords(claim, grants)
             except BaseException:
                 self._io.poison()
                 raise

@@ -3,10 +3,11 @@
 Recovery is a separate user action, not another activation attempt. The source
 contains bounded recovery options, a private live actor context, and separate
 original-only recovery-grant production and admission. A dedicated cold private
-issuer and finite verified client connect those libraries, but their actual
-control-plane actor/configuration and recovery-worker staging remain open.
-They do **not** recover a token or close activation step 23. Source remains
-unbuilt, unexecuted and unprovisioned.
+issuer and finite verified client now connect to independently signed parent
+configuration, the live private actor and durable acquisition records.
+Recovery-worker staging, protected exchange and the public recovery route remain
+open. This does **not** recover a token or close activation step 23. Source
+remains unbuilt, unexecuted and unprovisioned.
 
 ## Why the activation permission cannot be reused
 
@@ -37,8 +38,10 @@ flowchart LR
   O --> W[New target-key assertion]
   W --> A[Current roles, trust and approval]
   A --> P[Live private actor context]
-  P -. separate unfinished integration .-> D[Fresh recovery authority and dispatch]
-  D -.-> C[Verified original token and guarded cookie delivery]
+  P --> I[Independent policy and retained originals]
+  I --> D[Durable acquisition claim before issuer contact]
+  D --> G[Verified and retained recovery grants]
+  G -. unfinished staging and exchange .-> C[Verified token and guarded cookie delivery]
 ```
 
 ## Public options; no permission-success endpoint
@@ -87,7 +90,45 @@ locks stay held during the private authorization context; its scope is
 invalidated on exit. No old activation permission is reopened and no old intent
 interval is renewed.
 
-## Remaining recovery work
+## Private actor-to-grant acquisition
+
+Explicit [parent/v15 configuration](control-plane-oidc-session-activation-release-recovery-grant-acquisition-bootstrap.md)
+adds the fixed recovery issuer endpoint and exact independent policy, historical
+custody and proof/intent enrollment originals. Both existing parent intent and
+proof configurations are required. Older parent versions and null configuration
+leave this lane disabled; the parent byte limit and key/descriptor inventory
+are unchanged. Public configuration supplies no private signer or permission.
+
+The private acquisition context enters the actual fresh actor authorization,
+then selects only the two retained claims, intent, proof response and small
+encrypted completion hints. It does not load prepared ciphertext or treat the
+selected metadata as execution authority. The original policy/history, proof,
+intent, old-token possession and ciphertext binding are genuinely admitted
+under the same actor and processing bounds.
+
+A separate durable acquisition claim precedes issuer contact. Its identity
+includes the independently pinned issuer-policy digest and exact retained
+target/intent association. An existing or recovered claim cannot resume or
+repeat that acquisition, including after a missing reply. An explicitly fresh,
+independently root-authorized policy is a different attempt and still requires
+fresh actor proof; it is not an automatic retry under the old authority.
+
+The exact client/server/outcome triple is retained **after** genuine original
+admission and before the live private continuation is exposed. Framing,
+admission, expiry or storage failure can therefore leave a claim without a
+retained reply; no malformed-reply retention or rollback is promised. Records
+contain public/ciphertext originals and association metadata, never the old
+cookie, assertion, request frames or plaintext token. Retained bytes do not
+restore actor permission or prove that a private outcome exists.
+
+The continuation remains context-bound and invalidates on exit. It provides
+guarded originals for later staging/exchange, not a transferable permission,
+public success endpoint or recovered session. The optional
+[public socket mount](../docker-compose.oidc-session-activation-release-recovery-grants.yml)
+exposes only a preprovisioned issuer socket, refuses host-path creation and
+does not install services or deliver signing keys to the application.
+
+## Recovery integration and remaining work
 
 ### Fresh recovery grants, distinct from execution authority
 
@@ -132,7 +173,7 @@ flowchart LR
   G --> O[Exact canonical outcome]
   C --> V[Independent grant admission]
   O --> V
-  V -. unfinished staging and actor integration .-> S[Read actual retained outcome]
+  V -. unfinished worker staging and exchange .-> S[Read actual retained outcome]
   S -.-> R[Private recovery and guarded cookie delivery]
 ```
 
@@ -168,14 +209,20 @@ resources are created by this source integration.
 
 This slice requires a retained release intent. Failures before that stage still
 need a distinct original-bound completion/recovery path; they are not treated
-as safe activation retries. Full recovery still needs the actual independently
-configured actor-to-acquisition connection, recovery-specific release-worker
-staging and durable original retention, exact retained outcome/storage
-admission, the private recovery exchange, genuine token response verification
-and a final current-auth/cookie boundary. The new private issuer/client does
-not complete those connections. The existing LIVE staging path is not reused
-as recovery admission. A once-checked actor or intent result cannot replace
-any of these checks.
+as safe activation retries. Full recovery still needs recovery-specific
+release-worker staging, exact retained outcome/storage admission, the private
+recovery exchange, genuine token response verification and a final public
+current-auth/cookie boundary. The private actor-to-grant connection does not
+complete those remaining steps. The existing LIVE staging path is not reused
+as recovery admission. A once-checked actor, retained triple or intent result
+cannot replace any of these checks.
+
+Before source freeze, the earlier historical target loader also needs aggregate
+capacity enforcement before its preparation/reservation/outcome reads. Its
+existing finalization inspector totals originals after loading them. The new
+acquisition-phase reservation bounds the held actor result and subsequent
+selection, policy, client and retention work; it does not retroactively bound
+those earlier reads or establish a whole-call preallocation guarantee.
 
 No protected activation or consume SQL is repeated here. WebAuthn challenge
 issuance and assertion-counter updates remain their normal authentication

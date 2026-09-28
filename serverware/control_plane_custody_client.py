@@ -916,6 +916,110 @@ class ControlPlaneCustodyClient:
         current()
         return retained
 
+    def load_oidc_session_activation_recovery_inputs(self, finalization_digest, *, work, current):
+        """Select exact target/proof/hint originals on the caller's original work."""
+        from serverware import control_plane_oidc_session_activation_dispatch_attempt as attempts
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+
+        target = journal._digest(finalization_digest)
+        if not callable(current):
+            raise CustodyClientError("recovery input selection requires its original guard")
+        current()
+        binding = _snapshot(self)
+        retained = journal.CustodyJournal.load_oidc_session_activation_recovery_inputs(
+            binding.journal, target, work=work, current=current)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while selecting recovery inputs")
+        if retained is None:
+            return None
+        if (type(retained) is not tuple or len(retained) != 5
+                or type(retained[0]) is not attempts.ActivationDispatchAttemptRecord
+                or any(type(value) is not consume.ConsumeRecord for value in retained[1:])):
+            raise CustodyClientError("recovery input original inventory differs")
+        activation, claim, intent, proof, hints = retained
+        if (activation.finalization_digest != target or claim.kind != "claimed" or claim.originals != ()
+                or (intent.kind, proof.kind, hints.kind) != ("release-intent", "release-proof", "completion-hints")
+                or tuple(len(value.originals) for value in (intent, proof, hints)) != (1, 4, 2)
+                or activation.source_revision != claim.source_revision
+                or any(value.finalization_digest != target or value.source_revision != claim.source_revision
+                    or value.slot_digest != claim.slot_digest
+                    or value.activation_authorization_digest != claim.activation_authorization_digest
+                    for value in (claim, intent, proof, hints))):
+            raise CustodyClientError("recovery inputs differ from the retained intent association")
+        current()
+        return retained
+
+    def claim_oidc_session_activation_recovery_grant_attempt(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest):
+        """Burn the exact independently authenticated policy slot before contact."""
+        from serverware import control_plane_oidc_session_activation_recovery_records as recovery
+
+        scalars = tuple(journal._digest(value) for value in (finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest))
+        expected = recovery._slot_digest(*scalars)
+        binding = _snapshot(self)
+        slot = journal.CustodyJournal.claim_oidc_session_activation_recovery_grant_attempt(binding.journal,
+            finalization_digest=scalars[0], activation_authorization_digest=scalars[1],
+            release_intent_digest=scalars[2], issuer_policy_digest=scalars[3])
+        if slot != expected or _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller or recovery policy changed after durable claim")
+        return slot
+
+    def append_oidc_session_activation_recovery_grants(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest, originals):
+        """Opaque raw3 retention only; the actual caller supplies admitted originals."""
+        from serverware import control_plane_oidc_session_activation_recovery_records as recovery
+
+        scalars = tuple(journal._digest(value) for value in (finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest))
+        held = recovery._originals(originals)
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_oidc_session_activation_recovery_grants(binding.journal,
+            finalization_digest=scalars[0], activation_authorization_digest=scalars[1],
+            release_intent_digest=scalars[2], issuer_policy_digest=scalars[3], originals=held)
+        journal._digest(digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed after recovery grant retention")
+        return digest
+
+    def load_oidc_session_activation_recovery_grants(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest, work, current):
+        """Read exact token-free policy history; never resume acquisition."""
+        from serverware import control_plane_oidc_session_activation_recovery_records as recovery
+
+        scalars = tuple(journal._digest(value) for value in (finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest))
+        slot = recovery._slot_digest(*scalars)
+        if not callable(current):
+            raise CustodyClientError("recovery acquired-original selection requires its original guard")
+        current()
+        binding = _snapshot(self)
+        retained = journal.CustodyJournal.load_oidc_session_activation_recovery_grants(binding.journal,
+            finalization_digest=scalars[0], activation_authorization_digest=scalars[1],
+            release_intent_digest=scalars[2], issuer_policy_digest=scalars[3], work=work, current=current)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while reading recovery acquired originals")
+        if retained is None:
+            return None
+        if (type(retained) is not recovery.RecoveryGrantRecords
+                or type(retained.claim) is not recovery.RecoveryGrantRecord
+                or retained.claim.kind != "claimed" or retained.claim.originals != ()
+                or retained.claim.slot_digest != slot
+                or (retained.claim.finalization_digest, retained.claim.activation_authorization_digest,
+                    retained.claim.release_intent_digest, retained.claim.issuer_policy_digest) != scalars):
+            raise CustodyClientError("recovery acquired originals have a different policy claim")
+        if retained.grants is not None and (type(retained.grants) is not recovery.RecoveryGrantRecord
+                or retained.grants.kind != "grants" or retained.grants.slot_digest != slot
+                or retained.grants.source_revision != retained.claim.source_revision
+                or retained.grants.intent_record_digest != retained.claim.intent_record_digest
+                or (retained.grants.finalization_digest, retained.grants.activation_authorization_digest,
+                    retained.grants.release_intent_digest, retained.grants.issuer_policy_digest) != scalars):
+            raise CustodyClientError("recovery retained grants differ from their original claim")
+        current()
+        return retained
+
     def append_registration_finalization_sql_outcome(self, finalization_digest, originals):
         """Retain first unsigned raw4 without a renewed clock or success assertion."""
         local = journal._digest(finalization_digest)

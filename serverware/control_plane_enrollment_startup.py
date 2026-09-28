@@ -431,6 +431,16 @@ class _EnrollmentOwner:
             raise EnrollmentStartupError("release grant acquisition requires the actual active parent permission")
         return permission.acquire_and_release_token()
 
+    def _acquire_oidc_session_activation_recovery_grants(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Return the private same-actor context, not grants or renewed permission."""
+        from serverware import control_plane_oidc_session_activation_recovery_acquisition as acquisition
+
+        _require_pid()
+        return acquisition._acquire_on_owner(self, request=request, recovery_bytes=recovery_bytes,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+            work=work, current=current)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

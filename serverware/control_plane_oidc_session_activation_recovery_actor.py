@@ -87,7 +87,7 @@ class _ActorScope:
         "_policy_pin", "_request_pin", "_old_token", "_target_pin", "_binding",
         "_binding_pin", "_payload_digest", "_credential", "_count", "_roles",
         "_rbac_pin", "_session_pin", "_trust_pin", "_window", "_bound", "_epoch", "_monotonic",
-        "_pid", "_thread", "_active", "_authorized")
+        "_pid", "_thread", "_active", "_authorized", "_recovery_acquisition_spent")
 
     def __init__(self, construction, *, application, owner, request, original,
             payload, work, current, owner_scope, target, policy, policy_pin,
@@ -114,6 +114,7 @@ class _ActorScope:
         self._epoch, self._monotonic = self._window[0], self._window[2]
         self._pid, self._thread = os.getpid(), threading.get_ident()
         self._active, self._authorized = True, False
+        self._recovery_acquisition_spent = False
 
     @property
     def binding(self):
@@ -354,9 +355,10 @@ def _options(request, *, recovery_bytes):
 @contextmanager
 def _authorize_on_owner(owner, *, request, recovery_bytes, live_window,
         transport_deadline_ns, work, current):
-    """Future recovery owner must consume this live context, never its result.
+    """Private recovery acquisition consumes this live context, never its result.
 
-    No public dispatch endpoint calls this in the options-only source slice.
+    Its source-owned one-use latch is never reset, including on failure or exit.
+    No public recovery exchange or token delivery follows in this source slice.
     A fresh assertion can claim a challenge and advance its authenticator CAS;
     rejection is not a claim that those permission-side effects were absent.
     """

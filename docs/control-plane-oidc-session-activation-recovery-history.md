@@ -45,6 +45,13 @@ and explicit RBAC, with session/provider expiry only tightening the original
 delivery deadline. A distinct fresh recovery assertion and any required
 two-person authority remain separate from this evidence inspection.
 
-This is a source-only target/possession connection, not completion of public
-recovery. Prior-stage recovery, actual recovery issuance/dispatch, independent
-resource provisioning and runtime verification remain separate work.
+The [actor-owned acquisition context](control-plane-oidc-session-activation-recovery-acquisition.md)
+now composes this evidence with fresh actor authority, independent parent
+originals, a policy-keyed durable attempt and admitted grant retention. This
+inspector itself still grants no issuance or exchange permission. Its earlier
+finalization loader's combined preallocation boundary remains required work
+before freeze; later acquisition capacity reservations do not cover that load.
+
+This is source-only, not completion of public recovery. Prior-stage recovery,
+recovery-worker staging and protected exchange, independent resource
+provisioning and runtime verification remain separate work.

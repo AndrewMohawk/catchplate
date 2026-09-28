@@ -1,9 +1,10 @@
 # Fresh recovery actor for the original session
 
-Source only, unbuilt and unexecuted. This slice provides genuine recovery
-options and a private live authorization context. It does **not** dispatch
-recovery, retry activation SQL, release a token or confirm a session. Step 23
-remains incomplete until its separately authorized recovery owner is connected.
+Source only, unbuilt and unexecuted. Genuine recovery options and the private
+live actor context now connect to same-context recovery grant acquisition.
+This does **not** stage a recovery worker, retry activation SQL, perform the
+private recovery exchange, release a token or confirm a session. Step 23
+remains incomplete.
 
 ## Actor and target are separate
 
@@ -62,12 +63,25 @@ is read or rewritten by this source change.
 
 ## Live context, not a permission carrier
 
-`_authorize_on_owner(...)` is a private context manager for the future recovery
-owner. It accepts the actual Request/original body and original owner/work/time
+`_authorize_on_owner(...)` is a private context manager consumed by the actual
+[recovery acquisition owner](control-plane-oidc-session-activation-recovery-acquisition.md).
+It accepts the actual Request/original body and original owner/work/time
 bounds, acquires the actual startup/trust locks, and freshly admits historical
 evidence and actor proof. Its source-constructed scope is invalid after exit;
 no public endpoint returns or accepts it. A source-owned latch rejects nested
 or overlapping recovery scopes and any live activation permission.
+
+Each actor initializes `_recovery_acquisition_spent=False` once. The actual
+acquisition owner spends it only after genuine actor authorization, and neither
+failure nor scope cleanup resets it. The parent's private
+`_acquire_oidc_session_activation_recovery_grants(...)` facade returns that
+context manager with the exact Request/body/work/window/deadline/current args;
+it creates no work or time allowance and does not close the global owner.
+Within the same active context, acquisition re-admits the independent recovery
+policy, durably claims its exact policy-keyed attempt, calls the finite private
+client, and retains exact returned raw3 originals with genuine current guards.
+Leaving the context invalidates access; retained bytes do not become a reusable
+permission carrier or retry authority.
 
 Current guards retain original PID/thread, owner/resources, Request/body,
 Origin/CSRF/cookie, policy, RBAC, credential, trust and target-row snapshots.
@@ -76,6 +90,13 @@ provider expiry can only shorten the same allowance. Guard callbacks do not
 reload the journal or reopen historical admission. The old token stays in
 request/live-scope memory only, never journal, logs or JSON.
 
+The earlier historical-target finalization loader still totals its combined
+original inventory only after loading it. The new acquisition phases have
+preallocation bounds, but this is not a full-call 64 MiB peak guarantee. A
+source-fixed metadata preflight and combined bounded loader before the first
+historical body read remain required before the verification freeze.
+
 The [options route](control-plane-oidc-session-activation-recovery-routes.md)
-is the only public addition. Recovery effects, outcome inspection, guarded
-token delivery, portal wiring and runtime/provisioning evidence remain open.
+remains the only public route. Genuine recovery-worker staging, actual retained
+outcome-store reads, private token exchange, current-auth/cookie completion,
+portal wiring and runtime/provisioning evidence remain open.

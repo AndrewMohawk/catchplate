@@ -1248,6 +1248,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware_agent_trust/workload_identity_submission.py \
 	serverware_agent_trust/_workload_operator_http.py \
 	serverware_agent_trust/workload_identity_originals.py \
+	serverware_agent_trust/workload_identity_bootstrap_originals.py \
+	serverware_agent_trust/workload_identity_bootstrap.py \
 	serverware_agent_trust/_workload_signed_packet.py \
 	serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_release_grant_acquisition.py \
@@ -3495,6 +3497,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \
 				serverware_agent_trust/workload_identity_originals.py \
+				serverware_agent_trust/workload_identity_bootstrap_originals.py \
+				serverware_agent_trust/workload_identity_bootstrap.py \
 				serverware_agent_trust/_workload_signed_packet.py \
 				serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_release_grant_acquisition.py \
@@ -3666,6 +3670,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-enrollment-assignment.v1.schema.json \
 				schemas/native-enrollment-evidence.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
+				schemas/workload-identity-bootstrap-request.v1.schema.json \
 				schemas/release-completion-verification.v1.schema.json \
 				schemas/release-completion-result-signing-request.v1.schema.json \
 				schemas/release-completion-result-signing-response.v1.schema.json \

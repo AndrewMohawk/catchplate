@@ -106,7 +106,8 @@ def _issuer(raw: bytes, budget: Budget):
     return original
 
 
-def _selected(value: object, selectors: dict[str, object]) -> dict[str, list[str]]:
+def _sans(value: object) -> dict[str, list[str]]:
+    """Canonical SAN shape only; this does not authorize a requested identity."""
     if type(value) is not dict or set(value) != {"dnsNames", "uris"}:
         _fail("selected workload SANs require the closed DNS/URI profile")
     selected = {}
@@ -128,6 +129,11 @@ def _selected(value: object, selectors: dict[str, object]) -> dict[str, list[str
         for uri in selected["uris"]:
             identity._canonical_uri(uri)
     validate_mtls_identity(shaped)
+    return selected
+
+
+def _selected(value: object, selectors: dict[str, object]) -> dict[str, list[str]]:
+    selected = _sans(value)
     dns, uris = set(selected["dnsNames"]), set(selected["uris"])
     if (not dns <= set(selectors.get("sanDnsNames", ()))
             or not uris <= set(selectors.get("sanUris", ())) | set(selectors.get("sanSpiffeIds", ()))):
@@ -161,12 +167,23 @@ def _request(raw: bytes, binding: dict, selectors: dict, budget: Budget):
     if packets._canonical(envelope, MAX_REQUEST_BYTES, budget) != raw:
         _fail("workload identity request is not canonical")
     selected = _selected(payload["selectedSans"], selectors)
-    wrapped = payload["csr"]
+    _csr_raw, public, spki_digest, _csr_digest = _csr(payload["csr"], selected, budget)
+    if payload["subjectPublicKeyInfoSha256"] != spki_digest:
+        _fail("workload CSR key differs from the signed request")
+    _request_signature(envelope["signature"], payload, public, REQUEST_DOMAIN, budget)
+    return selected, public
+
+
+def _csr(wrapped: object, selected: dict[str, list[str]], budget: Budget):
+    """Verify the exact standard CSR original, without packet/issuance authority."""
     if (type(wrapped) is not dict or set(wrapped) != {"pem", "sha256"}
             or type(wrapped["pem"]) is not str):
         _fail("workload request CSR wrapper is invalid")
     csr_raw = wrapped["pem"].encode("ascii")
-    if not 1 <= len(csr_raw) <= MAX_CSR_BYTES or _digest(csr_raw, budget) != wrapped["sha256"]:
+    if not 1 <= len(csr_raw) <= MAX_CSR_BYTES:
+        _fail("workload CSR original exceeds its bound")
+    csr_digest = _digest(csr_raw, budget)
+    if csr_digest != wrapped["sha256"]:
         _fail("workload CSR original differs from its signed digest")
     budget.check()
     packets._charge(budget, input_bytes=len(csr_raw), hashes=1)
@@ -182,9 +199,11 @@ def _request(raw: bytes, binding: dict, selectors: dict, budget: Budget):
     san = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
     if not san.critical or list(san.value) != _names(selected):
         _fail("workload CSR SANs differ from the exact signed request")
-    if payload["subjectPublicKeyInfoSha256"] != _digest(_spki(public), budget):
-        _fail("workload CSR key differs from the signed request")
-    encoded = envelope["signature"]
+    return csr_raw, public, _digest(_spki(public), budget), csr_digest
+
+
+def _request_signature(encoded: object, payload: dict, public, domain: bytes, budget: Budget):
+    """Fixed canonical low-S P-256 signature primitive; callers fix their domain."""
     prefix = "ecdsa-p256-sha256:"
     if type(encoded) is not str or not encoded.startswith(prefix) or len(encoded) > 128:
         _fail("workload request signature profile differs")
@@ -197,10 +216,9 @@ def _request(raw: bytes, binding: dict, selectors: dict, budget: Budget):
         _fail("workload request signature is not canonical P-256")
     budget.check()
     packets._charge(budget, hashes=1)
-    public.verify(signature, REQUEST_DOMAIN + packets._canonical(payload, MAX_REQUEST_BYTES, budget),
+    public.verify(signature, domain + packets._canonical(payload, MAX_REQUEST_BYTES, budget),
         ec.ECDSA(hashes.SHA256()))
     budget.check()
-    return selected, public
 
 
 def _leaf(raw: bytes, issuer_certificate, selected: dict, public, binding: dict,

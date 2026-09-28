@@ -700,6 +700,44 @@ def _workload_issuance_mode(parser: argparse.ArgumentParser, args: argparse.Name
     return True
 
 
+def _workload_bootstrap_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
+    """Explicit local request-first mode; no packet, admin or network authority."""
+    if not args.prepare_workload_bootstrap:
+        return False
+    supplied = {item.split("=", 1)[0] for item in sys.argv[1:] if item.startswith("--")}
+    allowed = {"--prepare-workload-bootstrap", "--expected-principal", "--expected-nonce",
+        "--workload-issuer", "--workload-issuer-sha256", "--workload-output-directory",
+        "--workload-timeout-ms", "--workload-san-dns", "--workload-san-uri"}
+    if supplied - allowed:
+        parser.error("local workload bootstrap accepts only its explicit issuer, identity and output inputs")
+    required = (("--expected-principal", args.expected_principal),
+        ("--expected-nonce", args.expected_nonce), ("--workload-issuer", args.workload_issuer),
+        ("--workload-issuer-sha256", args.workload_issuer_sha256),
+        ("--workload-output-directory", args.workload_output_directory))
+    missing = [flag for flag, value in required if value is None or value == ""]
+    if missing:
+        parser.error("local workload bootstrap requires " + ", ".join(missing))
+    from .workload_identity_bootstrap import prepare_bootstrap
+    from ._workload_tls import PinnedFile
+
+    prepared = prepare_bootstrap(
+        issuer=PinnedFile(args.workload_issuer, args.workload_issuer_sha256),
+        expected_principal=args.expected_principal, expected_nonce=args.expected_nonce,
+        requested_sans={"dnsNames": sorted(args.workload_san_dns),
+            "uris": sorted(args.workload_san_uri)},
+        output_directory=args.workload_output_directory, timeout_ms=args.workload_timeout_ms)
+
+    def description(pin: PinnedFile) -> dict[str, str]:
+        return {"path": os.fspath(pin.path), "sha256": pin.sha256}
+
+    print(json.dumps({"schema": "serverware.workloadIdentityLocalResult/v1",
+        "profile": "request-first-p256-bootstrap-v1", "status": "bootstrap-prepared-local-only",
+        "request": description(prepared.request), "csr": description(prepared.csr),
+        "privateKey": description(prepared.private_key), "issuanceAuthorized": False,
+        "proxyAuthenticated": False, "enrollmentComplete": False}, indent=2, sort_keys=True))
+    return True
+
+
 def _workload_identity_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
     """Local-only provisioning; never fall through into enrollment networking."""
     selected = args.prepare_workload_identity or args.admit_workload_certificate
@@ -820,6 +858,8 @@ def main() -> None:
     parser.add_argument("--expected-principal")
     parser.add_argument("--expected-nonce")
     workload_modes = parser.add_mutually_exclusive_group()
+    workload_modes.add_argument("--prepare-workload-bootstrap", action="store_true",
+        help="locally prepare one request-first P-256 key/CSR; no packet, certificate or issuance authority")
     workload_modes.add_argument("--prepare-workload-identity", action="store_true",
         help="locally prepare one packet-bound P-256 key and public CSR/request; never contact an issuer")
     workload_modes.add_argument("--admit-workload-certificate", action="store_true",
@@ -841,9 +881,9 @@ def main() -> None:
         help="existing current-user-owned mode-0700 directory; fixed outputs are never overwritten")
     parser.add_argument("--workload-timeout-ms", type=int, default=30_000)
     parser.add_argument("--workload-san-dns", action="append", default=[],
-        help="exact DNS SAN selected from the authenticated packet; repeat for multiple values")
+        help="exact requested DNS SAN; packet-bound modes require signed permission; repeat for multiple values")
     parser.add_argument("--workload-san-uri", action="append", default=[],
-        help="exact URI/SPIFFE SAN selected from the authenticated packet; repeat for multiple values")
+        help="exact requested URI/SPIFFE SAN; packet-bound modes require signed permission; repeat for multiple values")
     parser.add_argument(
         "--sign-setup-receipt",
         action="store_true",
@@ -889,7 +929,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if _workload_issuance_mode(parser, args) or _workload_identity_mode(parser, args):
+    if (_workload_bootstrap_mode(parser, args) or _workload_issuance_mode(parser, args)
+            or _workload_identity_mode(parser, args)):
         return
 
     if args.verify_packet is not None and args.verified_packet is not None:

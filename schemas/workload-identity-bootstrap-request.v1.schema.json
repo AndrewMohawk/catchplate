@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/workload-identity-bootstrap-request.v1.schema.json",
+  "title": "Serverware target workload identity bootstrap request v1",
+  "description": "Canonical compact sorted JSON using the existing workload-packet encoding, without a trailing LF, at most 65536 original bytes. This is a request-first target P-256 key/CSR possession profile, not caller authentication, caller-to-target delegation, SAN entitlement, packet issuance, CA permission or completed enrollment. No enrollment packet, existing target certificate or runtimeManifestDigest is included. Runtime must verify the original CSR and same-key request signature, independent expected principal/nonce/SANs and issuer original, all exact digests, current positive lifetime at most 300000 ms wholly inside issuer validity, and the caller's original nonrenewing processing budget. JSON Schema alone proves none of those properties.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {
+      "const": "serverware.signedWorkloadIdentityBootstrapRequest/v1"
+    },
+    "payload": {
+      "$ref": "#/$defs/payload"
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 128,
+      "pattern": "^ecdsa-p256-sha256:(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])",
+      "description": "Fixed prefix followed by canonical unpadded base64url of DER ECDSA (r,s). Runtime requires canonical P-256 integers and low-S, then verifies with the CSR's actual key over ASCII(serverware.workloadIdentityBootstrapRequest/v1) || NUL || canonical payload JSON bytes. This proves key possession, not independent authorization."
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])",
+      "description": "Runtime must compare the claimed digest with the actual cryptographic original in the field's specified byte domain. Shape alone is not a valid pin or signature."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema", "principalId", "nonce", "issuerCertificateDerSha256",
+        "issuerSpkiSha256", "subjectPublicKeyInfoSha256", "requestedSans",
+        "createdAtEpochMs", "expiresAtEpochMs", "csr"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.workloadIdentityBootstrapRequest/v1"
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "Requested target principal, not an authenticated caller or delegation. Runtime additionally limits the original string to 1024 UTF-8 bytes and joins the independent expected principal."
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9_-]{32,256}(?![\\s\\S])",
+          "description": "Exact independently expected request nonce under the existing workload nonce syntax; not a durable one-use reservation."
+        },
+        "issuerCertificateDerSha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "SHA-256 of the actual independently supplied issuing certificate's DER, not its PEM file bytes. Naming an issuer does not authorize it to issue."
+        },
+        "issuerSpkiSha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "SHA-256 of that issuer's actual DER SubjectPublicKeyInfo."
+        },
+        "subjectPublicKeyInfoSha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "SHA-256 of the target CSR's actual DER SubjectPublicKeyInfo."
+        },
+        "requestedSans": {
+          "$ref": "#/$defs/requestedSans"
+        },
+        "createdAtEpochMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854,
+          "description": "Self-asserted creation time; runtime requires currentness and original issuer containment. It is not an independently authorized lifetime."
+        },
+        "expiresAtEpochMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854,
+          "description": "Runtime requires createdAtEpochMs < expiry, a difference at most 300000 ms, now < expiry and issuer containment. Independent delegation and issuance authority retain their own expiry constraints."
+        },
+        "csr": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pem", "sha256"],
+          "properties": {
+            "pem": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "description": "Exact canonical ASCII CSR PEM, at most 16384 bytes. Runtime requires an empty subject, genuine P-256/SHA-256 CSR signature, only the fixed SAN extension-request profile, and exact requested SAN order: DNS then URI."
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256",
+              "description": "SHA-256 of the exact canonical CSR PEM bytes, including their canonical line endings."
+            }
+          }
+        }
+      }
+    },
+    "requestedSans": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dnsNames", "uris"],
+      "description": "Each list must be strictly sorted and unique. Runtime requires 1..8 entries across both lists and at most 8192 aggregate UTF-8 bytes, plus the existing canonical DNS/URI validators. These are requested identities, not authorized selectors.",
+      "anyOf": [
+        {"properties": {"dnsNames": {"minItems": 1}}},
+        {"properties": {"uris": {"minItems": 1}}}
+      ],
+      "properties": {
+        "dnsNames": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 253}
+        },
+        "uris": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 2048}
+        }
+      }
+    }
+  }
+}

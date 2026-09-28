@@ -112,9 +112,11 @@ their previous boundaries.
 The `.238` gate admits an existing authenticated identity. It can consume a
 genuinely externally provisioned certificate/key, but does not ship that PKI's
 first-time issuance or delivery contract. The current issuer accepts only signed
-`agentEnrollment/v1` packets; local CSR preparation already requires such a
-packet. The legacy operator enrollment route's attestation helper refuses
-production. None is a native first-time onboarding fallback.
+`agentEnrollment/v1` packets; legacy packet-bound CSR preparation requires such a
+packet. The new [request-first local bootstrap profile](workload-identity-bootstrap.md)
+prepares target key/CSR possession without that prerequisite, but adds no
+authenticated caller, delegation or issuance authority. The legacy operator
+enrollment route's attestation helper refuses production; it is not a fallback.
 
 Complete N05 therefore requires explicit bootstrap-versus-target semantics:
 an independently authorized bootstrap caller/principal, an original target

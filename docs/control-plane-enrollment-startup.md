@@ -8,6 +8,24 @@ registration to the independent signer and successor execution. The private
 separately, including its [dedicated cold launch](registration-evidence-signer-startup.md).
 Actual deployment provisioning and public orchestration remain open.
 
+## Historical inventory projection
+
+The `.222` launcher connection recognizes the exact v17–v20 enrollment envelope
+and payload schemas. These preserve the existing ten-field purpose projection:
+registration, finalization and activation histories are bounded data namespaces,
+not additional key descriptors or live permissions. V19 accepts activation
+history v1 only; v20 also accepts v2's independent completion expectations.
+The earlier launcher allowlist stopped at v16, so child history admission alone
+was insufficient to start those newer profiles.
+
+The root-owned sealed 4 MiB parent remains byte-identical through projection.
+The launcher checks closed history namespaces and shared-inventory dependencies;
+the child still authenticates the actual parent signature, complete archive,
+original enrollments and current authorization interval before private-key intake.
+Historical key-slot numbers are never extracted as new current capabilities.
+This is a source integration correction, not successful startup or deployment
+evidence. See [activation history admission](control-plane-oidc-session-activation-history-bootstrap.md).
+
 ## Private release client extension
 
 Source `.180` adds an explicit [v5 public-only release configuration](control-plane-oidc-session-activation-release-bootstrap.md)

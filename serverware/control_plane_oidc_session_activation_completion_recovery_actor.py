@@ -55,10 +55,58 @@ def _configuration_pin(profile, scope):
         scope.current_pending)
 
 
+def _historical_configuration(target, profile):
+    authority = target.authority
+    if type(authority) is not history.historical._SelectedActivationHistory:
+        actor._deny("completion recovery lacks its genuine historical authority", 503)
+    recovery = authority.completion_recovery
+    if type(recovery) is not configured._CompletionRecoveryMaterial:
+        actor._deny("completion recovery lacks independently archived completion pins", 503)
+    selected = recovery.activation if profile == "activation" else recovery.consume
+    if type(selected) is not configured._CompletionRecoveryScope:
+        actor._deny("completion recovery historical profile is disabled", 503)
+    return selected
+
+
+def _selected_configuration(target, profile, current):
+    """Historical expectations with only the currently enabled transport.
+
+    These are the existing cold scope fields, not proof of an outcome. The
+    target retains genuine archive admission; later controls re-admit actual
+    signatures before any durable claim or network exchange.
+    """
+    target.live()
+    selected = _historical_configuration(target, profile)
+    if selected is current:
+        # Preserve exact identity for the unchanged no-history live lane.
+        return current
+    return configured._CompletionRecoveryScope(current.endpoint, selected.packet_digest,
+        selected.authorization_digest, selected.current_pending)
+
+
+def _require_current_effect_authority(owner, parent, target):
+    """Completion history cannot silently enable a later current-key producer.
+
+    The later consume/intent/proof/release lanes still admit current originals.
+    Until each owns a historical join, accept only the genuine current-mode
+    selection, not equivalent-looking archived fields or coincident keys.
+    """
+    selected = target.authority
+    if (type(selected) is not history.historical._SelectedActivationHistory
+            or selected.configuration_payload is not parent.configuration_payload
+            or selected.configuration_digest != parent.configuration_digest
+            or selected.root_public_key is not owner._binding.runtime_root_public_key
+            or any(getattr(selected, name) is not getattr(parent, name) for name in (
+                "activation_execution", "activation_planning", "consume_execution",
+                "release_intent", "completion_recovery"))):
+        actor._deny("historical completion does not authorize a current effect continuation", 503)
+
+
 def _target_pin(target, work):
     return (actor._snapshot(target.subject, work), target.activation_authorization_digest,
         target.old_token_digest, target.new_token_digest, target.credential_record_id,
-        target.challenge_id, target.original_bytes, target.original_reservation_bytes)
+        target.challenge_id, target.original_bytes, target.original_reservation_bytes,
+        target.authority)
 
 
 class _CompletionActorScope(actor._ActorScope):
@@ -66,12 +114,13 @@ class _CompletionActorScope(actor._ActorScope):
 
     __slots__ = ("_profile", "_parent", "_recovery", "_configuration", "_configuration_pin",
         "_target_seal", "_completion_recovery_spent", "_completion_receiving_current",
-        "_purpose", "_purpose_pin", "_future_original_bytes", "_future_original_bytes_pin")
+        "_purpose", "_purpose_pin", "_future_original_bytes", "_future_original_bytes_pin",
+        "_current_configuration", "_current_configuration_pin", "_configuration_seal")
 
     def __init__(self, construction, *, application, owner, request, original,
             payload, work, current, owner_scope, target, policy, policy_pin,
             request_pin, old_token, profile, parent, recovery, configuration,
-            purpose, future_original_bytes):
+            current_configuration, purpose, future_original_bytes):
         if (construction is not _CONSTRUCTION
                 or type(target) is not history._CompletionRecoveryTarget):
             actor._deny("completion recovery scope is privately constructed", 503)
@@ -84,7 +133,9 @@ class _CompletionActorScope(actor._ActorScope):
         self._profile, self._parent, self._recovery = profile, parent, recovery
         self._purpose = self._purpose_pin = purpose
         self._future_original_bytes = self._future_original_bytes_pin = future_original_bytes
-        self._configuration = configuration
+        self._current_configuration = current_configuration
+        self._current_configuration_pin = _configuration_pin(profile, current_configuration)
+        self._configuration = self._configuration_seal = configuration
         self._configuration_pin = _configuration_pin(profile, configuration)
         self._target_pin = _target_pin(target, work)
         # Shape projection is not evidence: the inspector above genuinely
@@ -150,10 +201,16 @@ class _CompletionActorScope(actor._ActorScope):
                 or self._future_original_bytes is not self._future_original_bytes_pin
                 or getattr(self._request.state, actor.ORIGINAL_STATE_NAME, None) is not self._original):
             actor._deny("completion recovery actor is no longer live", 503)
-        parent, recovery, selected = _configuration(self._owner, self._profile)
+        parent, recovery, current_configuration = _configuration(self._owner, self._profile)
+        historical = _historical_configuration(target, self._profile)
+        expected = (self._profile, current_configuration.endpoint, historical.packet_digest,
+            historical.authorization_digest, historical.current_pending)
         if (parent is not self._parent or recovery is not self._recovery
-                or selected is not self._configuration
-                or _configuration_pin(self._profile, selected) != self._configuration_pin):
+                or current_configuration is not self._current_configuration
+                or _configuration_pin(self._profile, current_configuration) != self._current_configuration_pin
+                or self._configuration is not self._configuration_seal
+                or _configuration_pin(self._profile, self._configuration) != self._configuration_pin
+                or expected != self._configuration_pin):
             actor._deny("completion recovery original configuration changed", 503)
         self._source_current()
         self._owner_scope.current()
@@ -224,11 +281,11 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
             or actor._ACTIVE is not None or owner._activation_permission is not None):
         actor._deny("completion recovery requires a non-overlapping actual owner", 409)
     current()
-    parent, recovery, configuration = _configuration(owner, profile)
+    parent, recovery, current_configuration = _configuration(owner, profile)
     if (_purpose in ("release-intent-proof", "release", "retained-release")
             and (parent.release_intent is None or parent.release_proof is None)):
         actor._deny("completion release purpose lacks independent cold intent/proof configuration", 503)
-    configuration_pin = _configuration_pin(profile, configuration)
+    current_configuration_pin = _configuration_pin(profile, current_configuration)
     work.charge(input_bytes=4 * len(recovery_bytes),
         json_nodes=4 * contract.permission.framing._JSON_LIMITS.max_total_nodes)
     try:
@@ -243,8 +300,8 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         current()
         observed_parent, observed_recovery, observed_configuration = _configuration(owner, profile)
         if (observed_parent is not parent or observed_recovery is not recovery
-                or observed_configuration is not configuration
-                or _configuration_pin(profile, configuration) != configuration_pin):
+                or observed_configuration is not current_configuration
+                or _configuration_pin(profile, current_configuration) != current_configuration_pin):
             actor._deny("completion recovery configuration changed during target admission", 503)
         return owner_scope.current()
 
@@ -267,14 +324,19 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         "authorization_enrollment_bytes", "current_root_enrollment_bytes",
         "grant_enrollment_bytes", "configuration_digest"))
     held_bytes = 4 * actor._owned_capture_bytes((recovery_bytes, payload, policy,
-        policy_pin, request_pin, old_token, scope_originals, configuration_pin), work)
-    held_bytes += 8 * (3 * 32 + startup.MAX_PRIVATE_KEY_BYTES)
+        policy_pin, request_pin, old_token, scope_originals, current_configuration_pin), work)
+    # The effective historical pin tuple and current endpoint are retained
+    # separately. Reserve their bounded metadata before historical body one.
+    held_bytes += 8 * (3 * 32 + startup.MAX_PRIVATE_KEY_BYTES) + 16 * 1024
     target = history._inspect_on_owner(owner, local_digest=payload["localDigest"],
         old_token_bytes=old_token, live_window=owner_scope.window,
         transport_deadline_ns=owner_scope.deadline_ns, work=work, current=base_current,
         _additional_original_bytes=held_bytes + _additional_original_bytes)
     if type(target) is not history._CompletionRecoveryTarget:
         actor._deny("completion recovery original target is unavailable", 503)
+    configuration = _selected_configuration(target, profile, current_configuration)
+    if _purpose != "completion":
+        _require_current_effect_authority(owner, parent, target)
     window = execution.clock._validate(target.live_window)
     if (window[:3] != owner_scope.window[:3]
             or any(new > old for new, old in zip(window[3:], owner_scope.window[3:]))
@@ -288,7 +350,8 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         current=current, owner_scope=owner_scope, target=target, policy=policy,
         policy_pin=policy_pin, request_pin=request_pin, old_token=old_token,
         profile=profile, parent=parent, recovery=recovery, configuration=configuration,
-        purpose=_purpose, future_original_bytes=_additional_original_bytes)
+        current_configuration=current_configuration, purpose=_purpose,
+        future_original_bytes=_additional_original_bytes)
     _ACTIVE = scope
     try:
         rbac_pin, session_pin, credential, roles, trust_pin = scope._read_current()

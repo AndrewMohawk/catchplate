@@ -6,6 +6,38 @@ completion-only exchange and genuine response admission. Its successful result
 means only that signed historical completion controls were reconciled. It never
 repeats SQL, releases a token, changes a cookie or declares a session active.
 
+## Independently selected historical completion authority (.222)
+
+The genuine target now retains its selected activation-history authority. The
+cold archive separately admits that scope's activation/consume execution keys,
+state enrollment and completion packet, caller and pending pins. The actor
+still needs the currently enabled phase endpoint and fresh current user
+authorization. Its effective scope combines that current endpoint with the
+selected historical pins; neither the browser nor a journal record chooses an
+old root. An unknown scope or disabled historical profile fails closed.
+
+After genuine control admission, the coordinator checks the effective actor
+scope against those exact controls before framing the durable configuration
+identity. Its domain, field order and global target/phase slot are unchanged.
+Configuration rollover cannot create another attempt, replace an uncertain
+outcome or make an existing claim without a response retryable. Read-only reuse
+still checks the exact stored pins and genuinely re-admits the original reply.
+
+The original archive guard survives transport, guarded publication, receiving
+and normal actor/trust cleanup. Old caller, plan, grant and reserve intervals
+are checked against the selected historical scope. A newly issued completion
+statement is instead checked under its genuine selected state enrollment,
+signed marker/ACK and original current processing window; its issue time is
+not required to lie inside the earlier execution interval. No expiry is renewed.
+
+This connects activation and consume **completion-only** recovery across admitted
+configuration history. Historical authority for fresh consume, intent/proof,
+grant and token-release producers, and explicit older-source replay adapters,
+remain separate work. Non-completion actor purposes must still select the exact
+current material identities before options or authorization; an archived scope
+cannot silently reach those producers. The existing current-scope public and
+portal flows are not new production evidence.
+
 ## Explicit routes
 
 All four routes are POSTs using the existing closed 64 KiB
@@ -39,8 +71,9 @@ The processing allowance is never reopened or widened to accommodate history.
 The [historical controls helper](control-plane-oidc-session-activation-completion-recovery-controls.md)
 loads the exact indexed originals and requires the original SQL-attempt claim.
 It genuinely authenticates the historical caller, grant, reservation, signed
-snapshot and state acknowledgment against independent parent-v16 pins. Consume
-also requires its original exported ciphertext; prepared metadata alone cannot
+snapshot and state acknowledgment against the independently selected execution
+and completion pins. Consume also requires its original exported ciphertext;
+prepared metadata alone cannot
 establish its signed commitments. This is public control admission, not private
 AES/history replay or proof from an unsigned SQL result.
 
@@ -70,7 +103,8 @@ Existing acknowledged originals must remain byte-identical. Unsigned consume
 hints do not become release or packet authority.
 
 The coordinator reserves fixed transport, verification, publication and reload
-headroom before the first historical control-bundle body read, within the
+headroom before the first historical target body read. The target carries that
+same reserve into control admission without adding it a second time, within the
 unchanged 64 MiB representation ceiling. These are not measured heap/RSS bounds.
 The genuine receiving guard remains a separate child through normal trust
 cleanup, avoiding an actor/receiver recursion. HTTP success is possible only
@@ -85,14 +119,14 @@ keep `sessionState: unknown`, `tokenReleased: false` and
 messages or private controls. Failures after actor admission are conservatively
 unknown, even if this call never reached a socket. No response changes a cookie.
 
-This path does not synthesize a missing release intent, resume an unattempted
-consume operation or connect the portal. Returning the new session token still
+This completion-only action does not itself synthesize a missing release intent
+or execute an unattempted consume operation. Returning the new session token still
 requires its independently authorized intent/proof/release flow. Missing
 originals remain unavailable, not nonexecution or authority to repeat SQL.
-The separate post-intent token-recovery route is unchanged. Full recovery and
-portal integration, deployment and independent production acceptance must not
-be inferred from this completion-only connection. Source only: no build, test,
-runtime or provisioning evidence is claimed.
+The separate post-intent token-recovery route and existing portal are unchanged.
+Historical authority in later effect-capable stages, deployment and independent
+production acceptance must not be inferred from this completion-only connection.
+Source only: no build, test, runtime or provisioning evidence is claimed.
 
 The separate [fresh intent/proof action](control-plane-oidc-session-activation-completion-recovery-release.md)
 now continues acknowledged consume originals under a distinct WebAuthn binding,

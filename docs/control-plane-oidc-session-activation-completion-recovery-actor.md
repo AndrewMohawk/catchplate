@@ -6,6 +6,29 @@ WebAuthn permission. It is a distinct exact type, not a renewed activation
 permission or an intent-stage token-recovery context. Source only: unbuilt,
 unexecuted and unprovisioned.
 
+## Archived completion expectations, current permission
+
+Parent v20's [activation history v2](control-plane-oidc-session-activation-history-bootstrap.md)
+adds independently archived completion expectations. The genuine historical
+target now retains its selected authority. Before WebAuthn options or assertion
+binding, the actor combines the currently enabled phase endpoint with that
+authority's exact packet, authorization and pending tuple. An archived endpoint
+never authorizes current contact; an absent archived completion lane fails closed.
+
+The original current configuration and effective historical expectation scope
+are separately retained and checked on each guard. The actual target/authority
+identity and archive guard survive through completion receiving and normal
+cleanup. An additional 16 KiB metadata reservation is held before the first
+historical body; later receiving/publication headroom is passed into that same
+target allowance, not added as a new budget after reading.
+
+This connection is completion-only. Non-completion purposes explicitly require
+the genuine current-mode configuration/root/execution/planning/consume/intent
+material identities before options or authorization. Matching-looking archived
+pins are insufficient to reach a current-key producer. The existing no-history
+path preserves exact current objects; historical fresh consume, intent/proof,
+grant and release need their own joins and remain H05 work.
+
 ## Source-selected purpose and target
 
 The actual enrollment owner has separate activation and consume completion

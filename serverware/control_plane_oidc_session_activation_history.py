@@ -40,6 +40,8 @@ class _SelectedActivationHistory:
     consume_execution: object
     release_intent: object
     planner_attestation_interval: tuple
+    completion_recovery: object
+    authority_interval: tuple
     live: object
 
 
@@ -141,11 +143,13 @@ def _common(owner, selected, snapshot, work):
         return (parent.configuration_payload, parent.configuration_digest, generation,
             parent.runtime_role_identities, owner._binding.runtime_root_public_key,
             parent.activation_execution, parent.activation_planning, parent.consume_execution,
-            parent.release_intent, owner._binding.attestation_interval)
+            parent.release_intent, owner._binding.attestation_interval,
+            parent.completion_recovery, owner._binding.attestation_interval)
     return (snapshot.payload, snapshot.configuration_digest, snapshot.generation,
         snapshot.runtime_role_identities, selected.root_public_key, selected.activation_execution,
         selected.activation_planning, selected.consume_execution, selected.release_intent,
-        selected.planner_attestation_interval)
+        selected.planner_attestation_interval, selected.completion_recovery,
+        (snapshot.valid_from_epoch_ns, snapshot.valid_until_epoch_ns))
 
 
 def _result_on_owner(owner, selected, snapshot, *, originals, work, current):
@@ -156,7 +160,8 @@ def _result_on_owner(owner, selected, snapshot, *, originals, work, current):
     pins = tuple(registration._graph_bytes(value, work) for value in graphs)
     # Current-mode lanes are source-owned too; replacing any lane invalidates
     # an already selected original just as replacing archived material does.
-    lanes = parent.activation_execution, parent.activation_planning, parent.consume_execution, parent.release_intent
+    lanes = (parent.activation_execution, parent.activation_planning, parent.consume_execution,
+        parent.release_intent, parent.completion_recovery)
     result = None
 
     def live():
@@ -165,11 +170,13 @@ def _result_on_owner(owner, selected, snapshot, *, originals, work, current):
                 or owner._material is not parent or owner._binding is not binding or owner._custody is not custody
                 or parent.activation_history is not material
                 or any(actual is not prior for actual, prior in zip((parent.activation_execution,
-                    parent.activation_planning, parent.consume_execution, parent.release_intent), lanes))
+                    parent.activation_planning, parent.consume_execution, parent.release_intent,
+                    parent.completion_recovery), lanes))
                 or any(getattr(result, name) is not value for name, value in zip((
                     "configuration_payload", "configuration_digest", "generation", "runtime_role_identities",
                     "root_public_key", "activation_execution", "activation_planning", "consume_execution",
-                    "release_intent", "planner_attestation_interval"), values))
+                    "release_intent", "planner_attestation_interval", "completion_recovery",
+                    "authority_interval"), values))
                 or type(originals) is not tuple or any(type(raw) is not bytes for raw in originals)):
             raise ActivationHistoryError("activation historical selected scope changed")
         for graph, pin in zip(graphs, pins):

@@ -52,6 +52,7 @@ class _CompletionRecoveryTarget:
     live: object
     original_bytes: int
     original_reservation_bytes: int
+    authority: object
 
 
 def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
@@ -284,15 +285,19 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     target_scalars = (authenticated.authorization_digest, old_digest, arguments["new_token_digest"],
         arguments["credential_record_id"], arguments["challenge_id"])
     lifetime.current()
+    result = None
 
     def live():
         identity()
-        if tuple(sorted(subject.items())) != subject_pin:
+        if (tuple(sorted(subject.items())) != subject_pin
+                or result is not None and result.authority is not selected_scope):
             _fail("completion recovery genuine subject changed")
         selected_scope.live()
         lifetime.current()
         return selected_scope.live()
 
     live()
-    return _CompletionRecoveryTarget(subject, *target_scalars, lifetime.window,
-        lifetime.bound, live, original_bytes, reservation_bytes)
+    result = _CompletionRecoveryTarget(subject, *target_scalars, lifetime.window,
+        lifetime.bound, live, original_bytes, reservation_bytes, selected_scope)
+    live()
+    return result

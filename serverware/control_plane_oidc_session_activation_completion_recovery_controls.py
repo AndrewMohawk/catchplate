@@ -61,6 +61,7 @@ class _CompletionControls:
     original_reservation_bytes: int
     prior_response: tuple | None
     prior_completion: tuple | None
+    authority: object
     _live: object
     _seal: tuple | None = None
 
@@ -74,7 +75,7 @@ class _CompletionControls:
 _SEALED_FIELDS = ("_actor", "profile", "originals", "before_bytes", "after_bytes", "marker",
     "enrollment_bytes", "root_public_key", "current_pending", "endpoint", "packet_digest",
     "authorization_digest", "finalization_digest", "work", "window", "deadline_ns",
-    "original_reservation_bytes", "prior_response", "prior_completion", "_live")
+    "original_reservation_bytes", "prior_response", "prior_completion", "authority", "_live")
 
 
 def _identity(value):
@@ -92,7 +93,8 @@ def _identity(value):
     actor = value._actor
     if (type(actor) is not actors._CompletionActorScope or actor._active is not True
             or actor._authorized is not True or actor._completion_recovery_spent is not True
-            or actor._work is not value.work or actor._profile != value.profile):
+            or actor._work is not value.work or actor._profile != value.profile
+            or actor._target.authority is not value.authority):
         _fail("completion controls outlived their exact fresh actor")
 
 
@@ -209,8 +211,34 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     work, owner, target = actor._work, actor._owner, actor._target
     parent, binding, custody, configured = owner._material, owner._binding, owner._custody, actor._configuration
     phase, finalization = actor._profile, target.subject["localDigest"]
-    policy = parent.activation_execution if phase == "activation" else parent.consume_execution
-    root = binding.runtime_root_public_key
+    authority = target.authority
+    if type(authority) is not history.historical._SelectedActivationHistory:
+        _fail("completion controls lack their original authenticated historical authority")
+    authority.live()
+    policy = authority.activation_execution if phase == "activation" else authority.consume_execution
+    policy_type = (execution.configured._ActivationExecutionMaterial if phase == "activation"
+        else consume_dispatch.configured._ConsumeExecutionMaterial)
+    if type(policy) is not policy_type:
+        _fail("completion controls lack the selected historical execution lane")
+    recovery = authority.completion_recovery
+    if type(recovery) is not actors.configured._CompletionRecoveryMaterial:
+        _fail("completion controls have no independently configured historical completion pins")
+    recovery_scope = recovery.activation if phase == "activation" else recovery.consume
+    if type(recovery_scope) is not actors.configured._CompletionRecoveryScope:
+        _fail("completion controls historical completion profile is disabled")
+    # Routing remains the current actor's independently enabled endpoint. Only
+    # these original authority pins are supplied by the selected archived lane.
+    for name in ("packet_digest", "authorization_digest", "current_pending"):
+        plan._same(getattr(configured, name), getattr(recovery_scope, name), work,
+            "completion recovery exact selected historical " + name)
+    root, configuration_digest = authority.root_public_key, authority.configuration_digest
+    authority_interval = authority.authority_interval
+    if type(authority_interval) is not tuple or len(authority_interval) != 2:
+        _fail("completion controls lack their original historical interval")
+    for value in authority_interval:
+        shape._integer(value, minimum=1)
+    if authority_interval[0] >= authority_interval[1]:
+        _fail("completion controls historical interval is empty")
     enrollment_originals = (policy.authorization_enrollment_bytes,
         policy.current_root_enrollment_bytes, policy.grant_enrollment_bytes)
     cold = 4 * sum(map(len, enrollment_originals))
@@ -231,8 +259,12 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
         if (actor._owner is not owner or actor._work is not work or actor._target is not target
                 or actor._configuration is not configured or actor._profile != phase
                 or owner._material is not parent or owner._binding is not binding or owner._custody is not custody
-                or (parent.activation_execution if phase == "activation" else parent.consume_execution) is not policy
-                or any(actual is not expected for actual, expected in zip((binding.runtime_root_public_key,
+                or target.authority is not authority or authority.completion_recovery is not recovery
+                or authority.authority_interval is not authority_interval
+                or authority.configuration_digest is not configuration_digest
+                or (recovery.activation if phase == "activation" else recovery.consume) is not recovery_scope
+                or (authority.activation_execution if phase == "activation" else authority.consume_execution) is not policy
+                or any(actual is not expected for actual, expected in zip((authority.root_public_key,
                     policy.planner_public_key, policy.operation_public_key, policy.caller_public_key), keys_pin))
                 or any(actual is not expected for actual, expected in zip((policy.authorization_enrollment_bytes,
                     policy.current_root_enrollment_bytes, policy.grant_enrollment_bytes), enrollment_originals))):
@@ -240,6 +272,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
 
     def ancestor(epoch, monotonic):
         identity()
+        authority.live()
         now = actor.current()
         mono = caller.production._callback(work, time.monotonic_ns)
         if type(now) is not int or now < epoch or type(mono) is not int or mono < monotonic:
@@ -277,7 +310,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     plan._same(plan._frame(selected_caller.REQUEST_IDENTITY_DOMAIN, (original,), work),
         configured.authorization_digest, work, "independently pinned exact caller original")
     plan._same(activation_claim.authorization_enrollment_digest,
-        parent.activation_execution.authorization_enrollment_digest, work,
+        authority.activation_execution.authorization_enrollment_digest, work,
         "completion recovery original activation enrollment association")
     grant_raw = _record(granted, "grant", phase, finalization, activation_digest, work)[0]
     reserve_raw = _record(reserved, "reserved", phase, finalization, activation_digest, work)
@@ -320,7 +353,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     lifetime.current()
     common = dict(authorization_enrollment_bytes=enrollment_originals[0],
         current_root_enrollment_bytes=enrollment_originals[1], grant_enrollment_bytes=enrollment_originals[2],
-        root_public_key=root, configuration_digest=parent.configuration_digest,
+        root_public_key=root, configuration_digest=configuration_digest,
         planner_public_key=policy.planner_public_key, operation_public_key=policy.operation_public_key)
     if phase == "activation":
         original, signed, encrypted, expectation_bytes, original_before = prepared_raw
@@ -372,7 +405,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
         _target_arguments(expected, target, phase, work)
         expectation_bytes = consume.registration._wire(expected, work)
         auth_payload, signed_payload, facts = _consume_authorization(original, (signed, encrypted), before,
-            expected, policy, root, parent.configuration_digest, lifetime, work)
+            expected, policy, root, configuration_digest, lifetime, work)
         authorization_digest = plan._frame(consume.REQUEST_IDENTITY_DOMAIN, (original,), work)
         _same_bytes(exported_raw[5], facts["planDigest"].encode("ascii"), work, "consume signed plan identity")
         enrolled = enrolled_grant
@@ -384,7 +417,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
                 ("currentRootEnrollmentDigest", enrolled.payload["currentRootEnrollmentDigest"]),
                 ("databaseId", enrolled.payload["databaseId"]), ("generationDigest", enrolled.payload["generationDigest"]),
                 ("authorizerMeasurementDigest", enrolled.payload["authorizer"]["measurementDigest"]),
-                ("configurationDigest", parent.configuration_digest),
+                ("configurationDigest", configuration_digest),
                 ("requestAuthorizationDigest", configured.authorization_digest)):
             plan._same(grant[field], value, work, "historical consume grant " + field)
         if grant["expiresAtEpochNs"] - grant["issuedAtEpochNs"] > enrolled.payload["maximumGrantAgeNs"]:
@@ -415,9 +448,11 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
             or reserve["expiresAtEpochNs"] > grant["expiresAtEpochNs"]):
         _fail("completion historical controls retime or renew original authority")
     current_ceiling = lifetime.current() + lifetime.window[6]
-    if any(value["issuedAtEpochNs"] > current_ceiling for value in
-            (signed_payload, auth_payload, grant, reserve)):
-        _fail("completion historical controls are future-issued beyond the narrowed skew")
+    for value in (signed_payload, auth_payload, grant, reserve):
+        if not authority_interval[0] <= value["issuedAtEpochNs"] < value["expiresAtEpochNs"] <= authority_interval[1]:
+            _fail("completion original controls escape the selected historical authority interval")
+        if value["issuedAtEpochNs"] > current_ceiling:
+            _fail("completion historical controls are future-issued beyond the narrowed skew")
     snapshot_fields = ("sourceRevision", "databaseId", "generationDigest", "operation", "requestDigest",
         "operationId", "retainedRecordDigest", "planDigest", "beforeVectorDigest", "afterVectorDigest",
         "resultDigest", "originalFrames", "originalIssuedAtEpochNs", "originalExpiresAtEpochNs")
@@ -435,7 +470,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     result = _CompletionControls(_CONSTRUCTION, actor, phase, originals, before, after, marker,
         enrollment_originals[1], root, configured.current_pending, configured.endpoint, configured.packet_digest,
         configured.authorization_digest, finalization, work, lifetime.window, lifetime.bound, reservation, prior_response,
-        prior_completion, lifetime.current)
+        prior_completion, authority, lifetime.current)
     object.__setattr__(result, "_seal", (tuple(getattr(result, name) for name in _SEALED_FIELDS),
         tuple(marker[name] for name in pending._MARKER_COLUMNS)))
     return _require_controls(result)

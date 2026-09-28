@@ -61,6 +61,20 @@ def _held(controls):
     wire = _profile(controls.profile)
     work = controls.work
     state.capture._SharedLedger(work)
+    authority = controls.authority
+    policy = (authority.activation_execution if wire is activation_wire
+        else authority.consume_execution)
+    recovery = authority.completion_recovery
+    configured = recovery.activation if wire is activation_wire else recovery.consume
+    if (controls.root_public_key is not authority.root_public_key
+            or controls.enrollment_bytes is not policy.current_root_enrollment_bytes):
+        raise CompletionRecoveryExchangeError("completion receiving changed its selected historical keys")
+    for name in ("packet_digest", "authorization_digest", "current_pending"):
+        plan._same(getattr(controls, name), getattr(configured, name), work,
+            "completion receiving independent historical " + name)
+    # The endpoint intentionally remains current. The archived caller/state
+    # keys and independent completion pins are not replaced by current keys.
+    controls.current()
     reserved = controls.original_reservation_bytes
     if (type(reserved) is not int or not _exchange_reservation(controls.profile)
             <= reserved <= MAX_ORIGINAL_BYTES):
@@ -161,6 +175,9 @@ def _verify_on_controls(controls, *, response_originals):
             (marker["pending_decision_digest"], head), (marker["fence"], fence)):
         plan._same(actual, expected, work, "completion recovery independent pending scope")
     # These are bounded, pure original signature/canonical admission calls.
+    # The controls guard retains the independently selected archive/root. A
+    # newly issued completion/ACK is not forced into the old execution interval;
+    # its own genuine enrollment, marker and current processing checks apply.
     # They charge this ledger directly; guards bracket them, not an unmetered
     # wrapper or a generic interception of lower native operations.
     current()

@@ -17,11 +17,15 @@ orchestrator must already have irreversibly spent that actor's completion
 recovery latch. No request may supply a successful target, marker, expected
 scope, public key, profile selector or previously admitted controls object.
 The actor owns the original work/window, genuinely admitted historical target,
-old-token possession and independent signed-parent v16 recovery configuration.
+old-token possession and independent completion-recovery configuration.
 
-The selected endpoint, packet identity, caller-authorization identity and
-pending `(sequence, headDigest, fence)` come from that actual parent. The
-exact caller-original identity is compared before deeper control admission.
+The target retains its actual selected historical `authority`. With history
+enabled, packet identity, caller-authorization identity and pending
+`(sequence, headDigest, fence)` come from that scope's separately root-admitted
+completion pins. The current parent must independently enable the profile;
+only its current endpoint supplies routing. Old endpoint metadata cannot grant
+transport access. Without history, the existing current material is unchanged.
+The exact caller-original identity is compared before deeper control admission.
 The packet pin remains an independent expectation: these public records and
 the activation raw4 response do not attest a private packet's identity.
 
@@ -62,7 +66,11 @@ Both lanes join the exact typed request to the actor's authenticated
 user/session/credential/challenge and old/new token commitments. Neither old
 nor recovered plaintext token is returned or retained here.
 
-Original plan/caller/grant issue and expiry remain ordered and contained;
+Original plan/caller/grant/reserve issue and expiry remain ordered and contained
+within the selected authority's original archive interval. Both completion
+profiles must join that authenticated target cohort; a consume original from a
+different cohort fails rather than borrowing the activation target's keys.
+Unknown, ambiguous or absent archived completion pins have no current fallback;
 source/enrollment age ceilings and future-issue restrictions still apply.
 The existing processing window is only narrowed to the genuine caller, grant
 and current-root age/skew ceilings and original scope restrictions. Its opening
@@ -70,12 +78,12 @@ samples, work and clock floors remain unchanged; the returned continuation owns
 the final narrowed window and bound, never an expired execution deadline used
 as a new clock. The fresh processing window is not substituted for an old interval. Enrolled
 root, caller, planner, grant-authorizer and state keys are admitted from the
-actual parent originals. Public ciphertext framing and signed commitments are
+selected original historical scope. Public ciphertext framing and signed commitments are
 not claims of successful AES opening or private replay.
 
 The actual historical current-root request and reservation verifiers authenticate
 reserve, snapshot and state ACK against the independently configured predecessor.
-The ACK must match the parent's exact pending tuple. Grant, snapshot, request,
+The ACK must match the selected historical scope's exact pending tuple. Grant, snapshot, request,
 full before/after vectors and fixed operation all agree before constructing the
 source marker. This does not establish that this is today's latest pending head.
 
@@ -83,14 +91,16 @@ source marker. This does not establish that this is today's latest pending head.
 
 The private frozen `_CompletionControls` retains the actual actor, SQL raw8
 controls, before/after bytes, marker, enrolled state original/root key,
-configuration pins, work/window/deadline, total reservation and prior response
+configuration pins, exact historical authority, work/window/deadline, total reservation and prior response
 originals. Consume's expectation field is canonically regenerated from its
 retained typed-request/scope/journal originals and authenticated commitments;
 it is not a caller-supplied authority template.
 
 `_require_controls(value)` and `value.current()` check the exact private
 construction, immutable field references, every marker scalar and the still-live
-authorized actor. Original owner/key/enrollment identities, work limits and
+authorized actor and its identical target authority. That authority's live guard
+remains a sibling of genuine admission children, preserving archive authorization
+without feedback into their ancestors. Original owner/key/enrollment identities, work limits and
 both clock floors remain guarded. Child historical guards receive only the
 base ancestor; the response guard is never fed back into its own parent.
 Closed actors cannot use this continuation. The orchestrator separately owns
@@ -105,6 +115,18 @@ to the loader, whose exact metadata preflight covers three selected encoded
 representations plus 16 KiB. Eight selected-original footprints remain reserved
 for loading and subsequent bounded captures. The returned reservation includes
 all of these held phases; it is not another allowance or a process-heap bound.
+The target already retains the archived completion configuration within its
+existing cold-original reservation; that inventory is not counted as a new
+allowance here. Coordinator transport/publication headroom must reach the
+actor before its target's first historical body read.
+
+New completion statements are independently signed historical reconciliation,
+not renewed execution. Their issue time need not fall inside the old execution
+interval: the receiving helper checks its genuine state enrollment, exact old
+marker/pending binding, observation and current processing/future-clock guards.
+This slice does not enable old-authority fresh consume, intent/proof signing,
+grant acquisition or token release; those separate consumers must make their
+own independent original joins.
 
 See the [parent configuration](control-plane-oidc-session-activation-completion-recovery-bootstrap.md)
 for fixed profiles. Completion-only exchange, genuine response admission and

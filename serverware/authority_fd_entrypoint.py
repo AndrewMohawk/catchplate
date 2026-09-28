@@ -47,6 +47,14 @@ CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEn
 CONTROL_PLANE_ENROLLMENT_V15_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v15"
 CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v16"
 CONTROL_PLANE_ENROLLMENT_V16_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v16"
+CONTROL_PLANE_ENROLLMENT_V17_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v17"
+CONTROL_PLANE_ENROLLMENT_V17_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v17"
+CONTROL_PLANE_ENROLLMENT_V18_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v18"
+CONTROL_PLANE_ENROLLMENT_V18_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v18"
+CONTROL_PLANE_ENROLLMENT_V19_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v19"
+CONTROL_PLANE_ENROLLMENT_V19_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v19"
+CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v20"
+CONTROL_PLANE_ENROLLMENT_V20_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v20"
 CONTROL_PLANE_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationCompletionRecovery/v1"
 CONTROL_PLANE_ACTIVATION_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationCompletionRecoveryScope/v1"
 CONTROL_PLANE_CONSUME_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeCompletionRecoveryScope/v1"
@@ -1253,8 +1261,37 @@ def _control_plane_completion_recovery_public_shape(value, *, activation_value, 
                 raise RuntimeError("completion recovery original pin is not canonical SHA256")
 
 
+def _control_plane_history_public_shape(payload, *, registration, finalization, activation, v20):
+    """Data-only history fields never contribute a key or purpose descriptor.
+
+    The bounded sealed parent reaches genuine child signature/archive admission
+    unchanged. This projection checks only the outer data namespaces; it must
+    not interpret historical key-slot numbers as live startup capabilities.
+    """
+    inventories = (
+        (registration, "registrationHistory", ("serverware.controlPlaneRegistrationHistory/v1",),
+            {"schema", "currentEntry", "archive", "registrations"}),
+        (finalization, "finalizationHistory", ("serverware.controlPlaneRegistrationFinalizationHistory/v1",),
+            {"schema", "finalizations"}),
+        (activation, "activationHistory", (("serverware.controlPlaneOidcSessionActivationHistory/v1",
+            "serverware.controlPlaneOidcSessionActivationHistory/v2") if v20 else
+            ("serverware.controlPlaneOidcSessionActivationHistory/v1",)), {"schema", "activations"}))
+    for enabled, name, schemas, fields in inventories:
+        if not enabled:
+            continue
+        value = payload[name]
+        if value is not None and (type(value) is not dict or set(value) != fields
+                or type(value["schema"]) is not str or value["schema"] not in schemas):
+            raise RuntimeError("control-plane historical data namespace is not closed")
+    if finalization and payload["finalizationHistory"] is not None and payload["registrationHistory"] is None:
+        raise RuntimeError("finalization history requires the shared registration archive")
+    if activation and payload["activationHistory"] is not None and (
+            payload["registrationHistory"] is None or payload["finalizationHistory"] is None):
+        raise RuntimeError("activation history requires both shared historical inventories")
+
+
 def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
-    """Project closed v2-v16 slots; child admission alone supplies authority."""
+    """Project closed v2-v20 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -1285,7 +1322,11 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
                     CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V17_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V18_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V19_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
         is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
@@ -1297,10 +1338,15 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
         is_v10 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA
         is_v11 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA
         is_v12 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA
-        is_v16 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA
+        is_v20 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA
+        is_v19 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V19_BOOTSTRAP_SCHEMA or is_v20
+        is_v18 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V18_BOOTSTRAP_SCHEMA or is_v19
+        is_v17 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V17_BOOTSTRAP_SCHEMA or is_v18
+        is_v16 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA or is_v17
         is_v15 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA or is_v16
         is_v14 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA or is_v15
-        # v14-v16 preserve the exact v13 prefix and all ten purpose slots.
+        # v14-v20 preserve the exact v13 prefix and all ten purpose slots.
+        # v17-v20 historical inventories are data, never additional FDs.
         is_v13 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA or is_v14
         payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
             "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
@@ -1332,9 +1378,19 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             payload_fields.add("oidcSessionActivationReleaseRecoveryGrantAcquisition")
         if is_v16:
             payload_fields.add("oidcSessionActivationCompletionRecovery")
+        if is_v17:
+            payload_fields.add("registrationHistory")
+        if is_v18:
+            payload_fields.add("finalizationHistory")
+        if is_v19:
+            payload_fields.add("activationHistory")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V16_PAYLOAD_SCHEMA if is_v16
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V20_PAYLOAD_SCHEMA if is_v20
+                    else CONTROL_PLANE_ENROLLMENT_V19_PAYLOAD_SCHEMA if is_v19
+                    else CONTROL_PLANE_ENROLLMENT_V18_PAYLOAD_SCHEMA if is_v18
+                    else CONTROL_PLANE_ENROLLMENT_V17_PAYLOAD_SCHEMA if is_v17
+                    else CONTROL_PLANE_ENROLLMENT_V16_PAYLOAD_SCHEMA if is_v16
                     else CONTROL_PLANE_ENROLLMENT_V15_PAYLOAD_SCHEMA if is_v15
                     else CONTROL_PLANE_ENROLLMENT_V14_PAYLOAD_SCHEMA if is_v14
                     else CONTROL_PLANE_ENROLLMENT_V13_PAYLOAD_SCHEMA if is_v13
@@ -1418,6 +1474,8 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             _control_plane_completion_recovery_public_shape(payload["oidcSessionActivationCompletionRecovery"],
                 activation_value=payload["oidcSessionActivationExecution"],
                 consume_value=payload["oidcSessionActivationConsumeExecution"])
+        _control_plane_history_public_shape(payload, registration=is_v17,
+            finalization=is_v18, activation=is_v19, v20=is_v20)
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:

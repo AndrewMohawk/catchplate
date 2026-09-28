@@ -46,20 +46,39 @@ def _require_claimed(selected):
     selected.current()
 
 
-def _configuration_digest(scope):
+def _configuration_digest(scope, *, selected=None):
     """Bind every actual cold pin, not a candidate reply or generic config ID."""
     scope.current()
     configured = scope._configuration
     endpoint = configured.endpoint
     pending = configured.current_pending
-    values = (scope._profile, endpoint[0], str(endpoint[1]), str(endpoint[2]), str(endpoint[3]),
-        configured.packet_digest, configured.authorization_digest,
+    profile, packet, authorization = (scope._profile,
+        configured.packet_digest, configured.authorization_digest)
+    current = scope.current
+    if selected is not None:
+        controls._require_controls(selected)
+        if selected._actor is not scope or selected.work is not scope._work:
+            execution._fail("completion recovery configuration changed its admitted actor or work")
+        for actual, expected in ((selected.profile, profile), (selected.endpoint, endpoint),
+                (selected.packet_digest, packet), (selected.authorization_digest, authorization),
+                (selected.current_pending, pending)):
+            execution.plan._same(actual, expected, scope._work,
+                "completion recovery admitted historical configuration pin")
+        profile, endpoint, packet, authorization, pending = (selected.profile,
+            selected.endpoint, selected.packet_digest, selected.authorization_digest,
+            selected.current_pending)
+        current = selected.current
+    current()
+    # Keep the existing domain and field order: independently selected old
+    # authority changes neither the global slot nor these identity semantics.
+    values = (profile, endpoint[0], str(endpoint[1]), str(endpoint[2]), str(endpoint[3]),
+        packet, authorization,
         str(pending[0]), pending[1], str(pending[2]))
     for value in values:
         scope._work.prepare_utf8(value)
     frames = tuple(value.encode("ascii") for value in values)
     identity = execution.plan._frame(_CONFIGURATION_DOMAIN, frames, scope._work)
-    scope.current()
+    current()
     return identity
 
 
@@ -104,18 +123,21 @@ def _recover_on_owner(owner, *, profile, request, recovery_bytes, live_window,
     try:
         with actors._authorize_on_owner(owner, profile=profile, request=request,
                 recovery_bytes=recovery_bytes, live_window=live_window,
-                transport_deadline_ns=transport_deadline_ns, work=work, current=current) as scope:
+                transport_deadline_ns=transport_deadline_ns, work=work, current=current,
+                _additional_original_bytes=additional) as scope:
             scope.current()
             if (scope._authorized is not True or scope._purpose != "completion"
                     or scope._completion_recovery_spent is not False
                     or scope._completion_receiving_current is not None):
                 execution._fail("completion recovery requires a fresh unspent actor")
             scope._completion_recovery_spent = True
-            configuration_digest = _configuration_digest(scope)
-            selected = controls._admit_on_actor(scope, _additional_original_bytes=additional)
+            # The target already carries the complete future reserve, admitted
+            # before its first body read. Do not add that allowance twice.
+            selected = controls._admit_on_actor(scope, _additional_original_bytes=0)
             controls._require_controls(selected)
             if selected._actor is not scope or selected.work is not work:
                 execution._fail("completion recovery changed its original actor or work")
+            configuration_digest = _configuration_digest(scope, selected=selected)
             active = _CompletionAttempt(selected)
             _ACTIVE = active
             pins = {"finalization_digest": selected.finalization_digest, "phase": profile,

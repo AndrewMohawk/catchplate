@@ -71,6 +71,8 @@ V18_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v18"
 V18_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v18"
 V19_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v19"
 V19_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v19"
+V20_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v20"
+V20_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v20"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_NODES = capture.MAX_TOTAL_JSON_NODES
 MAX_DEPTH = capture.MAX_JSON_DEPTH
@@ -96,6 +98,7 @@ _V16_PAYLOAD_FIELDS = _V15_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationCom
 _V17_PAYLOAD_FIELDS = _V16_PAYLOAD_FIELDS | frozenset({"registrationHistory"})
 _V18_PAYLOAD_FIELDS = _V17_PAYLOAD_FIELDS | frozenset({"finalizationHistory"})
 _V19_PAYLOAD_FIELDS = _V18_PAYLOAD_FIELDS | frozenset({"activationHistory"})
+_V20_PAYLOAD_FIELDS = _V19_PAYLOAD_FIELDS
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _GENERATION_FIELDS = frozenset(configuration._GENERATION_FIELDS)
 _NUMBER_BYTES = frozenset(b"0123456789.eE+-")
@@ -626,6 +629,8 @@ def _v19_payload_shape(value):
     prior["schema"] = V18_PAYLOAD_SCHEMA
     _v18_payload_shape(prior)
     history._shape(value["activationHistory"])
+    if value["activationHistory"] is not None:
+        capability.shape._literal(value["activationHistory"]["schema"], history.SCHEMA)
     if value["activationHistory"] is not None and (
             value["registrationHistory"] is None or value["finalizationHistory"] is None):
         raise EnrollmentBootstrapError("v19 activation history requires both shared historical scopes")
@@ -636,6 +641,27 @@ def _v19_shape(value):
     capability.shape._literal(value["schema"], V19_SCHEMA)
     capability.shape._base64url(value["signatureBase64Url"], signature=True)
     _v19_payload_shape(value["payload"])
+
+
+def _v20_payload_shape(value):
+    from serverware import control_plane_oidc_session_activation_history_bootstrap as history
+
+    capability.shape._object(value, _V20_PAYLOAD_FIELDS, "v20 enrollment bootstrap payload")
+    capability.shape._literal(value["schema"], V20_PAYLOAD_SCHEMA)
+    prior = {name: value[name] for name in _V18_PAYLOAD_FIELDS}
+    prior["schema"] = V18_PAYLOAD_SCHEMA
+    _v18_payload_shape(prior)
+    history._shape(value["activationHistory"])
+    if value["activationHistory"] is not None and (
+            value["registrationHistory"] is None or value["finalizationHistory"] is None):
+        raise EnrollmentBootstrapError("v20 activation history requires both shared historical scopes")
+
+
+def _v20_shape(value):
+    capability.shape._object(value, _ENVELOPE_FIELDS, "v20 enrollment bootstrap envelope")
+    capability.shape._literal(value["schema"], V20_SCHEMA)
+    capability.shape._base64url(value["signatureBase64Url"], signature=True)
+    _v20_payload_shape(value["payload"])
 
 
 def _canonical(raw, value, work):
@@ -1058,7 +1084,10 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         is_v17 = type(envelope) is dict and envelope.get("schema") == V17_SCHEMA
         is_v18 = type(envelope) is dict and envelope.get("schema") == V18_SCHEMA
         is_v19 = type(envelope) is dict and envelope.get("schema") == V19_SCHEMA
-        if is_v19:
+        is_v20 = type(envelope) is dict and envelope.get("schema") == V20_SCHEMA
+        if is_v20:
+            _v20_shape(envelope)
+        elif is_v19:
             _v19_shape(envelope)
         elif is_v18:
             _v18_shape(envelope)
@@ -1098,12 +1127,12 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         payload = envelope["payload"]
         payload_bytes = configuration._configuration_wire(payload, capture._SharedLedger(work))
         capability._signature(key, envelope["signatureBase64Url"],
-            V19_SCHEMA if is_v19 else V18_SCHEMA if is_v18 else V17_SCHEMA if is_v17 else V16_SCHEMA if is_v16 else V15_SCHEMA if is_v15 else V14_SCHEMA if is_v14 else V13_SCHEMA if is_v13 else V12_SCHEMA if is_v12 else V11_SCHEMA if is_v11 else V10_SCHEMA if is_v10 else V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
+            V20_SCHEMA if is_v20 else V19_SCHEMA if is_v19 else V18_SCHEMA if is_v18 else V17_SCHEMA if is_v17 else V16_SCHEMA if is_v16 else V15_SCHEMA if is_v15 else V14_SCHEMA if is_v14 else V13_SCHEMA if is_v13 else V12_SCHEMA if is_v12 else V11_SCHEMA if is_v11 else V10_SCHEMA if is_v10 else V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
             payload_bytes, capture._SharedLedger(work))
         _canonical(original, envelope, work)
         material = (_v19_material(payload, expected, key, work,
             current_interval=_history_current_interval, now_epoch_ns=_history_now_epoch_ns,
-            live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns) if is_v19
+            live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns) if (is_v19 or is_v20)
             else _v18_material(payload, expected, key, work,
             current_interval=_history_current_interval, now_epoch_ns=_history_now_epoch_ns) if is_v18
             else _v17_material(payload, expected, key, work,
@@ -2302,3 +2331,100 @@ def _produce_v19_on_work(*, configuration_payload, generation, runtime_role_iden
         if isinstance(exc, EnrollmentBootstrapError):
             raise
         raise EnrollmentBootstrapError("v19 enrollment bootstrap production failed") from exc
+
+
+def _produce_v20_on_work(*, configuration_payload, generation, runtime_role_identities,
+        configuration_digest, issuer_private_key_fd, signer_endpoint, registration_execution,
+        registration_finalization, oidc_session_activation_release, oidc_session_activation_execution,
+        oidc_session_activation_planning, oidc_session_activation_consume_execution,
+        oidc_session_activation_release_intent, oidc_session_activation_release_proof,
+        oidc_session_activation_release_handoff, oidc_session_activation_release_grant_acquisition,
+        oidc_session_activation_consume_input_acquisition, oidc_session_activation_release_proof_acquisition,
+        oidc_session_activation_release_recovery_grant_acquisition,
+        oidc_session_activation_completion_recovery, registration_history, finalization_history,
+        activation_history, history_current_interval, history_now_epoch_ns,
+        history_live_window, history_transport_deadline_ns,
+        runtime_root_private_key, runtime_root_public_key, work):
+    """Sign archived completion expectations without enabling an old endpoint."""
+    from serverware import control_plane_oidc_session_activation_history_bootstrap as history
+
+    try:
+        ledger = capture._SharedLedger(work)
+        private_key, public_key = runtime_root_private_key, runtime_root_public_key
+        digest, descriptor = configuration_digest, issuer_private_key_fd
+        if not isinstance(private_key, Ed25519PrivateKey) or not isinstance(public_key, Ed25519PublicKey):
+            raise EnrollmentBootstrapError("v20 bootstrap production requires the actual admitted root pair")
+        capability.shape._digest(digest)
+        capability.shape._bounded_object(generation, 24, "v20 bootstrap provisioner launch context")
+        current = history.planning.planner._processing(history_live_window, history_transport_deadline_ns, work)
+        current()
+        payload = configuration._ConfigurationCapture(ledger, maximum_bytes=MAX_BYTES).visit({
+            "schema": V20_PAYLOAD_SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
+            "configurationDigest": digest, "configurationPayload": configuration_payload,
+            "generation": {name: generation[name] for name in configuration._GENERATION_FIELDS},
+            "runtimeRoleIdentities": runtime_role_identities, "issuerPrivateKeyFd": descriptor,
+            "signerEndpoint": signer_endpoint, "registrationExecution": registration_execution,
+            "registrationFinalization": registration_finalization,
+            "oidcSessionActivationRelease": oidc_session_activation_release,
+            "oidcSessionActivationExecution": oidc_session_activation_execution,
+            "oidcSessionActivationPlanning": oidc_session_activation_planning,
+            "oidcSessionActivationConsumeExecution": oidc_session_activation_consume_execution,
+            "oidcSessionActivationReleaseIntent": oidc_session_activation_release_intent,
+            "oidcSessionActivationReleaseProof": oidc_session_activation_release_proof,
+            "oidcSessionActivationReleaseHandoff": oidc_session_activation_release_handoff,
+            "oidcSessionActivationReleaseGrantAcquisition": oidc_session_activation_release_grant_acquisition,
+            "oidcSessionActivationConsumeInputAcquisition": oidc_session_activation_consume_input_acquisition,
+            "oidcSessionActivationReleaseProofAcquisition": oidc_session_activation_release_proof_acquisition,
+            "oidcSessionActivationReleaseRecoveryGrantAcquisition": oidc_session_activation_release_recovery_grant_acquisition,
+            "oidcSessionActivationCompletionRecovery": oidc_session_activation_completion_recovery,
+            "registrationHistory": registration_history, "finalizationHistory": finalization_history,
+            "activationHistory": activation_history})
+        _v20_payload_shape(payload)
+        envelope = {"schema": V20_SCHEMA, "payload": payload, "signatureBase64Url": "A" * 86}
+        _v20_shape(envelope)
+        # Both versions retain the identical actual shared archive and child
+        # material constructor; the signed v20 shape alone admits history v2.
+        material = _v19_material(payload, digest, public_key, work,
+            current_interval=history_current_interval, now_epoch_ns=history_now_epoch_ns,
+            live_window=history_live_window, transport_deadline_ns=history_transport_deadline_ns)
+
+        def history_current():
+            now = current()
+            if material.activation_history is not None and not (
+                    material.activation_history.valid_from_epoch_ns <= now
+                    < material.activation_history.valid_until_epoch_ns):
+                raise EnrollmentBootstrapError("v20 history authorization expired during production")
+
+        history_current()
+        keys._pair_on_work(private_key, public_key, work)
+        history_current()
+        payload_size, payload_nodes = _measure(payload, work)
+        envelope_size, envelope_nodes = _measure(envelope, work)
+        work.charge(input_bytes=3 * payload_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
+            json_nodes=payload_nodes + envelope_nodes)
+        frame_bytes = 2 * len(V20_SCHEMA) + 9 + payload_size + 2 * 71
+        if (work.limits.max_hashes - work.hash_work < 1
+                or work.limits.max_input_bytes - work.input_bytes < frame_bytes + payload_size
+                or work.limits.max_json_nodes - work.json_nodes < 4 + payload_nodes):
+            raise EnrollmentBootstrapError("v20 bootstrap cannot reserve its signature output")
+        original = configuration._configuration_wire(payload, capture._SharedLedger(work))
+        if len(original) != payload_size:
+            raise EnrollmentBootstrapError("v20 bootstrap payload changed after measurement")
+        message = plan._ascii(plan._frame(V20_SCHEMA, (original,), work), work)
+        history_current()
+        signature = production._sign_and_verify(private_key, public_key, message, work)
+        history_current()
+        if _measure(payload, work) != (payload_size, payload_nodes) or _encode(payload) != original:
+            raise EnrollmentBootstrapError("v20 bootstrap payload changed during signing")
+        encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+        capability.shape._base64url(encoded, signature=True)
+        envelope["signatureBase64Url"] = encoded
+        result = _encode(envelope)
+        if len(result) != envelope_size:
+            raise EnrollmentBootstrapError("v20 bootstrap output changed after reservation")
+        history_current()
+        return result
+    except (KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, EnrollmentBootstrapError):
+            raise
+        raise EnrollmentBootstrapError("v20 enrollment bootstrap production failed") from exc

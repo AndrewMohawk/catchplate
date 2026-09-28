@@ -16,13 +16,16 @@ from serverware import control_plane_oidc_session_activation_execution_bootstrap
 from serverware import control_plane_oidc_session_activation_planning_bootstrap as planning
 from serverware import control_plane_oidc_session_activation_consume_execution_bootstrap as consume
 from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as intent
+from serverware import control_plane_oidc_session_activation_completion_recovery_bootstrap as completion
 
 
 SCHEMA = "serverware.controlPlaneOidcSessionActivationHistory/v1"
+V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationHistory/v2"
 MAX_BYTES = registration.MAX_BYTES
 _FIELDS = frozenset({"schema", "activations"})
 _SCOPE_FIELDS = frozenset({"configurationDigest", "plannerAttestationReceiptDigest",
     "activationExecution", "activationPlanning", "consumeExecution", "releaseIntent"})
+_V2_SCOPE_FIELDS = _SCOPE_FIELDS | frozenset({"completionRecovery"})
 shape, capture, plan, clock = planning.shape, planning.capture, planning.plan, planning.planner.clock
 
 
@@ -44,6 +47,7 @@ class _ActivationHistoryScope:
     release_intent: object
     planner_attestation_interval: tuple
     original_bytes: bytes
+    completion_recovery: completion._CompletionRecoveryMaterial | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -61,13 +65,16 @@ def _shape(value):
     if value is None:
         return
     shape._object(value, _FIELDS, "activation history")
-    shape._literal(value["schema"], SCHEMA)
+    if type(value["schema"]) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA):
+        raise OidcSessionActivationHistoryBootstrapError("activation history schema is not supported")
+    is_v2 = value["schema"] == V2_SCHEMA
     values = value["activations"]
     if type(values) is not list or not 1 <= len(values) <= archive.MAX_ENTRIES + 1:
         raise OidcSessionActivationHistoryBootstrapError("activation history inventory exceeds its fixed bound")
     previous = None
     for selected in values:
-        shape._object(selected, _SCOPE_FIELDS, "activation historical scope")
+        shape._object(selected, _V2_SCOPE_FIELDS if is_v2 else _SCOPE_FIELDS,
+            "activation historical scope")
         shape._digest(selected["configurationDigest"])
         shape._digest(selected["plannerAttestationReceiptDigest"])
         selector = selected["configurationDigest"], selected["plannerAttestationReceiptDigest"]
@@ -82,6 +89,8 @@ def _shape(value):
             module._shape(child)
             if child is None or child["schema"] != schema:
                 raise OidcSessionActivationHistoryBootstrapError("activation history requires its exact original child profiles")
+        if is_v2:
+            completion._shape(selected["completionRecovery"])
 
 
 def _histories(registrations, finalized):
@@ -128,7 +137,7 @@ def _processing(history, live_window, transport_deadline_ns, work):
 
 def _admit_on_work(*, activation_history, registration_history, finalization_history,
         live_window, transport_deadline_ns, work):
-    """Parent v19 supplies independently authenticated originals and live bounds."""
+    """Signed parents supply independently authenticated originals and live bounds."""
     try:
         _shape(activation_history)
         if activation_history is None:
@@ -189,10 +198,22 @@ def _admit_on_work(*, activation_history, registration_history, finalization_his
                 historical_interval=interval, live_window=window, transport_deadline_ns=bound,
                 _continuity=continuity, **common, **exclusions)
             current()
+            # These archived endpoints establish the historical execution join
+            # only. A current enabled endpoint must independently authorize any
+            # later contact; no old endpoint becomes a current routing grant.
+            completed = completion._admit_on_work(
+                completion_recovery=(selected["completionRecovery"]
+                    if owned["schema"] == V2_SCHEMA else None),
+                activation_execution=activated, consume_execution=consumed,
+                runtime_root_public_key=registered.root_public_key,
+                configuration_digest=chosen.configuration_digest,
+                generation_digest=chosen.generation_digest, work=work)
+            current()
             scope_raw = configuration._configuration_wire(selected, capture._SharedLedger(work))
             scopes.append(_ActivationHistoryScope(chosen.configuration_digest, chosen.generation_digest,
                 chosen.planner_receipt_digest, chosen.valid_from_epoch_ns, chosen.valid_until_epoch_ns,
-                registered.root_public_key, activated, planned, consumed, intended, planner_interval, scope_raw))
+                registered.root_public_key, activated, planned, consumed, intended, planner_interval, scope_raw,
+                completed))
         plan._same(configuration._configuration_wire(owned, capture._SharedLedger(work)), original, work,
             "activation history changed during cold admission")
         current()
@@ -220,7 +241,9 @@ def _scopes(material, work):
                 or type(scope.activation_execution) is not activation._ActivationExecutionMaterial
                 or type(scope.activation_planning) is not planning._PlanningMaterial
                 or type(scope.consume_execution) is not consume._ConsumeExecutionMaterial
-                or type(scope.release_intent) is not intent._ReleaseIntentMaterial):
+                or type(scope.release_intent) is not intent._ReleaseIntentMaterial
+                or (scope.completion_recovery is not None
+                    and type(scope.completion_recovery) is not completion._CompletionRecoveryMaterial)):
             raise OidcSessionActivationHistoryBootstrapError("activation historical child inventory changed")
     return material.scopes
 

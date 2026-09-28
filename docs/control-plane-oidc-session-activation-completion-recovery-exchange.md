@@ -5,6 +5,13 @@ only the actual fresh completion actor's source-owned historical controls. It
 does not accept an activation permission, a caller-supplied successful result,
 private AES custody, a token or an unsigned packet as authority.
 
+For admitted configuration history, those controls retain the genuine target's
+selected archive authority. The exchange checks the exact selected root and
+state-enrollment originals and independently admitted packet/authorization/
+pending pins; only the enabled worker endpoint stays current. It never reads a
+replacement root or completion profile from the current parent or from returned
+data. The controls guard retains the archive and fresh actor through all work.
+
 The root orchestrator first publishes the separate irreversible completion
 attempt. `_exchange_on_controls` requires that exact active claimed attempt and
 spends its one-use socket latch before contact. Activation selects the existing
@@ -36,16 +43,23 @@ narrow. A future-issued statement or uncertain response is refused. Existing
 acknowledged originals must match exactly, including an old consume raw4 whose
 separate hints were not retained.
 
+The old caller/plan/grant/reserve statements must fit the independently admitted
+historical execution interval. A new completion statement and its state ACK are
+not forced into that old interval: their own genuine enrollment, signed marker,
+original processing window and future-issue checks remain required. This does
+not turn an expired historical permission into a live permission.
+
 The raw4 wire contains no packet identity. A matching consume hint is only a
 consistency check against the independent packet pin; hints remain unsigned
 data, not proof of private replay, release authority, latest state or an active
 session. All private packet/AES/commit admission stays in the configured worker.
 
-Before historical body reads, `_exchange_reservation(profile)` contributes a
-fixed conservative reserve for request/response buffers, repeated original
+Before the first historical target body read, `_exchange_reservation(profile)`
+contributes a fixed conservative reserve for request/response buffers, repeated original
 captures, enrollment/key representations, signed observation and vector copies.
-The controls loader includes it in the same 64 MiB representation ceiling;
-journal I/O is reserved separately. This is not a heap/RSS guarantee or fresh
+The actor target carries it into the controls loader exactly once, inside the
+same 64 MiB representation ceiling; journal I/O is reserved separately. This is
+not a heap/RSS guarantee or fresh
 work allowance. Pure signature admission is bracketed by the original guard;
 native transport operations use its existing per-operation guarded path.
 
@@ -54,11 +68,11 @@ actor/trust cleanup; it must not be attached back into its own controls ancestor
 No closed-actor fallback is provided. Public historical success requires the
 orchestrator's successful normal cleanup and does not release a token or cookie.
 
-This does not finish pre-intent recovery. The existing intent signer accepts
-only the original live activation permission; the existing token-recovery
-selector still requires retained intent, proof and hints, not this separate
-reconciliation record. A new fresh-permission continuation must re-admit these
-originals before any intent/proof issuance. The recovery worker also requires
+This completion-only historical-authority connection does not extend the later
+fresh consume, intent/proof or token-release producers to archived authority.
+Those separate current-scope continuations already re-admit retained originals
+under distinct fresh permissions; they do not inherit this actor. The recovery
+worker also requires
 an independently authorized existing checkpoint-one outcome: reconstructing an
 outcome, or missing local records, proves neither existence nor an empty slot.
 No SQL retry, fabricated delivery dates or automatic first release is implied.

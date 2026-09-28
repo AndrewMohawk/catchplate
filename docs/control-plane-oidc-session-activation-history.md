@@ -57,10 +57,22 @@ large valid inventories may fail closed.
 All guards retain the original owner, work and clock floors. Archive lifetime
 may only narrow the processing window. Selected-scope guards are siblings of
 their genuine receiving children, never inserted into their own ancestors.
-The actual target `live` guard retains both; ordinary target fields are not
-accepted as proof by later actions.
+The actual target `live` guard retains both and identity-pins its `authority`
+reference; ordinary target fields are not accepted as proof by later actions.
 
-This slice does not complete historical activation/consume execution or the
+## Completion-only handoff
+
+The selected authority additionally carries its original archive interval and
+independently admitted `completion_recovery` pins. The fresh completion actor
+binds those historical packet/caller/pending expectations while routing only
+through the separately enabled current endpoint. Actual completion controls
+retain the same authority and admit original activation or consume controls
+under its old root, configuration and enrollments. Caller, plan, grant and
+reserve must all stay in the selected original interval; this does not assume
+that a different consume cohort is interchangeable. New signed completion
+reconciliation remains distinct from those old execution intervals.
+
+This does not complete historical fresh activation/consume execution or the
 proof, grant and token-release continuation under old authority. Those consumers
 and explicit older-source adapters remain separate H05 work. No SQL retry,
 profile fallback, build/runtime validation or production acceptance is claimed.

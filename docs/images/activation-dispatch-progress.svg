@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="760" height="478" viewBox="0 0 760 478" role="img" aria-labelledby="activation-dispatch-title activation-dispatch-description">
-  <title id="activation-dispatch-title">Step 22 public activation is source-landed in 0bffe70: all seven dispatch facets and all five inner RELEASE connections are green. One live permission connects the public POST to exact protected delivery, fresh current-auth and the final cookie-send guard. Uncertainty keeps the pending cookie and forbids automatic retry. Separately authorized recovery is next; resources and portal remain open. Source only; unbuilt, unexecuted and unprovisioned.</title>
-  <desc id="activation-dispatch-description">Step 22 public activation is source-landed in 0bffe70: all seven dispatch facets and all five inner RELEASE connections are green. One live permission connects the public POST to exact protected delivery, fresh current-auth and the final cookie-send guard. Uncertainty keeps the pending cookie and forbids automatic retry. Separately authorized recovery is next; resources and portal remain open. Source only; unbuilt, unexecuted and unprovisioned. Seven facets and five nested connections are display detail, not extra milestones or effort percentages. Activation is 22/26, with 0 active and 4 todo; project remains 34/46 and production acceptance 0/6 verified.</desc>
+  <title id="activation-dispatch-title">Historical .201 checkpoint: step 22 public activation is source-landed in 0bffe70, with all seven dispatch facets and all five inner RELEASE connections green. One live permission connects the public POST to protected delivery, fresh current-auth and the final cookie-send guard. Uncertainty keeps the pending cookie without automatic retry. Recovery was next at this checkpoint. Source only; unbuilt, unexecuted and unprovisioned.</title>
+  <desc id="activation-dispatch-description">Historical .201 checkpoint, not the current recovery rollup. Step 22 public activation is source-landed in 0bffe70: all seven dispatch facets and all five inner RELEASE connections are green. One live permission connects the public POST to exact protected delivery, fresh current-auth and the final cookie-send guard. Uncertainty keeps the pending cookie and forbids automatic retry. Separately authorized recovery was next at this checkpoint; resources and portal remained open. Source only; unbuilt, unexecuted and unprovisioned. Seven facets and five nested connections are display detail, not extra milestones or effort percentages. At .201 activation was 22/26, with 0 active and 4 todo; project was 34/46 and production acceptance 0/6 verified.</desc>
   <rect x="1" y="1" width="758" height="476" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="33" fill="#f8fafc" font-size="24" font-weight="700">Inside step 22 · Public activation dispatch</text>
-    <text x="24" y="59" fill="#a7f3d0" font-size="16" font-weight="600">SOURCE LANDED · all 7 connections · .201 / 0bffe70</text>
+    <text x="24" y="59" fill="#a7f3d0" font-size="16" font-weight="600">HISTORICAL .201 · SOURCE LANDED · all 7 connections · 0bffe70</text>
 
     <a href="../production-status.md#activation-dispatch-detail">
       <g font-size="13" font-weight="700" text-anchor="middle">
@@ -99,7 +99,7 @@
     </a>
 
     <path d="M24 414H736" stroke="#334155"/>
-    <text x="24" y="434" fill="#cbd5e1" font-size="13">Activation 22/26 · 0 active · 4 todo · project 34/46 · production 0/6 verified</text>
+    <text x="24" y="434" fill="#cbd5e1" font-size="13">At .201: activation 22/26 · 0 active · 4 todo · project 34/46 · production 0/6</text>
     <text x="24" y="453" fill="#94a3b8" font-size="12">LANDED = committed source · IN PROGRESS = current work · TODO = remaining connections</text>
     <text x="24" y="470" fill="#a7f3d0" font-size="11">.201 SOURCE LANDED · public POST → same permission → guarded cookie send · 0bffe70</text>
   </g>

@@ -3,13 +3,13 @@
 Source integrated, unbuilt and unexecuted. These dedicated local records retain
 only token-free claims and exact consume planning, authorization, grant,
 reservation, unsigned SQL and completion-response originals, unsigned hints
-and the exact signed release intent. They are not
+and the exact signed release intent and public proof response. They are not
 permission, signed-plan admission, private replay, committed SQL or authenticated
 completion evidence, token release, a public route or a retry mechanism.
 
 ## Closed inventory and association
 
-One separate logical consume claim has at most twelve physical files:
+One separate logical consume claim has at most fourteen physical files:
 
 | Fixed kind | Exact retained content | Ordering |
 | --- | --- | --- |
@@ -25,6 +25,8 @@ One separate logical consume claim has at most twelve physical files:
 | `completion-hints` | raw2: opaque unsigned packet-digest bytes (0..71) and descriptor bytes (0..1,024) | After `completion-outcome`; retained before any response or hint interpretation |
 | `release-intent-claimed` | raw0 | After `completion-hints`; durable before the actual intent producer/signing, never repeatable |
 | `release-intent` | raw1: exact original signed release intent | After `release-intent-claimed`; durably retained before the caller returns the original |
+| `release-proof-claimed` | raw0 | After `release-intent`; irreversible and durable before any proof request I/O |
+| `release-proof` | raw4: opaque status, original signed release custody, signed proof and proof enrollment | After `release-proof-claimed`; retained before status, content-shape or signature interpretation |
 
 The fixed slot identity frames both the finalization locator and the genuine
 activation authorization identity under
@@ -81,6 +83,14 @@ intent attempt and intent original are 1,442, 331 and 65,875 bytes respectively.
 The maximum hints append precharge is 5,019 bytes, including both fixed claim
 reads and three times the bounded framed record; actual inputs use the same
 size-based meter below.
+Profiles 12–13 append the empty proof attempt and opaque raw4 proof response.
+The actual proof transport bounds the four bodies to 6 bytes, 8 MiB, 64 KiB and
+16 KiB. The journal accepts any immutable bytes within those caps, including
+empty or malformed originals; only the caller subsequently interprets the
+status, root-authenticates custody and verifies the proof/enrollment. The
+maximum framed response is 8,470,897 bytes and its maximum append precharge is
+25,413,384 bytes. These original commitments are token-free; the old token in
+the proof request is never a retained frame. Earlier encodings are unchanged.
 New publication requires the current source cohort;
 decode accepts historical source metadata only as ordinary data. There is no
 generic prepared/forwarding-family extension.
@@ -105,11 +115,14 @@ is an original ciphertext, not plaintext or authority.
 - `append_oidc_session_activation_consume_completion_hints(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
 - `claim_oidc_session_activation_consume_release_intent_attempt(finalization_digest=..., activation_authorization_digest=...) -> None`
 - `append_oidc_session_activation_consume_release_intent(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
+- `claim_oidc_session_activation_consume_release_proof_attempt(finalization_digest=..., activation_authorization_digest=...) -> None`
+- `append_oidc_session_activation_consume_release_proof(finalization_digest=..., activation_authorization_digest=..., originals=...) -> record_digest`
 - `load_oidc_session_activation_consume_records(finalization_digest=..., activation_authorization_digest=...) -> ConsumeRecords`
 
 `ConsumeRecords(claim, prepared, exported, authorized=None, grant=None,
 reservation=None, sql_attempt=None, sql_outcome=None, completion_outcome=None,
-completion_hints=None, release_intent_attempt=None, release_intent=None)`
+completion_hints=None, release_intent_attempt=None, release_intent=None,
+release_proof_attempt=None, release_proof=None)`
 is ordinary retained data, with optional stage records. Each `ConsumeRecord` contains source revision,
 finalization and authorization digests, slot digest, kind, original tuple and
 content digest. None is a successful-admission carrier.
@@ -118,13 +131,15 @@ Before the stable native custody callback, the genuine caller precharges
 `control_plane_oidc_session_activation_consume_records.MAX_CLAIM_IO_BYTES`
 for the planning claim, or `_append_io_bytes(kind, originals)` for each fixed
 stage: `prepared`, `exported`, `authorized`, `grant`, `reserved`, `sql-claimed`,
-`sql-outcome`, `completion-outcome`, `completion-hints`, `release-intent-claimed`
-or `release-intent`. SQL and intent claims pass the exact empty tuple `()` to
+`sql-outcome`, `completion-outcome`, `completion-hints`, `release-intent-claimed`,
+`release-intent`, `release-proof-claimed` or `release-proof`. SQL, intent and proof
+claims pass the exact empty tuple `()` to
 the meter; signed intent retention passes `(signed_intent_bytes,)`.
 `MAX_AUTHORIZED_BYTES`, `MAX_GRANT_BYTES`, `MAX_RESERVATION_BYTES`,
 `MAX_SQL_CLAIM_BYTES`, `MAX_SQL_OUTCOME_BYTES`,
 `MAX_COMPLETION_OUTCOME_BYTES`, `MAX_COMPLETION_HINTS_BYTES`,
-`MAX_RELEASE_INTENT_CLAIM_BYTES` and `MAX_RELEASE_INTENT_BYTES` expose their framed bounds;
+`MAX_RELEASE_INTENT_CLAIM_BYTES`, `MAX_RELEASE_INTENT_BYTES`,
+`MAX_RELEASE_PROOF_CLAIM_BYTES` and `MAX_RELEASE_PROOF_BYTES` expose their framed bounds;
 `MAX_LOAD_IO_BYTES` includes the complete optional suffix. Old prefixes load
 with absent suffix fields set to `None` and gain no publication, signing or
 SQL permission. The exact work ledger and actual current guard remain around
@@ -139,7 +154,7 @@ clock, creates a work allowance or restores continuation authority.
 ## Durability, quota and terminal uncertainty
 
 The existing no-replace publication, file and directory synchronization, normal
-close, exact readback and immutable identity checks apply to all twelve files.
+close, exact readback and immutable identity checks apply to all fourteen files.
 An identical response append is only first-exact local retention, never
 permission to repeat a network request. A different original poisons the owner.
 An uncertain prepared response cannot acquire an export sibling, and an
@@ -167,23 +182,31 @@ terminal prefix, not a retry permission. These records never retain the old
 token, signing key or separate producer inputs, and never replace genuine
 caller admission.
 
+The proof attempt similarly burns before any proof I/O, even if no response
+arrives. A same-owner duplicate is rejected before an idempotent append path;
+restart never restores its live claim. Received raw4 is retained first-exact
+before semantic/status/custody/proof checks. Invalid retained data or an
+uncertain/missing response cannot authorize another request. Separate private
+proof admission remains necessary; neither successful storage nor the returned
+status proves consumption, release or current session state.
+
 Recovery validates the fixed prefix, claim/source/target association and
 original response shapes, but deliberately does not restore the volatile
 same-owner continuation set. Historical originals can only be read. Missing
 responses, successful decode and exact old bytes cannot authorize prepare,
-export, repeat signing, SQL, completion, intent production, automatic recovery or a resend. Every
+export, repeat signing, SQL, completion, intent production, proof I/O, automatic recovery or a resend. Every
 dispatch-suffix stage requires this live owner's original activation and consume claims,
 their exact current-source prefix and successful exported predecessor.
 
 Every consume claim counts as one additional logical record alongside legacy
 prepared records, release claims and activation claims, at every capacity gate
 and during recovery. The activation claim still has at most seven files; the
-separate consume claim now has twelve, including the required SQL and intent
-claims, completion response and opaque hints. Live physical accounting is exactly
-`7 * maximum_records + 5 * admitted_consume_claim_count`: only that separately
-counted namespace contributes five extra possible files. This does not widen
-other codecs or give every old record twelve slots. Unordered recovery first
-limits scanning to the worst-case `12 * maximum_records`, then enforces the
+separate consume claim now has fourteen, including the required SQL, intent and
+proof claims, completion response and opaque hints. Live physical accounting is exactly
+`7 * maximum_records + 7 * admitted_consume_claim_count`: only that separately
+counted namespace contributes seven extra possible files. This does not widen
+other codecs or give every old record fourteen slots. Unordered recovery first
+limits scanning to the worst-case `14 * maximum_records`, then enforces the
 tighter consume-specific ceiling and complete fixed prefix before admission.
 The 4,096 logical-record limit, byte quota and 8 GiB maximum are unchanged.
 Legacy marker byte reservations remain subtracted before new publication.

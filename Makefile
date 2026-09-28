@@ -1105,6 +1105,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_release_proof_enrollment.py \
 	serverware/authority_oidc_session_activation_release_proof.py \
 	serverware/authority_oidc_session_activation_release_proof_production.py \
+	serverware/oidc_session_activation_release_proof_bootstrap.py \
+	serverware/oidc_session_activation_release_proof_entrypoint.py \
+	serverware/oidc_session_activation_release_proof_startup.py \
+	serverware/oidc_session_activation_release_proof_launcher.py \
+	serverware/oidc_session_activation_release_proof_runner.py \
+	serverware/authority_oidc_session_activation_release_proof_transport.py \
 	serverware/oidc_session_activation_release_outcome.py \
 	serverware/oidc_session_activation_release_outcome_authorization.py \
 	serverware/authority_oidc_session_activation_release_outcome_store.py \
@@ -1133,6 +1139,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_consume_completion.py \
 	serverware/control_plane_oidc_session_activation_release_intent_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_release_intent.py \
+	serverware/control_plane_oidc_session_activation_release_proof_bootstrap.py \
+	serverware/control_plane_oidc_session_activation_release_proof.py \
 	serverware/control_plane_oidc_session_activation_consume_planning.py \
 	serverware/control_plane_oidc_session_activation_consume_records.py \
 	serverware/authority_oidc_session_activation_completion_dispatch_transport.py \
@@ -3198,6 +3206,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_release_proof_enrollment.py \
 				serverware/authority_oidc_session_activation_release_proof.py \
 				serverware/authority_oidc_session_activation_release_proof_production.py \
+				serverware/oidc_session_activation_release_proof_bootstrap.py \
+				serverware/oidc_session_activation_release_proof_entrypoint.py \
+				serverware/oidc_session_activation_release_proof_startup.py \
+				serverware/oidc_session_activation_release_proof_launcher.py \
+				serverware/oidc_session_activation_release_proof_runner.py \
+				serverware/authority_oidc_session_activation_release_proof_transport.py \
 				serverware/oidc_session_activation_release_outcome.py \
 				serverware/oidc_session_activation_release_outcome_authorization.py \
 				serverware/authority_oidc_session_activation_release_outcome_store.py \
@@ -3226,6 +3240,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_consume_completion.py \
 				serverware/control_plane_oidc_session_activation_release_intent_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_release_intent.py \
+				serverware/control_plane_oidc_session_activation_release_proof_bootstrap.py \
+				serverware/control_plane_oidc_session_activation_release_proof.py \
 				serverware/control_plane_oidc_session_activation_consume_planning.py \
 				serverware/control_plane_oidc_session_activation_consume_records.py \
 				serverware/authority_oidc_session_activation_completion_dispatch_transport.py \

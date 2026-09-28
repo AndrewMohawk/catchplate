@@ -1,0 +1,13 @@
+# Optional public-only proof transport for explicit parent/v10 configuration.
+# This mounts one preprovisioned socket, not proof/history/delivery private keys.
+# The signed bootstrap uses the existing authority-trust mount. No host path,
+# key, socket or service is created by this overlay.
+services:
+  serverware:
+    volumes:
+      - type: bind
+        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_PROOF_SOCKET:?set preprovisioned committed-release proof socket}
+        target: /run/serverware/oidc-session-activation-token-release/proof.sock
+        read_only: true
+        bind:
+          create_host_path: false

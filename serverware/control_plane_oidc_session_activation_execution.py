@@ -175,7 +175,8 @@ class _ActivationPermission:
         "_consume_completion_context", "_consume_completion_context_seal",
         "_consume_completion_hints", "_consume_completion_hints_seal", "_release_intent_spent",
         "_release_intent_signing", "_release_intent_signing_seal", "_release_intent_original", "_release_intent_seal",
-        "_release_intent_context", "_release_intent_context_seal")
+        "_release_intent_context", "_release_intent_context_seal", "_release_proof_spent",
+        "_release_proof_originals", "_release_proof_seal", "_release_proof_context", "_release_proof_context_seal")
 
     def __init__(self, owner, request, permission_bytes, live_window, transport_deadline_ns, work):
         from serverware import control_plane_oidc_session_activation_permission as permission
@@ -214,6 +215,9 @@ class _ActivationPermission:
         self._consume_completion_context = self._consume_completion_context_seal = None
         self._consume_completion_hints = self._consume_completion_hints_seal = None
         self._release_intent_spent = False
+        self._release_proof_spent = False
+        self._release_proof_originals = self._release_proof_seal = None
+        self._release_proof_context = self._release_proof_context_seal = None
         self._release_intent_signing = self._release_intent_signing_seal = None
         self._release_intent_original = self._release_intent_seal = None
         self._release_intent_context = self._release_intent_context_seal = None
@@ -237,12 +241,15 @@ class _ActivationPermission:
                 or type(self._owner) is not startup._EnrollmentOwner
                 or self._owner._activation_permission is not self or not self._locked):
             _fail("activation permission context is no longer the active parent-owned call")
-        if self._dispatch_phase not in ("new", "preparing", "preparing-completion",
+        # Proof phases retain every intent and predecessor invariant below.
+        phase = ("release-intent-authorized" if self._dispatch_phase in (
+            "release-proof-requesting", "release-proof-verified") else self._dispatch_phase)
+        if phase not in ("new", "preparing", "preparing-completion",
                 "sql", "sql-completion", "completed", "consume-planning", "consume-planned",
                 "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
                 "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized", "closed"):
             _fail("activation permission dispatch phase is not source fixed")
-        if self._dispatch_phase in ("sql", "sql-completion", "completed", "consume-planning", "consume-planned",
+        if phase in ("sql", "sql-completion", "completed", "consume-planning", "consume-planned",
                 "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
                 "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized") and (
                 self._spent is not True or self._planning_spent is not True
@@ -250,7 +257,7 @@ class _ActivationPermission:
                 or self._sql_originals is not self._sql_seal
                 or any(type(raw) is not bytes for raw in self._sql_originals)):
             _fail("activation SQL continuation replaced its exact admitted originals")
-        if self._dispatch_phase in ("completed", "consume-planning", "consume-planned",
+        if phase in ("completed", "consume-planning", "consume-planned",
                 "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
                 "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized") and (
                 type(self._completion_originals) is not tuple or len(self._completion_originals) != 4
@@ -263,7 +270,7 @@ class _ActivationPermission:
             _fail("consume planning lost the actual same-call completion continuation")
         if self._consume_lifetimes is not self._consume_lifetimes_seal:
             _fail("consume planning replaced its admitted root-original lifetimes")
-        if self._dispatch_phase in ("consume-planned", "consume-authorizing", "consume-authorized",
+        if phase in ("consume-planned", "consume-authorizing", "consume-authorized",
                 "consume-dispatching", "consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed",
                 "release-intent-signing", "release-intent-authorized"):
             if (self._consume_spent is not True or type(self._consume_originals) is not tuple
@@ -287,20 +294,20 @@ class _ActivationPermission:
             if (self._owner._material.consume_execution is not policy or self._owner._consume_key is not private
                     or self._owner._consume_key_fd != descriptor or self._owner._consume_key_identity is not identity):
                 _fail("consume signing original cold resources changed")
-        if self._dispatch_phase in ("consume-authorizing", "consume-authorized", "consume-dispatching",
+        if phase in ("consume-authorizing", "consume-authorized", "consume-dispatching",
                 "consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed",
                 "release-intent-signing", "release-intent-authorized") and self._consume_authorization_spent is not True:
             _fail("consume authorization did not spend its one-use signing latch")
-        if self._dispatch_phase in ("consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
+        if phase in ("consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
                 "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized") and (
                 type(self._consume_authorization) is not bytes
                 or self._consume_authorization is not self._consume_authorization_seal
                 or self._consume_signing is None):
             _fail("consume authorization lost its exact retained signed original")
-        if self._dispatch_phase in ("consume-dispatching", "consume-sql", "consume-dispatched",
+        if phase in ("consume-dispatching", "consume-sql", "consume-dispatched",
                 "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized") and self._consume_dispatch_spent is not True:
             _fail("consume dispatch did not spend its one-use continuation")
-        if self._dispatch_phase in ("consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed",
+        if phase in ("consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed",
                 "release-intent-signing", "release-intent-authorized") and (
                 type(self._consume_sql_originals) is not tuple or len(self._consume_sql_originals) != 8
                 or self._consume_sql_originals is not self._consume_sql_seal
@@ -310,16 +317,16 @@ class _ActivationPermission:
                 or type(self._consume_sql_context[0]) is not bytes
                 or type(self._consume_sql_context[3]) is not int or self._consume_sql_context[3] < 1):
             _fail("consume SQL continuation lost its exact admitted originals")
-        if self._dispatch_phase in ("consume-dispatched", "consume-completing", "consume-completion-observed",
+        if phase in ("consume-dispatched", "consume-completing", "consume-completion-observed",
                 "release-intent-signing", "release-intent-authorized") and (
                 type(self._consume_sql_outcome) is not tuple or len(self._consume_sql_outcome) != 4
                 or self._consume_sql_outcome is not self._consume_sql_outcome_seal
                 or any(type(raw) is not bytes for raw in self._consume_sql_outcome)):
             _fail("consume SQL continuation lost its retained unsigned outcome")
-        if self._dispatch_phase in ("consume-completing", "consume-completion-observed",
+        if phase in ("consume-completing", "consume-completion-observed",
                 "release-intent-signing", "release-intent-authorized") and self._consume_completion_spent is not True:
             _fail("consume completion did not spend its one-use continuation")
-        if self._dispatch_phase in ("consume-completion-observed", "release-intent-signing", "release-intent-authorized") and (
+        if phase in ("consume-completion-observed", "release-intent-signing", "release-intent-authorized") and (
                 type(self._consume_completion_originals) is not tuple or len(self._consume_completion_originals) != 4
                 or self._consume_completion_originals is not self._consume_completion_seal
                 or any(type(raw) is not bytes for raw in self._consume_completion_originals)
@@ -337,12 +344,12 @@ class _ActivationPermission:
             if (self._owner._material.release_intent is not policy or self._owner._intent_key is not private
                     or self._owner._intent_key_fd != descriptor or self._owner._intent_key_identity is not identity):
                 _fail("release intent original cold resources changed")
-        if self._dispatch_phase in ("release-intent-signing", "release-intent-authorized") and (
+        if phase in ("release-intent-signing", "release-intent-authorized") and (
                 self._release_intent_spent is not True or self._consume_completion_originals[0] != b"acknowledged"
                 or type(self._consume_completion_hints) is not tuple or len(self._consume_completion_hints) != 2
                 or any(type(raw) is not bytes or not raw for raw in self._consume_completion_hints)):
             _fail("release intent lacks its actual acknowledged completion and retained hints")
-        if self._dispatch_phase == "release-intent-authorized" and (
+        if phase == "release-intent-authorized" and (
                 type(self._release_intent_original) is not bytes or self._release_intent_original is not self._release_intent_seal
                 or self._release_intent_signing is None
                 or type(self._release_intent_context) is not tuple or len(self._release_intent_context) != 4
@@ -350,6 +357,19 @@ class _ActivationPermission:
                 or type(self._release_intent_context[0]) is not bytes
                 or type(self._release_intent_context[3]) is not int or self._release_intent_context[3] < 1):
             _fail("release intent lost its exact retained original or live continuation")
+        if self._dispatch_phase in ("release-proof-requesting", "release-proof-verified") and self._release_proof_spent is not True:
+            _fail("release proof did not spend its one-use continuation")
+        if self._release_proof_originals is not self._release_proof_seal:
+            _fail("release proof replaced its retained response originals")
+        if self._dispatch_phase == "release-proof-verified" and (
+                type(self._release_proof_originals) is not tuple or len(self._release_proof_originals) != 4
+                or any(type(raw) is not bytes for raw in self._release_proof_originals)
+                or self._release_proof_originals[0] != b"proved"
+                or type(self._release_proof_context) is not tuple or len(self._release_proof_context) != 4
+                or self._release_proof_context is not self._release_proof_context_seal
+                or type(self._release_proof_context[0]) is not bytes
+                or type(self._release_proof_context[3]) is not int or self._release_proof_context[3] < 1):
+            _fail("release proof lost its exact admitted originals or live continuation")
 
     def _current(self, epoch_floor=None, monotonic_floor=None):
         self._identity()
@@ -366,7 +386,8 @@ class _ActivationPermission:
         if self._target is not None and self._dispatch_phase not in (
                 "sql", "sql-completion", "completed", "consume-planning", "consume-planned",
                 "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
-                "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized"):
+                "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized",
+                "release-proof-requesting", "release-proof-verified"):
             from serverware import control_plane_registration_finalization_completion_pending as pending
 
             application, session_scope, binding, credential, count = self._target
@@ -459,6 +480,9 @@ class _ActivationPermission:
         self._consume_completion_context = self._consume_completion_context_seal = None
         self._consume_completion_hints = self._consume_completion_hints_seal = None
         self._release_intent_spent = True
+        self._release_proof_spent = True
+        self._release_proof_originals = self._release_proof_seal = None
+        self._release_proof_context = self._release_proof_context_seal = None
         self._release_intent_signing = self._release_intent_signing_seal = None
         self._release_intent_original = self._release_intent_seal = None
         self._release_intent_context = self._release_intent_context_seal = None
@@ -727,6 +751,24 @@ class _ActivationPermission:
             self._release_intent_spent = True
             self._dispatch_phase = "release-intent-signing"
             return release._authorize_on_permission(self)
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+
+    def prove_release(self):
+        """One private proof attempt after this call's retained signed intent."""
+        from serverware import control_plane_oidc_session_activation_release_proof as release
+
+        try:
+            self._identity()
+            if (self._state != "active" or self._dispatch_phase != "release-intent-authorized"
+                    or self._release_proof_spent is not False):
+                _fail("release proof requires the unspent actual intent continuation")
+            self._release_proof_spent = True
+            self._dispatch_phase = "release-proof-requesting"
+            return release._prove_on_permission(self)
         except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:
                 self._revoke()

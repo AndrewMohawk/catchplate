@@ -138,7 +138,8 @@ def _complete_on_permission(permission):
                 or permission._consume_sql_context is not continuation or permission._consume_sql_outcome is not sql_outcome
                 or permission._sql_originals is not activation_raw or permission._consume_signing is not signing
                 or permission._consume_authorization is not authorization or permission._dispatch_phase not in (
-                    "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized")):
+                    "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized",
+                    "release-proof-requesting", "release-proof-verified")):
             execution._fail("consume completion changed its original authority or cold resources")
         return guard()
 

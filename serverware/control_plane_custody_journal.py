@@ -174,7 +174,7 @@ class CustodyJournal:
     their separate association is published last. Each may retain one opaque
     reservation raw3, one SQL claim, one SQL outcome, one completion outcome
     and one completion reconciliation under that association.
-    Seven times maximum_records plus five per consume claim bounds published files, including associations and
+    Seven times maximum_records plus seven per consume claim bounds published files, including associations and
     fixed registration outcomes: legacy records use at most three, evidence
     grants seven, signer records one and finalization grants seven each.
     Old records are never rewritten or removed; legacy marker byte
@@ -183,8 +183,8 @@ class CustodyJournal:
     the unchanged physical/quota ceilings, without reserving legacy markers.
     An activation claim has exactly six possible stage siblings: seven total
     files, exhausting its unchanged allowance. No stage adds another slot.
-    Consume uses a separately counted logical claim with at most twelve files.
-    Only that namespace adds five physical allowances; other codecs remain strict.
+    Consume uses a separately counted logical claim with at most fourteen files.
+    Only that namespace adds seven physical allowances; other codecs remain strict.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -264,9 +264,9 @@ class CustodyJournal:
         return (metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns, metadata.st_ctime_ns)
 
     def _physical_limit(self):
-        # Only a separately counted, admitted consume claim may use its five
+        # Only a separately counted, admitted consume claim may use its seven
         # suffix files beyond seven. Older families retain their fixed inventories.
-        return 7 * self._maximum_records + 5 * len(self._consume_claims)
+        return 7 * self._maximum_records + 7 * len(self._consume_claims)
 
     def _require_process(self):
         if os.getpid() != self._pid:
@@ -333,7 +333,7 @@ class CustodyJournal:
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
                 count += 1
-                if count > 12 * self._maximum_records:
+                if count > 14 * self._maximum_records:
                     raise CustodyJournalError("journal physical file limit exceeded")
                 name = entry.name
                 if name.startswith("prepared-"):
@@ -491,7 +491,7 @@ class CustodyJournal:
                         uncertain_completions.add(digest)
         # Directory order is not authority: first bound the scan by the worst
         # possible inventory, then require the exact admitted consume allowance.
-        if count > 7 * self._maximum_records + 5 * len(consume_claims):
+        if count > 7 * self._maximum_records + 7 * len(consume_claims):
             raise CustodyJournalError("journal physical inventory exceeds its consume-specific allowance")
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
@@ -1568,7 +1568,7 @@ class CustodyJournal:
             if slot not in self._consume_live_claims or target not in self._activation_live_claims:
                 raise CustodyJournalError("recovered consume claims are read-only; continuation is forbidden")
             by_kind = self._consume_records.get(slot, {})
-            if kind in ("sql-claimed", "release-intent-claimed") and kind in by_kind:
+            if kind in ("sql-claimed", "release-intent-claimed", "release-proof-claimed") and kind in by_kind:
                 raise CustodyJournalError("consume one-use operation was already claimed; repeat is forbidden")
             try:
                 self._read_activation_claim(target)
@@ -1682,6 +1682,20 @@ class CustodyJournal:
         return self._append_consume_record(finalization_digest=finalization_digest,
             activation_authorization_digest=activation_authorization_digest,
             kind="release-intent", originals=originals)
+
+    def claim_oidc_session_activation_consume_release_proof_attempt(self, *, finalization_digest,
+            activation_authorization_digest):
+        """Burn proof acquisition before I/O; neither restart nor same-owner repeat is allowed."""
+        self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-proof-claimed", originals=())
+
+    def append_oidc_session_activation_consume_release_proof(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain bounded opaque raw4 before status, custody or proof admission."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-proof", originals=originals)
 
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):

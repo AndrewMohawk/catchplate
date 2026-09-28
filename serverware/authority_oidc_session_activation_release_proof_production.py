@@ -6,6 +6,8 @@ payload override, release AES key, token opening or durable outcome is accepted.
 """
 from __future__ import annotations
 
+import time
+
 from serverware import authority_oidc_session_activation_release_committed as committed
 from serverware import authority_oidc_session_activation_release_intent as intent
 from serverware import authority_oidc_session_activation_release_proof as verification
@@ -75,7 +77,8 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
         expected_generation_digest, expected_pending_sequence, expected_pending_head_digest,
         expected_fence, historical_custody, commit_reader, live_window, transport_deadline_ns,
         release_custody_bytes, intent_bytes, intent_enrollment_bytes, proof_enrollment_bytes,
-        proof_private_key, expected_proof_scope, expected_caller_id, old_token_bytes, work):
+        proof_private_key, expected_proof_scope, expected_caller_id, old_token_bytes, work,
+        _continuity=None):
     """Authenticate originals, replay once, then sign only derived facts."""
     signer = proof_private_key
     capture._SharedLedger(work)
@@ -127,7 +130,30 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
     window, bound = held.live_window, held.transport_deadline_ns
     _window, original_current = delivery._window(window, bound, work)
     guards = [original_current]
-    last_epoch = window[0]
+    last_epoch, last_monotonic = window[0], window[2]
+    if _continuity is not None and not callable(_continuity):
+        _fail("release proof producer restrictive continuity is not callable")
+
+    def continue_owner():
+        nonlocal last_epoch, last_monotonic
+        if _continuity is None:
+            return
+        limits, before = work.limits, work.metrics
+        ceilings = limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes
+        observed = _continuity(last_epoch, last_monotonic)
+        capture._SharedLedger(work)
+        after = work.metrics
+        if (work.limits is not limits
+                or ceilings != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or after.hash_work < before.hash_work or after.input_bytes < before.input_bytes
+                or after.json_nodes < before.json_nodes):
+            _fail("release proof producer continuity reset its original allowance")
+        if (type(observed) is not tuple or len(observed) != 2
+                or any(type(value) is not int or value < 1 for value in observed)
+                or observed[0] < last_epoch or observed[1] < last_monotonic
+                or observed[0] >= window[3] or observed[1] >= bound):
+            _fail("release proof producer continuity reversed or expired its narrowed clocks")
+        last_epoch, last_monotonic = observed
 
     def identities():
         if owner_type._snapshot_configuration(owner) is not owner_configuration:
@@ -136,7 +162,8 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
             _fail("release proof commit reader changed")
 
     def current():
-        nonlocal last_epoch
+        nonlocal last_epoch, last_monotonic
+        continue_owner()
         identities()
         for guard in (*guards, original_current):
             epoch = guard()
@@ -144,7 +171,14 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
             if epoch < last_epoch:
                 _fail("release proof processing clocks reversed across original authority")
             last_epoch = epoch
+            if _continuity is not None:
+                monotonic = contract.production._callback(work, time.monotonic_ns)
+                shape._integer(monotonic, minimum=1)
+                if monotonic < last_monotonic or monotonic >= bound:
+                    _fail("release proof producer monotonic observations reversed or expired")
+                last_monotonic = monotonic
         identities()
+        continue_owner()
         return last_epoch
 
     def narrow(expiry, age, skew):
@@ -215,7 +249,7 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
     admitted_intent = intent._verify_on_work(intent_bytes=extra[1], enrollment_bytes=extra[2],
         root_public_key=root, forbidden_public_keys=base_keys, expected_scope=intent_scope,
         expected_release=held.expected_release, old_token_bytes=old_token,
-        live_window=window, transport_deadline_ns=bound, work=work)
+        live_window=window, transport_deadline_ns=bound, work=work, _continuity=_continuity)
     if type(admitted_intent) is not intent._AdmittedIntent:
         _fail("release proof intent verification did not return genuine same-call facts")
     guards.append(admitted_intent.live)
@@ -279,7 +313,8 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
     received = verification._verify_on_work(proof_bytes=original, enrollment_bytes=extra[3],
         root_public_key=root, forbidden_public_keys=forbidden, expected_scope=proof_scope,
         expected_release=verified.release_binding, expected_evidence=evidence,
-        expected_intent_interval=intent_interval, live_window=window, transport_deadline_ns=bound, work=work)
+        expected_intent_interval=intent_interval, live_window=window, transport_deadline_ns=bound,
+        work=work, _continuity=_continuity)
     if type(received) is not verification._AdmittedProof:
         _fail("release proof signed output did not pass genuine receiving verification")
     guards.append(received.live)

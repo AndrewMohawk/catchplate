@@ -366,6 +366,22 @@ class _EnrollmentOwner:
         return permission.authorize_release_intent()
 
     @property
+    def release_proof_enabled(self):
+        """Cold verifier configuration, never a committed proof or permission."""
+        _continuity(self)
+        return self._material is not None and self._material.release_proof is not None
+
+    def _prove_oidc_session_activation_release(self):
+        """Contact the private proof worker only through the actual permission."""
+        from serverware import control_plane_oidc_session_activation_execution as execution
+
+        _require_pid()
+        permission = self._activation_permission
+        if type(permission) is not execution._ActivationPermission or permission._owner is not self:
+            raise EnrollmentStartupError("release proof requires the actual active parent permission")
+        return permission.prove_release()
+
+    @property
     def finalization_reservation_enabled(self):
         _live(self)
         finalization = None if self._material is None else self._material.finalization

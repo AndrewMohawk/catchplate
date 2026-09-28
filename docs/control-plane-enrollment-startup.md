@@ -37,7 +37,7 @@ variable is `SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR`, with
 provisioned listener has mode 0660 and owner/group `65502:65532`, with searchable
 parent directories. A read-only directory bind permits connecting, not replacing
 the listener. Actual peer credentials and signed original response admission
-remain mandatory. Select this overlay only for an explicitly enabled v5–v9 release lane;
+remain mandatory. Select this overlay only for an explicitly enabled v5–v10 release lane;
 it neither creates the worker/socket nor mounts a release or signing key.
 The existing enrollment-only offline preparer is unchanged and does not compose
 this overlay. Any separately composed artifact still requires independent
@@ -242,6 +242,23 @@ directory bind covers the independently provisioned authorizer, reserver, SQL
 and completion sockets; mounting it does not authorize or perform a request.
 The enrollment-only offline preparer is unchanged. Source remains unbuilt and
 unexecuted, and production acceptance remains 0/6.
+
+## Private proof continuation extension
+
+Explicit parent `/v10` adds nullable public-only
+[`oidcSessionActivationReleaseProof`](control-plane-oidc-session-activation-release-proof.md).
+It admits the distinct proof enrollment, independently held producer scope and
+fixed endpoint, and requires the actual parent release-intent configuration.
+The root delivery projection has the same ten slots as v9; no proof private key
+is delivered to the control plane. Older parent schemas retain their exact shapes.
+
+`release_proof_enabled` is configuration only. The no-argument
+`_prove_oidc_session_activation_release()` facade uses only the actual active
+permission after its retained signed intent. Its irreversible durable claim
+precedes transport, opaque raw4 retention precedes semantic admission, and
+genuine root custody/proof verification preserves the original allowance.
+The new worker is separately provisioned after intent; no new token or cookie
+is released by this continuation. Source remains unbuilt and unexecuted.
 
 ## Dedicated release-intent caller extension
 

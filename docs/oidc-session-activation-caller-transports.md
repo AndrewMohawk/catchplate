@@ -16,7 +16,7 @@ and older helpers are unchanged. SQL's existing uncertainty and empty-frame
 grammar is not widened.
 
 `authority_oidc_session_activation_caller_transport.py` shares only the bounded
-I/O implementation. Ten literal entry functions select the exact ten
+I/O implementation. Eleven literal entry functions select the exact eleven
 existing transport modules; its private engine rejects any other module. It
 does not accept request-selected profiles, framing callbacks or arbitrary
 endpoints. Shape-valid response bytes and a matching local socket peer are not
@@ -114,6 +114,16 @@ The tenth literal profile uses `SWODCM03` / `SWODCR02` only for consume caller
 completion frames. Those unsigned hints and encrypted delivery bytes are not
 authenticated by the completion/state signatures. Later private proof must
 independently authenticate their exact mapping before credential release.
+
+The eleventh literal profile is the
+[private committed-release proof connection](control-plane-oidc-session-activation-release-proof.md).
+It uses `SWORPQ01` / `SWORPR01` at the distinct root-created proof socket.
+Request raw3 carries fixed purpose, exact intent identity and ephemeral old-token
+possession. Response raw4 carries bounded status, release custody, proof and
+proof enrollment originals. Its caller durably claims before transport and
+retains the opaque response before semantic/signature admission. The worker
+uses completion-purpose UID65497 but admits only caller65532; the public caller
+checks listener0:0. No response field or socket peer alone is proof authority.
 
 This is a source-only downstream caller seam. It does not establish completed
 public activation dispatch, installed services, runtime success or production

@@ -818,6 +818,22 @@ class ControlPlaneCustodyClient:
             activation_authorization_digest=activation_authorization_digest,
             kind="release-intent", originals=originals)
 
+    def claim_oidc_session_activation_consume_release_proof_attempt(self, *, finalization_digest,
+            activation_authorization_digest):
+        """Durably burn proof I/O once before dispatch, never grant a recovered retry."""
+        ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-proof-claimed", originals=())
+
+    def append_oidc_session_activation_consume_release_proof(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain opaque status/custody/proof/enrollment originals before interpretation."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-proof", originals=originals)
+
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):
         """Read bounded ordinary history, not a recovered permission to continue."""

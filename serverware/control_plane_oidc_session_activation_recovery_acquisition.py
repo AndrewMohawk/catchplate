@@ -16,7 +16,6 @@ import time
 
 from serverware import authority_oidc_session_activation_release_hints as hints
 from serverware import authority_oidc_session_activation_release_recovery_delivery_transport as staging
-from serverware import control_plane_enrollment_bootstrap as parent_bootstrap
 from serverware import control_plane_oidc_session_activation_consume_records as consume
 from serverware import control_plane_oidc_session_activation_recovery_actor as actor
 from serverware import control_plane_oidc_session_activation_recovery_records as records
@@ -293,14 +292,17 @@ class _RecoveryAcquisition:
 def _acquire(active):
     scope, work, config, lifetime = active._scope, active._work, active._config, active._lifetime
     active.current()
-    # Historical admission preflights its own selected inventory before body
-    # reads. This later phase reserves the actor result and its new originals.
-    held = 8 * parent_bootstrap.MAX_BYTES + 4 * _actor_bytes(scope, work)
-    held += 8 * len(scope._target.intent_bytes) + 8 * startup.MAX_PRIVATE_KEY_BYTES
+    # Keep the actual target's full history/archive reservation, including its
+    # upstream request and measured parent, exactly once. New actor captures and
+    # private-operation headroom are additive; parent and intent originals are
+    # already reserved by the target and must not acquire a second allowance.
+    target = scope._target
+    actor._target_snapshot(target, work)
+    held = (target.original_reservation_bytes + 4 * _actor_bytes(scope, work)
+        + 8 * startup.MAX_PRIVATE_KEY_BYTES)
     if (MAX_ORIGINAL_BYTES != 64 * 1024 * 1024
             or held + _SELECTED_RESERVATION > MAX_ORIGINAL_BYTES):
         _fail("recovery held parent and actor leave no bounded selector capacity")
-    target = scope._target
     local = target.subject["localDigest"]
     # This call meters actual metadata sizes directly before reads. The guard
     # checks existing actor/resources, never recursively selects journal data.

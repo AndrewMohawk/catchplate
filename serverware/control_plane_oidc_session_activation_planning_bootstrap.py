@@ -70,6 +70,35 @@ def _same_configuration(actual, expected, work, label):
 def _admit_on_work(*, planning, configuration_payload, configuration_digest,
         generation, runtime_role_identities, runtime_root_public_key,
         activation_execution, work, live_window=None, transport_deadline_ns=None):
+    return _admit(planning=planning, configuration_payload=configuration_payload,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, runtime_root_public_key=runtime_root_public_key,
+        activation_execution=activation_execution, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns)
+
+
+def _admit_historical_on_work(*, planning, configuration_payload, configuration_digest,
+        generation, runtime_role_identities, runtime_root_public_key, activation_execution,
+        historical_interval, live_window, transport_deadline_ns, work, _continuity=None):
+    """Return (cold originals, original planner interval), never a live launch."""
+    if type(historical_interval) is not tuple or len(historical_interval) != 2:
+        raise OidcSessionActivationPlanningBootstrapError("historical planning interval is not exact")
+    for value in historical_interval:
+        shape._integer(value, minimum=1)
+    if historical_interval[0] >= historical_interval[1] or live_window is None:
+        raise OidcSessionActivationPlanningBootstrapError("historical planning bounds are invalid")
+    return _admit(planning=planning, configuration_payload=configuration_payload,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, runtime_root_public_key=runtime_root_public_key,
+        activation_execution=activation_execution, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, historical_interval=historical_interval,
+        _continuity=_continuity)
+
+
+def _admit(*, planning, configuration_payload, configuration_digest,
+        generation, runtime_role_identities, runtime_root_public_key,
+        activation_execution, work, live_window=None, transport_deadline_ns=None,
+        historical_interval=None, _continuity=None):
     """Verify original root/config/key joins on the supplied work only.
 
     A request caller supplies both original processing arguments. The cold
@@ -105,7 +134,7 @@ def _admit_on_work(*, planning, configuration_payload, configuration_digest,
         raw = planner.authorization.transport._decode(original["base64Url"],
             original["byteCount"], planner.MAX_BYTES, work)
         endpoint = _endpoint(value["plannerEndpoint"])
-        current = planner._processing(live_window, transport_deadline_ns, work)
+        current = planner._processing(live_window, transport_deadline_ns, work, _continuity=_continuity)
         current()
         configured, launch = configuration._capture_configuration_on_work(
             payload=owned["configuration"], configuration_digest=digest,
@@ -114,8 +143,17 @@ def _admit_on_work(*, planning, configuration_payload, configuration_digest,
             runtime_role_identities=owned["runtime"], owned_payload=configured,
             configuration_digest=digest, launch=launch, work=work)
         current()
-        material = planner._verify_on_work(bootstrap_bytes=raw, root_public_key=root,
-            live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+        if historical_interval is None:
+            material = planner._verify_on_work(bootstrap_bytes=raw, root_public_key=root,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+        else:
+            material = planner._verify_historical_on_work(bootstrap_bytes=raw, root_public_key=root,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+                _continuity=_continuity)
+            if (material.attestation_interval[0] < historical_interval[0]
+                    or material.attestation_interval[1] > historical_interval[1]):
+                raise OidcSessionActivationPlanningBootstrapError(
+                    "historical planner interval exceeds its independently admitted snapshot")
         if current() < material.opening_sample[1]:
             raise OidcSessionActivationPlanningBootstrapError(
                 "activation planning clock reversed across nested original admission")
@@ -150,6 +188,10 @@ def _admit_on_work(*, planning, configuration_payload, configuration_digest,
             raise OidcSessionActivationPlanningBootstrapError(
                 "activation planner endpoint exceeds its original launch timeout")
         current()
+        if historical_interval is not None:
+            # Historical signature/scope admission above is genuine; do not
+            # label its unchanged old attestation interval as currently live.
+            return _PlanningMaterial(raw, endpoint), material.attestation_interval
         observed = planner._fresh(material.attestation_interval, work, opening=material.opening_sample)
         if current() < observed[1]:
             raise OidcSessionActivationPlanningBootstrapError(

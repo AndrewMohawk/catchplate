@@ -2939,7 +2939,8 @@ class CustodyJournal:
                 self._io.poison()
                 raise
 
-    def load_oidc_session_activation_recovery_target(self, finalization_digest, *, work, current):
+    def load_oidc_session_activation_recovery_target(self, finalization_digest, *, work, current,
+            maximum_original_bytes=None):
         """Read only the two original claims and target intent, never authority.
 
         The guard must be the original owner-scope guard, not a callback that
@@ -2951,6 +2952,9 @@ class CustodyJournal:
         target = _digest(finalization_digest)
         if type(work) is not _ValidationWork or not callable(current):
             raise CustodyJournalError("recovery selection requires the original work and guard")
+        if maximum_original_bytes is not None and (type(maximum_original_bytes) is not int
+                or not 0 < maximum_original_bytes <= _COMPLETION_HISTORY_MAX_BYTES):
+            raise CustodyJournalError("recovery selection remaining original capacity differs")
         work.charge(json_nodes=128)
         current()
         self._require_process()
@@ -2993,6 +2997,9 @@ class CustodyJournal:
                     sizes = tuple(identity[6] for identity in identities)
                     if sizes[2] != by_kind["release-intent"][2]:
                         raise CustodyJournalError("recovery intent size differs from admitted metadata")
+                    if maximum_original_bytes is not None:
+                        for name, maximum, identity in zip(names, maxima, identities):
+                            self._completion_history_metadata(name, maximum, identity, current)
             except BaseException:
                 self._io.poison()
                 raise
@@ -3003,21 +3010,31 @@ class CustodyJournal:
             # Capacity refusal happens before the first body read and does not
             # poison a valid journal. Charge read/owned decode/hash byte work
             # from actual immutable sizes, never full-prefix maximums.
+            if (maximum_original_bytes is not None
+                    and 3 * sum(sizes) + _COMPLETION_HISTORY_FIXED_BYTES > maximum_original_bytes):
+                raise CustodyJournalError("recovery target exceeds remaining preallocation capacity")
             work.charge(input_bytes=3 * sum(sizes) + len(sizes), hashes=4)
             try:
                 loaded = []
                 for name, size, identity in zip(names, sizes, identities):
                     current()
-                    try:
-                        raw, observed = self._read_file(name, maximum_bytes=size)
-                    finally:
-                        current()
-                    if observed != identity:
-                        raise CustodyJournalError("recovery target original identity changed")
+                    if maximum_original_bytes is None:
+                        try:
+                            raw, observed = self._read_file(name, maximum_bytes=size)
+                        finally:
+                            current()
+                        if observed != identity:
+                            raise CustodyJournalError("recovery target original identity changed")
+                    else:
+                        raw = self._read_completion_history_file(name, identity, current)
                     loaded.append(raw)
+                current()
                 activation = activation_attempts.decode(loaded[0])
+                current()
                 retained_claim = consume_records.decode(loaded[1])
+                current()
                 intent = consume_records.decode(loaded[2])
+                current()
                 metadata = by_kind["release-intent"]
                 if (activation != self._activation_dispatch_attempts.get(target)
                         or retained_claim != claim or retained_claim.kind != "claimed"
@@ -3030,6 +3047,9 @@ class CustodyJournal:
                     raise CustodyJournalError("recovery target originals differ from their retained association")
                 current()
                 self._consume_metadata_current(slot, by_kind)
+                if maximum_original_bytes is not None:
+                    for name, maximum, identity in zip(names, maxima, identities):
+                        self._completion_history_metadata(name, maximum, identity, current)
                 self._require_ready()
                 current()
                 return activation, retained_claim, intent

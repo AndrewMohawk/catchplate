@@ -42,6 +42,7 @@ class _FinalizationHistoryScope:
     completion_packet_digest: str
     completion_authorization_digest: str
     original_bytes: bytes
+    caller_public_key: object
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -132,7 +133,7 @@ def _admit_on_work(*, finalization_history, registration_history, work):
                 chosen.planner_receipt_digest, chosen.valid_from_epoch_ns, chosen.valid_until_epoch_ns,
                 prior.root_public_key, held.current_root_enrollment_bytes, held.grant_enrollment_bytes,
                 held.authorization_enrollment_bytes, held.current_pending, held.completion_packet_digest,
-                held.completion_authorization_digest, scope_raw))
+                held.completion_authorization_digest, scope_raw, held.caller_public_key))
         plan._same(configuration._configuration_wire(owned, capture._SharedLedger(work)), original, work,
             "finalization history changed during cold admission")
         return _FinalizationHistoryMaterial(history.archive, history, tuple(scopes),

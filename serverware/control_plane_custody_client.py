@@ -1449,7 +1449,8 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while reading consume originals")
         return retained
 
-    def load_oidc_session_activation_recovery_target(self, finalization_digest, *, work, current):
+    def load_oidc_session_activation_recovery_target(self, finalization_digest, *, work, current,
+            maximum_original_bytes=None):
         """Select bounded original target evidence; None means unavailable only.
 
         This method charges work directly. Its original owner-scope guard must
@@ -1461,10 +1462,14 @@ class ControlPlaneCustodyClient:
         target = journal._digest(finalization_digest)
         if not callable(current):
             raise CustodyClientError("recovery target selection lacks its original guard")
+        if maximum_original_bytes is not None and (type(maximum_original_bytes) is not int
+                or not 0 < maximum_original_bytes <= journal._COMPLETION_HISTORY_MAX_BYTES):
+            raise CustodyClientError("recovery target remaining original capacity differs")
         current()
         binding = _snapshot(self)
         retained = journal.CustodyJournal.load_oidc_session_activation_recovery_target(
-            binding.journal, target, work=work, current=current)
+            binding.journal, target, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes)
         current()
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed while selecting recovery target")

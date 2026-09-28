@@ -1077,6 +1077,7 @@ def initialize_from_environment():
             from serverware import control_plane_custody_startup as custody
             from serverware import control_plane_enrollment_bootstrap as bootstrap
             from serverware import authority_webauthn_enrollment_issuer as issuer
+            from serverware import authority_webauthn_evidence_plan_clock as history_clock
             from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
             custody_owner = custody.require_started()
@@ -1088,10 +1089,20 @@ def initialize_from_environment():
             client._receipt_now(binding)
             original, original_identity = _read_original(descriptor, private=False)
             work = _ValidationWork(QueryReadValidationLimits())
+            # One actual startup-processing window, never an archived time.
+            # Before parent admission there is no trusted issuer skew policy;
+            # zero skew is conservative and grants no operation permission.
+            history_window = history_clock._open_on_work(
+                deadline_epoch_ns=binding.attestation_interval[1],
+                maximum_lifetime_ns=min(binding.maximum_deadline_ns,
+                    history_clock.evidence.authority.VERIFIER_RESPONSE_MAX_AGE_NS),
+                maximum_clock_skew_ns=0, work=work)
             material = bootstrap._admit_on_work(bootstrap_bytes=original,
                 runtime_root_public_key=root_key, expected_configuration_digest=digest, work=work,
                 _history_current_interval=binding.attestation_interval,
-                _history_now_epoch_ns=client._receipt_now(binding))
+                _history_now_epoch_ns=client._receipt_now(binding),
+                _history_live_window=history_window,
+                _history_transport_deadline_ns=history_window[4])
             # Cold public history admission may do substantial original replay.
             # Recheck the same live owner and archive before touching private keys;
             # the control-plane receipt is not an authority cohort replacement.
@@ -1099,6 +1110,7 @@ def initialize_from_environment():
                     or client._snapshot(custody_owner) is not binding):
                 raise EnrollmentStartupError("enrollment custody changed during cold admission")
             history_now = client._receipt_now(binding)
+            history_clock._check_on_work(history_window, work=work)
             if (material.registration_history is not None
                     and not material.registration_history.valid_from_epoch_ns
                         <= history_now < material.registration_history.valid_until_epoch_ns):
@@ -1111,6 +1123,16 @@ def initialize_from_environment():
                         or not finalization_history.valid_from_epoch_ns
                             <= history_now < finalization_history.valid_until_epoch_ns):
                     raise EnrollmentStartupError("finalization history changed or expired during cold admission")
+            if material.activation_history is not None:
+                activation_history = material.activation_history
+                if (activation_history.registration_history is not material.registration_history
+                        or activation_history.finalization_history is not material.finalization_history
+                        or material.registration_history is None or material.finalization_history is None
+                        or activation_history.archive is not material.registration_history.archive
+                        or activation_history.archive is not material.finalization_history.archive
+                        or not activation_history.valid_from_epoch_ns
+                            <= history_now < activation_history.valid_until_epoch_ns):
+                    raise EnrollmentStartupError("activation history changed or expired during cold admission")
             key_fd, policy, public_key = (material.issuer_private_key_fd,
                 material.issuer_policy, material.issuer_public_key)
             key, key_identity, response_path, response_pin = None, None, None, None

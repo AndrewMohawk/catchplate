@@ -16,7 +16,8 @@ from serverware.authority_query_read_work import _ValidationWork
 startup, custody, clock = execution.startup, execution.custody, execution.clock
 
 
-def _select_on_owner(owner, *, local_digest, live_window, transport_deadline_ns, work, current):
+def _select_on_owner(owner, *, local_digest, live_window, transport_deadline_ns, work, current,
+        maximum_original_bytes=None):
     """Return None or (dispatch claim, consume claim, intent record) DATA.
 
     ``current`` is the original owner-scope guard. It must not recursively
@@ -27,6 +28,9 @@ def _select_on_owner(owner, *, local_digest, live_window, transport_deadline_ns,
     if (type(owner) is not startup._EnrollmentOwner or type(work) is not _ValidationWork
             or not callable(current)):
         execution._fail("recovery selection requires the actual owner and original work")
+    if maximum_original_bytes is not None and (type(maximum_original_bytes) is not int
+            or not 0 < maximum_original_bytes <= 64 * 1024 * 1024):
+        execution._fail("recovery selection remaining original capacity differs")
     target = custody.journal._digest(local_digest)
     window = clock._validate(live_window)
     bound = transport_deadline_ns
@@ -57,6 +61,7 @@ def _select_on_owner(owner, *, local_digest, live_window, transport_deadline_ns,
 
     guarded()
     selected = custody.ControlPlaneCustodyClient.load_oidc_session_activation_recovery_target(
-        retained, target, work=work, current=guarded)
+        retained, target, work=work, current=guarded,
+        maximum_original_bytes=maximum_original_bytes)
     guarded()
     return selected

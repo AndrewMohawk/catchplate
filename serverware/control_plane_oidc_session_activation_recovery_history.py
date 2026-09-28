@@ -16,6 +16,9 @@ from serverware import authority_oidc_session_activation_release_intent as inten
 from serverware import authority_registration_finalization_completion_history as completed
 from serverware import control_plane_enrollment_startup as startup
 from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as configured
+from serverware import control_plane_oidc_session_activation_history as historical
+from serverware import control_plane_oidc_session_activation_consume_records as retained
+from serverware import control_plane_oidc_session_activation_dispatch_attempt as attempts
 from serverware import control_plane_oidc_session_activation_recovery_selection as selection
 from serverware import control_plane_registration_activation_subject as subjects
 from serverware import control_plane_registration_finalization_completion_subject as finalization
@@ -24,6 +27,9 @@ from serverware import control_plane_registration_finalization_completion_subjec
 authorization, shape, plan = intent.authorization, intent.shape, intent.plan
 capture, production, clock = intent.capture, intent.production, intent.clock
 MAX_ORIGINAL_BYTES = intent.contract.authority.MAX_RESULT_BYTES
+_METADATA_RESERVATION_BYTES = 16 * 1024
+_TARGET_REPRESENTATION_BYTES = (4 * intent.MAX_BYTES + _METADATA_RESERVATION_BYTES
+    + 8 * (attempts.MAX_RECORD_BYTES + retained.MAX_CLAIM_BYTES + retained._MAX_HEADER_BYTES + 8))
 
 
 class OidcSessionActivationRecoveryHistoryError(ValueError):
@@ -52,11 +58,17 @@ class _RecoveryTarget:
     live_window: tuple
     deadline_ns: int
     live: object
+    original_bytes: int
+    original_reservation_bytes: int
 
 
 def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
         transport_deadline_ns, work, current, _additional_original_bytes=0):
-    """Freshly join originals before recovery options or assertion admission."""
+    """Freshly join originals before recovery options or assertion admission.
+
+    The returned reservation includes the caller's additional bytes and actual
+    parent once. A later owner must not add those representations a second time.
+    """
     capture._SharedLedger(work)
     if type(owner) is not startup._EnrollmentOwner or not callable(current):
         _fail("recovery history requires the actual owner and current guard")
@@ -66,27 +78,27 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     material, binding, custody = owner._material, owner._binding, owner._custody
     if material is None or binding is None or custody is None:
         _fail("recovery history has no actual cold configuration")
-    policy = material.release_intent
-    if type(policy) is not configured._ReleaseIntentMaterial:
-        _fail("recovery history requires independently configured intent custody")
-    root = binding.runtime_root_public_key
-    enrollment, enrollment_digest = policy.enrollment_bytes, policy.enrollment_digest
-    scope_original, public, forbidden = (
-        policy.expected_scope_bytes, policy.caller_public_key, policy.forbidden_public_keys)
-    authorization._public(root)
-    authorization._public(public)
+    current_policy, current_root = material.release_intent, binding.runtime_root_public_key
+    archive_material = material.activation_history
+    selected_scope = policy = root = enrollment = enrollment_digest = None
+    scope_original = public = forbidden = None
     digest = finalization.journal._digest(local_digest)
     # Hold the request-local token before callbacks. It is never part of the
     # returned subject, selected journal originals or lifetime closure.
     old_token = intent.delivery._token(old_token_bytes, work)
-    held_history_bytes = (_additional_original_bytes
-        + 4 * (len(enrollment) + len(scope_original))
-        + 8 * (len(old_token) + 32 * (2 + len(forbidden))))
-    if held_history_bytes >= MAX_ORIGINAL_BYTES:
-        _fail("recovery history held originals exhaust finalization capacity")
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
+    window, bound, archive_current, _archive_bytes = historical._lifetime_on_owner(owner,
+        window=window, bound=bound, work=work, current=current)
+    archive_current()
+    cold_original_bytes, cold_reservation = historical._capture_reservation_on_owner(owner)
+    archive_current()
+    held_history_bytes = (_additional_original_bytes + cold_reservation
+        + _TARGET_REPRESENTATION_BYTES + 8 * (len(old_token)
+            + 32 * (2 + intent.enrollments.MAX_FORBIDDEN_PUBLIC_KEYS)))
+    if held_history_bytes >= MAX_ORIGINAL_BYTES:
+        _fail("recovery history held originals exhaust finalization capacity")
     pid, thread = os.getpid(), threading.get_ident()
     limits = work.limits
     ceilings = limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes
@@ -97,13 +109,16 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     def identity():
         if (os.getpid() != pid or threading.get_ident() != thread
                 or owner._material is not material or owner._binding is not binding
-                or owner._custody is not custody or material.release_intent is not policy
-                or binding.runtime_root_public_key is not root
-                or policy.enrollment_bytes is not enrollment
-                or policy.enrollment_digest != enrollment_digest
+                or owner._custody is not custody or material.release_intent is not current_policy
+                or binding.runtime_root_public_key is not current_root
+                or material.activation_history is not archive_material):
+            _fail("recovery history actual cold ownership changed")
+        if selected_scope is not None and (
+                selected_scope.release_intent is not policy or selected_scope.root_public_key is not root
+                or policy.enrollment_bytes is not enrollment or policy.enrollment_digest != enrollment_digest
                 or policy.expected_scope_bytes is not scope_original
                 or policy.caller_public_key is not public or policy.forbidden_public_keys is not forbidden):
-            _fail("recovery history actual cold ownership changed")
+            _fail("recovery history selected original intent authority changed")
 
     def continuity(epoch_floor, monotonic_floor):
         nonlocal last_epoch, last_monotonic, metrics
@@ -116,6 +131,7 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
         # this inspector or the child intent guard returned below.
         first = current()
         shape._integer(first, minimum=1)
+        archive_current()
         if history_current is not None:
             history_current()
         observed = current()
@@ -141,6 +157,11 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
         return continuity(last_epoch, last_monotonic)[0]
 
     base_current()
+    parent_reservation = finalization._parent_representation_bytes_on_owner(
+        owner, work=work, current=base_current)
+    held_reservation = held_history_bytes + parent_reservation
+    if held_reservation >= MAX_ORIGINAL_BYTES:
+        _fail("recovery history cold representations exceed the shared original bound")
     # Complete independently selected finalization replay first. Keep its full
     # result guard through ACK admission; only then release the replay inventory
     # before reading the separately selected intent. No ciphertext is opened.
@@ -193,8 +214,12 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     del inspected, held, reserved, observed, common, record, returned
     base_current()
 
+    maximum_selected = 3 * ((MAX_ORIGINAL_BYTES - held_reservation) // 8)
+    if maximum_selected <= _METADATA_RESERVATION_BYTES:
+        _fail("recovery history has no remaining target-original capacity")
     selected = selection._select_on_owner(owner, local_digest=digest, live_window=window,
-        transport_deadline_ns=bound, work=work, current=base_current)
+        transport_deadline_ns=bound, work=work, current=base_current,
+        maximum_original_bytes=maximum_selected)
     base_current()
     if selected is None:
         _fail("recovery target has no retained release intent; prior-stage recovery is unavailable")
@@ -206,9 +231,30 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     if type(originals) is not tuple or len(originals) != 1:
         _fail("recovery requires the exact retained intent original")
     raw = authorization._original(originals[0], intent.MAX_BYTES, "selected historical release intent")
+    # The two claim records contain only the bounded public metadata already
+    # reserved above; the selected original body is exactly this raw intent.
+    selected_bytes = len(raw)
+    original_bytes = cold_original_bytes + selected_bytes
+    original_reservation_bytes = held_reservation + 8 * selected_bytes
+    if not 0 < original_bytes <= original_reservation_bytes <= MAX_ORIGINAL_BYTES:
+        _fail("recovery historical target representations exceed the shared bound")
+    # Locators only select one independently admitted archived scope. The
+    # resolver repeats original signature/scope/interval checks; no unknown
+    # archived cohort silently falls back to the current intent configuration.
+    selected_scope = historical._intent_scope_on_owner(owner, intent_bytes=raw,
+        window=window, bound=bound, work=work, current=base_current)
+    policy, root = selected_scope.release_intent, selected_scope.root_public_key
+    if type(policy) is not configured._ReleaseIntentMaterial:
+        _fail("recovery history requires independently admitted intent custody")
+    enrollment, enrollment_digest = policy.enrollment_bytes, policy.enrollment_digest
+    scope_original, public, forbidden = (
+        policy.expected_scope_bytes, policy.caller_public_key, policy.forbidden_public_keys)
+    authorization._public(root)
+    authorization._public(public)
+    selected_scope.live()
     scope = configured._scope_on_work(scope_original, work)
-    for name, expected in (("configurationDigest", binding.configuration_digest),
-            ("generationDigest", material.generation["digest"])):
+    for name, expected in (("configurationDigest", selected_scope.configuration_digest),
+            ("generationDigest", selected_scope.generation["digest"])):
         plan._same(scope[name], expected, work, "recovery actual independent intent " + name)
     base_current()
     target = intent._inspect_historical_target_on_work(intent_bytes=raw,
@@ -221,20 +267,30 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     del old_token
     if type(target) is not intent._HistoricalIntentTarget:
         _fail("recovery target requires genuine same-call historical target admission")
+    selected_scope.live()
     candidate = clock._validate(target.live_window)
     if (candidate[:3] != window[:3] or target.deadline_ns > bound
             or any(actual > prior for actual, prior in zip(candidate[3:], window[3:]))):
         _fail("recovery target replaced the original processing lifetime")
     window, bound = candidate, min(target.deadline_ns, candidate[4])
 
+    result = None
+    budget_pin = original_bytes, original_reservation_bytes
+
     def live():
         if (type(subject) is not dict or set(subject) != set(subject_fields)
-                or tuple(subject[name] for name in subject_fields) != subject_values):
+                or tuple(subject[name] for name in subject_fields) != subject_values
+                or result is not None and (result.original_bytes, result.original_reservation_bytes) != budget_pin):
             _fail("recovery historical subject changed after original admission")
-        # target.live retains continuity, the exact cold resources, genuine
-        # finalization guard and narrowed clocks; do not add a child cycle.
-        return target.live()
+        # Both children use the same ancestor; neither is inserted into that
+        # ancestor. The selected scope remains live without a child cycle.
+        selected_scope.live()
+        target.live()
+        return selected_scope.live()
 
     live()
-    return _RecoveryTarget(subject, association, raw, target.intent_digest,
-        target.delivery_scope, target.old_token_digest, window, bound, live)
+    result = _RecoveryTarget(subject, association, raw, target.intent_digest,
+        target.delivery_scope, target.old_token_digest, window, bound, live,
+        original_bytes, original_reservation_bytes)
+    live()
+    return result

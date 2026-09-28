@@ -18,6 +18,7 @@ from serverware import control_plane_oidc_session_activation_planning as plannin
 from serverware import control_plane_oidc_session_activation_records as records
 from serverware import control_plane_registration_activation_subject as subjects
 from serverware import control_plane_registration_finalization_completion_subject as finalization
+from serverware import control_plane_oidc_session_activation_history as historical
 
 
 execution, configured = planning.execution, planning.configured
@@ -70,51 +71,32 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     parent, binding, custody = owner._material, owner._binding, owner._custody
     if parent is None or binding is None or custody is None:
         _fail("completion recovery has no admitted cold owner")
-    policy, caller_policy = parent.activation_planning, parent.activation_execution
-    if (type(policy) is not configured._PlanningMaterial
-            or type(caller_policy) is not configured.execution._ActivationExecutionMaterial):
-        _fail("completion recovery requires independent activation planning and caller originals")
-    bootstrap = authorization._original(policy.planner_bootstrap_bytes, planner.MAX_BYTES,
-        "completion recovery historical planner bootstrap")
-    enrollment_originals = tuple(authorization._original(raw, cap, label) for raw, cap, label in (
-        (caller_policy.authorization_enrollment_bytes, caller.MAX_ENROLLMENT_BYTES, "historical caller enrollment"),
-        (caller_policy.current_root_enrollment_bytes, authorization.MAX_ENROLLMENT_BYTES, "historical state enrollment"),
-        (caller_policy.grant_enrollment_bytes, caller.grants.MAX_ENROLLMENT_BYTES, "historical grant enrollment")))
-    root, planner_key, operation_key, caller_key = (binding.runtime_root_public_key,
-        caller_policy.planner_public_key, caller_policy.operation_public_key, caller_policy.caller_public_key)
-    for key in (root, planner_key, operation_key, caller_key):
-        authorization._public(key)
     digest = finalization.journal._digest(local_digest)
     old = assertion._token(old_token_bytes, work)
-    cold_original_bytes = len(bootstrap) + sum(map(len, enrollment_originals))
-    cold_reservation = (8 * len(bootstrap) + 4 * sum(map(len, enrollment_originals))
-        + 8 * (len(old) + 4 * 32) + _METADATA_RESERVATION)
+    window = clock._validate(live_window)
+    shape._integer(transport_deadline_ns, minimum=1)
+    bound = min(transport_deadline_ns, window[4])
+    window, bound, archive_current, _archive_original_bytes = historical._lifetime_on_owner(owner,
+        window=window, bound=bound, work=work, current=current)
+    cold_original_bytes, cold_capture = historical._capture_reservation_on_owner(owner)
+    cold_reservation = cold_capture + 8 * (len(old) + 4 * 32) + _METADATA_RESERVATION
     parent_reservation = finalization._parent_representation_bytes_on_owner(
         owner, work=work, current=current)
     held_reservation = _additional_original_bytes + parent_reservation + cold_reservation
     if held_reservation >= MAX_ORIGINAL_BYTES:
         _fail("completion recovery cold representations exhaust the original bound")
-    window = clock._validate(live_window)
-    shape._integer(transport_deadline_ns, minimum=1)
-    bound = min(transport_deadline_ns, window[4])
     pid, thread = os.getpid(), threading.get_ident()
     history_current = None
-    configuration_pin = parent.configuration_digest
-    originals_pin = (bootstrap, *enrollment_originals)
-    keys_pin = (root, planner_key, operation_key, caller_key)
+    parent_configuration = parent.configuration_digest
+    cold_lanes = parent.activation_planning, parent.activation_execution, parent.activation_history
 
     def identity():
         if (os.getpid() != pid or threading.get_ident() != thread
                 or execution.startup._owner is not owner
                 or owner._material is not parent or owner._binding is not binding or owner._custody is not custody
-                or parent.activation_planning is not policy or parent.activation_execution is not caller_policy
-                or parent.configuration_digest != configuration_pin
-                or any(actual is not held for actual, held in zip((policy.planner_bootstrap_bytes,
-                    caller_policy.authorization_enrollment_bytes, caller_policy.current_root_enrollment_bytes,
-                    caller_policy.grant_enrollment_bytes), originals_pin))
-                or any(actual is not held for actual, held in zip((binding.runtime_root_public_key,
-                    caller_policy.planner_public_key, caller_policy.operation_public_key,
-                    caller_policy.caller_public_key), keys_pin))):
+                or parent.configuration_digest != parent_configuration
+                or any(actual is not held for actual, held in zip((parent.activation_planning,
+                    parent.activation_execution, parent.activation_history), cold_lanes))):
             _fail("completion recovery original owner or keys changed")
 
     def ancestor(epoch_floor, monotonic_floor):
@@ -122,6 +104,7 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
         observed = current()
         if type(observed) is not int or observed < epoch_floor:
             _fail("completion recovery ancestor lowered the current epoch")
+        archive_current()
         if history_current is not None:
             history_current()
         now = current()
@@ -134,38 +117,6 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
 
     lifetime = bookkeeping._Lifetime(window, bound, work, ancestor)
     lifetime.current()
-    material = planner._verify_historical_on_work(bootstrap_bytes=bootstrap, root_public_key=root,
-        live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work,
-        _continuity=lifetime.continuity)
-    if type(material) is not planner._PlannerMaterial:
-        _fail("completion recovery lacks genuine historical planner admission")
-    for actual, expected, label in (
-            (material.configuration_payload, parent.configuration_payload, "configuration"),
-            (material.generation, {name: parent.generation[name]
-                for name in configured.configuration._GENERATION_FIELDS}, "generation"),
-            (material.runtime_role_identities, parent.runtime_role_identities, "runtime cohort")):
-        configured._same_configuration(actual, expected, work,
-            "completion recovery planner differs from actual parent " + label)
-    plan._same(material.configuration_digest, configuration_pin, work, "completion recovery configuration")
-    plan._same(material.planner_spki_digest, caller.keys._spki_on_work(planner_key, work), work,
-        "completion recovery independently enrolled planner")
-    plan._same(caller.keys._spki_on_work(operation_key, work), caller.keys._spki_on_work(root, work), work,
-        "completion recovery operation key is the actual root")
-    bookkeeping._same_bytes(material.state_enrollment_bytes, enrollment_originals[1], work,
-        "completion recovery independent state enrollment")
-    enrolled = caller._admit_enrollment_on_work(authorization_enrollment_bytes=enrollment_originals[0],
-        current_root_enrollment_bytes=enrollment_originals[1], grant_enrollment_bytes=enrollment_originals[2],
-        root_public_key=root, configuration_digest=configuration_pin,
-        planner_public_key=planner_key, operation_public_key=operation_key, work=work)
-    plan._same(enrolled.enrollment_digest, caller_policy.authorization_enrollment_digest, work,
-        "completion recovery actual caller enrollment")
-    plan._same(caller.keys._spki_on_work(enrolled.caller_public_key, work),
-        caller.keys._spki_on_work(caller_key, work), work, "completion recovery actual caller key")
-    plan._same(enrolled.payload["generationDigest"], parent.generation["digest"], work,
-        "completion recovery actual caller generation")
-    lifetime.narrow(lifetime.window[3], min(material.maximum_plan_age_ns,
-        enrolled.payload["maximumAgeNs"]), min(material.maximum_clock_skew_ns,
-        enrolled.payload["maximumClockSkewNs"]))
 
     # Existing combined finalization loader reserves all selected bodies and
     # replay captures before reading. It already owns the parent reservation.
@@ -235,6 +186,57 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     original_bytes = cold_original_bytes + sum(map(len, raw))
     if reservation_bytes > MAX_ORIGINAL_BYTES or original_bytes + _additional_original_bytes > MAX_ORIGINAL_BYTES:
         _fail("completion recovery selected originals exceed retained replay capacity")
+    # No current planner/key admission precedes this bounded read. Original
+    # caller and planner signatures select only an independently cold-admitted
+    # historical scope; the actual historical bootstrap is then replayed below.
+    selected_scope = historical._prepared_scope_on_owner(owner, originals=raw,
+        window=lifetime.window, bound=lifetime.bound, work=work, current=lifetime.base)
+    policy, caller_policy = selected_scope.activation_planning, selected_scope.activation_execution
+    if (type(policy) is not configured._PlanningMaterial
+            or type(caller_policy) is not configured.execution._ActivationExecutionMaterial):
+        _fail("completion recovery requires independently selected activation originals")
+    bootstrap = authorization._original(policy.planner_bootstrap_bytes, planner.MAX_BYTES,
+        "selected historical planner bootstrap")
+    enrollment_originals = tuple(authorization._original(value, cap, label) for value, cap, label in (
+        (caller_policy.authorization_enrollment_bytes, caller.MAX_ENROLLMENT_BYTES, "historical caller enrollment"),
+        (caller_policy.current_root_enrollment_bytes, authorization.MAX_ENROLLMENT_BYTES, "historical state enrollment"),
+        (caller_policy.grant_enrollment_bytes, caller.grants.MAX_ENROLLMENT_BYTES, "historical grant enrollment")))
+    root, planner_key, operation_key, caller_key = (selected_scope.root_public_key,
+        caller_policy.planner_public_key, caller_policy.operation_public_key, caller_policy.caller_public_key)
+    configuration_pin = selected_scope.configuration_digest
+    selected_scope.live()
+    material = planner._verify_historical_on_work(bootstrap_bytes=bootstrap, root_public_key=root,
+        live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work,
+        _continuity=lifetime.continuity)
+    if type(material) is not planner._PlannerMaterial:
+        _fail("completion recovery lacks genuine historical planner admission")
+    for actual, expected, label in (
+            (material.configuration_payload, selected_scope.configuration_payload, "configuration"),
+            (material.generation, selected_scope.generation, "generation"),
+            (material.runtime_role_identities, selected_scope.runtime_role_identities, "runtime cohort")):
+        configured._same_configuration(actual, expected, work,
+            "completion recovery planner differs from independently selected " + label)
+    plan._same(material.configuration_digest, configuration_pin, work, "completion recovery configuration")
+    plan._same(material.planner_spki_digest, caller.keys._spki_on_work(planner_key, work), work,
+        "completion recovery independently enrolled planner")
+    plan._same(caller.keys._spki_on_work(operation_key, work), caller.keys._spki_on_work(root, work), work,
+        "completion recovery operation key is the selected root")
+    bookkeeping._same_bytes(material.state_enrollment_bytes, enrollment_originals[1], work,
+        "completion recovery independent state enrollment")
+    enrolled = caller._admit_enrollment_on_work(authorization_enrollment_bytes=enrollment_originals[0],
+        current_root_enrollment_bytes=enrollment_originals[1], grant_enrollment_bytes=enrollment_originals[2],
+        root_public_key=root, configuration_digest=configuration_pin,
+        planner_public_key=planner_key, operation_public_key=operation_key, work=work)
+    plan._same(enrolled.enrollment_digest, caller_policy.authorization_enrollment_digest, work,
+        "completion recovery actual caller enrollment")
+    plan._same(caller.keys._spki_on_work(enrolled.caller_public_key, work),
+        caller.keys._spki_on_work(caller_key, work), work, "completion recovery actual caller key")
+    plan._same(enrolled.payload["generationDigest"], selected_scope.generation["digest"], work,
+        "completion recovery selected caller generation")
+    lifetime.narrow(lifetime.window[3], min(material.maximum_plan_age_ns,
+        enrolled.payload["maximumAgeNs"]), min(material.maximum_clock_skew_ns,
+        enrolled.payload["maximumClockSkewNs"]))
+    selected_scope.live()
     expectations = caller.expectations_wire._capture_on_work(
         planning._object(raw[3], caller.expectations_wire.MAX_BYTES, work), work=work)
     arguments = caller.expectations_wire.plan.transition._arguments(expectations["request"]["arguments"], work)
@@ -287,7 +289,9 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
         identity()
         if tuple(sorted(subject.items())) != subject_pin:
             _fail("completion recovery genuine subject changed")
-        return lifetime.current()
+        selected_scope.live()
+        lifetime.current()
+        return selected_scope.live()
 
     live()
     return _CompletionRecoveryTarget(subject, *target_scalars, lifetime.window,

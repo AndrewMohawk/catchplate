@@ -86,6 +86,43 @@ def _admit_on_work(*, release_intent, configuration_payload, configuration_diges
         generation, runtime_role_identities, runtime_root_public_key,
         activation_execution, activation_planning, consume_execution,
         issuer_public_key, execution_caller_public_key, finalization_caller_public_key, work):
+    return _admit(release_intent=release_intent, configuration_payload=configuration_payload,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, runtime_root_public_key=runtime_root_public_key,
+        activation_execution=activation_execution, activation_planning=activation_planning,
+        consume_execution=consume_execution, issuer_public_key=issuer_public_key,
+        execution_caller_public_key=execution_caller_public_key,
+        finalization_caller_public_key=finalization_caller_public_key, work=work)
+
+
+def _admit_historical_on_work(*, release_intent, configuration_payload, configuration_digest,
+        generation, runtime_role_identities, runtime_root_public_key,
+        activation_execution, activation_planning, consume_execution,
+        issuer_public_key, execution_caller_public_key, finalization_caller_public_key,
+        historical_interval, live_window, transport_deadline_ns, work, _continuity=None):
+    """Admit original intent scope with genuine historical planner verification."""
+    if type(historical_interval) is not tuple or len(historical_interval) != 2:
+        raise OidcSessionActivationReleaseIntentBootstrapError("historical intent interval is not exact")
+    for value in historical_interval:
+        shape._integer(value, minimum=1)
+    if historical_interval[0] >= historical_interval[1] or live_window is None:
+        raise OidcSessionActivationReleaseIntentBootstrapError("historical intent processing bounds are invalid")
+    return _admit(release_intent=release_intent, configuration_payload=configuration_payload,
+        configuration_digest=configuration_digest, generation=generation,
+        runtime_role_identities=runtime_role_identities, runtime_root_public_key=runtime_root_public_key,
+        activation_execution=activation_execution, activation_planning=activation_planning,
+        consume_execution=consume_execution, issuer_public_key=issuer_public_key,
+        execution_caller_public_key=execution_caller_public_key,
+        finalization_caller_public_key=finalization_caller_public_key, work=work,
+        historical_interval=historical_interval, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, _continuity=_continuity)
+
+
+def _admit(*, release_intent, configuration_payload, configuration_digest,
+        generation, runtime_role_identities, runtime_root_public_key,
+        activation_execution, activation_planning, consume_execution,
+        issuer_public_key, execution_caller_public_key, finalization_caller_public_key, work,
+        historical_interval=None, live_window=None, transport_deadline_ns=None, _continuity=None):
     try:
         ledger = capture._SharedLedger(work)
         root, digest = runtime_root_public_key, configuration_digest
@@ -94,6 +131,11 @@ def _admit_on_work(*, release_intent, configuration_payload, configuration_diges
         _shape(release_intent)
         if release_intent is None:
             return None
+        processing = None
+        if historical_interval is not None:
+            processing = planning.planner._processing(live_window, transport_deadline_ns, work,
+                _continuity=_continuity)
+            processing()
         if (type(activated) is not activation._ActivationExecutionMaterial
                 or type(planned) is not planning._PlanningMaterial
                 or type(consumed) is not consume._ConsumeExecutionMaterial
@@ -127,8 +169,18 @@ def _admit_on_work(*, release_intent, configuration_payload, configuration_diges
             root_public_key=root, work=work)
         # This repeats genuine cold planner-original admission on the same work;
         # its static freshness is not a request-time permission or new allowance.
-        planner = planning.planner._verify_on_work(
-            bootstrap_bytes=planner_raw, root_public_key=root, work=work)
+        if historical_interval is None:
+            planner = planning.planner._verify_on_work(
+                bootstrap_bytes=planner_raw, root_public_key=root, work=work)
+        else:
+            planner = planning.planner._verify_historical_on_work(
+                bootstrap_bytes=planner_raw, root_public_key=root, live_window=live_window,
+                transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity)
+            if (planner.attestation_interval[0] < historical_interval[0]
+                    or planner.attestation_interval[1] > historical_interval[1]):
+                raise OidcSessionActivationReleaseIntentBootstrapError(
+                    "historical intent planner exceeds its independently admitted snapshot")
+            processing()
         for actual, wanted in ((planner.configuration_payload, configured),
                 (planner.generation, launch), (planner.runtime_role_identities, identities)):
             planning._same_configuration(actual, wanted, work, "release intent parent planner cohort")
@@ -155,6 +207,8 @@ def _admit_on_work(*, release_intent, configuration_payload, configuration_diges
                     "release intent key reuses another configured purpose")
         scope_bytes = enrollment.capability._wire(expected, ledger, enrollment.MAX_BYTES, enrollment.MAX_NODES)
         _scope_on_work(scope_bytes, work)
+        if processing is not None:
+            processing()
         return _ReleaseIntentMaterial(CALLER_KEY_FD, admitted.caller_public_key, raw,
             admitted.enrollment_digest, scope_bytes, forbidden)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:

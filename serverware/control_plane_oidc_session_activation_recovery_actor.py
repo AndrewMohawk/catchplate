@@ -54,6 +54,20 @@ def _snapshot(value, work):
     return tuple((key, pending._hold(value[key])) for key in sorted(value))
 
 
+def _target_snapshot(target, work):
+    """Pin only genuine same-call target data and its inherited byte reserve."""
+    if (type(target) is not history._RecoveryTarget
+            or type(target.original_bytes) is not int
+            or type(target.original_reservation_bytes) is not int
+            or not 0 < target.original_bytes <= target.original_reservation_bytes
+                <= history.MAX_ORIGINAL_BYTES):
+        _deny("recovery historical target capacity differs", 503)
+    return (_snapshot(target.subject, work), _snapshot(target.delivery_scope, work),
+        target.activation_authorization_digest, target.old_token_digest,
+        target.intent_bytes, target.intent_digest, target.original_bytes,
+        target.original_reservation_bytes)
+
+
 def _policy(application, work):
     policy = application._control_plane_mutation_authn_policy()
     if policy.get("userVerification") != "required":
@@ -148,9 +162,7 @@ class _ActorScope:
         self._source_current, self._owner_scope, self._target = current, owner_scope, target
         self._policy, self._policy_pin, self._request_pin = policy, policy_pin, request_pin
         self._old_token = old_token
-        self._target_pin = (_snapshot(target.subject, work),
-            _snapshot(target.delivery_scope, work), target.activation_authorization_digest,
-            target.old_token_digest, target.intent_bytes, target.intent_digest)
+        self._target_pin = _target_snapshot(target, work)
         self._binding = contract.request_binding(target.subject,
             activation_authorization_digest=target.activation_authorization_digest,
             old_token_digest=target.old_token_digest)
@@ -209,9 +221,7 @@ class _ActorScope:
             self._request.scope.get("query_string", b""))
         if policy_pin != self._policy_pin or request_pin != self._request_pin:
             _deny("recovery request or current policy changed", 403)
-        if (_snapshot(target.subject, work), _snapshot(target.delivery_scope, work),
-                target.activation_authorization_digest, target.old_token_digest,
-                target.intent_bytes, target.intent_digest) != self._target_pin:
+        if _target_snapshot(target, work) != self._target_pin:
             _deny("recovery historical target changed", 503)
         if (_snapshot(self._binding, work) != self._binding_pin
                 or _snapshot(self._policy, work) != self._policy_pin[0]):

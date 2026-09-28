@@ -173,9 +173,7 @@ class _StagedRecoveryResponse:
         if (policy_pin != self._pins[0] or request_pin != self._pins[1]
                 or actor._snapshot(scope._policy, work) != self._pins[0][0]
                 or actor._snapshot(scope._binding, work) != self._pins[3]
-                or (actor._snapshot(target.subject, work), actor._snapshot(target.delivery_scope, work),
-                    target.activation_authorization_digest, target.old_token_digest,
-                    target.intent_bytes, target.intent_digest) != self._pins[2]):
+                or actor._target_snapshot(target, work) != self._pins[2]):
             _fail()
 
     def _continuity(self, epoch, monotonic):

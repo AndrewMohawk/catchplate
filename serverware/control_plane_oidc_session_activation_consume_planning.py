@@ -12,6 +12,7 @@ from serverware import authority_oidc_session_activation_delivery_execution_repl
 from serverware import authority_oidc_session_activation_delivery_planner_transport as transport
 from serverware import authority_oidc_session_activation_reservation_records as reservations
 from serverware import control_plane_oidc_session_activation_consume_bootstrap as configured
+from serverware import control_plane_oidc_session_activation_consume_input_request as input_request
 from serverware import control_plane_oidc_session_activation_consume_records as retained
 from serverware import control_plane_oidc_session_activation_execution as execution
 from serverware import control_plane_oidc_session_activation_planning as activation
@@ -80,10 +81,6 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
     endpoint = transport._endpoint(policy.consume_planner_endpoint)
     root = permission._scope.common["root_public_key"]
     application, _session_scope, target, _credential, _count = permission._target
-    cookie = permission._request.cookies.get(application.OIDC_SESSION_COOKIE_NAME)
-    if type(cookie) is not str or len(cookie) != 64 or any(ord(value) > 127 for value in cookie):
-        execution._fail("consume planning requires the actual original cookie possession")
-    old = assertion._token(cookie.encode("ascii"), work)
     # All remaining mutable caller graphs are copied together before root,
     # commitment, key, clock or native callbacks. Only configuration permits
     # its existing finite-float grammar; no returned object supplies authority.
@@ -93,10 +90,11 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
             for name in activation.configured.configuration._GENERATION_FIELDS},
         "runtime": parent.runtime_role_identities, "target": target})
     target = owned["target"]
-    activation_originals = (*completed, raw[1], raw[2], raw[5], raw[7], raw[6], raw[0], raw[4],
-        policy.authorization_enrollment_bytes, policy.grant_enrollment_bytes)
-    activation_originals = consume.plan._activation_originals(activation_originals, work)
-    held_bytes = sum(map(len, (root_original, history_original, *activation_originals, old, before, raw[3],
+    request_originals = input_request._originals_on_permission(permission)
+    activation_originals = request_originals[:13]
+    expectations_original, before, old = request_originals[13:]
+    cookie = old.decode("ascii")
+    held_bytes = sum(map(len, (root_original, history_original, *activation_originals, old, before, expectations_original,
         policy.current_root_enrollment_bytes, permission._original,
         parent.activation_planning.planner_bootstrap_bytes))) + activation.MAX_ASSERTION_BYTES
     if held_bytes >= consume.MAX_ORIGINAL_BYTES:
@@ -140,7 +138,7 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
         material.payload["maximumClockSkewNs"])
     current()
     original_expectations = caller.expectations_wire._capture_on_work(
-        activation._object(raw[3], caller.expectations_wire.MAX_BYTES, work), work=work)
+        activation._object(expectations_original, caller.expectations_wire.MAX_BYTES, work), work=work)
     plan._same(material.payload["activationExpectations"], original_expectations, work,
         "consume root original activation expectations")
     authorization_digest = plan._frame(caller.REQUEST_IDENTITY_DOMAIN, (raw[0],), work)

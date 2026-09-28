@@ -1,7 +1,7 @@
 # Guarded activation and consume caller transports
 
-The five fixed activation, five fixed consume, private proof and release-grant
-transport profiles expose the same private caller API:
+The five fixed activation, five fixed consume, private proof, release-grant and
+consume-input transport profiles expose the same private caller API:
 
 ```text
 _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current)
@@ -16,7 +16,7 @@ and older helpers are unchanged. SQL's existing uncertainty and empty-frame
 grammar is not widened.
 
 `authority_oidc_session_activation_caller_transport.py` shares only the bounded
-I/O implementation. Twelve literal entry functions select the exact twelve
+I/O implementation. Thirteen literal entry functions select the exact thirteen
 existing transport modules; its private engine rejects any other module. It
 does not accept request-selected profiles, framing callbacks or arbitrary
 endpoints. Shape-valid response bytes and a matching local socket peer are not
@@ -134,6 +134,15 @@ pins or paths. Response raw2 contains opaque bounded client authorization and
 server bootstrap originals, not a success status. The caller retains these
 originals before genuine admission. This profile introduces no service role,
 issuance authority, work allowance, recovery or request retry.
+
+The thirteenth literal profile is the
+[fixed consume-input issuance transport](oidc-session-activation-consume-input-transport.md).
+It uses `SWOCIQ01` / `SWOCIR01` at its distinct root-created grants socket.
+Raw17 carries the fixed purpose, actual activation raw13, original expectations,
+complete before-vector and ephemeral old-token possession. Its opaque raw2
+reply contains bounded consume-planner and history-custody originals. The full
+reply and both headers are reserved inside the existing 64 MiB exchange ceiling;
+neither framing nor a returned original supplies independent root authority.
 
 This is a source-only downstream caller seam. It does not establish completed
 public activation dispatch, installed services, runtime success or production

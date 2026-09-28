@@ -241,7 +241,7 @@ def _planner_key(payload, configured, nested, root, work):
 
 
 def _material(payload, original, custody, root, window, bound, opening, current, work,
-        *, historical=False):
+        *, historical=False, _continuity=None):
     if type(historical) is not bool:
         _fail("consume bootstrap internal history selector is not exact")
     configured, generation = configuration._capture_configuration_on_work(payload=payload["configurationPayload"],
@@ -261,8 +261,13 @@ def _material(payload, original, custody, root, window, bound, opening, current,
         _fail("consume history original length differs")
     plan._same(_sha(custody, work), pin["bytesDigest"], work, "consume history original digest differs")
     verifier = history._verify_historical_consume_on_work if historical else history._verify_consume_on_work
+    continuity_arguments = {}
+    if _continuity is not None:
+        if historical:
+            _fail("consume planner live continuity does not select historical authority")
+        continuity_arguments["_continuity"] = _continuity
     nested = verifier(custody_bytes=custody, root_public_key=root,
-        work=work, live_window=window, transport_deadline_ns=bound)
+        work=work, live_window=window, transport_deadline_ns=bound, **continuity_arguments)
     current()
     plan._same((payload["configurationDigest"], generation["digest"], payload["runtimeClosureDigest"],
         payload["historyReceiverIdentity"]), (nested.planner.configuration_digest, nested.planner.generation["digest"],
@@ -325,7 +330,7 @@ def _material(payload, original, custody, root, window, bound, opening, current,
 
 
 def _verify_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     try:
         original, custody, root = bootstrap_bytes, history_custody_bytes, root_public_key
         if (type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES
@@ -335,7 +340,7 @@ def _verify_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
         window = clock._validate(live_window)
         shape._integer(transport_deadline_ns, minimum=1)
         bound = min(window[4], transport_deadline_ns)
-        inherited = shared._processing(window, bound, work)
+        inherited = shared._processing(window, bound, work, _continuity=_continuity)
         inherited()
         envelope = shared.codec._decode(original, work)
         shape._object(envelope, shared._ENVELOPE_FIELDS, "signed consume bootstrap")
@@ -351,8 +356,9 @@ def _verify_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
         _payload(payload, work)
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = shared._fresh(interval, work)
-        current = shared._launch_guard(interval, opening, inherited, work)
-        material = _material(payload, original, custody, root, window, bound, opening, current, work)
+        current = shared._launch_guard(interval, opening, inherited, work, _continuity=_continuity)
+        material = _material(payload, original, custody, root, window, bound, opening, current, work,
+            _continuity=_continuity)
         shared.codec._canonical(original, envelope, work)
         current()
         return material
@@ -405,7 +411,7 @@ def _verify_historical_on_work(*, bootstrap_bytes, history_custody_bytes, root_p
 
 
 def _produce_on_work(*, payload, history_custody_bytes, root_private_key, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     private, root, custody = root_private_key, root_public_key, history_custody_bytes
     authorization._private(private)
     authorization._public(root)
@@ -415,13 +421,13 @@ def _produce_on_work(*, payload, history_custody_bytes, root_private_key, root_p
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(window[4], transport_deadline_ns)
-    inherited = shared._processing(window, bound, work)
+    inherited = shared._processing(window, bound, work, _continuity=_continuity)
     inherited()
     _payload(owned, work)
     interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
     opening = shared._fresh(interval, work)
-    current = shared._launch_guard(interval, opening, inherited, work)
-    _material(owned, b"", custody, root, window, bound, opening, current, work)
+    current = shared._launch_guard(interval, opening, inherited, work, _continuity=_continuity)
+    _material(owned, b"", custody, root, window, bound, opening, current, work, _continuity=_continuity)
     unsigned = configuration._configuration_wire(owned, capture._SharedLedger(work))
     current()
     original = shared.signing._sign(owned, SCHEMA, MAX_BYTES, private, root, work)

@@ -259,7 +259,7 @@ def _admit_consume_request(payload, work, current):
     return original
 
 
-def _admit_planner(payload, root, window, deadline, work, current):
+def _admit_planner(payload, root, window, deadline, work, current, *, _continuity=None):
     record = payload["plannerBootstrap"]
     current()
     original = authorization.transport._decode(record["base64Url"], record["byteCount"],
@@ -269,7 +269,8 @@ def _admit_planner(payload, root, window, deadline, work, current):
     current()
     plan._same(digest, record["bytesDigest"], work, "historical planner original digest differs")
     admitted = planner_bootstrap._verify_historical_on_work(bootstrap_bytes=original,
-        root_public_key=root, live_window=window, transport_deadline_ns=deadline, work=work)
+        root_public_key=root, live_window=window, transport_deadline_ns=deadline, work=work,
+        _continuity=_continuity)
     current()
     for field, expected in (("configurationDigest", admitted.configuration_digest),
             ("generationDigest", admitted.generation["digest"]),
@@ -285,7 +286,7 @@ def _admit_planner(payload, root, window, deadline, work, current):
 
 
 def _verify_fixed_purpose(*, custody_bytes, root_public_key, work, live_window,
-        transport_deadline_ns, purpose):
+        transport_deadline_ns, purpose, _continuity=None):
     """Authenticate fresh outer purpose and genuine historical inner originals."""
     try:
         original, root = custody_bytes, root_public_key
@@ -297,7 +298,7 @@ def _verify_fixed_purpose(*, custody_bytes, root_public_key, work, live_window,
         window = clock._validate(live_window)
         shape._integer(transport_deadline_ns, minimum=1)
         deadline = min(window[4], transport_deadline_ns)
-        inherited = planner_bootstrap._processing(window, deadline, work)
+        inherited = planner_bootstrap._processing(window, deadline, work, _continuity=_continuity)
         inherited()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed activation history custody")
@@ -316,8 +317,8 @@ def _verify_fixed_purpose(*, custody_bytes, root_public_key, work, live_window,
         _payload_for_purpose(payload, purpose=purpose)
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = _fresh(interval, work)
-        current = planner_bootstrap._launch_guard(interval, opening, inherited, work)
-        admitted = _admit_planner(payload, root, window, deadline, work, current)
+        current = planner_bootstrap._launch_guard(interval, opening, inherited, work, _continuity=_continuity)
+        admitted = _admit_planner(payload, root, window, deadline, work, current, _continuity=_continuity)
         request = _admit_consume_request(payload, work, current) if consume else None
         material = _HistoryCustodyMaterial(original, admitted, role, mode,
             uid, gid, payload["receiverIdentity"], payload["bundleKeyDigest"],
@@ -332,7 +333,7 @@ def _verify_fixed_purpose(*, custody_bytes, root_public_key, work, live_window,
 
 
 def _produce_fixed_purpose(*, payload, root_private_key, root_public_key, work,
-        live_window, transport_deadline_ns, purpose):
+        live_window, transport_deadline_ns, purpose, _continuity=None):
     """Sign fresh independently established history scope, never invent its pins."""
     try:
         private, root = root_private_key, root_public_key
@@ -344,13 +345,13 @@ def _produce_fixed_purpose(*, payload, root_private_key, root_public_key, work,
         window = clock._validate(live_window)
         shape._integer(transport_deadline_ns, minimum=1)
         deadline = min(window[4], transport_deadline_ns)
-        inherited = planner_bootstrap._processing(window, deadline, work)
+        inherited = planner_bootstrap._processing(window, deadline, work, _continuity=_continuity)
         inherited()
         _payload_for_purpose(owned, purpose=purpose)
         interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
         opening = _fresh(interval, work)
-        current = planner_bootstrap._launch_guard(interval, opening, inherited, work)
-        _admit_planner(owned, root, window, deadline, work, current)
+        current = planner_bootstrap._launch_guard(interval, opening, inherited, work, _continuity=_continuity)
+        _admit_planner(owned, root, window, deadline, work, current, _continuity=_continuity)
         if consume:
             _admit_consume_request(owned, work, current)
         unsigned = _wire(owned, work)
@@ -385,17 +386,18 @@ def _produce_fixed_purpose(*, payload, root_private_key, root_public_key, work,
 
 
 def _verify_for_purpose(*, custody_bytes, root_public_key, work, live_window,
-        transport_deadline_ns, consume):
+        transport_deadline_ns, consume, _continuity=None):
     return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
         work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
-        purpose=_purpose_from_consume(consume))
+        purpose=_purpose_from_consume(consume), _continuity=_continuity)
 
 
 def _produce_for_purpose(*, payload, root_private_key, root_public_key, work,
-        live_window, transport_deadline_ns, consume):
+        live_window, transport_deadline_ns, consume, _continuity=None):
     return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
         root_public_key=root_public_key, work=work, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, purpose=_purpose_from_consume(consume))
+        transport_deadline_ns=transport_deadline_ns, purpose=_purpose_from_consume(consume),
+        _continuity=_continuity)
 
 
 def _verify_on_work(*, custody_bytes, root_public_key, work, live_window, transport_deadline_ns):
@@ -404,10 +406,12 @@ def _verify_on_work(*, custody_bytes, root_public_key, work, live_window, transp
         work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns, consume=False)
 
 
-def _verify_consume_on_work(*, custody_bytes, root_public_key, work, live_window, transport_deadline_ns):
+def _verify_consume_on_work(*, custody_bytes, root_public_key, work, live_window, transport_deadline_ns,
+        _continuity=None):
     """Fixed request-bound consume-planning v2 original admission only."""
     return _verify_for_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
-        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns, consume=True)
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns, consume=True,
+        _continuity=_continuity)
 
 
 def _verify_consume_grant_on_work(*, custody_bytes, root_public_key, work, live_window,
@@ -486,10 +490,10 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, work,
 
 
 def _produce_consume_on_work(*, payload, root_private_key, root_public_key, work,
-        live_window, transport_deadline_ns):
+        live_window, transport_deadline_ns, _continuity=None):
     return _produce_for_purpose(payload=payload, root_private_key=root_private_key,
         root_public_key=root_public_key, work=work, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, consume=True)
+        transport_deadline_ns=transport_deadline_ns, consume=True, _continuity=_continuity)
 
 
 def _produce_consume_grant_on_work(*, payload, root_private_key, root_public_key, work,

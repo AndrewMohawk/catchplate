@@ -418,13 +418,15 @@ def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes, curr
 
 def _verify_historical_on_work(*, authorization_bytes, authorization_enrollment_bytes, current_root_enrollment_bytes,
         grant_enrollment_bytes, root_public_key, configuration_digest, planner_public_key, operation_public_key,
-        originals, expectations, before_vector_bytes, live_window, transport_deadline_ns, work):
+        originals, expectations, before_vector_bytes, live_window, transport_deadline_ns, work, _continuity=None):
     """Authenticate historical post-plan intent without reviving its authority.
 
     Independent original scope, keys and enrollments are required. The current
     supplied processing window is never capped to an expired original scope,
     authorization or plan deadline. Full encrypted-original replay remains a
     separate mandatory composition; this result cannot stand in for it.
+    Optional restrictive continuity retains caller clock floors through every
+    live check; it supplies no authority and never renews historical intervals.
     """
     capture._SharedLedger(work)
     original = authorization._original(authorization_bytes, MAX_AUTHORIZATION_BYTES,
@@ -453,7 +455,7 @@ def _verify_historical_on_work(*, authorization_bytes, authorization_enrollment_
         "historical activation caller configuration")
     held = _Inputs(raw, before, caller, current_raw, grant, root, planner, operation_key,
         config, owned, window, bound)
-    current = _clock(held, work)
+    current = _clock(held, work, continuity=_continuity)
     current()
     enrolled = _enrollment(held, work)
     envelope = _read(original, enrollment=False, work=work)

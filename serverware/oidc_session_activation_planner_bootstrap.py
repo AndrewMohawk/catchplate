@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import re
+import time
 
 from cryptography.exceptions import InvalidSignature
 
@@ -245,9 +246,13 @@ def _fresh(interval, work, opening=None):
         raise OidcSessionActivationPlannerBootstrapError("activation original launch interval is not live") from exc
 
 
-def _processing(live_window, transport_deadline_ns, work):
+def _processing(live_window, transport_deadline_ns, work, *, _continuity=None):
     """Preserve optional inherited request bounds; never open an allowance."""
     capture._SharedLedger(work)
+    if _continuity is not None:
+        window = clock._validate(live_window)
+        shape._integer(transport_deadline_ns, minimum=1)
+        return _historical_processing(window, min(window[4], transport_deadline_ns), work, _continuity)
     if live_window is not None:
         _window, current = delivery._window(live_window, transport_deadline_ns, work)
         return current
@@ -263,6 +268,57 @@ def _processing(live_window, transport_deadline_ns, work):
             _fail("activation cold processing clock reversed or inherited deadline expired")
         previous = observed
         return observed[1]
+
+    return current
+
+
+def _historical_processing(window, deadline, work, continuation):
+    """A floor-only owner hook cannot renew or authenticate historical facts."""
+    if continuation is None:
+        return _processing(window, deadline, work)
+    if not callable(continuation):
+        _fail("historical activation continuity is not callable")
+    capture._SharedLedger(work)
+    limits, metrics = work.limits, work.metrics
+    ceilings = limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes
+    epoch, monotonic = window[0], window[2]
+
+    def ledger():
+        nonlocal metrics
+        capture._SharedLedger(work)
+        observed = work.metrics
+        if (work.limits is not limits
+                or ceilings != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or observed.hash_work < metrics.hash_work or observed.input_bytes < metrics.input_bytes
+                or observed.json_nodes < metrics.json_nodes):
+            _fail("historical activation continuity reset the original allowance")
+        metrics = observed
+
+    def floors(observed):
+        nonlocal epoch, monotonic
+        if (type(observed) is not tuple or len(observed) != 2
+                or any(type(value) is not int for value in observed)
+                or observed[0] < epoch or observed[1] < monotonic
+                or observed[0] >= window[3] or observed[1] >= deadline):
+            _fail("historical activation continuity reversed or exhausted its clock floors")
+        epoch, monotonic = observed
+
+    def owner():
+        ledger()
+        observed = continuation(epoch, monotonic)
+        ledger()
+        floors(observed)
+
+    def current(observed=None):
+        if observed is not None:
+            ledger()
+            floors(observed)
+        owner()
+        now = clock._check_on_work(window, work=work)
+        sampled = registration.evidence.production._callback(work, time.monotonic_ns)
+        floors((now, sampled))
+        owner()
+        return epoch
 
     return current
 
@@ -447,8 +503,13 @@ def _material(payload, root, opening, original, work, current):
         bundle_key_digest=payload["bundleKeyDigest"])
 
 
-def _launch_guard(interval, opening, inherited, work):
+def _launch_guard(interval, opening, inherited, work, *, _continuity=None):
     previous = opening
+    if _continuity is not None:
+        if not callable(_continuity):
+            _fail("activation launch restrictive continuity is not callable")
+        if inherited((opening[1], opening[2])) >= interval[1]:
+            _fail("activation launch expired during opening continuity")
 
     def current():
         nonlocal previous
@@ -457,6 +518,11 @@ def _launch_guard(interval, opening, inherited, work):
         if sample[0] < previous[2] or sample[1] < previous[1]:
             _fail("activation original launch clock reversed between callbacks")
         previous = sample
+        if _continuity is not None:
+            observed = inherited((sample[1], sample[2]))
+            if observed >= interval[1]:
+                _fail("activation launch expired during restrictive continuity")
+            return observed
         inherited()
         return sample[1]
 
@@ -501,7 +567,7 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, work, live_window=None,
 
 
 def _verify_historical_on_work(*, bootstrap_bytes, root_public_key, live_window,
-        transport_deadline_ns, work):
+        transport_deadline_ns, work, _continuity=None):
     """Authenticate original v3 scope as history, never as a renewed launch.
 
     The returned ordinary material retains the original attestation interval.
@@ -517,7 +583,7 @@ def _verify_historical_on_work(*, bootstrap_bytes, root_public_key, live_window,
         window = clock._validate(live_window)
         shape._integer(transport_deadline_ns, minimum=1)
         deadline = min(window[4], transport_deadline_ns)
-        current = _processing(window, deadline, work)
+        current = _historical_processing(window, deadline, work, _continuity)
         current()
         envelope = codec._decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed historical activation bootstrap")
@@ -540,7 +606,10 @@ def _verify_historical_on_work(*, bootstrap_bytes, root_public_key, live_window,
         if payload["issuedAtEpochNs"] > current():
             _fail("historical activation bootstrap is future-issued")
         opening = clock._sample_on_work(work)
-        current()
+        if _continuity is not None:
+            current((opening[1], opening[2]))
+        else:
+            current()
         material = _material(payload, root, opening, original, work, current)
         codec._canonical(original, envelope, work)
         current()

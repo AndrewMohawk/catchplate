@@ -180,7 +180,7 @@ def _derive_originals_on_work(*, assertion_bytes, session_row, challenge_row, cr
                     expected_user_id, expected_session_id, expected_credential_id,
                     rp_id, origin, authn_policy, trust_policy, old_token_bytes, new_token_bytes,
                     live_window, work, transport_deadline_ns=None,
-                    historical_plan_interval=None, original_database_now_epoch_ns=None):
+                    historical_plan_interval=None, original_database_now_epoch_ns=None, _current=None):
     """Common original semantics with separate live and historical time rules."""
     ledger = registration.capture._SharedLedger(work)
     historical = None
@@ -219,6 +219,10 @@ def _derive_originals_on_work(*, assertion_bytes, session_row, challenge_row, cr
         last_epoch, last_monotonic = now, monotonic
         return now
 
+    if _current is not None:
+        from serverware import oidc_session_activation_delivery as delivery
+
+        current = delivery._join_current(current, _current, work)
     now = current()
     if historical is not None and (historical[0] > now + window[6] or cutoff > now + window[6]):
         _fail("activation historical issue or database cutoff is in the future")
@@ -386,7 +390,7 @@ def _derive_historical_on_work(*, assertion_bytes, session_row, challenge_row, c
                     expected_user_id, expected_session_id, expected_credential_id,
                     rp_id, origin, authn_policy, trust_policy, old_token_bytes, new_token_bytes,
                     original_database_now_epoch_ns, historical_plan_interval,
-                    live_window, work, transport_deadline_ns=None):
+                    live_window, work, transport_deadline_ns=None, _current=None):
     """Reverify original assertion semantics, never a live or executable result.
 
     The caller must authenticate the original plan interval and database cutoff
@@ -399,4 +403,4 @@ def _derive_historical_on_work(*, assertion_bytes, session_row, challenge_row, c
         old_token_bytes=old_token_bytes, new_token_bytes=new_token_bytes, live_window=live_window,
         work=work, transport_deadline_ns=transport_deadline_ns,
         historical_plan_interval=_historical_interval(historical_plan_interval),
-        original_database_now_epoch_ns=original_database_now_epoch_ns)
+        original_database_now_epoch_ns=original_database_now_epoch_ns, _current=_current)

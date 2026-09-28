@@ -36,6 +36,10 @@ journaled or logged. A returned prepared/exported pair is not consume commit,
 token release or a current authenticated session.
 
 This is unbuilt/unexecuted source. Issuer startup and opt-in socket packaging do
-not provision the independently pinned keys/resources or stage the issued pair
-into a matching consume worker. That worker delivery, per-request proof setup,
-public HTTP/current-auth/cookie, recovery and portal integration remain open.
+not provision the independently pinned keys/resources. Explicit issuer launch v2
+now stages the exact pair into the matching
+[dynamic consume worker](oidc-session-activation-consume-dynamic-delivery.md)
+before returning it; v1 does not. The public acquisition API cannot select that
+launch version or treat its response as worker readiness. Actual provisioning,
+per-request proof setup, public HTTP/current-auth/cookie, recovery and portal
+integration remain open.

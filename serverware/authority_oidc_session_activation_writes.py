@@ -225,7 +225,7 @@ def _replay_originals_on_work(context, *, assertion_bytes, old_token_bytes, new_
         expected_credential_id, expected_credential_record_id, expected_challenge_id,
         rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
-        live_window, work, transport_deadline_ns, historical_plan_interval):
+        live_window, work, transport_deadline_ns, historical_plan_interval, _current=None):
     """Replay all original semantics and writes relative to independent roots/heads.
 
     The expected thirteen closed head dictionaries are independent inputs, not
@@ -283,6 +283,7 @@ def _replay_originals_on_work(context, *, assertion_bytes, old_token_bytes, new_
         epoch, monotonic = now, observed
         return now
 
+    processing_live = activation.delivery._join_current(processing_live, _current, work)
     if interval is not None:
         processing_live()
     decoded = _decode_on_work(write_proof_bytes, work=work)
@@ -313,7 +314,7 @@ def _replay_originals_on_work(context, *, assertion_bytes, old_token_bytes, new_
     else:
         processing_live()
         full = activation._full_transition_historical_on_work(current,
-            **transition_originals, historical_plan_interval=interval)
+            **transition_originals, historical_plan_interval=interval, _current=_current)
         if type(full) is not activation._HistoricalFullTransition:
             _fail("activation historical transition returned another result family")
         registration._same(full.historical_plan_interval, interval, work, "historical transition interval")
@@ -417,7 +418,7 @@ def _replay_historical_on_work(context, *, assertion_bytes, old_token_bytes, new
         expected_credential_id, expected_credential_record_id, expected_challenge_id,
         rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
-        historical_plan_interval, live_window, work, transport_deadline_ns=None) -> _HistoricalReplayedWrites:
+        historical_plan_interval, live_window, work, transport_deadline_ns=None, _current=None) -> _HistoricalReplayedWrites:
     """Rebuild original indexed effects; caller authenticates the signed interval.
 
     The current supplied allowance stays live. Original lifetimes are checked
@@ -436,4 +437,5 @@ def _replay_historical_on_work(context, *, assertion_bytes, old_token_bytes, new
         authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
         read_heads=read_heads, query_frontiers=query_frontiers, expected_counted_heads=expected_counted_heads,
         write_proof_bytes=write_proof_bytes, live_window=live_window, work=work,
-        transport_deadline_ns=transport_deadline_ns, historical_plan_interval=historical_plan_interval)
+        transport_deadline_ns=transport_deadline_ns, historical_plan_interval=historical_plan_interval,
+        _current=_current)

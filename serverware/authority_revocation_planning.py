@@ -156,22 +156,23 @@ class _ReadResult:
 class _ReadCursor:
     """Require the already-entered planner transaction around every driver call."""
 
-    __slots__ = ("_cursor", "_connection", "_raw", "_work", "_identity")
+    __slots__ = ("_cursor", "_connection", "_raw", "_work", "_current", "_identity")
 
-    def __init__(self, cursor, connection, raw_identity, work):
+    def __init__(self, cursor, connection, raw_identity, work, _current=None):
         self._cursor, self._connection, self._raw, self._work = cursor, connection, raw_identity, work
-        self._identity = cursor, connection, raw_identity, work
+        self._current = _current
+        self._identity = cursor, connection, raw_identity, work, _current
 
     def _require(self, identity):
         if (self._identity is not identity or any(actual is not expected for actual, expected in zip(
-                (self._cursor, self._connection, self._raw, self._work), identity))):
+                (self._cursor, self._connection, self._raw, self._work, self._current), identity))):
             raise reader.roots.RevocationRootReadError("observed planner cursor binding changed")
 
     def _call(self, callback):
         identity = self._identity
-        if type(identity) is not tuple or len(identity) != 4:
+        if type(identity) is not tuple or len(identity) != 5:
             raise reader.roots.RevocationRootReadError("observed planner cursor binding is invalid")
-        _, connection, raw, work = identity
+        _, connection, raw, work, current = identity
 
         def invoke():
             self._require(identity)
@@ -183,7 +184,7 @@ class _ReadCursor:
             self._require(identity)
             return value
 
-        return reader.roots._callback(work, invoke)
+        return _read_native(work, current, invoke)
 
     def execute(self, sql, parameters=None):
         arguments = (sql,) if parameters is None else (sql, parameters)
@@ -201,8 +202,36 @@ class _ProducedObservedPlanBytes:
     expected_context: dict
 
 
+def _read_native(work, current, callback, *args):
+    """An inherited guard may charge work, so it stays outside the native call."""
+    if current is not None:
+        current()
+    try:
+        return reader.roots._callback(work, callback, *args)
+    finally:
+        if current is not None:
+            current()
+
+
 @contextmanager
-def _read_scope(read_configuration, *, operation, work):
+def _read_context(manager, work, current):
+    """Guard normal entry/exit without allowing expiry to skip owned cleanup."""
+    if current is not None:
+        current()
+    try:
+        with reader._context(manager, work) as active:
+            if current is not None:
+                current()
+            yield active
+            if current is not None:
+                current()
+    finally:
+        if current is not None:
+            current()
+
+
+@contextmanager
+def _read_scope(read_configuration, *, operation, work, _current=None):
     """Own the genuine read transaction for eight fixed successor operations.
 
     The exact configuration triple has no signing key. Callers must own their
@@ -214,6 +243,8 @@ def _read_scope(read_configuration, *, operation, work):
     """
     _validate_read_scope_configuration(read_configuration)
     retention.capture._SharedLedger(work)
+    if _current is not None and not callable(_current):
+        raise RevocationPlanningError("planner read continuation must be an actual current guard")
     if type(operation) is not str or operation not in _READ_OPERATIONS:
         raise RevocationPlanningError("planner read scope operation is not source admitted")
     read_dsn, timeout, identity = read_configuration
@@ -225,33 +256,37 @@ def _read_scope(read_configuration, *, operation, work):
     trace = planner.PlannerTrace(operation=operation,
         _complete_queries=operation in _COMPLETE_READ_OPERATIONS,
         _counted_writes=operation == "webauthn.trust.complete")
+    if _current is not None:
+        _current()
     connection = reader._connect(work, lambda: psycopg.connect(read_dsn,
         row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))
     try:
-        raw = reader.roots._callback(work, reader._connection_identity, connection, 0)
-        with reader._context(connection, work) as active_connection:
+        if _current is not None:
+            _current()
+        raw = _read_native(work, _current, reader._connection_identity, connection, 0)
+        with _read_context(connection, work, _current) as active_connection:
             if active_connection is not connection:
                 raise reader.roots.RevocationRootReadError("observed planner connection context changed its handle")
-            reader.roots._callback(work, reader._require_connection, connection, raw, 0)
-            transaction = reader.roots._callback(work, lambda: connection.transaction())
-            reader.roots._callback(work, reader._require_connection, connection, raw, 0)
-            with reader._context(transaction, work):
-                reader.roots._callback(work, reader._require_connection, connection, raw, 2)
-                cursor = reader.roots._callback(work, lambda: connection.cursor())
-                reader.roots._callback(work, reader._require_connection, connection, raw, 2)
-                with reader._context(cursor, work) as active:
+            _read_native(work, _current, reader._require_connection, connection, raw, 0)
+            transaction = _read_native(work, _current, lambda: connection.transaction())
+            _read_native(work, _current, reader._require_connection, connection, raw, 0)
+            with _read_context(transaction, work, _current):
+                _read_native(work, _current, reader._require_connection, connection, raw, 2)
+                cursor = _read_native(work, _current, lambda: connection.cursor())
+                _read_native(work, _current, reader._require_connection, connection, raw, 2)
+                with _read_context(cursor, work, _current) as active:
                     if active is not cursor:
                         raise reader.roots.RevocationRootReadError("observed planner cursor context changed its handle")
-                    guarded = _ReadCursor(active, connection, raw, work)
+                    guarded = _ReadCursor(active, connection, raw, work, _current)
                     guarded.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE")
                     planner._validate_database_identity(guarded, database_identity)
                     manifest, _ = planner._load_manifest(guarded, operation=operation, trace=trace)
                     authorization = planner._load_authorization_manifest(guarded, operation=operation, trace=trace)
                     yield guarded, manifest + authorization, trace
-                    reader.roots._callback(work, reader._require_connection, connection, raw, 2)
-                reader.roots._callback(work, reader._require_connection, connection, raw, 2)
-            reader.roots._callback(work, reader._require_connection, connection, raw, 0)
-        if reader.roots._callback(work, lambda: connection.closed) is not True:
+                    _read_native(work, _current, reader._require_connection, connection, raw, 2)
+                _read_native(work, _current, reader._require_connection, connection, raw, 2)
+            _read_native(work, _current, reader._require_connection, connection, raw, 0)
+        if _read_native(work, _current, lambda: connection.closed) is not True:
             raise reader.roots.RevocationRootReadError("observed planner connection was not closed")
     except BaseException:
         reader._close_after_failure(connection)

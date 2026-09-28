@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import errno
+import os
 import socket
 
 from serverware import authority_transport
@@ -44,6 +46,7 @@ MAX_HEAD_QUERY_BYTES = 4 * 1024
 MAX_HEAD_OBSERVATION_BYTES = 8 * 1024
 _ACTIONS = ("reserve", "complete")
 _NANOSECONDS = 1_000_000_000
+_quarantined_delivery_head_sockets = []
 
 _check_deadline = io._check_deadline
 _recv_prefix = io._recv_prefix
@@ -243,6 +246,108 @@ def _delivery_head_on_configuration(config, *, query_bytes, deadline_ns):
     """Unverified consume-head originals, never a decision or legacy lookup."""
     return _socket_exchange(config, purpose="delivery-head",
         original_bytes=query_bytes, deadline_ns=deadline_ns)
+
+
+def _delivery_head_on_work(config, *, query_bytes, deadline_ns, work, current):
+    """One fixed delivery-head query retaining the actual original guard.
+
+    This direct metered path is not invoked inside a stable-metrics callback.
+    It owns only its one nonblocking socket and returns unverified originals.
+    Existing decision, lookup and numeric-window-only callers are unchanged.
+    """
+    from serverware import oidc_session_activation_release_transport as chunks
+
+    configured = _validate_configuration(config)
+    request = _original(query_bytes, MAX_HEAD_QUERY_BYTES, "delivery head query")
+    chunks._guard(work, current, deadline_ns)
+    bound = min(deadline_ns, chunks._native(lambda: io._deadline_ns(configured[1]),
+        work=work, current=current, deadline_ns=deadline_ns))
+    connection = None
+    descriptor = identity = None
+    peer_identity = None
+    close_attempted = False
+
+    def fd_identity():
+        value = os.fstat(descriptor)
+        return value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid
+
+    def exact_socket():
+        if (connection.fileno() != descriptor or descriptor is None or identity is None
+                or fd_identity() != identity or connection.family != socket.AF_UNIX
+                or connection.type != socket.SOCK_STREAM or connection.gettimeout() != 0.0
+                or connection.get_inheritable()
+                or peer_identity is not None and authority_transport._peer_identity(connection) != peer_identity):
+            raise AuthorityTransportError("delivery head socket ownership changed")
+
+    def guarded_current():
+        observed = current()
+        if connection is not None and not close_attempted:
+            work.charge(input_bytes=64)
+            chunks.production._callback(work, exact_socket)
+        return observed
+
+    kwargs = {"deadline_ns": bound, "work": work, "current": guarded_current}
+
+    def opening():
+        nonlocal connection, descriptor, identity
+        # Retain the actual object before a post-native guard can fail.
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        descriptor = connection.fileno()
+        identity = fd_identity()
+        connection.setblocking(False)
+        connection.set_inheritable(False)
+
+    try:
+        work.charge(input_bytes=4096 + 32 + len(request) + MAX_HEAD_OBSERVATION_BYTES)
+        chunks._native(opening, **kwargs)
+        chunks._connection(connection, **kwargs)
+        connected = chunks._native(lambda: connection.connect_ex(configured[0]), **kwargs)
+        if type(connected) is not int or connected not in (0, errno.EINPROGRESS, errno.EALREADY):
+            raise AuthorityTransportError("delivery head connection was not established")
+        if connected != 0:
+            chunks._ready(connection, writing=True, **kwargs)
+            error = chunks._native(lambda: connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR), **kwargs)
+            if type(error) is not int or error != 0:
+                raise AuthorityTransportError("delivery head connection failed")
+        chunks._peer(connection, configured[2:], **kwargs)
+        peer_identity = chunks._native(lambda: authority_transport._peer_identity(connection), **kwargs)
+        if peer_identity[:2] != configured[2:]:
+            raise AuthorityTransportError("delivery head peer changed after connection")
+        header = DELIVERY_HEAD_QUERY_REQUEST_MAGIC + len(request).to_bytes(8, "big")
+        chunks._send_precharged(connection, header, **kwargs)
+        chunks._send_precharged(connection, request, **kwargs)
+        chunks._native(lambda: connection.shutdown(socket.SHUT_WR), **kwargs)
+        if chunks._recv_exact(connection, 8, **kwargs) != DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC:
+            raise AuthorityTransportError("delivery head response magic differs")
+        raw_length = chunks._recv_exact(connection, 8, **kwargs)
+        work.charge(input_bytes=8)
+        length = int.from_bytes(raw_length, "big")
+        if not 2 <= length <= MAX_HEAD_OBSERVATION_BYTES:
+            raise AuthorityTransportError("delivery head response length exceeds its fixed bound")
+        response = chunks._recv_exact(connection, length, **kwargs)
+        chunks._eof(connection, **kwargs)
+        chunks._native(exact_socket, **kwargs)
+        work.charge(input_bytes=1)
+        chunks._guard(work, current, bound)
+        close_attempted = True
+        chunks.production._callback(work, connection.close)
+        if connection.fileno() != -1:
+            raise AuthorityTransportError("delivery head socket closure is indeterminate")
+        chunks._guard(work, current, bound)
+        return response
+    finally:
+        if connection is not None and connection.fileno() != -1:
+            try:
+                if close_attempted:
+                    raise AuthorityTransportError("delivery head socket cleanup cannot retry")
+                close_attempted = True
+                exact_socket()
+                connection.close()
+                if connection.fileno() != -1:
+                    raise AuthorityTransportError("delivery head socket cleanup is indeterminate")
+            except BaseException:
+                _quarantined_delivery_head_sockets.append(connection)
+                raise AuthorityTransportError("delivery head socket cleanup is not established") from None
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)

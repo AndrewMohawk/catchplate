@@ -128,13 +128,15 @@ def _capture(*, request, business_before_roots, authorization_before_roots,
 class _Lifetime:
     """Current processing guard owned by this invocation, never caller supplied."""
 
-    def __init__(self, owner, configured, window, bound, work, lock):
+    def __init__(self, owner, configured, window, bound, work, lock, *, _current=None):
         self.owner, self.configured, self.window = owner, configured, window
         self.bound, self.work, self.lock = min(bound, window[4]), work, lock
         self.limits = work.limits
         self.ceilings = (self.limits.max_hashes, self.limits.max_input_bytes, self.limits.max_json_nodes)
         self.metrics = work.metrics
         self.last_epoch, self.last_monotonic = window[0], window[2]
+        self.external_current = _current
+        self.current = transition.delivery._join_current(self._check, _current, work)
 
     def _require(self):
         if (OidcSessionActivationDeliveryReadPlanner._snapshot_configuration(self.owner) is not self.configured
@@ -151,6 +153,9 @@ class _Lifetime:
         self.metrics = current
 
     def check(self):
+        return self.current()
+
+    def _check(self):
         self._require()
         epoch = clock._check_on_work(self.window, work=self.work)
         monotonic = planning.reader.roots._callback(self.work, time.monotonic_ns)
@@ -182,7 +187,7 @@ def _write_evidence(cursor, trace, physical, request, database_now, selected, re
         business_before_roots=retained.business_before_roots,
         authorization_before_roots=retained.authorization_before_roots, before_proofs=retained.before_proofs,
         read_heads=read_heads, query_frontiers=retained.frontiers, live_window=lifetime.window,
-        transport_deadline_ns=lifetime.bound, work=work)
+        transport_deadline_ns=lifetime.bound, work=work, _current=lifetime.external_current)
     _fresh_transition(actual, lifetime)
     mutations = actual.transition.mutations
     write_ids = {identifier for item in mutations for identifier in projection.index_ids_for_table(item["table"])}
@@ -296,7 +301,7 @@ class OidcSessionActivationDeliveryReadPlanner:
             expected_counted_heads, old_token_bytes, expected_delivery_id, expected_user_id,
             expected_session_id, expected_credential_id, expected_credential_record_id,
             expected_challenge_id, authn_policy, trust_policy,
-            live_window, transport_deadline_ns, work: _ValidationWork):
+            live_window, transport_deadline_ns, work: _ValidationWork, _current=None):
         token = transition.assertion._token(old_token_bytes, work)
         inputs = {"deliveryId": expected_delivery_id, "userId": expected_user_id, "sessionId": expected_session_id,
             "credentialId": expected_credential_id, "credentialRecordId": expected_credential_record_id,
@@ -304,11 +309,12 @@ class OidcSessionActivationDeliveryReadPlanner:
         return OidcSessionActivationDeliveryReadPlanner._run(self, request=request,
             business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
             expected_counted_heads=expected_counted_heads, live_window=live_window,
-            transport_deadline_ns=transport_deadline_ns, work=work, transition_inputs=inputs, token=token)
+            transport_deadline_ns=transport_deadline_ns, work=work, transition_inputs=inputs, token=token,
+            _current=_current)
 
     def _run(self, *, request, business_before_roots, authorization_before_roots,
              expected_counted_heads, live_window, transport_deadline_ns, work,
-             transition_inputs=None, token=None):
+             transition_inputs=None, token=None, _current=None):
         configured = OidcSessionActivationDeliveryReadPlanner._snapshot_configuration(self)
         lock = self._lock
         if not lock.acquire(blocking=False):
@@ -321,12 +327,14 @@ class OidcSessionActivationDeliveryReadPlanner:
             window = owned["liveWindow"]
             if window[6] != configured[3]:
                 raise OidcSessionActivationDeliveryPlanningError("delivery clock policy differs from its owner")
-            lifetime = _Lifetime(self, configured, window, owned["transportDeadlineNs"], work, lock)
+            lifetime = _Lifetime(self, configured, window, owned["transportDeadlineNs"], work, lock,
+                _current=_current)
             lifetime.check()
             timeout = min(configured[1], (lifetime.bound - lifetime.last_monotonic) // 1_000_000_000)
             if timeout < 2:
                 raise OidcSessionActivationDeliveryPlanningError("delivery lifetime cannot cover libpq minimum timeout")
-            with planning._read_scope((configured[0], timeout, configured[2]), operation=OPERATION, work=work) as (
+            with planning._read_scope((configured[0], timeout, configured[2]), operation=OPERATION,
+                    work=work, _current=lifetime.check if _current is not None else None) as (
                     cursor, manifest, trace):
                 lifetime.check()
                 # This wrapper owns only native cursor/result identity and

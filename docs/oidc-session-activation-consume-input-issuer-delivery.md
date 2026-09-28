@@ -4,8 +4,8 @@ This source-only cold path delivers six independently provisioned resources to
 the finite consume-input issuer. It authenticates public originals before
 opening the runtime root signer, then permanently drops privilege and continues
 in the same process and original work/window. It does not create resources,
-install a service, deploy a worker or stage the issued consume bootstraps into
-their destination workers.
+install a service or deploy a worker. Explicit launch v2 permits one exact-pair
+staging exchange after issuance; the original launch v1 has no such channel.
 
 ## Closed signed launch
 
@@ -22,8 +22,17 @@ The signed/payload schemas are
 `serverware.oidcSessionActivationConsumeInputIssuerBootstrap/v1`; the launch
 schema is `serverware.oidcSessionActivationConsumeInputIssuerLaunch/v1`. Purpose
 is `launch-oidc-session-activation-consume-input-issuer`, bound to the actual
-source revision and `trusted-host-local` trust mode. There is no launch-v2,
-delivery endpoint, staging socket or request-selected profile.
+source revision and `trusted-host-local` trust mode. Explicit launch v2 is
+`serverware.oidcSessionActivationConsumeInputIssuerLaunch/v2`; it adds exactly
+`deliveryEndpoint` to the otherwise unchanged launch fields. Both envelope and
+payload schemas remain v1. No request-selected profile or v2-to-v1 fallback exists.
+
+The v2 endpoint has exactly `path`, `timeoutSeconds`, `peerUid`, `peerGid`:
+`/run/serverware/oidc-session-activation/consume-bootstrap.sock`, an integer
+timeout 1..30 no greater than the signed request timeout, and root peer 0:0.
+It narrows the same opening allowance and adds no inherited descriptor. The
+actual owner creates, tracks and closes one staging socket under its fixed
+channel; a supplied socket or arbitrary FD cannot replace it.
 
 The closed payload contains `schema`, `sourceRevision`, `purpose`, `role`,
 `trustMode`, `issuerPolicyDigest`, `activationPlannerBootstrapDigest`,
@@ -43,10 +52,11 @@ owned payload and actual root private/public pair; it genuinely admits policy
 and activation originals before signing and checking its signed readback.
 Neither accepts a verified-material input or loads a key.
 
-The private `_IssuerMaterial` has twelve fields: `bootstrap_bytes`,
+The private `_IssuerMaterial` has thirteen fields: `bootstrap_bytes`,
 `issuer_policy_bytes`, `activation_planner_bootstrap_bytes`, `policy_material`,
 `launch`, `root_signing_key_byte_count`, `root_signing_key_digest`,
-`attestation_interval`, `opening_sample`, `live_window`, `deadline_ns`, `live`.
+`attestation_interval`, `opening_sample`, `live_window`, `deadline_ns`, `live`,
+`delivery_endpoint` (None for v1).
 These are same-call outputs, not transferable verification proof.
 
 ## Exact files and descriptor delivery
@@ -111,6 +121,10 @@ closing replaced slots or retrying uncertain closes.
 
 The [finite service](oidc-session-activation-consume-input-issuer-service.md)
 authenticates actual request originals and returns signed consume-planner/history
-originals. Returning those bytes does not stage their workers or close the
-remaining public dispatch/HTTP/cookie path. Installation, provisioning, runtime
-verification and production acceptance remain separate.
+originals. Under launch v2 it first sends those exact two originals to the
+[dynamic receiver](oidc-session-activation-consume-dynamic-delivery.md), checks
+both framed identities in the staged ACK and closes its owned staging channel.
+The ACK is not worker readiness, private replay, commit or token delivery. V1
+continues to return originals without staging. Neither closes the public
+dispatch/HTTP/cookie path. Installation, provisioning, runtime verification and
+production acceptance remain separate.

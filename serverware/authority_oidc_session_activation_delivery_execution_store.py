@@ -50,28 +50,33 @@ class DeliveryExecutionBundleStore(storage._ExecutionBundleStore):
 
     def __init__(self, *, directory_fd, expected_device, expected_inode, expected_uid, expected_gid,
             maximum_records, quota_bytes, configuration_digest, bundle_key,
-            live_window, work, transport_deadline_ns=None):
+            live_window, work, transport_deadline_ns=None, maximum_record_bytes=None, _current=None):
         _require_owner(self)
         storage._ExecutionBundleStore.__init__(self, directory_fd=directory_fd,
             expected_device=expected_device, expected_inode=expected_inode, expected_uid=expected_uid,
             expected_gid=expected_gid, maximum_records=maximum_records, quota_bytes=quota_bytes,
             configuration_digest=configuration_digest, bundle_key=bundle_key, live_window=live_window,
-            work=work, transport_deadline_ns=transport_deadline_ns)
+            work=work, transport_deadline_ns=transport_deadline_ns,
+            maximum_record_bytes=maximum_record_bytes, _current=_current)
 
     def _snapshot_configuration(self):
         _require_owner(self)
         return storage._ExecutionBundleStore._snapshot_configuration(self)
 
-    def read(self, *, context, envelope_bytes, live_window, work, transport_deadline_ns):
+    def read(self, *, context, envelope_bytes, live_window, work, transport_deadline_ns,
+            maximum_record_bytes=None, _current=None):
         _require_owner(self)
         return storage._ExecutionBundleStore.read(self, context=context, envelope_bytes=envelope_bytes,
-            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
+            maximum_record_bytes=maximum_record_bytes, _current=_current)
 
-    def append(self, *, context, envelope_bytes, bundle_bytes, live_window, work, transport_deadline_ns):
+    def append(self, *, context, envelope_bytes, bundle_bytes, live_window, work, transport_deadline_ns,
+            maximum_record_bytes=None, _current=None):
         _require_owner(self)
         return storage._ExecutionBundleStore.append(self, context=context, envelope_bytes=envelope_bytes,
             bundle_bytes=bundle_bytes, live_window=live_window, work=work,
-            transport_deadline_ns=transport_deadline_ns)
+            transport_deadline_ns=transport_deadline_ns,
+            maximum_record_bytes=maximum_record_bytes, _current=_current)
 
     def close(self):
         _require_owner(self)

@@ -22,12 +22,14 @@ The service inherits exactly six independently delivered resources:
 Startup re-admits the actual launch, policy and historical planner originals
 before reading the private key through the real delivery helper. The key must
 match the runtime root. No AES, private history, completion signer, database
-connection, worker-resource channel or journal is opened by this owner.
+connection or journal is opened by this owner. Explicit signed launch v2 adds
+one fixed public-original staging channel, not private resource custody.
 
 Original process/PID, closed environment, permanent credentials, immutable
 configuration references, sealed descriptors and listener pins remain checked.
-Only the actual accepted, peer-checked socket may extend the inherited
-inventory. A replacement descriptor or unrelated socket is never exempted.
+Only the actual accepted, peer-checked socket and the v2 owner's actual single
+staging socket may extend the inherited inventory. A replacement descriptor or
+unrelated socket is never exempted.
 
 ## One exchange on the original allowance
 
@@ -51,10 +53,18 @@ pair. Nested admissions and signing retain sticky epoch/monotonic floors and
 the same cumulative ledger. The private continuity seam exchanges restrictive
 clock floors only; it conveys no permission or replacement processing scope.
 
-Only the actual signed planner/history raw2 is framed back to the original
-peer. The live owner guard remains active through send and normal socket
-close. Success means this finite exchange closed normally, not that a consume
-worker started, private replay passed, SQL committed or a credential arrived.
+Under launch v2, the actual signed planner/history raw2 first goes to the fixed
+root staging endpoint. Request originals, including old-token possession, are
+not sent to that receiver. The issuer reserves the retained/output wire bytes,
+frames and ACK within 64 MiB, spends a separate one-use staging latch and owns
+the socket from creation through normal close. Only a raw3 staged ACK matching
+both purpose-separated original identities permits returning the original raw2
+to the public caller. The receiver's separate verification and actual resource
+checks are described in [dynamic delivery](oidc-session-activation-consume-dynamic-delivery.md).
+
+Launch v1 has no staging channel and retains its existing return behavior. The
+original guard remains active through both exchanges and normal close. A staged
+ACK is not worker readiness, private replay, SQL commit or credential delivery.
 
 ## Failure and remaining boundaries
 
@@ -64,15 +74,15 @@ failure text, never original request data or exception details. Old-token
 possession remains ephemeral; this service does not journal or log it.
 
 Cleanup makes one attempt only against each held original descriptor identity.
-An uncertain accepted-socket close is quarantined and remains a failure;
+An uncertain accepted or staging socket close is quarantined and remains a failure;
 cleanup never closes an identity-replaced descriptor or silently reports
 success on a later attempt.
 
 Signed consume-worker resource pins remain authorization, not observations of
-provisioning. The service does not stage planner/history originals into a
-worker, deliver AES keys, provision resources or claim private worker readiness.
-Actual consume-worker delivery and its proof/current-row checks remain separate
-requirements. No public route or completion/release authority is added here.
+provisioning. The v2 staging path delivers only the exact public originals; this
+issuer never delivers AES keys, provisions resources or claims private worker
+readiness. Genuine worker proof/current-row checks and actual deployment remain
+separate requirements. No public route or completion/release authority is added.
 
 The checked-in socket unit and service template are uninstalled and unrendered.
 `Dockerfile.production` packages their source and the isolated launcher only.
@@ -80,4 +90,6 @@ The optional `docker-compose.oidc-session-activation-consume-inputs.yml` exposes
 only the already-provisioned fixed public `grants.sock`, read-only, with host
 path creation disabled. It mounts no signer, policy directory or AES material;
 the base Compose file is unchanged. None of these source definitions performs
-installation, provisioning, worker staging or a production acceptance check.
+installation, provisioning or a production acceptance check. The separate opt-in
+issuer staging drop-in is required only for launch v2 and leaves v1 packaging
+independent of the dynamic receiver.

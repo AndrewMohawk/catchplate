@@ -2,7 +2,8 @@
 
 The independent policy and activation planner remain separate public originals.
 Actual policy admission precedes private signer access by the cold owner. This
-v1 has no worker staging endpoint, resource creation or historical key custody.
+v1 has no worker staging endpoint. Explicit launch v2 adds only fixed staging;
+neither version creates resources or acquires historical private-key custody.
 """
 from __future__ import annotations
 
@@ -32,6 +33,8 @@ PURPOSE = "launch-oidc-session-activation-consume-input-issuer"
 SCHEMA = "serverware.signedOidcSessionActivationConsumeInputIssuerBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationConsumeInputIssuerBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationConsumeInputIssuerLaunch/v1"
+DELIVERY_LAUNCH_SCHEMA = "serverware.oidcSessionActivationConsumeInputIssuerLaunch/v2"
+DELIVERY_SOCKET_PATH = "/run/serverware/oidc-session-activation/consume-bootstrap.sock"
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationConsumeInputIssuerBootstrapIdentity/v1"
 MAX_BYTES = MAX_BOOTSTRAP_BYTES = 16 * 1024
 MAX_POLICY_BYTES = issuer.MAX_BYTES
@@ -47,6 +50,7 @@ _LAUNCH_FIELDS = frozenset({"schema", "role", "processMode", "serviceUid", "serv
     "peerUid", "peerGid", *(name for name, _ in _FD_FIELDS), "inheritedFileDescriptors",
     "listenerPath", "requestTimeoutSeconds", "listenerSocketDevice", "listenerSocketInode",
     "listenerPathDevice", "listenerPathInode"})
+_DELIVERY_LAUNCH_FIELDS = _LAUNCH_FIELDS | frozenset({"deliveryEndpoint"})
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "purpose", "role", "trustMode",
     "issuerPolicyDigest", "activationPlannerBootstrapDigest", "rootSigningKey", "issuedAtEpochNs",
     "expiresAtEpochNs", "launch"})
@@ -75,6 +79,7 @@ class _IssuerMaterial:
     live_window: tuple
     deadline_ns: int
     live: object
+    delivery_endpoint: tuple | None = None
 
 
 class _Capture(capture._JSONCapture):
@@ -108,9 +113,27 @@ def _construction_on_work(work):
     return window, window[4]
 
 
+def _delivery_endpoint(value):
+    shape._object(value, frozenset({"path", "timeoutSeconds", "peerUid", "peerGid"}),
+        "consume issuer fixed bootstrap delivery endpoint")
+    shape._literal(value["path"], DELIVERY_SOCKET_PATH)
+    shape._integer(value["timeoutSeconds"], 30, minimum=1)
+    for name in ("peerUid", "peerGid"):
+        shape._integer(value[name], 2**32 - 2)
+        if value[name] != 0:
+            _fail("consume issuer bootstrap staging requires the actual root peer")
+    return value["path"], value["timeoutSeconds"], value["peerUid"], value["peerGid"]
+
+
 def _launch_shape(value, work):
-    shape._object(value, _LAUNCH_FIELDS, "consume input issuer launch v1")
-    for name, expected in (("schema", LAUNCH_SCHEMA), ("role", ROLE),
+    if type(value) is not dict or type(value.get("schema")) is not str:
+        _fail("consume issuer launch requires its explicit closed version")
+    version = value["schema"]
+    if version not in (LAUNCH_SCHEMA, DELIVERY_LAUNCH_SCHEMA):
+        _fail("consume issuer launch version is not source fixed")
+    shape._object(value, _DELIVERY_LAUNCH_FIELDS if version == DELIVERY_LAUNCH_SCHEMA else _LAUNCH_FIELDS,
+        "consume input issuer launch")
+    for name, expected in (("schema", version), ("role", ROLE),
             ("processMode", PROCESS_MODE), ("listenerPath", LISTENER_PATH)):
         shape._literal(value[name], expected)
     for name, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID),
@@ -128,6 +151,10 @@ def _launch_shape(value, work):
         shape._integer(value[name], 2**64 - 1)
     for name in ("listenerSocketInode", "listenerPathInode"):
         shape._integer(value[name], 2**64 - 1, minimum=1)
+    if version == DELIVERY_LAUNCH_SCHEMA:
+        endpoint = _delivery_endpoint(value["deliveryEndpoint"])
+        if endpoint[1] > value["requestTimeoutSeconds"]:
+            _fail("consume issuer staging timeout exceeds its original launch timeout")
 
 
 def _payload_shape(payload, work):
@@ -214,13 +241,17 @@ def _material(payload, original, policy_original, activation_original, root, lif
     plan._same(policy.policy_digest, payload["issuerPolicyDigest"], work,
         "consume issuer admitted policy identity")
     current()
+    endpoint = (_delivery_endpoint(payload["launch"]["deliveryEndpoint"])
+        if payload["launch"]["schema"] == DELIVERY_LAUNCH_SCHEMA else None)
     timeout = payload["launch"]["requestTimeoutSeconds"]
+    if endpoint is not None:
+        timeout = min(timeout, endpoint[1])
     lifetime.narrow(interval[1], min(lifetime.window[5], timeout * 1_000_000_000), lifetime.window[6])
     launch = _capture(payload["launch"], work)
     current()
     return _IssuerMaterial(original, policy_original, activation_original, policy, launch,
         payload["rootSigningKey"]["byteCount"], payload["rootSigningKey"]["bytesDigest"],
-        interval, opening, lifetime.window, lifetime.bound, current)
+        interval, opening, lifetime.window, lifetime.bound, current, endpoint)
 
 
 def _verify_on_work(*, bootstrap_bytes, issuer_policy_bytes, activation_planner_bootstrap_bytes,

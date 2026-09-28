@@ -6,6 +6,9 @@ It is unbuilt, unexecuted and uninstalled. This is a private planning/retained
 replay and exact encrypted-export service, not consumption execution, public
 permission or token release. Earlier prepare/verify raw6 responses are preserved;
 export is a separate fixed purpose and raw7 response, not an automatic chain.
+The [dynamic consume delivery](oidc-session-activation-consume-dynamic-delivery.md)
+adds a distinct same-process startup and exact bounded-prepare then export
+sequence. The fixed-bootstrap startup described below remains unchanged.
 
 ## Startup and resource ownership
 
@@ -33,7 +36,7 @@ reject changed process identity, environment, sealed descriptors, listener,
 journal/export directory, TLS metadata or held owner/configuration. These local controls do not
 prove hostile-host isolation or off-host freshness.
 
-## One accepted exchange
+## Fixed-bootstrap startup: one accepted exchange
 
 An idle poll may repeat only while the original construction lifetime remains
 live. The launch ends after its first accepted connection, including an invalid
@@ -73,6 +76,35 @@ noncommit, rollback or permission to regenerate, re-sign, reseal or retry. A
 failed export read never authorizes creating replacement ciphertext. The private
 transport client returns unverified raw originals, not a proof-success or
 execution capability.
+
+## Dynamic startup: bounded prepare, then exact export
+
+The separate `_initialize_from_delivery_on_work` accepts only the actual dynamic
+entrypoint's same-process work, window, deadline and private bound-method
+continuation. That owner checks its original resources and exposes its measured
+retained inventory; it is not a caller-supplied admission result or new budget.
+The service re-admits the sealed originals and constructs the genuine cold
+planner while preserving that original allowance.
+
+`serve_sequence()` accepts exactly bounded prepare, then export of that same
+prepared envelope/deadline/journal identity. Each phase has one accepted
+connection. Prepare must finish with `prepared` and normal connection closure
+before export can start; uncertainty, disconnect or failure is terminal. There
+is no second prepare, generic retained lookup, replacement signature, automatic
+retry, or clock/work renewal between phases. The static runner is unchanged.
+
+The actual delivery guard is explicitly carried through cold planning,
+historical private replay, database acquisition, journals, ciphertext storage and
+AEAD operations. Each leaf keeps its own checks as well; no global callback
+interception replaces them. The new optional internal hooks default to the old
+behavior when the dynamic continuation is absent.
+
+Originals already held by delivery and startup reduce request capacity before
+body allocation. Actual recovery record sizes are checked before reading;
+export capacity is narrowed before retained ciphertext reads or encryption.
+The raw7 response is also checked against the remaining whole-call inventory.
+Neither a staged ACK nor normal two-phase completion proves SQL consumption,
+token release, current authentication or end-to-end runtime readiness.
 
 ## Remaining boundary
 

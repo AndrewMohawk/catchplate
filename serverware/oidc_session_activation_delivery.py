@@ -84,6 +84,48 @@ def _window(live_window, transport_deadline_ns, work):
     return window, current
 
 
+def _join_current(base_current, external_current, work):
+    """Explicitly retain an existing guard around this leaf's clock checks.
+
+    No native callback is intercepted and no clock/work allowance is created.
+    The optional caller is only an additional restriction, never authority in
+    place of the actual leaf guard. Default callers keep that guard unchanged.
+    """
+    if external_current is None:
+        return base_current
+    if not callable(base_current) or not callable(external_current):
+        _fail("activation delivery continuity requires actual callable guards")
+    registration.capture._SharedLedger(work)
+    limits, metrics = work.limits, work.metrics
+    ceilings = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+    last_epoch = 0
+
+    def ledger():
+        nonlocal metrics
+        registration.capture._SharedLedger(work)
+        observed = work.metrics
+        if (work.limits is not limits
+                or ceilings != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or observed.hash_work < metrics.hash_work
+                or observed.input_bytes < metrics.input_bytes
+                or observed.json_nodes < metrics.json_nodes):
+            _fail("activation delivery continuity replaced or reset the original work")
+        metrics = observed
+
+    def current():
+        nonlocal last_epoch
+        for guard in (external_current, base_current, external_current):
+            ledger()
+            observed = guard()
+            ledger()
+            if type(observed) is not int or observed < max(1, last_epoch):
+                _fail("activation delivery continuity reversed its original clock observations")
+            last_epoch = observed
+        return last_epoch
+
+    return current
+
+
 def _historical_interval(value):
     if type(value) is not tuple or len(value) != 2:
         _fail("activation delivery historical interval is not an exact immutable pair")
@@ -95,7 +137,7 @@ def _historical_interval(value):
 
 
 def _prepare_originals(custody_key, scope, live_window, transport_deadline_ns, work,
-                       *, historical_plan_interval=None):
+                       *, historical_plan_interval=None, _current=None):
     """Capture the closed scalar scope before clocks, codecs or crypto callbacks."""
     ledger = registration.capture._SharedLedger(work)
     historical = (None if historical_plan_interval is None
@@ -117,6 +159,7 @@ def _prepare_originals(custody_key, scope, live_window, transport_deadline_ns, w
     owned = registration.capture._JSONCapture(ledger, maximum_bytes=MAX_SCOPE_BYTES).visit(owned)
     work.charge(input_bytes=KEY_BYTES)
     window, check = _window(live_window, transport_deadline_ns, work)
+    check = _join_current(check, _current, work)
     check()
     for field, maximum in _SCOPE_LIMITS.items():
         registration._text(owned[field], "delivery " + field, maximum, work)
@@ -267,7 +310,7 @@ def _delivery_row_on_work(*, envelope_bytes, custody_key, scope, live_window, wo
 
 def _delivery_row_historical_on_work(*, envelope_bytes, custody_key, scope,
                                     historical_plan_interval, live_window, work,
-                                    transport_deadline_ns=None):
+                                    transport_deadline_ns=None, _current=None):
     """Reopen a historical original and derive row data, never release its token.
 
     The caller authenticates the plan interval and derives scope from original
@@ -278,7 +321,7 @@ def _delivery_row_historical_on_work(*, envelope_bytes, custody_key, scope,
     historical = _historical_interval(historical_plan_interval)
     envelope = _envelope(envelope_bytes, work)
     owned, aad, current = _prepare_originals(custody_key, scope, live_window,
-        transport_deadline_ns, work, historical_plan_interval=historical)
+        transport_deadline_ns, work, historical_plan_interval=historical, _current=_current)
     _open_captured(envelope, custody_key, owned, aad, work, current)
     return _row_captured(envelope, owned, current, work)
 

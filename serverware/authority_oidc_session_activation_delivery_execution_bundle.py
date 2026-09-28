@@ -63,10 +63,11 @@ def _capture(key, context):
     return key, owned, scope
 
 
-def _begin(context, live_window, transport_deadline_ns, work):
+def _begin(context, live_window, transport_deadline_ns, work, _current=None):
     evidence.capture._SharedLedger(work)
     journal.registration._integer(transport_deadline_ns, "consume bundle inherited deadline", 1)
     _window, current = delivery._window(live_window, transport_deadline_ns, work)
+    current = delivery._join_current(current, _current, work)
     current()
     raw_context = evidence.capability._wire(context, evidence.capture._SharedLedger(work),
         MAX_CONTEXT_BYTES, MAX_CONTEXT_NODES)
@@ -122,13 +123,13 @@ def _open_captured(raw, key, scope, raw_context, work, current):
     return original
 
 
-def _seal_on_work(*, original_bytes, bundle_key, context, live_window, transport_deadline_ns, work):
+def _seal_on_work(*, original_bytes, bundle_key, context, live_window, transport_deadline_ns, work, _current=None):
     """Seal the canonical consume journal document and genuinely reopen it."""
     if type(original_bytes) is not bytes or not 2 <= len(original_bytes) <= MAX_ORIGINAL_BYTES:
         _fail("consume execution bundle requires bounded immutable journal originals")
     original = original_bytes
     key, owned, scope = _capture(bundle_key, context)
-    raw_context, current = _begin(owned, live_window, transport_deadline_ns, work)
+    raw_context, current = _begin(owned, live_window, transport_deadline_ns, work, _current)
     journal._decode_original_on_work(original, scope=scope, work=work)
     current()
     work.charge(input_bytes=HEADER_BYTES + 8)
@@ -152,9 +153,9 @@ def _seal_on_work(*, original_bytes, bundle_key, context, live_window, transport
     return frame
 
 
-def _open_on_work(*, bundle_bytes, bundle_key, expected_context, live_window, transport_deadline_ns, work):
+def _open_on_work(*, bundle_bytes, bundle_key, expected_context, live_window, transport_deadline_ns, work, _current=None):
     """Return private exact bytes, never a verified consumption carrier."""
     original_frame = _bounded_frame(bundle_bytes)
     key, owned, scope = _capture(bundle_key, expected_context)
-    raw_context, current = _begin(owned, live_window, transport_deadline_ns, work)
+    raw_context, current = _begin(owned, live_window, transport_deadline_ns, work, _current)
     return _open_captured(original_frame, key, scope, raw_context, work, current)

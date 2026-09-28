@@ -111,7 +111,7 @@ def _capture_on_work(*, plan_originals, reserve_request_bytes, reserve_receipt_b
         "transport_deadline_ns": min(scope[5][4], scope[6])}, total
 
 
-def _start_on_work(held, work, *, expected_consume_request=None):
+def _start_on_work(held, work, *, expected_consume_request=None, _current=None):
     """Fixed suffix over this call's owned inputs, never caller-supplied success."""
     owner = held["historical_custody"]
     if expected_consume_request is None:
@@ -123,11 +123,13 @@ def _start_on_work(held, work, *, expected_consume_request=None):
         root_public_key=held["root_public_key"], current_root_enrollment_bytes=held["enrollment_bytes"],
         work=work)
     window, bound = custody.OidcSessionActivationHistoryCustody.processing_bounds_on_work(owner,
-        live_window=held["live_window"], transport_deadline_ns=held["transport_deadline_ns"], work=work)
+        live_window=held["live_window"], transport_deadline_ns=held["transport_deadline_ns"],
+        work=work, _current=_current)
     held["live_window"], held["transport_deadline_ns"] = window, bound
     owner_live = custody.OidcSessionActivationHistoryCustody.check_on_work(owner,
-        live_window=window, transport_deadline_ns=bound, work=work)
+        live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     _window, processing = admission.delivery._window(window, bound, work)
+    processing = admission.delivery._join_current(processing, _current, work)
 
     def current():
         first = processing()
@@ -150,7 +152,7 @@ def _verify_originals_on_work(*, response_originals, plan_originals,
         expected_authorization_digest, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
         historical_custody, live_window, transport_deadline_ns, work, include_delivery,
-        expected_consume_request=None):
+        expected_consume_request=None, _current=None):
     """Authenticate returned originals against actual historical pending replay."""
     returned = transport._originals(response_originals, response=True)
     if include_delivery:
@@ -184,7 +186,7 @@ def _verify_originals_on_work(*, response_originals, plan_originals,
         raise OidcSessionActivationCompletionUncertainError("activation completion is not established")
     work.charge(input_bytes=len(returned[1]))
     returned_identity = returned[1].decode("ascii")
-    current = _start_on_work(held, work, expected_consume_request=consume)
+    current = _start_on_work(held, work, expected_consume_request=consume, _current=_current)
     admitted = None
 
     def live():
@@ -212,7 +214,8 @@ def _verify_originals_on_work(*, response_originals, plan_originals,
         authorization_enrollment_bytes=held["authorization_enrollment_bytes"],
         grant_bytes=held["grant_bytes"], grant_enrollment_bytes=held["grant_enrollment_bytes"],
         configuration_digest=held["configuration_digest"], historical_custody=held["historical_custody"],
-        live_window=held["live_window"], transport_deadline_ns=held["transport_deadline_ns"], work=work)
+        live_window=held["live_window"], transport_deadline_ns=held["transport_deadline_ns"],
+        work=work, _current=_current)
     if include_delivery:
         if type(actual_admission) is not admission._AdmittedDeliveryCompletion:
             raise OidcSessionActivationCompletionResponseError(
@@ -283,7 +286,7 @@ def _verify_delivery_on_work(*, expected_consume_request, response_originals, pl
         operation_public_key, root_public_key, configuration_digest,
         expected_authorization_digest, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        historical_custody, live_window, transport_deadline_ns, work):
+        historical_custody, live_window, transport_deadline_ns, work, _current=None):
     """Original-only suffix: verify completion and expose authentic delivery IDs."""
     return _verify_originals_on_work(response_originals=response_originals, plan_originals=plan_originals,
         reserve_request_bytes=reserve_request_bytes, reserve_receipt_bytes=reserve_receipt_bytes,
@@ -297,7 +300,7 @@ def _verify_delivery_on_work(*, expected_consume_request, response_originals, pl
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         historical_custody=historical_custody, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=True,
-        expected_consume_request=expected_consume_request)
+        expected_consume_request=expected_consume_request, _current=_current)
 
 
 def _request_on_work(endpoint, *, packet_digest, plan_originals,

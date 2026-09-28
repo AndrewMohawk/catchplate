@@ -151,7 +151,7 @@ class OidcSessionActivationHistoryCustody:
     @classmethod
     def for_consume_planning(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
             expected_consume_request, bundle_key, delivery_custody_key, live_window,
-            transport_deadline_ns, work):
+            transport_deadline_ns, work, _current=None):
         """Fixed v2 factory; never reinterpret a completion owner or material."""
         if cls is not OidcSessionActivationHistoryCustody:
             _fail("consume history requires the exact configured owner class")
@@ -161,7 +161,7 @@ class OidcSessionActivationHistoryCustody:
             expected_consume_request=expected_consume_request, bundle_key=bundle_key,
             delivery_custody_key=delivery_custody_key, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work,
-            purpose=bootstrap.CONSUME_CONSUMER_ROLE)
+            purpose=bootstrap.CONSUME_CONSUMER_ROLE, _current=_current)
         return owner
 
     @classmethod
@@ -230,7 +230,7 @@ class OidcSessionActivationHistoryCustody:
 
     def _initialize(self, *, custody_bytes, root_public_key, expected_receiver_identity,
             bundle_key, delivery_custody_key, live_window, transport_deadline_ns, work,
-            purpose, expected_consume_request):
+            purpose, expected_consume_request, _current=None):
         evidence.capture._SharedLedger(work)
         if type(self) is not OidcSessionActivationHistoryCustody:
             _fail("historical activation custody requires its exact owner class")
@@ -250,6 +250,7 @@ class OidcSessionActivationHistoryCustody:
             if consume else None)
         _process_for_purpose(purpose)
         _window, processing = history.delivery._window(window, bound, work)
+        processing = history.delivery._join_current(processing, _current, work)
         processing()
         verify = _verifier(purpose)
         material = verify(custody_bytes=original, root_public_key=root,
@@ -278,7 +279,7 @@ class OidcSessionActivationHistoryCustody:
         object.__setattr__(self, "_last_epoch", material.opening_sample[1])
         object.__setattr__(self, "_last_monotonic", material.opening_sample[2])
         self._snapshot_configuration()
-        self._guard(configured, window, bound, work)()
+        self._guard(configured, window, bound, work, _current)()
 
     def _snapshot_configuration(self):
         if (type(self) is not OidcSessionActivationHistoryCustody or self._closed
@@ -297,7 +298,7 @@ class OidcSessionActivationHistoryCustody:
         _process_for_purpose(configured.consumer_role)
         return configured
 
-    def _guard(self, configured, window, bound, work):
+    def _guard(self, configured, window, bound, work, _current=None):
         opening, interval = configured.opening_sample, configured.attestation_interval
         bound = min(bound, window[4], opening[0] + interval[1] - opening[1])
         _window, processing = history.delivery._window(window, bound, work)
@@ -317,7 +318,7 @@ class OidcSessionActivationHistoryCustody:
             self._snapshot_configuration()
             return now
 
-        return current
+        return history.delivery._join_current(current, _current, work)
 
     def _bounds(self, configured, window, deadline):
         opening, interval = configured.opening_sample, configured.attestation_interval
@@ -326,8 +327,8 @@ class OidcSessionActivationHistoryCustody:
             maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
         return narrowed, min(narrowed[4], deadline, opening[0] + interval[1] - opening[1])
 
-    def _reauthenticate_locked(self, configured, window, bound, work):
-        current = self._guard(configured, window, bound, work)
+    def _reauthenticate_locked(self, configured, window, bound, work, _current=None):
+        current = self._guard(configured, window, bound, work, _current)
         current()
         verify = _verifier(configured.consumer_role)
         material = verify(custody_bytes=configured.custody_bytes,
@@ -469,7 +470,7 @@ class OidcSessionActivationHistoryCustody:
         finally:
             lock.release()
 
-    def check_on_work(self, *, live_window, transport_deadline_ns, work):
+    def check_on_work(self, *, live_window, transport_deadline_ns, work, _current=None):
         """Authenticate current custody before protected I/O or retained reuse."""
         evidence.capture._SharedLedger(work)
         window = clock._validate(live_window)
@@ -480,16 +481,16 @@ class OidcSessionActivationHistoryCustody:
         if not lock.acquire(blocking=False):
             _fail("historical activation custody is already in use")
         try:
-            _material, current = self._reauthenticate_locked(configured, window, bound, work)
+            _material, current = self._reauthenticate_locked(configured, window, bound, work, _current)
             window, bound = self._bounds(configured, window, bound)
-            current = self._guard(configured, window, bound, work)
+            current = self._guard(configured, window, bound, work, _current)
             result = self._retained_guard(current)
             current()
             return result
         finally:
             lock.release()
 
-    def processing_bounds_on_work(self, *, live_window, transport_deadline_ns, work):
+    def processing_bounds_on_work(self, *, live_window, transport_deadline_ns, work, _current=None):
         """Authenticate, then return only narrower current I/O bound data."""
         evidence.capture._SharedLedger(work)
         window = clock._validate(live_window)
@@ -500,10 +501,10 @@ class OidcSessionActivationHistoryCustody:
         if not lock.acquire(blocking=False):
             _fail("historical activation custody is already in use")
         try:
-            _material, current = self._reauthenticate_locked(configured, window, bound, work)
+            _material, current = self._reauthenticate_locked(configured, window, bound, work, _current)
             narrowed, bound = self._bounds(configured, window, bound)
             current()
-            self._guard(configured, narrowed, bound, work)()
+            self._guard(configured, narrowed, bound, work, _current)()
             return narrowed, bound
         finally:
             lock.release()
@@ -511,7 +512,7 @@ class OidcSessionActivationHistoryCustody:
     def verify_exchange_on_work(self, *, originals, expectations, before_vector_bytes,
             authorization_bytes, grant_bytes, authorization_enrollment_bytes, grant_enrollment_bytes,
             current_root_enrollment_bytes, root_public_key, planner_public_key, operation_public_key,
-            configuration_digest, live_window, transport_deadline_ns, work):
+            configuration_digest, live_window, transport_deadline_ns, work, _current=None):
         evidence.capture._SharedLedger(work)
         raw2, before = caller.grants.replay._originals(history.OPERATION, originals, before_vector_bytes)
         caller_raw = caller.authorization._original(authorization_bytes, caller.MAX_AUTHORIZATION_BYTES,
@@ -540,9 +541,9 @@ class OidcSessionActivationHistoryCustody:
         if not lock.acquire(blocking=False):
             _fail("historical activation custody is already in use")
         try:
-            material, current = self._reauthenticate_locked(configured, window, bound, work)
+            material, current = self._reauthenticate_locked(configured, window, bound, work, _current)
             window, bound = self._bounds(configured, window, bound)
-            current = self._guard(configured, window, bound, work)
+            current = self._guard(configured, window, bound, work, _current)
             current()
             admitted = material.planner
             registration._same(evidence.keys._spki_on_work(root, work),
@@ -571,7 +572,7 @@ class OidcSessionActivationHistoryCustody:
                 current_root_enrollment_bytes=state_enrollment, root_public_key=root,
                 planner_public_key=planner, operation_public_key=operation_key, configuration_digest=config,
                 bundle_key=configured.bundle_key, delivery_custody_key=configured.delivery_key,
-                live_window=window, transport_deadline_ns=bound, work=work)
+                live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
             if type(actual) is not exchange._HistoricalExchange:
                 _fail("historical custody requires genuine same-call original exchange")
             _activation_binding(configured, actual.replayed.request, work)

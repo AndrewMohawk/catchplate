@@ -77,6 +77,7 @@ opens no AES/history key, decrypts no token, writes no SQL/state, runs no worker
 and claims neither consume commit nor credential release. The separate
 [one-shot issuer](oidc-session-activation-consume-input-issuer-service.md) and
 [durable acquisition client](oidc-session-activation-consume-input-acquisition.md)
-are now source-connected. Actual resource provisioning and exact delivery into
-the matching consume worker remain open; these originals alone do not close the
-public flow or prove a service ran.
+are now source-connected. Explicit issuer launch v2 also connects
+[exact-pair worker staging](oidc-session-activation-consume-dynamic-delivery.md).
+Actual resource provisioning remains open; signed originals and a staged ACK
+alone do not close the public flow or prove a service ran.

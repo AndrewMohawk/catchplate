@@ -101,7 +101,7 @@ def _capture(context, *, request, scope, old_token_bytes, business_before_roots,
         state_root_public_key, complete_root_vector_bytes, head_query_bytes,
         head_observation_bytes, activation_originals, activation_expectations, activation_scope,
         activation_planner_public_key, operation_public_key, historical_custody,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _current=None):
     return _capture_originals(context, request=request, scope=scope, old_token_bytes=old_token_bytes,
         business_before_roots=business_before_roots, authorization_before_roots=authorization_before_roots,
         before_proofs=before_proofs, read_heads=read_heads, query_frontiers=query_frontiers,
@@ -112,7 +112,7 @@ def _capture(context, *, request, scope, old_token_bytes, business_before_roots,
         activation_expectations=activation_expectations, activation_scope=activation_scope,
         activation_planner_public_key=activation_planner_public_key, operation_public_key=operation_public_key,
         historical_custody=historical_custody, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, work=work, historical=False)
+        transport_deadline_ns=transport_deadline_ns, work=work, historical=False, _current=_current)
 
 
 def _capture_originals(context, *, request, scope, old_token_bytes, business_before_roots,
@@ -121,7 +121,7 @@ def _capture_originals(context, *, request, scope, old_token_bytes, business_bef
         state_root_public_key, complete_root_vector_bytes, head_query_bytes,
         head_observation_bytes, activation_originals, activation_expectations, activation_scope,
         activation_planner_public_key, operation_public_key, historical_custody,
-        live_window, transport_deadline_ns, work, historical):
+        live_window, transport_deadline_ns, work, historical, _current=None):
     """Detach all graphs and hold originals/keys before native/hash/clock work."""
     ledger = evidence.capture._SharedLedger(work)
     if type(historical) is not bool:
@@ -207,7 +207,7 @@ def _capture_originals(context, *, request, scope, old_token_bytes, business_bef
     custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
         root_public_key=root, current_root_enrollment_bytes=original_state[0], work=work)
     narrowed, narrowed_bound = custody.OidcSessionActivationHistoryCustody.processing_bounds_on_work(owner,
-        live_window=window, transport_deadline_ns=bound, work=work)
+        live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     if (narrowed[:3] != window[:3] or narrowed[3] > window[3] or narrowed[4] > window[4]
             or narrowed[5] > window[5] or narrowed[6] > window[6] or narrowed_bound > bound):
         _fail("consume provenance custody renewed the original processing allowance")
@@ -219,7 +219,7 @@ def _capture_originals(context, *, request, scope, old_token_bytes, business_bef
         operation_key, owner, narrowed, min(narrowed_bound, narrowed[4]))
 
 
-def _live(invocation, work):
+def _live(invocation, work, *, _current=None):
     epoch, monotonic = invocation.window[0], invocation.window[2]
 
     def check():
@@ -232,10 +232,10 @@ def _live(invocation, work):
         epoch, monotonic = now, observed
         return now
 
-    return check
+    return transition.delivery._join_current(check, _current, work)
 
 
-def _provenance(invocation, work):
+def _provenance(invocation, work, *, _current=None):
     raw, old, scope = invocation.activation_originals, invocation.activation_scope, invocation.scope
     selected = invocation.context._exact("oidc_session_activation_deliveries",
         {"id": scope["deliveryId"]}, work=work)
@@ -252,10 +252,11 @@ def _provenance(invocation, work):
         expected_database_id=old["databaseId"], expected_generation_digest=old["generationDigest"],
         expected_pending_sequence=old["pendingSequence"], expected_pending_head_digest=old["pendingHeadDigest"],
         expected_fence=old["fence"], historical_custody=invocation.historical_custody,
-        live_window=invocation.window, transport_deadline_ns=invocation.monotonic_deadline, work=work)
+        live_window=invocation.window, transport_deadline_ns=invocation.monotonic_deadline,
+        work=work, _current=_current)
 
 
-def _replay(invocation, work):
+def _replay(invocation, work, *, _current=None):
     expected, raw = invocation.scope, invocation.raw_reads
     return writes._replay_on_work(invocation.context, old_token_bytes=invocation.old_token_bytes,
         expected_delivery_id=expected["deliveryId"], expected_user_id=expected["userId"],
@@ -266,10 +267,10 @@ def _replay(invocation, work):
         before_proofs=raw["before_proofs"], read_heads=invocation.read_heads,
         query_frontiers=invocation.query_frontiers, expected_counted_heads=invocation.expected_counted_heads,
         write_proof_bytes=invocation.write_proof_bytes, live_window=invocation.window,
-        transport_deadline_ns=invocation.monotonic_deadline, work=work)
+        transport_deadline_ns=invocation.monotonic_deadline, work=work, _current=_current)
 
 
-def _authorities(invocation, live, work):
+def _authorities(invocation, live, work, *, _current=None):
     originals = invocation.state_originals
     observed = state._verify_on_work(request=invocation.request, scope=invocation.scope,
         old_token_bytes=invocation.old_token_bytes, complete_root_vector_bytes=originals[1],
@@ -283,11 +284,11 @@ def _authorities(invocation, live, work):
             (invocation.expected_counted_heads, projected.expected_counted_heads, "seven counted heads")):
         work.prepare_copy(actual)
         registration._same(tuple(actual), expected, work, "observed consume " + label)
-    actual_provenance = _provenance(invocation, work)
+    actual_provenance = _provenance(invocation, work, _current=_current)
     first = actual_provenance.live()
     if live() < first:
         _fail("consume processing reversed after completed-activation admission")
-    actual_writes = _replay(invocation, work)
+    actual_writes = _replay(invocation, work, _current=_current)
     return observed, actual_provenance, actual_writes
 
 
@@ -379,7 +380,7 @@ def _produce_on_work(context, *, request, scope, old_token_bytes, business_befor
         state_root_public_key, complete_root_vector_bytes, head_query_bytes,
         head_observation_bytes, activation_originals, activation_expectations, activation_scope,
         activation_planner_public_key, operation_public_key, historical_custody,
-        planner_private_key, planner_public_key, live_window, transport_deadline_ns, work):
+        planner_private_key, planner_public_key, live_window, transport_deadline_ns, work, _current=None):
     """Replay actual originals, then sign only bounded token-free commitments."""
     private, public = planner_private_key, planner_public_key
     if (not isinstance(private, evidence.Ed25519PrivateKey)
@@ -395,9 +396,9 @@ def _produce_on_work(context, *, request, scope, old_token_bytes, business_befor
         activation_expectations=activation_expectations, activation_scope=activation_scope,
         activation_planner_public_key=activation_planner_public_key, operation_public_key=operation_public_key,
         historical_custody=historical_custody, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, work=work)
-    live = _live(invocation, work)
-    observed, actual_provenance, actual_writes = _authorities(invocation, live, work)
+        transport_deadline_ns=transport_deadline_ns, work=work, _current=_current)
+    live = _live(invocation, work, _current=_current)
+    observed, actual_provenance, actual_writes = _authorities(invocation, live, work, _current=_current)
     fields = _bodies(invocation, actual_provenance, actual_writes, work)
     expected, issued = invocation.scope, invocation.window[0]
     payload = {**contract._source_fields(), **fields,
@@ -439,7 +440,7 @@ def _verify_full_on_work(context, *, envelope_bytes, request, scope, old_token_b
         state_root_public_key, complete_root_vector_bytes, head_query_bytes,
         head_observation_bytes, activation_originals, activation_expectations, activation_scope,
         activation_planner_public_key, operation_public_key, historical_custody,
-        planner_public_key, live_window, transport_deadline_ns, work):
+        planner_public_key, live_window, transport_deadline_ns, work, _current=None):
     """Authenticate the known signer, then genuinely replay every original again."""
     original, public = envelope_bytes, planner_public_key
     if (type(original) is not bytes or not 2 <= len(original) <= contract.MAX_BYTES
@@ -455,8 +456,8 @@ def _verify_full_on_work(context, *, envelope_bytes, request, scope, old_token_b
         activation_expectations=activation_expectations, activation_scope=activation_scope,
         activation_planner_public_key=activation_planner_public_key, operation_public_key=operation_public_key,
         historical_custody=historical_custody, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, work=work)
-    live = _live(invocation, work)
+        transport_deadline_ns=transport_deadline_ns, work=work, _current=_current)
+    live = _live(invocation, work, _current=_current)
     live()
     envelope = contract._decode_on_work(original, envelope=True, work=work)
     payload, expected = envelope["payload"], invocation.scope
@@ -469,7 +470,7 @@ def _verify_full_on_work(context, *, envelope_bytes, request, scope, old_token_b
     evidence.capability._signature(public, envelope["signatureBase64Url"], contract.SIGNATURE_DOMAIN,
         unsigned, evidence.capture._SharedLedger(work))
     evidence._fresh(payload, live(), expected["maximumPlanAgeNs"], expected["maximumClockSkewNs"])
-    observed, actual_provenance, actual_writes = _authorities(invocation, live, work)
+    observed, actual_provenance, actual_writes = _authorities(invocation, live, work, _current=_current)
     fields = _bodies(invocation, actual_provenance, actual_writes, work)
     for name, value in fields.items():
         registration._same(payload[name], value, work, "consume original " + name)

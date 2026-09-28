@@ -178,7 +178,7 @@ def _business_originals_on_work(context, *, assertion_bytes, old_token_bytes, ne
         expected_credential_id, expected_credential_record_id, expected_challenge_id,
         rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, live_window, work, transport_deadline_ns=None,
-        historical_plan_interval=None):
+        historical_plan_interval=None, _current=None):
     """Replay originals once and retain only this call's owned context and clock.
 
     Raw QueryRead records come from the exact context; raw primary/range proofs
@@ -250,6 +250,7 @@ def _business_originals_on_work(context, *, assertion_bytes, old_token_bytes, ne
             _fail("activation historical database cutoff or issue is in the future")
         return epoch
 
+    live = delivery._join_current(live, _current, work)
     live()
     session_selected = current._exact("oidc_browser_sessions", {"id": values["session_id"]}, work=work)
     challenge_selected = current._exact("webauthn_challenges", {"id": values["challenge_id"]}, work=work)
@@ -266,7 +267,7 @@ def _business_originals_on_work(context, *, assertion_bytes, old_token_bytes, ne
         intent = assertion._derive_on_work(**assertion_arguments)
     else:
         intent = assertion._derive_historical_on_work(**assertion_arguments,
-            original_database_now_epoch_ns=now_ns, historical_plan_interval=historical)
+            original_database_now_epoch_ns=now_ns, historical_plan_interval=historical, _current=_current)
     registration._same((intent["subject"]["credentialRecordId"], intent["subject"]["challengeId"],
         intent["sessionCas"]["expectedTokenDigest"], intent["sessionCas"]["newTokenDigest"], intent["assertionDigest"]),
         (values["credential_record_id"], values["challenge_id"], values["old_token_digest"],
@@ -304,7 +305,7 @@ def _business_originals_on_work(context, *, assertion_bytes, old_token_bytes, ne
         delivery_row = delivery._delivery_row_on_work(**delivery_arguments)
     else:
         delivery_row = delivery._delivery_row_historical_on_work(**delivery_arguments,
-            historical_plan_interval=historical)
+            historical_plan_interval=historical, _current=_current)
     work.prepare_copy(challenge)
     used_challenge = {**challenge, "used_at": now_iso}
     work.prepare_copy(credential)
@@ -478,7 +479,7 @@ def _full_transition_historical_on_work(context, *, assertion_bytes, old_token_b
         expected_credential_id, expected_credential_record_id, expected_challenge_id,
         rp_id, origin, authn_policy, trust_policy, business_before_roots, authorization_before_roots,
         before_proofs, read_heads, query_frontiers, historical_plan_interval,
-        live_window, work, transport_deadline_ns=None):
+        live_window, work, transport_deadline_ns=None, _current=None):
     """Reverify historical originals and effects with a separate current guard.
 
     The authenticated plan's interval and original UTC database cutoff constrain
@@ -496,7 +497,8 @@ def _full_transition_historical_on_work(context, *, assertion_bytes, old_token_b
         trust_policy=trust_policy, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
         read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window, work=work,
-        transport_deadline_ns=transport_deadline_ns, historical_plan_interval=historical)
+        transport_deadline_ns=transport_deadline_ns, historical_plan_interval=historical,
+        _current=_current)
     return _finish_full_transition(owned, effects, result, live, valid_until, work,
         historical_plan_interval=historical)
 

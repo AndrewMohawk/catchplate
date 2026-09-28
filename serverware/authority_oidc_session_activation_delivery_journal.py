@@ -162,7 +162,7 @@ class DeliveryOriginalJournal(storage.ActivationOriginalJournal):
 
     def __init__(self, *, directory_fd, expected_device, expected_inode, expected_uid, expected_gid,
             maximum_records, quota_bytes, configuration_digest, journal_key, bundle_key, delivery_key,
-            live_window, work, transport_deadline_ns):
+            live_window, work, transport_deadline_ns, maximum_record_bytes=None, _current=None):
         shape._integer(transport_deadline_ns, minimum=1)
         keys = (journal_key, bundle_key, delivery_key)
         if (any(type(key) is not bytes or len(key) != 32 for key in keys)
@@ -175,7 +175,8 @@ class DeliveryOriginalJournal(storage.ActivationOriginalJournal):
             expected_device=expected_device, expected_inode=expected_inode, expected_uid=expected_uid,
             expected_gid=expected_gid, maximum_records=maximum_records, quota_bytes=quota_bytes,
             configuration_digest=configuration_digest, journal_key=journal_key, delivery_key=bundle_key,
-            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
+            maximum_record_bytes=maximum_record_bytes, _current=_current)
         configured = self._configuration
         self._base_configuration = configured
         self._delivery_configuration = (*configured[:4], delivery_key, *configured[4:])
@@ -187,18 +188,18 @@ class DeliveryOriginalJournal(storage.ActivationOriginalJournal):
             _fail("consume journal configuration changed after construction")
         return self._delivery_configuration
 
-    def append(self, *, scope, original_bytes, live_window, work, transport_deadline_ns):
+    def append(self, *, scope, original_bytes, live_window, work, transport_deadline_ns, _current=None):
         shape._integer(transport_deadline_ns, minimum=1)
         return storage.ActivationOriginalJournal.append(self, scope=scope, original_bytes=original_bytes,
-            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns, _current=_current)
 
-    def read(self, *, scope, live_window, work, transport_deadline_ns):
+    def read(self, *, scope, live_window, work, transport_deadline_ns, _current=None):
         shape._integer(transport_deadline_ns, minimum=1)
         return storage.ActivationOriginalJournal.read(self, scope=scope, live_window=live_window,
-            work=work, transport_deadline_ns=transport_deadline_ns)
+            work=work, transport_deadline_ns=transport_deadline_ns, _current=_current)
 
-    def read_bound(self, *, scope, expected_journal_digest, live_window, work, transport_deadline_ns):
+    def read_bound(self, *, scope, expected_journal_digest, live_window, work, transport_deadline_ns, _current=None):
         shape._integer(transport_deadline_ns, minimum=1)
         return storage.ActivationOriginalJournal.read_bound(self, scope=scope,
             expected_journal_digest=expected_journal_digest, live_window=live_window,
-            work=work, transport_deadline_ns=transport_deadline_ns)
+            work=work, transport_deadline_ns=transport_deadline_ns, _current=_current)

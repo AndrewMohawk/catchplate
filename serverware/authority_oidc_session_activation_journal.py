@@ -204,12 +204,14 @@ class ActivationOriginalJournal:
     """PID-bound local first-original custody; not an anti-rollback anchor."""
 
     __slots__ = ("_pid", "_configuration", "_binding", "_closed", "_directory_fd",
-        "_directory_stamp", "_io", "_entries", "_used_bytes")
+        "_directory_stamp", "_io", "_entries", "_used_bytes", "_maximum_record_bytes")
 
     def __init__(self, *, directory_fd, expected_device, expected_inode, expected_uid, expected_gid,
             maximum_records, quota_bytes, configuration_digest, journal_key, delivery_key,
-            live_window, work, transport_deadline_ns=None):
+            live_window, work, transport_deadline_ns=None, maximum_record_bytes=None, _current=None):
         _storage_profile(self)
+        record_maximum = MAX_RECORD_BYTES if maximum_record_bytes is None else maximum_record_bytes
+        shape._integer(record_maximum, MAX_RECORD_BYTES, minimum=50)
         for value, minimum, maximum in ((directory_fd, 0, 2**31 - 1),
                 (expected_device, 0, 2**64 - 1), (expected_inode, 1, 2**64 - 1),
                 (expected_uid, 1, 2**32 - 2), (expected_gid, 0, 2**32 - 2),
@@ -226,7 +228,9 @@ class ActivationOriginalJournal:
             delivery_key, self._binding, maximum_records, quota_bytes)
         self._closed, self._directory_fd, self._directory_stamp, self._io = False, None, None, None
         self._entries, self._used_bytes = {}, 0
+        self._maximum_record_bytes = record_maximum
         _window_value, current = delivery._window(live_window, transport_deadline_ns, work)
+        current = delivery._join_current(current, _current, work)
         current()
         self._require_process()
         self._directory_metadata(directory_fd, work, current)
@@ -237,7 +241,7 @@ class ActivationOriginalJournal:
             self._directory_metadata(self._directory_fd, work, current)
             _native(work, current, lambda: fcntl.flock(self._directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB))
             self._io = _native(work, current, lambda: WitnessJournalIO(self._directory_fd,
-                maximum_record_bytes=MAX_RECORD_BYTES))
+                maximum_record_bytes=record_maximum))
             self._directory_stamp = self._stamp(work, current)
 
             def scan():
@@ -317,7 +321,7 @@ class ActivationOriginalJournal:
         if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o400
                 or metadata.st_nlink != 1 or metadata.st_dev != self._binding[0]
                 or (metadata.st_uid, metadata.st_gid) != self._binding[2:]
-                or not 50 <= metadata.st_size <= MAX_RECORD_BYTES):
+                or not 50 <= metadata.st_size <= self._maximum_record_bytes):
             _fail("activation journal record is not bounded private immutable material")
         return _identity(metadata)
 
@@ -447,13 +451,14 @@ class ActivationOriginalJournal:
             _fail("activation journal seal did not reopen its exact original")
         return raw
 
-    def append(self, *, scope, original_bytes, live_window, work, transport_deadline_ns=None):
+    def append(self, *, scope, original_bytes, live_window, work, transport_deadline_ns=None, _current=None):
         """Durably retain the first exact private original; return ciphertext ID."""
         held = _scope(scope)
         if type(original_bytes) is not bytes or not 2 <= len(original_bytes) <= MAX_ORIGINAL_BYTES:
             _fail("activation journal append requires bounded immutable original bytes")
         self._require_process()
         _window_value, current = delivery._window(live_window, transport_deadline_ns, work)
+        current = delivery._join_current(current, _current, work)
         with self._io.ready():
             try:
                 self._require_process()
@@ -478,6 +483,8 @@ class ActivationOriginalJournal:
                     return previous[1]
                 if len(self._entries) >= self._configuration[5]:
                     _fail("activation journal record count is exhausted")
+                if len(original_bytes) + MAX_SCOPE_BYTES + 46 > self._maximum_record_bytes:
+                    _fail("activation journal record exceeds its inherited allocation ceiling")
                 raw = self._seal(held, original_bytes, work, current)
                 if len(raw) > self._configuration[6] - self._used_bytes:
                     _fail("activation journal byte quota is exhausted")
@@ -505,13 +512,13 @@ class ActivationOriginalJournal:
                 self._io.poison()
                 raise
 
-    def read(self, *, scope, live_window, work, transport_deadline_ns=None):
+    def read(self, *, scope, live_window, work, transport_deadline_ns=None, _current=None):
         """Read exact local plaintext privately; absence says nothing about SQL."""
         held = _scope(scope)
         return ActivationOriginalJournal._read_captured(self, held=held, expected_journal_digest=None,
-            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns, _current=_current)
 
-    def read_bound(self, *, scope, expected_journal_digest, live_window, work, transport_deadline_ns=None):
+    def read_bound(self, *, scope, expected_journal_digest, live_window, work, transport_deadline_ns=None, _current=None):
         """Join the independent ciphertext locator before any private decryption."""
         held = _scope(scope)
         expected = expected_journal_digest
@@ -521,12 +528,13 @@ class ActivationOriginalJournal:
         # The complete scope and immutable digest are held before process,
         # clock, readiness or file callbacks. Neither is learned from the file.
         return ActivationOriginalJournal._read_captured(self, held=held, expected_journal_digest=expected,
-            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
+            live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns, _current=_current)
 
-    def _read_captured(self, *, held, expected_journal_digest, live_window, work, transport_deadline_ns):
+    def _read_captured(self, *, held, expected_journal_digest, live_window, work, transport_deadline_ns, _current=None):
         """Shared real read path; None preserves the original unbound API."""
         self._require_process()
         _window_value, current = delivery._window(live_window, transport_deadline_ns, work)
+        current = delivery._join_current(current, _current, work)
         with self._io.ready():
             try:
                 self._require_process()

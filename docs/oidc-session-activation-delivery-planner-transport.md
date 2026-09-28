@@ -56,7 +56,7 @@ means the root-created socket-activation listener; it does **not** attest that
 the executing server is UID 65501. Dedicated launch/resource admission remains
 necessary; this module does not provision socket access.
 
-Every I/O entrypoint requires the supplied `live_window`, inherited
+The original I/O entrypoints require the supplied `live_window`, inherited
 `deadline_ns` and existing `work`. It only narrows the bound; no clock opening or
 new work allowance exists. Source ceilings and all frame lengths are checked
 before body allocation. Prepare/verify preserve their existing reservation of
@@ -87,6 +87,18 @@ retained lookup, SQL or fallback paths here. A disconnect or uncertainty may fol
 it is never proof of absence or permission to prepare/sign again.
 
 ## Guarded prepare and export callers
+
+The dynamic worker has separate server entrypoints:
+`_recv_request_on_work(connection, *, deadline_ns, work, current,
+maximum_request_bytes=None, expected_purpose=None)` and
+`_send_response_on_work(connection, originals, *, deadline_ns, work, current,
+export=False)`. These retain the actual original delivery/service guard before
+and after each native readiness/read/write operation on the owned nonblocking
+socket. The owner-selected phase is checked at the magic prefix; the optional
+body cap is checked after fixed grammar lengths and before body allocation.
+Neither can widen the existing raw15/raw16/raw4 and raw6/raw7 grammar or its
+aggregate ceiling. The actual dynamic service selects only bounded prepare,
+then exact retained export, on one original work/window.
 
 The source-fixed guarded entrypoints are:
 

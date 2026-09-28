@@ -327,6 +327,74 @@ def _send_response(connection, originals, *, live_window, deadline_ns, work, exp
     live()
 
 
+def _recv_request_on_work(connection, *, deadline_ns, work, current,
+        maximum_request_bytes=None, expected_purpose=None):
+    """Dynamic worker intake retains actual original guards between chunks.
+
+    This is the existing closed grammar on an owned nonblocking socket. The
+    optional body cap only tightens the profile's prior whole-exchange ceiling.
+    No numeric-window-only guard can replace the actual delivery continuation.
+    """
+    from serverware import oidc_session_activation_release_transport as chunks
+
+    maximum = MAX_BYTES if maximum_request_bytes is None else maximum_request_bytes
+    if type(maximum) is not int or not 1 <= maximum <= MAX_BYTES:
+        _fail("consume planner dynamic request cap must only restrict the fixed inventory")
+    if expected_purpose is not None:
+        _profile(expected_purpose)
+    kwargs = {"deadline_ns": deadline_ns, "work": work, "current": current}
+    chunks._guard(work, current, deadline_ns)
+    chunks._connection(connection, **kwargs)
+    chunks._peer(connection, (REQUEST_PEER_UID, REQUEST_PEER_GID), **kwargs)
+    magic = chunks._recv_exact(connection, 8, **kwargs)
+    if magic == PREPARE_REQUEST_MAGIC:
+        purpose = PREPARE_PURPOSE
+    elif magic == BOUNDED_PREPARE_REQUEST_MAGIC:
+        purpose = BOUNDED_PREPARE_PURPOSE
+    elif magic == RETAINED_REQUEST_MAGIC:
+        purpose = RETAINED_PURPOSE
+    elif magic == EXPORT_REQUEST_MAGIC:
+        purpose = EXPORT_PURPOSE
+    else:
+        _fail("consume planner dynamic request magic differs")
+    if expected_purpose is not None and purpose != expected_purpose:
+        _fail("consume planner dynamic request differs from the owner's fixed phase")
+    limits = _profile(purpose)[1]
+    header = chunks._recv_exact(connection, 8 * len(limits), **kwargs)
+    work.charge(input_bytes=len(header))
+    lengths = tuple(int.from_bytes(header[index:index + 8], "big")
+        for index in range(0, len(header), 8))
+    _request_lengths(lengths, purpose)
+    if sum(lengths) > maximum:
+        _fail("consume planner dynamic request exceeds the remaining held inventory")
+    work.charge(input_bytes=2 * sum(lengths))
+    originals = tuple(chunks._recv_precharged(connection, size, **kwargs) for size in lengths)
+    chunks._eof(connection, **kwargs)
+    held = _originals(originals, response=False)
+    if held[0] != purpose:
+        _fail("consume planner dynamic magic and original purpose differ")
+    chunks._guard(work, current, deadline_ns)
+    return held
+
+
+def _send_response_on_work(connection, originals, *, deadline_ns, work, current, export=False):
+    """The dynamic owner retains its genuine guard through each response chunk."""
+    from serverware import oidc_session_activation_release_transport as chunks
+
+    kwargs = {"deadline_ns": deadline_ns, "work": work, "current": current}
+    chunks._guard(work, current, deadline_ns)
+    held = _originals(originals, response=True, export=export)
+    chunks._connection(connection, **kwargs)
+    chunks._peer(connection, (REQUEST_PEER_UID, REQUEST_PEER_GID), **kwargs)
+    magic = EXPORT_RESPONSE_MAGIC if export else RESPONSE_MAGIC
+    header_bytes = len(magic) + 8 * len(held)
+    work.charge(input_bytes=2 * header_bytes + sum(map(len, held)))
+    header = magic + b"".join(len(raw).to_bytes(8, "big") for raw in held)
+    for raw in (header, *held):
+        chunks._send_precharged(connection, raw, **kwargs)
+    chunks._guard(work, current, deadline_ns)
+
+
 def _socket_request(endpoint, *, originals, live_window, deadline_ns, work):
     # All originals, endpoint scalars and the original window are held before
     # the first native/clock callback. No callback or received proof is input.

@@ -44,7 +44,7 @@ def _verify_on_work(*, originals, expectations, before_vector_bytes, authorizati
         grant_bytes, authorization_enrollment_bytes, grant_enrollment_bytes,
         current_root_enrollment_bytes, root_public_key, planner_public_key,
         operation_public_key, configuration_digest, bundle_key, delivery_custody_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _current=None):
     """Authenticate originals, rederive actual effects, then join every grant claim."""
     evidence.capture._SharedLedger(work)
     raw2, before = grants.replay._originals(OPERATION, originals, before_vector_bytes)
@@ -81,6 +81,7 @@ def _verify_on_work(*, originals, expectations, before_vector_bytes, authorizati
     plan._same(owned["scope"]["configurationDigest"], config, work,
         "historical activation independent configuration")
     _window, processing = history.delivery._window(window, bound, work)
+    processing = history.delivery._join_current(processing, _current, work)
     authorized = replayed = None
 
     def current():
@@ -116,7 +117,7 @@ def _verify_on_work(*, originals, expectations, before_vector_bytes, authorizati
         expected_journal_digest=owned["journalDigest"], planner_public_key=planner,
         state_enrollment_bytes=state_enrollment, state_root_public_key=root,
         bundle_key=held_bundle, delivery_custody_key=held_delivery, before_vector_bytes=before,
-        live_window=window, transport_deadline_ns=bound, work=work)
+        live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     if type(replayed) is not history._HistoricalReplayedPlan:
         raise OidcSessionActivationHistoryExchangeError("historical activation requires genuine original replay")
     current()

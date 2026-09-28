@@ -113,7 +113,7 @@ def _authenticate(envelope_bytes, request, scope, planner_key, current, work):
 def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_request,
         expected_scope, expected_journal_digest, planner_public_key, state_enrollment_bytes,
         state_root_public_key, bundle_key, delivery_custody_key, before_vector_bytes,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _current=None):
     """Derive historical raw2/full-vector facts from actual original replay.
 
     The current work/window is supplied, never opened here or retimed. This
@@ -149,6 +149,7 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
     # Hold every external graph, immutable original and key before callbacks.
     _expectations(request, scope, window, work)
     _window, current = delivery._window(window, bound, work)
+    current = delivery._join_current(current, _current, work)
     known_payload, plan_digest = _authenticate(envelope, request, scope, planner_key, current, work)
     original_interval = known_payload["issuedAtEpochNs"], known_payload["expiresAtEpochNs"]
     expected_context = {"schema": bundle.CONTEXT_SCHEMA, "operation": OPERATION,
@@ -156,7 +157,8 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
         "configurationDigest": scope["configurationDigest"], "requestDigest": request["requestDigest"],
         "planDigest": plan_digest, "journalDigest": journal_digest}
     original = bundle._open_on_work(bundle_bytes=ciphertext, bundle_key=held_bundle_key,
-        expected_context=expected_context, live_window=window, transport_deadline_ns=bound, work=work)
+        expected_context=expected_context, live_window=window, transport_deadline_ns=bound, work=work,
+        _current=_current)
     current()
     journal_scope = {name: expected_context[name] for name in journal.SCOPE_FIELDS}
     stored = journal._decode_original_on_work(original, scope=journal_scope, work=work)
@@ -196,7 +198,8 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
         expected_counted_heads=tuple(raw["countedBeforeHeads"]), write_proof_bytes=write_bytes,
         planner_public_key=planner_key, state_enrollment_bytes=enrollment, state_root_public_key=root_key,
         complete_root_vector_bytes=before_bytes, head_query_bytes=query_bytes,
-        head_observation_bytes=observation_bytes, live_window=window, work=work, transport_deadline_ns=bound)
+        head_observation_bytes=observation_bytes, live_window=window, work=work, transport_deadline_ns=bound,
+        _current=_current)
     if type(full) is not plan._HistoricalVerifiedPlan:
         _fail("activation history requires its actual same-call historical replay")
     from serverware import authority_current_root_plan_replay as generic

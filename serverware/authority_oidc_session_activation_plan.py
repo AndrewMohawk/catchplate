@@ -566,7 +566,7 @@ def _verify_historical_full_on_work(context, *, envelope_bytes, request, scope, 
         expected_counted_heads, write_proof_bytes, planner_public_key,
         state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
         head_query_bytes, head_observation_bytes,
-        live_window, work, transport_deadline_ns=None):
+        live_window, work, transport_deadline_ns=None, _current=None):
     """Authenticate historical plan originals and genuinely rederive full effects.
 
     The independent scope, root/key cohort and original proofs are mandatory.
@@ -590,7 +590,7 @@ def _verify_historical_full_on_work(context, *, envelope_bytes, request, scope, 
         complete_root_vector_bytes=complete_root_vector_bytes,
         head_query_bytes=head_query_bytes, head_observation_bytes=head_observation_bytes,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work, historical=True)
-    live = captured.processing_live
+    live = transition.delivery._join_current(captured.processing_live, _current, work)
     live()
     envelope = contract._decode_on_work(envelope_bytes, envelope=True, work=work)
     payload, expected = envelope["payload"], captured.scope
@@ -611,7 +611,7 @@ def _verify_historical_full_on_work(context, *, envelope_bytes, request, scope, 
         query_bytes=captured.state_originals[2], observation_bytes=captured.state_originals[3],
         enrollment_bytes=captured.state_originals[0], root_public_key=captured.state_root_public_key,
         historical_plan_interval=interval, live_window=captured.window,
-        transport_deadline_ns=captured.monotonic_deadline, work=work)
+        transport_deadline_ns=captured.monotonic_deadline, work=work, _current=_current)
     live()
     _join_observed_inputs(captured, observed, work)
     invocation = _HistoricalInvocation(captured.request, expected, captured.context, captured.originals,
@@ -634,7 +634,8 @@ def _verify_historical_full_on_work(context, *, envelope_bytes, request, scope, 
         before_proofs=raw["before_proofs"], read_heads=invocation.read_heads,
         query_frontiers=invocation.query_frontiers, expected_counted_heads=invocation.expected_counted_heads,
         write_proof_bytes=invocation.write_proof_bytes, historical_plan_interval=interval,
-        live_window=invocation.window, work=work, transport_deadline_ns=invocation.monotonic_deadline)
+        live_window=invocation.window, work=work, transport_deadline_ns=invocation.monotonic_deadline,
+        _current=_current)
     if type(actual) is not writes._HistoricalReplayedWrites:
         _fail("activation historical plan received another write-result family")
     _historical_limits(payload, invocation, actual, live, work)

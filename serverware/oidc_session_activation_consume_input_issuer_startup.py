@@ -1,7 +1,8 @@
 """One original-bound consume-input issuance on six inherited resources.
 
-The private root signer is retained only by this one-shot owner. No history
-AES, worker staging, token retention, state mutation or retry is introduced.
+The private root signer is retained only by this one-shot owner. Launch v2
+stages the exact issued pair through one owned socket before returning it.
+No history AES, token retention, state mutation or retry is introduced.
 Signed resource pins authorize a configuration; they do not provision it.
 """
 from __future__ import annotations
@@ -11,11 +12,13 @@ import os
 import select
 import socket
 import threading
+from types import MethodType
 
 from serverware import oidc_session_activation_consume_input_issuer_bootstrap as bootstrap
 from serverware import oidc_session_activation_consume_input_issuer_entrypoint as delivery
 from serverware import authority_oidc_session_activation_consume_input_production as producer
 from serverware import authority_oidc_session_activation_consume_input_transport as transport
+from serverware import authority_oidc_session_activation_consume_input_delivery_transport as staging
 
 
 capture, clock, production = bootstrap.capture, bootstrap.clock, bootstrap.production
@@ -103,12 +106,82 @@ class _Configuration:
     listener_pins: tuple
     input_bytes: int
     maximum_request_bytes: int
+    delivery_endpoint: tuple | None
+
+
+class _DeliveryChannel:
+    """One issuer-owned staging socket, never an arbitrary FD allowance."""
+
+    __slots__ = ("_owner", "_opened", "_closed")
+
+    def __init__(self):
+        _fail("consume staging requires the actual issuer-owned channel")
+
+    def _identity(self):
+        owner = self._owner
+        if (type(self) is not _DeliveryChannel or type(owner) is not _IssuerOwner
+                or owner is not _owner or owner._delivery_channel is not self
+                or not owner._delivery_spent or owner._configured.delivery_endpoint is None or self._closed):
+            _fail("consume staging channel changed its actual issuer owner")
+        return owner
+
+    def check(self, *, endpoint, deadline_ns, work, current):
+        owner = self._identity()
+        if (type(endpoint) is not tuple or endpoint != owner._configured.delivery_endpoint
+                or work is not owner._configured.work or type(deadline_ns) is not int
+                or not 0 < deadline_ns <= owner._configured.lifetime.bound
+                or type(current) is not MethodType or current.__self__ is not owner
+                or current.__func__ is not _IssuerOwner._current):
+            _fail("consume staging changed its fixed endpoint or original allowance")
+        owner._current()
+
+    def open(self):
+        owner = self._identity()
+        if self._opened or owner._delivery_socket is not None:
+            _fail("consume staging socket cannot be reopened")
+        self._opened = True
+        work = owner._configured.work
+        owner._current()
+        work.charge(input_bytes=4096)
+
+        def opening():
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            owner._delivery_socket = connection
+            descriptor = connection.fileno()
+            owner._delivery_identity = connection, descriptor, _fd_identity(descriptor)
+            connection.setblocking(False)
+            connection.set_inheritable(False)
+
+        production._callback(work, opening)
+        owner._current()
+        return owner._delivery_socket
+
+    def connected(self):
+        owner = self._identity()
+        if not self._opened or owner._delivery_socket is None or owner._delivery_peer is not None:
+            _fail("consume staging connection cannot replace its peer")
+        work = owner._configured.work
+        owner._current()
+        work.charge(input_bytes=12)
+        peer = production._callback(work,
+            lambda: transport.authority_transport._peer_identity(owner._delivery_socket))
+        if peer[:2] != (0, 0):
+            _fail("consume staging receiver is not the actual root peer")
+        owner._delivery_peer = peer
+        owner._current()
+
+    def close(self):
+        owner = self._identity()
+        owner._close_delivery(guarded=True)
+        self._closed = True
 
 
 class _IssuerOwner:
     __slots__ = ("_configured", "_seal", "_window_seal", "_bound_seal",
         "_spent", "_failed", "_closed", "_connection", "_connection_identity",
-        "_connection_peer", "_connection_close_attempted")
+        "_connection_peer", "_connection_close_attempted", "_delivery_channel",
+        "_delivery_spent", "_delivery_socket", "_delivery_identity", "_delivery_peer",
+        "_delivery_close_attempted")
 
     def __init__(self):
         _fail("consume input issuer requires actual original cold construction")
@@ -129,6 +202,8 @@ class _IssuerOwner:
                 or any(new > old for new, old in zip(lifetime.window[3:], configured.window[3:]))
                 or lifetime.bound > min(configured.deadline_ns, lifetime.window[4])):
             _fail("consume input issuer replaced its original clock or work lifetime")
+        if configured.material.delivery_endpoint is not configured.delivery_endpoint:
+            _fail("consume input issuer replaced its admitted staging endpoint")
         _process(configured.namespace)
         for descriptor, maximum, private, identity in configured.sealed:
             if delivery._sealed_identity(descriptor, maximum, private=private) != identity:
@@ -152,6 +227,25 @@ class _IssuerOwner:
             inventory += (descriptor,)
         elif self._connection_identity is not None or self._connection_peer is not None:
             _fail("consume input issuer lost its accepted socket")
+        if self._delivery_socket is not None:
+            channel = self._delivery_channel
+            if (type(channel) is not _DeliveryChannel or channel._owner is not self
+                    or not channel._opened or channel._closed or not self._delivery_spent
+                    or configured.delivery_endpoint is None or self._delivery_identity is None):
+                _fail("consume issuer staging socket lacks its exact owned channel")
+            connection, descriptor, identity = self._delivery_identity
+            if (self._delivery_socket is not connection or connection.fileno() != descriptor
+                    or _fd_identity(descriptor) != identity or connection.family != socket.AF_UNIX
+                    or connection.type != socket.SOCK_STREAM or connection.gettimeout() != 0.0
+                    or connection.get_inheritable()):
+                _fail("consume issuer staging socket ownership changed")
+            if self._delivery_peer is not None:
+                if (self._delivery_peer[:2] != (0, 0)
+                        or transport.authority_transport._peer_identity(connection) != self._delivery_peer):
+                    _fail("consume issuer staging root peer changed")
+            inventory += (descriptor,)
+        elif self._delivery_identity is not None or self._delivery_peer is not None:
+            _fail("consume issuer lost its owned staging socket")
         delivery._require_inventory(inventory)
 
     def _current(self):
@@ -265,6 +359,7 @@ class _IssuerOwner:
                     work=work, current=self._current, maximum_request_bytes=configured.maximum_request_bytes)
                 response = self._produce(originals)
                 del originals
+                self._stage_response(response)
                 self._current()
                 transport._send_response(self._connection, response, deadline_ns=lifetime.bound,
                     work=work, current=self._current)
@@ -276,6 +371,10 @@ class _IssuerOwner:
                 self._failed = True
                 _state = "failed"
                 try:
+                    self._close_delivery(guarded=False)
+                except BaseException:
+                    pass
+                try:
                     self._close_connection(guarded=False)
                 except BaseException:
                     pass
@@ -286,6 +385,75 @@ class _IssuerOwner:
         if self is not _owner:
             _fail("consume input issuer cleanup requires its actual owner")
         close()
+
+    def _close_delivery(self, *, guarded):
+        global _cleanup_failed
+        connection = self._delivery_socket
+        if connection is None:
+            if guarded:
+                self._current()
+            return
+        if self._delivery_close_attempted:
+            _cleanup_failed = True
+            _fail("consume issuer cannot retry indeterminate staging cleanup")
+        if guarded:
+            self._current()
+        self._delivery_close_attempted = True
+        try:
+            if self._delivery_identity is None:
+                _fail("consume issuer staging socket identity was not established")
+            held, descriptor, identity = self._delivery_identity
+            if (connection is not held or connection.fileno() != descriptor
+                    or _fd_identity(descriptor) != identity):
+                _fail("consume issuer staging cleanup identity changed")
+            if guarded:
+                self._configured.work.charge(input_bytes=1)
+                production._callback(self._configured.work, connection.close)
+            else:
+                connection.close()
+            if connection.fileno() != -1:
+                _fail("consume issuer staging closure is indeterminate")
+        except BaseException:
+            _cleanup_failed = True
+            _quarantined.append(connection)
+            raise
+        self._delivery_socket = self._delivery_identity = self._delivery_peer = None
+        if guarded:
+            self._current()
+
+    def _stage_response(self, response):
+        configured, work = self._configured, self._configured.work
+        endpoint = configured.delivery_endpoint
+        if endpoint is None:
+            return
+        self._current()
+        if self._delivery_spent or self._delivery_channel is not None:
+            _fail("consume issuer cannot repeat bootstrap staging")
+        self._delivery_spent = True
+        # Request originals have been dropped. Reserve both retained response
+        # and outgoing wire copies, framing and ACK before opening a channel.
+        if (configured.input_bytes + 2 * sum(map(len, response)) + len(staging.PURPOSE)
+                + transport.RESPONSE_HEADER_BYTES + staging.REQUEST_HEADER_BYTES
+                + staging.RESPONSE_HEADER_BYTES + staging.MAX_RESPONSE_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
+            _fail("consume issuer staging exceeds the complete held inventory")
+        lifetime = configured.lifetime
+        identities = staging._pair_identities_on_work(*response,
+            deadline_ns=lifetime.bound, work=work, current=self._current)
+        channel = object.__new__(_DeliveryChannel)
+        channel._owner, channel._opened, channel._closed = self, False, False
+        self._delivery_channel = channel
+        self._current()
+        acknowledged = staging._socket_request_on_work(endpoint,
+            originals=(staging.PURPOSE, *response), deadline_ns=lifetime.bound,
+            work=work, current=self._current, channel=channel)
+        self._current()
+        acknowledged = staging._originals(acknowledged, response=True)
+        if (not channel._closed or self._delivery_socket is not None
+                or acknowledged[0] != staging.ACK_STATUS):
+            _fail("consume issuer staging acknowledgment is not established")
+        for observed, expected in zip(acknowledged[1:], identities):
+            producer._same_bytes(observed, expected, work, "consume issuer exact staged original identity")
+        self._current()
 
 
 def initialize_from_environment(*, work, live_window, transport_deadline_ns, delivery_current):
@@ -404,12 +572,14 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
             current()
             configured = _Configuration(material, root, key, work, work.limits, lifetime.ceilings,
                 lifetime, tuple(lifetime.guards), lifetime.window, lifetime.bound, namespace, sealed,
-                _listener_object, listener_pins, held_bytes, maximum_request_bytes)
+                _listener_object, listener_pins, held_bytes, maximum_request_bytes, material.delivery_endpoint)
             owner = object.__new__(_IssuerOwner)
             owner._configured = owner._seal = configured
             owner._window_seal, owner._bound_seal = lifetime.window, lifetime.bound
             owner._spent = owner._failed = owner._closed = owner._connection_close_attempted = False
             owner._connection = owner._connection_identity = owner._connection_peer = None
+            owner._delivery_spent = owner._delivery_close_attempted = False
+            owner._delivery_channel = owner._delivery_socket = owner._delivery_identity = owner._delivery_peer = None
             _owner, _state = owner, "started"
             owner._current()
             return owner
@@ -439,6 +609,10 @@ def close():
         owner = _owner
         if owner is not None and not owner._closed:
             owner._closed = owner._failed = True
+            try:
+                owner._close_delivery(guarded=False)
+            except BaseException:
+                _cleanup_failed = True
             try:
                 owner._close_connection(guarded=False)
             except BaseException:

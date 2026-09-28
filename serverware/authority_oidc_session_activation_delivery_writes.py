@@ -206,7 +206,7 @@ def _replay_originals_on_work(context, *, old_token_bytes, expected_delivery_id,
         expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
         business_before_roots, authorization_before_roots, before_proofs,
         read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
-        live_window, transport_deadline_ns, work, historical_plan_interval):
+        live_window, transport_deadline_ns, work, historical_plan_interval, _current=None):
     """Derive actual current consumption and indexed effects from originals.
 
     All roots, counted heads, policy and subject expectations are independent
@@ -215,6 +215,8 @@ def _replay_originals_on_work(context, *, old_token_bytes, expected_delivery_id,
     ledger = batch._SharedLedger(work)
     historical = (None if historical_plan_interval is None
         else consumption._historical_interval(historical_plan_interval))
+    if historical is not None and _current is not None:
+        _fail("historical consume replay cannot select a live delivery continuation")
     if (type(context) is not core.KernelContext or context.operation != OPERATION
             or context.verified_webauthn_evidence is not None
             or type(expected_counted_heads) is not tuple or len(expected_counted_heads) != HEAD_COUNT
@@ -250,6 +252,7 @@ def _replay_originals_on_work(context, *, old_token_bytes, expected_delivery_id,
         last_epoch, last_monotonic = now, monotonic
         return now
 
+    live = consumption.delivery._join_current(live, _current, work)
     live()
     decoded = _decode_on_work(write_proof_bytes, work=work)
     registration._same(decoded.request_digest, owned["request_digest"], work,
@@ -270,7 +273,9 @@ def _replay_originals_on_work(context, *, old_token_bytes, expected_delivery_id,
     # transition or callback. Historical expiry remains algebraic metadata.
     worker = (consumption._full_transition_with_liveness_on_work if historical is None
         else consumption._full_transition_historical_on_work)
-    extra = {} if historical is None else {"historical_plan_interval": historical}
+    # Pass the upstream guard, not this closure: live() begins calling
+    # full.live() after assignment and must never become its own descendant.
+    extra = {"_current": _current} if historical is None else {"historical_plan_interval": historical}
     full = worker(current,
         old_token_bytes=old, expected_delivery_id=scope["delivery"], expected_user_id=scope["user"],
         expected_session_id=scope["session"], expected_credential_id=scope["credential"],
@@ -335,7 +340,7 @@ def _replay_on_work(context, *, old_token_bytes, expected_delivery_id,
         expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
         business_before_roots, authorization_before_roots, before_proofs,
         read_heads, query_frontiers, expected_counted_heads, write_proof_bytes,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _current=None):
     return _replay_originals_on_work(context, old_token_bytes=old_token_bytes,
         expected_delivery_id=expected_delivery_id, expected_user_id=expected_user_id,
         expected_session_id=expected_session_id, expected_credential_id=expected_credential_id,
@@ -344,7 +349,7 @@ def _replay_on_work(context, *, old_token_bytes, expected_delivery_id,
         authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
         read_heads=read_heads, query_frontiers=query_frontiers, expected_counted_heads=expected_counted_heads,
         write_proof_bytes=write_proof_bytes, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, work=work, historical_plan_interval=None)
+        transport_deadline_ns=transport_deadline_ns, work=work, historical_plan_interval=None, _current=_current)
 
 
 def _replay_historical_on_work(context, *, old_token_bytes, expected_delivery_id,

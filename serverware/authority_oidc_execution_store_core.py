@@ -68,6 +68,13 @@ def _name(owner, raw_context, work):
     return profile._PREFIX + digest[7:]
 
 
+def _record_limit(owner, maximum):
+    selected = MAX_RECORD_BYTES if maximum is None else maximum
+    if type(selected) is not int or not 1 <= selected <= MAX_RECORD_BYTES:
+        owner._fail("execution record limit must only tighten the source maximum")
+    return selected
+
+
 class _ExecutionBundleStore:
     """PID/UID/GID-bound no-replace storage; no directory or key provisioning."""
 
@@ -76,8 +83,9 @@ class _ExecutionBundleStore:
 
     def __init__(self, *, directory_fd, expected_device, expected_inode, expected_uid, expected_gid,
             maximum_records, quota_bytes, configuration_digest, bundle_key,
-            live_window, work, transport_deadline_ns=None):
+            live_window, work, transport_deadline_ns=None, maximum_record_bytes=None, _current=None):
         profile = _profile(self)
+        record_limit = _record_limit(self, maximum_record_bytes)
         for value, minimum, maximum in ((directory_fd, 0, 2**31 - 1),
                 (expected_device, 0, 2**64 - 1), (expected_inode, 1, 2**64 - 1),
                 (expected_uid, 1, 2**32 - 2), (expected_gid, 0, 2**32 - 2),
@@ -92,7 +100,7 @@ class _ExecutionBundleStore:
             self._binding, maximum_records, quota_bytes)
         self._closed, self._directory_fd, self._directory_stamp, self._io = False, None, None, None
         self._entries, self._used_bytes = {}, 0
-        window, bound, current = self._window(live_window, transport_deadline_ns, work)
+        window, bound, current = self._window(live_window, transport_deadline_ns, work, _current)
         self._require_process()
         self._directory_metadata(directory_fd, work, current)
         try:
@@ -110,10 +118,12 @@ class _ExecutionBundleStore:
                 if before != self._directory_stamp:
                     self._fail("execution store changed before recovery")
                 for name, identity in self._inventory(work, current).items():
-                    raw, observed = self._read_file(name, work, current, synchronize=True)
+                    raw, observed = self._read_file(name, work, current, synchronize=True,
+                        maximum_record_bytes=record_limit)
                     if observed != identity:
                         self._fail("execution record changed during recovery")
-                    context, raw_context, _plan, _cipher = self._decode(raw, window, bound, work, current)
+                    context, raw_context, _plan, _cipher = self._decode(raw, window, bound, work, current,
+                        _current=_current)
                     if name != _name(self, raw_context, work):
                         self._fail("execution record differs from its context slot")
                     self._entries[name] = (_context_tuple(self, context), self._digest(raw, work, current), observed)
@@ -142,8 +152,9 @@ class _ExecutionBundleStore:
         raise _profile(self).StoreError(message)
 
     @staticmethod
-    def _window(live_window, transport_deadline_ns, work):
+    def _window(live_window, transport_deadline_ns, work, _current=None):
         window, current = delivery._window(live_window, transport_deadline_ns, work)
+        current = delivery._join_current(current, _current, work)
         bound = window[4] if transport_deadline_ns is None else min(window[4], transport_deadline_ns)
         current()
         return window, bound, current
@@ -228,12 +239,15 @@ class _ExecutionBundleStore:
         if self._stamp(work, current) != self._directory_stamp:
             self._fail("execution directory changed during continuity checks")
 
-    def _read_file(self, name, work, current, *, synchronize=False):
+    def _read_file(self, name, work, current, *, synchronize=False, maximum_record_bytes=None):
+        maximum = _record_limit(self, maximum_record_bytes)
         descriptor = _open(work, current, lambda: os.open(name,
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self._directory_fd))
         try:
             before = _native(work, current, lambda: os.fstat(descriptor))
             identity = self._file_identity(before)
+            if before.st_size > maximum:
+                self._fail("execution record exceeds the remaining held inventory")
             work.charge(input_bytes=2 * before.st_size)
             value = bytearray()
             while len(value) < before.st_size:
@@ -269,12 +283,20 @@ class _ExecutionBundleStore:
         shape._literal(evidence.plan._frame(contract.IDENTITY_DOMAIN, (envelope,), work), context["planDigest"])
         current()
 
-    def _validate(self, context, envelope, cipher, window, bound, work, current):
+    def _validate(self, context, envelope, cipher, window, bound, work, current, *, _current=None):
         profile = _profile(self)
         bundle, original_journal = profile.bundle, profile.journal
         self._plan(context, envelope, work, current)
-        original = bundle._open_on_work(bundle_bytes=cipher, bundle_key=self._configuration[2],
-            expected_context=context, live_window=window, transport_deadline_ns=bound, work=work)
+        if _current is None:
+            original = bundle._open_on_work(bundle_bytes=cipher, bundle_key=self._configuration[2],
+                expected_context=context, live_window=window, transport_deadline_ns=bound, work=work)
+        else:
+            from serverware import authority_oidc_session_activation_delivery_execution_store as consume
+            if profile is not consume:
+                self._fail("explicit execution continuity is confined to the consume profile")
+            original = bundle._open_on_work(bundle_bytes=cipher, bundle_key=self._configuration[2],
+                expected_context=context, live_window=window, transport_deadline_ns=bound,
+                work=work, _current=current)
         current()
         scope = {field: context[field] for field in original_journal.SCOPE_FIELDS}
         document = original_journal._decode_original_on_work(original, scope=scope, work=work)
@@ -285,7 +307,7 @@ class _ExecutionBundleStore:
             self._fail("execution bundle contains a different original plan")
         current()
 
-    def _decode(self, raw, window, bound, work, current):
+    def _decode(self, raw, window, bound, work, current, *, _current=None):
         profile = _profile(self)
         bundle = profile.bundle
         if (type(raw) is not bytes or not profile.MIN_RECORD_BYTES <= len(raw) <= MAX_RECORD_BYTES
@@ -306,34 +328,39 @@ class _ExecutionBundleStore:
         context = _capture(self, self._configuration[2], value, envelope, cipher)
         evidence.capability._canonical(raw_context, context, evidence.capture._SharedLedger(work),
             profile.MAX_CONTEXT_BYTES, bundle.MAX_CONTEXT_NODES)
-        self._validate(context, envelope, cipher, window, bound, work, current)
+        self._validate(context, envelope, cipher, window, bound, work, current, _current=_current)
         return context, raw_context, envelope, cipher
 
-    def _retained(self, name, held, envelope, window, bound, work, current):
+    def _retained(self, name, held, envelope, window, bound, work, current, *,
+            maximum_record_bytes=None, _current=None):
         previous = self._entries[name]
-        raw, identity = self._read_file(name, work, current)
+        raw, identity = self._read_file(name, work, current, maximum_record_bytes=maximum_record_bytes)
         if (previous[0] != _context_tuple(self, held) or identity != previous[2]
                 or self._digest(raw, work, current) != previous[1]):
             self._fail("execution record differs from its retained first identity")
-        context, raw_context, old_plan, cipher = self._decode(raw, window, bound, work, current)
+        context, raw_context, old_plan, cipher = self._decode(raw, window, bound, work, current,
+            _current=_current)
         work.charge(input_bytes=len(old_plan) + len(envelope))
         if (_context_tuple(self, context) != previous[0]
                 or name != _name(self, raw_context, work) or old_plan != envelope):
             self._fail("execution record differs from its independent context or plan")
         return cipher
 
-    def read(self, *, context, envelope_bytes, live_window, work, transport_deadline_ns):
+    def read(self, *, context, envelope_bytes, live_window, work, transport_deadline_ns,
+            maximum_record_bytes=None, _current=None):
+        maximum = _record_limit(self, maximum_record_bytes)
         held = _capture(self, self._configuration[2], context, envelope_bytes)
         journal.registration._integer(transport_deadline_ns, "execution store inherited deadline", 1)
         self._require_process()
-        window, bound, current = self._window(live_window, transport_deadline_ns, work)
+        window, bound, current = self._window(live_window, transport_deadline_ns, work, _current)
         with self._io.ready():
             try:
                 self._continuity(work, current)
                 self._plan(held, envelope_bytes, work, current)
                 name = _name(self, _context_bytes(self, held, work), work)
                 result = None if name not in self._entries else self._retained(
-                    name, held, envelope_bytes, window, bound, work, current)
+                    name, held, envelope_bytes, window, bound, work, current,
+                    maximum_record_bytes=maximum, _current=_current)
                 self._continuity(work, current)
                 current()
                 return result
@@ -341,20 +368,23 @@ class _ExecutionBundleStore:
                 self._io.poison()
                 raise
 
-    def append(self, *, context, envelope_bytes, bundle_bytes, live_window, work, transport_deadline_ns):
+    def append(self, *, context, envelope_bytes, bundle_bytes, live_window, work, transport_deadline_ns,
+            maximum_record_bytes=None, _current=None):
+        maximum = _record_limit(self, maximum_record_bytes)
         profile = _profile(self)
         profile.bundle._bounded_frame(bundle_bytes)
         held = _capture(self, self._configuration[2], context, envelope_bytes, bundle_bytes)
         journal.registration._integer(transport_deadline_ns, "execution store inherited deadline", 1)
         self._require_process()
-        window, bound, current = self._window(live_window, transport_deadline_ns, work)
+        window, bound, current = self._window(live_window, transport_deadline_ns, work, _current)
         with self._io.ready():
             try:
                 self._continuity(work, current)
                 raw_context = _context_bytes(self, held, work)
                 name = _name(self, raw_context, work)
                 if name in self._entries:
-                    first = self._retained(name, held, envelope_bytes, window, bound, work, current)
+                    first = self._retained(name, held, envelope_bytes, window, bound, work, current,
+                        maximum_record_bytes=maximum, _current=_current)
                     work.charge(input_bytes=len(first) + len(bundle_bytes))
                     if first != bundle_bytes:
                         self._fail("execution store refuses changed first ciphertext")
@@ -362,10 +392,11 @@ class _ExecutionBundleStore:
                     current()
                     return first
                 size = HEADER_BYTES + len(raw_context) + len(envelope_bytes) + len(bundle_bytes)
-                if (size > MAX_RECORD_BYTES or len(self._entries) >= self._configuration[4]
+                if (size > maximum or len(self._entries) >= self._configuration[4]
                         or size > self._configuration[5] - self._used_bytes):
                     self._fail("execution record count or byte quota is exhausted")
-                self._validate(held, envelope_bytes, bundle_bytes, window, bound, work, current)
+                self._validate(held, envelope_bytes, bundle_bytes, window, bound, work, current,
+                    _current=_current)
                 work.charge(input_bytes=size + HEADER_BYTES)
                 header = (profile.MAGIC + len(raw_context).to_bytes(4, "big")
                     + len(envelope_bytes).to_bytes(4, "big") + len(bundle_bytes).to_bytes(8, "big"))
@@ -374,11 +405,12 @@ class _ExecutionBundleStore:
                 self._continuity(work, current)
                 work.charge(input_bytes=len(raw))
                 _native(work, current, lambda: self._io.publish("pending-" + name[len(profile._PREFIX):], name, raw))
-                observed, identity = self._read_file(name, work, current)
+                observed, identity = self._read_file(name, work, current, maximum_record_bytes=maximum)
                 work.charge(input_bytes=len(raw) + len(observed))
                 if observed != raw:
                     self._fail("execution durable record differs from publication")
-                _context, _raw_context, _plan, cipher = self._decode(observed, window, bound, work, current)
+                _context, _raw_context, _plan, cipher = self._decode(observed, window, bound, work, current,
+                    _current=_current)
                 self._entries[name] = (_context_tuple(self, held), digest, identity)
                 self._used_bytes += len(raw)
                 self._directory_stamp = self._stamp(work, current)

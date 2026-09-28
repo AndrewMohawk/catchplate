@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import os
 import stat
 import threading
+import time
 
 from serverware import authority_current_root_transport as transport
 from serverware import authority_oidc_session_activation_delivery_execution_export as export_module
@@ -36,6 +37,25 @@ class OidcSessionActivationDeliveryColdPlanningError(ValueError):
 
 def _fail(message):
     raise OidcSessionActivationDeliveryColdPlanningError(message)
+
+
+def _continuity(current, work):
+    """Adapt only restrictive current observations, never an admission result."""
+    if current is None:
+        return None
+    if not callable(current):
+        _fail("consume cold continuation is not callable")
+
+    def floors(epoch, monotonic):
+        before = current()
+        sampled = production._callback(work, time.monotonic_ns)
+        after = current()
+        if (type(before) is not int or type(after) is not int or type(sampled) is not int
+                or before < epoch or after < before or sampled < monotonic):
+            _fail("consume cold continuation reversed original clock floors")
+        return after, sampled
+
+    return floors
 
 
 def _process():
@@ -173,7 +193,7 @@ def _scope(material, deadline, work):
         "maximumClockSkewNs": payload["maximumClockSkewNs"], "deadlineEpochNs": deadline})
 
 
-def _bounds(material, historical, window, bound, work):
+def _bounds(material, historical, window, bound, work, *, _current=None):
     payload = material.payload
     if window[0] < max(material.attestation_interval[0], material.history_material.attestation_interval[0]):
         _fail("consume processing opened before its independently signed launch purposes")
@@ -181,7 +201,7 @@ def _bounds(material, historical, window, bound, work):
         maximum_lifetime_ns=payload["maximumPlanAgeNs"], maximum_clock_skew_ns=payload["maximumClockSkewNs"])
     bound = min(bound, window[4], narrowed[4])
     narrowed, bound = history_module.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
-        historical, live_window=narrowed, transport_deadline_ns=bound, work=work)
+        historical, live_window=narrowed, transport_deadline_ns=bound, work=work, _current=_current)
     # The actual reader's configured skew is exact. A stricter caller cannot
     # silently select a different read profile or cause an allowance reset.
     if narrowed[6] != material.reader_configuration[3]:
@@ -282,17 +302,20 @@ class _ColdPlanner:
             _fail("consume cold planner is closed, changed or belongs to another process")
         return self._configured
 
-    def _admit(self, configured, window, bound, work):
+    def _admit(self, configured, window, bound, work, *, current=None):
+        external = current
         material = bootstrap._verify_on_work(bootstrap_bytes=configured.material.bootstrap_bytes,
             history_custody_bytes=configured.material.history_custody_bytes,
-            root_public_key=configured.root_public_key, live_window=window, transport_deadline_ns=bound, work=work)
+            root_public_key=configured.root_public_key, live_window=window, transport_deadline_ns=bound,
+            work=work, _continuity=_continuity(external, work))
         _join(configured, material, work)
-        narrowed, bound = _bounds(material, configured.historical, window, bound, work)
+        narrowed, bound = _bounds(material, configured.historical, window, bound, work, _current=external)
         _window, inherited = planning.transition.delivery._window(narrowed, bound, work)
         current = bootstrap.shared._launch_guard(material.attestation_interval,
             configured.material.opening_sample, inherited, work)
+        current = planning.transition.delivery._join_current(current, external, work)
         historical_live = history_module.OidcSessionActivationHistoryCustody.check_on_work(
-            configured.historical, live_window=narrowed, transport_deadline_ns=bound, work=work)
+            configured.historical, live_window=narrowed, transport_deadline_ns=bound, work=work, _current=external)
 
         def live():
             if self._snapshot() is not configured:
@@ -310,7 +333,9 @@ class _ColdPlanner:
         live()
         return material, narrowed, bound, live
 
-    def prepare(self, *, old_token_bytes, activation_originals, live_window, transport_deadline_ns, work):
+    def prepare(self, *, old_token_bytes, activation_originals, live_window, transport_deadline_ns,
+            work, current=None):
+        external = current
         configured = self._snapshot()
         if not self._lock.acquire(blocking=False):
             _fail("consume cold planner is already in use")
@@ -322,7 +347,7 @@ class _ColdPlanner:
             window = clock._validate(live_window)
             registration._integer(transport_deadline_ns, "consume inherited deadline", 1)
             bound = min(window[4], transport_deadline_ns)
-            material, window, bound, live = self._admit(configured, window, bound, work)
+            material, window, bound, live = self._admit(configured, window, bound, work, current=external)
             scope = _scope(material, window[3], work)
             request = material.payload["consumeRequest"]
             projected = state._project_on_work(vector_bytes=material.complete_root_vector_bytes,
@@ -338,8 +363,12 @@ class _ColdPlanner:
                 context_digest=context, expected_vector_digest=projected.vector_digest, challenge=nonce.hex(), work=work)
             live()
             work.charge(input_bytes=len(query))
-            observation = production._callback(work, lambda: transport._delivery_head_on_configuration(
-                material.state_endpoint, query_bytes=query, deadline_ns=bound))
+            if external is None:
+                observation = production._callback(work, lambda: transport._delivery_head_on_configuration(
+                    material.state_endpoint, query_bytes=query, deadline_ns=bound))
+            else:
+                observation = transport._delivery_head_on_work(material.state_endpoint,
+                    query_bytes=query, deadline_ns=bound, work=work, current=live)
             observation = state._original(observation, state.head.MAX_BYTES, "fresh observation")
             work.charge(input_bytes=len(observation))
             live()
@@ -351,9 +380,9 @@ class _ColdPlanner:
                 authorization_before_roots=projected.authorization_before_roots,
                 expected_counted_heads=projected.expected_counted_heads, head_query_bytes=query,
                 head_observation_bytes=observation, activation_originals=originals,
-                live_window=window, transport_deadline_ns=bound, work=work)
+                live_window=window, transport_deadline_ns=bound, work=work, _current=external)
             live()
-            self._admit(configured, window, bound, work)
+            self._admit(configured, window, bound, work, current=external)
             if type(result) is not owner_module.PreparedDeliveryPlan:
                 _fail("consume actual owner returned another result type")
             signed = plan.contract._decode_on_work(result.envelope_bytes, envelope=True, work=work)["payload"]
@@ -371,16 +400,22 @@ class _ColdPlanner:
             transport_deadline_ns=transport_deadline_ns, work=work, export=False)
 
     def export_retained(self, *, envelope_bytes, expected_deadline_epoch_ns, expected_journal_digest,
-            live_window, transport_deadline_ns, work):
+            live_window, transport_deadline_ns, work, current=None, maximum_response_bytes=None):
         return self._retained_on_work(envelope_bytes=envelope_bytes,
             expected_deadline_epoch_ns=expected_deadline_epoch_ns,
             expected_journal_digest=expected_journal_digest, live_window=live_window,
-            transport_deadline_ns=transport_deadline_ns, work=work, export=True)
+            transport_deadline_ns=transport_deadline_ns, work=work, export=True,
+            current=current, maximum_response_bytes=maximum_response_bytes)
 
     def _retained_on_work(self, *, envelope_bytes, expected_deadline_epoch_ns, expected_journal_digest,
-            live_window, transport_deadline_ns, work, export):
+            live_window, transport_deadline_ns, work, export, current=None, maximum_response_bytes=None):
+        external = current
         if type(export) is not bool:
             _fail("consume retained operation requires a fixed source purpose")
+        if maximum_response_bytes is not None and (not export
+                or type(maximum_response_bytes) is not int
+                or not 1 <= maximum_response_bytes <= bootstrap.authority.MAX_RESULT_BYTES):
+            _fail("consume export response capacity may only tighten the source bound")
         configured = self._snapshot()
         if not self._lock.acquire(blocking=False):
             _fail("consume cold planner is already in use")
@@ -392,18 +427,31 @@ class _ColdPlanner:
             window = clock._validate(live_window)
             registration._integer(transport_deadline_ns, "consume retained deadline", 1)
             material, window, bound, live = self._admit(configured, window,
-                min(window[4], transport_deadline_ns), work)
+                min(window[4], transport_deadline_ns), work, current=external)
             scope = _scope(material, original_deadline, work)
             projected = state._project_on_work(vector_bytes=material.complete_root_vector_bytes,
                 expected_vector_digest=material.complete_root_vector_digest, work=work)
             if export:
+                maximum_bundle_bytes = None
+                if maximum_response_bytes is not None:
+                    # Match registration._wire's exact lossless canonical JSON
+                    # traversal, without emitting either output buffer yet.
+                    request_size = work.measure(material.payload["consumeRequest"])[0]
+                    scope_size = work.measure(scope)[0]
+                    fixed_size = len(b"exported") + request_size + scope_size + len(original) + 2 * 71
+                    maximum_bundle_bytes = min(export_module.bundle.MAX_BYTES,
+                        maximum_response_bytes - fixed_size)
+                    if maximum_bundle_bytes < export_module.bundle.OVERHEAD_BYTES + 2:
+                        _fail("consume export cannot reserve its exact raw7 response before allocation")
+                    live()
                 cipher = export_module._export_on_work(configured.owner, configured.execution_store,
                     envelope_bytes=original, expected_request=material.payload["consumeRequest"], expected_scope=scope,
                     business_before_roots=projected.business_before_roots,
                     authorization_before_roots=projected.authorization_before_roots,
                     expected_counted_heads=projected.expected_counted_heads, expected_journal_digest=expected_digest,
                     bundle_key=configured.execution_store_configuration[2],
-                    live_window=window, transport_deadline_ns=bound, work=work)
+                    live_window=window, transport_deadline_ns=bound, work=work,
+                    maximum_bundle_bytes=maximum_bundle_bytes, _current=external)
                 live()
                 # This output is ordinary data. Genuine replay happened inside
                 # the exporter; no successful carrier can be fed back as proof.
@@ -416,9 +464,9 @@ class _ColdPlanner:
                     business_before_roots=projected.business_before_roots,
                     authorization_before_roots=projected.authorization_before_roots,
                     expected_counted_heads=projected.expected_counted_heads, expected_journal_digest=expected_digest,
-                    live_window=window, transport_deadline_ns=bound, work=work)
+                    live_window=window, transport_deadline_ns=bound, work=work, _current=external)
             live()
-            self._admit(configured, window, bound, work)
+            self._admit(configured, window, bound, work, current=external)
             signed = plan.contract._decode_on_work(original, envelope=True, work=work)["payload"]
             if live() >= min(signed["expiresAtEpochNs"], original_deadline):
                 _fail("retained consume plan expired before current verification return")
@@ -447,11 +495,13 @@ class _ColdPlanner:
 
 def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, planner_private_key,
         bundle_key, delivery_custody_key, journal_key, journal_directory_fd,
-        execution_bundle_key, execution_store_directory_fd, live_window, transport_deadline_ns, work):
+        execution_bundle_key, execution_store_directory_fd, live_window, transport_deadline_ns,
+        work, current=None, maximum_record_bytes=None):
     """Construct real owners only after authenticating the original root scope."""
     original, custody, root, private = bootstrap_bytes, history_custody_bytes, root_public_key, planner_private_key
     bundle, delivery, journal_key_original, descriptor = bundle_key, delivery_custody_key, journal_key, journal_directory_fd
     execution_key, execution_descriptor = execution_bundle_key, execution_store_directory_fd
+    external = current
     window = clock._validate(live_window)
     registration._integer(transport_deadline_ns, "consume construction deadline", 1)
     bound = min(window[4], transport_deadline_ns)
@@ -471,10 +521,12 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
     bootstrap.authorization._public(root)
     _process()
     material = bootstrap._verify_on_work(bootstrap_bytes=original, history_custody_bytes=custody,
-        root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work)
+        root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work,
+        _continuity=_continuity(external, work))
     payload, launch = material.payload, material.payload["launch"]
     current = bootstrap.shared._launch_guard(material.attestation_interval, material.opening_sample,
         bootstrap.shared._processing(window, bound, work), work)
+    current = planning.transition.delivery._join_current(current, external, work)
     for raw, digest in ((bundle, material.history_material.bundle_key_digest),
             (delivery, material.history_material.delivery_key_digest), (journal_key_original, payload["journalKeyDigest"]),
             (execution_key, material.execution_bundle_key_digest)):
@@ -490,11 +542,12 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
         historical = history_module.OidcSessionActivationHistoryCustody.for_consume_planning(
             custody_bytes=custody, root_public_key=root, expected_receiver_identity=payload["historyReceiverIdentity"],
             expected_consume_request=payload["consumeRequest"], bundle_key=bundle, delivery_custody_key=delivery,
-            live_window=window, transport_deadline_ns=bound, work=work)
+            live_window=window, transport_deadline_ns=bound, work=work, _current=external)
         current()
-        window, bound = _bounds(material, historical, window, bound, work)
+        window, bound = _bounds(material, historical, window, bound, work, _current=external)
         current = bootstrap.shared._launch_guard(material.attestation_interval, material.opening_sample,
             bootstrap.shared._processing(window, bound, work), work)
+        current = planning.transition.delivery._join_current(current, external, work)
         reader = planning.OidcSessionActivationDeliveryReadPlanner(read_dsn=material.reader_configuration[0],
             connect_timeout_seconds=material.reader_configuration[1], database_identity=material.reader_configuration[2],
             maximum_clock_skew_ns=material.reader_configuration[3])
@@ -504,14 +557,16 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
             expected_uid=bootstrap.SERVICE_UID, expected_gid=bootstrap.SERVICE_GID,
             maximum_records=launch["journalMaximumRecords"], quota_bytes=launch["journalQuotaBytes"],
             configuration_digest=payload["configurationDigest"], journal_key=journal_key_original,
-            bundle_key=bundle, delivery_key=delivery, live_window=window, transport_deadline_ns=bound, work=work)
+            bundle_key=bundle, delivery_key=delivery, live_window=window, transport_deadline_ns=bound,
+            work=work, _current=external, maximum_record_bytes=maximum_record_bytes)
         current()
         execution_store = store_module.DeliveryExecutionBundleStore(directory_fd=execution_descriptor,
             expected_device=launch["executionStoreDirectoryDevice"], expected_inode=launch["executionStoreDirectoryInode"],
             expected_uid=bootstrap.SERVICE_UID, expected_gid=bootstrap.SERVICE_GID,
             maximum_records=launch["executionStoreMaximumRecords"], quota_bytes=launch["executionStoreQuotaBytes"],
             configuration_digest=payload["configurationDigest"], bundle_key=execution_key,
-            live_window=window, transport_deadline_ns=bound, work=work)
+            live_window=window, transport_deadline_ns=bound, work=work, _current=external,
+            maximum_record_bytes=maximum_record_bytes)
         current()
         owner = owner_module.OidcSessionActivationDeliveryPlanOwner(read_planner=reader, journal=storage,
             planner_private_key=private, planner_public_key=material.planner_public_key,
@@ -522,7 +577,8 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
             state_root_public_key=root, complete_root_vector_bytes=material.complete_root_vector_bytes,
             historical_custody=historical, activation_expectations=payload["activationExpectations"],
             activation_scope=payload["activationScope"], activation_planner_public_key=material.history_material.planner.planner_public_key,
-            operation_public_key=root, live_window=window, transport_deadline_ns=bound, work=work)
+            operation_public_key=root, live_window=window, transport_deadline_ns=bound, work=work,
+            _current=external)
         current()
         configured = _Configuration(material, root, owner,
             owner_module.OidcSessionActivationDeliveryPlanOwner._snapshot_configuration(owner), historical,
@@ -535,7 +591,7 @@ def _create_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key, 
         object.__setattr__(result, "_pid", os.getpid())
         object.__setattr__(result, "_lock", threading.Lock())
         object.__setattr__(result, "_closed", False)
-        result._admit(configured, window, bound, work)
+        result._admit(configured, window, bound, work, current=external)
         current()
         return result
     except BaseException:

@@ -101,7 +101,7 @@ def _admit_originals_on_work(*, originals, expectations, planner_public_key,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
         authorization_bytes, authorization_enrollment_bytes, grant_bytes,
         grant_enrollment_bytes, configuration_digest, historical_custody,
-        live_window, transport_deadline_ns, work, include_delivery):
+        live_window, transport_deadline_ns, work, include_delivery, _current=None):
     """Authenticate all originals once; return pending scope plus effects ID only."""
     # Lazy import avoids a bootstrap/owner/completion composition import cycle.
     from serverware import authority_oidc_session_activation_history_custody as custody
@@ -144,6 +144,7 @@ def _admit_originals_on_work(*, originals, expectations, planner_public_key,
     plan._same(expected["scope"]["configurationDigest"], config, work,
         "activation completion independent configuration")
     _window, processing = delivery._window(window, bound, work)
+    processing = delivery._join_current(processing, _current, work)
     verified = None
 
     def live():
@@ -187,7 +188,8 @@ def _admit_originals_on_work(*, originals, expectations, planner_public_key,
         authorization_enrollment_bytes=caller_enrollment, grant_enrollment_bytes=grant_enrollment,
         current_root_enrollment_bytes=enrollment, root_public_key=root,
         planner_public_key=planner, operation_public_key=operation_key,
-        configuration_digest=config, live_window=window, transport_deadline_ns=bound, work=work)
+        configuration_digest=config, live_window=window, transport_deadline_ns=bound,
+        work=work, _current=_current)
     if (type(verified) is not exchange._HistoricalExchange
             or type(verified.replayed) is not exchange.history._HistoricalReplayedPlan):
         raise OidcSessionActivationCompletionAdmissionError(
@@ -275,7 +277,7 @@ def _admit_on_work(*, originals, expectations, planner_public_key,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
         authorization_bytes, authorization_enrollment_bytes, grant_bytes,
         grant_enrollment_bytes, configuration_digest, historical_custody,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _current=None):
     """Preserved original-only pending completion API and private result."""
     return _admit_originals_on_work(originals=originals, expectations=expectations,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
@@ -287,7 +289,8 @@ def _admit_on_work(*, originals, expectations, planner_public_key,
         authorization_bytes=authorization_bytes, authorization_enrollment_bytes=authorization_enrollment_bytes,
         grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
         configuration_digest=configuration_digest, historical_custody=historical_custody,
-        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=False)
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, include_delivery=False, _current=_current)
 
 
 def _admit_for_delivery_on_work(*, originals, expectations, planner_public_key,
@@ -296,7 +299,7 @@ def _admit_for_delivery_on_work(*, originals, expectations, planner_public_key,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
         authorization_bytes, authorization_enrollment_bytes, grant_bytes,
         grant_enrollment_bytes, configuration_digest, historical_custody,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _current=None):
     """Replay originals once; add only the authentic insertion's diagnostic IDs."""
     return _admit_originals_on_work(originals=originals, expectations=expectations,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
@@ -308,4 +311,5 @@ def _admit_for_delivery_on_work(*, originals, expectations, planner_public_key,
         authorization_bytes=authorization_bytes, authorization_enrollment_bytes=authorization_enrollment_bytes,
         grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
         configuration_digest=configuration_digest, historical_custody=historical_custody,
-        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work, include_delivery=True)
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, include_delivery=True, _current=_current)

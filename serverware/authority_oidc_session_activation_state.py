@@ -144,7 +144,7 @@ def _verify_on_work(*, scope, assertion_bytes, old_token_bytes, complete_root_ve
 
 def _verify_historical_on_work(*, scope, assertion_bytes, old_token_bytes, complete_root_vector_bytes,
         query_bytes, observation_bytes, enrollment_bytes, root_public_key,
-        historical_plan_interval, live_window, transport_deadline_ns, work):
+        historical_plan_interval, live_window, transport_deadline_ns, work, _current=None):
     """Join original state history to a separately authenticated plan interval.
 
     The caller must authenticate the original plan signature before supplying
@@ -201,6 +201,10 @@ def _verify_historical_on_work(*, scope, assertion_bytes, old_token_bytes, compl
         last_epoch, last_monotonic = now, monotonic
         return now
 
+    if _current is not None:
+        from serverware import oidc_session_activation_delivery as delivery
+
+        current = delivery._join_current(current, _current, work)
     current()
     payload, enrollment = head._verify_historical_with_enrollment_on_work(
         observation_bytes=original_observation, query_bytes=original_query,

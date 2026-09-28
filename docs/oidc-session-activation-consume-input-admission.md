@@ -38,5 +38,8 @@ now claims before issuer I/O and retains opaque response originals before this
 admission. Its explicit `acquire_and_prepare_consume` entrypoint keeps the whole
 exchange within the actual live permission; the existing direct `prepare_consume`
 path is not silently changed into network acquisition. The issuer/client are
-source-connected, but actual resource provisioning and exact worker delivery
-remain open. No build or execution has been performed.
+source-connected, including the optional signed launch-v2
+[worker staging path](oidc-session-activation-consume-dynamic-delivery.md).
+Its static receiving check does not replace this request-complete verifier or
+the worker's private replay. Actual resource provisioning remains open. No
+build or execution has been performed.

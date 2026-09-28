@@ -52,7 +52,8 @@ def _join_store(configured, store, key, work):
 
 def _export_on_work(owner, store, *, envelope_bytes, expected_request, expected_scope,
         business_before_roots, authorization_before_roots, expected_counted_heads,
-        expected_journal_digest, bundle_key, live_window, transport_deadline_ns, work):
+        expected_journal_digest, bundle_key, live_window, transport_deadline_ns, work,
+        maximum_bundle_bytes=None, _current=None):
     """Return first-exact durable ciphertext after genuine same-call live replay."""
     evidence.capture._SharedLedger(work)
     if (type(owner) is not retained.OidcSessionActivationDeliveryPlanOwner
@@ -63,6 +64,9 @@ def _export_on_work(owner, store, *, envelope_bytes, expected_request, expected_
             or type(expected_journal_digest) is not str):
         _fail("consume export requires bounded immutable originals and an independent private key")
     envelope, key = envelope_bytes, bundle_key
+    maximum = bundle.MAX_BYTES if maximum_bundle_bytes is None else maximum_bundle_bytes
+    if type(maximum) is not int or not bundle.OVERHEAD_BYTES + 2 <= maximum <= bundle.MAX_BYTES:
+        _fail("consume ciphertext capacity may only tighten its source bound")
     journal_digest = registration._digest(expected_journal_digest)
     lock = owner._lock
     if type(lock) is not retained._LOCK_TYPE or not lock.acquire(blocking=False):
@@ -92,7 +96,7 @@ def _export_on_work(owner, store, *, envelope_bytes, expected_request, expected_
                 authorization_before_roots=owned["authorizationBeforeRoots"],
                 expected_counted_heads=owned["expectedCountedHeads"],
                 expected_journal_digest=owned["transitionInputs"]["journalDigest"],
-                live_window=window, transport_deadline_ns=bound, work=work))
+                live_window=window, transport_deadline_ns=bound, work=work, _current=_current))
 
         def check():
             store_check()
@@ -102,36 +106,46 @@ def _export_on_work(owner, store, *, envelope_bytes, expected_request, expected_
             if not before <= replay_now <= after or after >= full.valid_until_epoch_ns:
                 _fail("consume export expired or clocks reversed across original replay")
             store_check()
+            return after
 
+        check = bundle.delivery._join_current(check, _current, work)
         check()
+        cipher_size = len(original) + bundle.OVERHEAD_BYTES
+        if cipher_size > maximum:
+            _fail("consume ciphertext exceeds its remaining response capacity before allocation")
         work.prepare_copy(journal_scope)
         context = {"schema": bundle.CONTEXT_SCHEMA, "operation": retained.OPERATION,
             **journal_scope, "journalDigest": journal_digest}
         raw_context = storage._context_bytes(context, work)
-        cipher_size = len(original) + bundle.OVERHEAD_BYTES
         if (storage.HEADER_BYTES + len(raw_context) + len(envelope) + cipher_size > storage.MAX_RECORD_BYTES
                 or len(envelope) + cipher_size > retained.contract.authority.MAX_RESULT_BYTES):
             _fail("consume export exceeds the fixed record or original-pair aggregate bound")
+        record_maximum = min(storage.MAX_RECORD_BYTES,
+            storage.HEADER_BYTES + len(raw_context) + len(envelope) + maximum)
         check()
         first = storage.DeliveryExecutionBundleStore.read(store, context=context,
-            envelope_bytes=envelope, live_window=window, work=work, transport_deadline_ns=bound)
+            envelope_bytes=envelope, live_window=window, work=work, transport_deadline_ns=bound,
+            maximum_record_bytes=record_maximum,
+            _current=_current)
         check()
         if first is not None:
             # Integrity of a stored record is insufficient: join the plaintext
             # to the exact original admitted by this call's genuine full replay.
             opened = bundle._open_on_work(bundle_bytes=first, bundle_key=key,
-                expected_context=context, live_window=window, transport_deadline_ns=bound, work=work)
+                expected_context=context, live_window=window, transport_deadline_ns=bound, work=work,
+                _current=_current)
             check()
             retained._bytes_equal(opened, original, work, "first consume execution originals")
             check()
             return first
 
         candidate = bundle._seal_on_work(original_bytes=original, bundle_key=key,
-            context=context, live_window=window, transport_deadline_ns=bound, work=work)
+            context=context, live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
         check()
         first = storage.DeliveryExecutionBundleStore.append(store, context=context,
             envelope_bytes=envelope, bundle_bytes=candidate, live_window=window,
-            work=work, transport_deadline_ns=bound)
+            work=work, transport_deadline_ns=bound, _current=_current,
+            maximum_record_bytes=record_maximum)
         check()
         retained._bytes_equal(first, candidate, work, "first durable consume ciphertext")
         check()

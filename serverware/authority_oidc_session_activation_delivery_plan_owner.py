@@ -160,7 +160,7 @@ class OidcSessionActivationDeliveryPlanOwner:
             state_enrollment_bytes, state_root_public_key, complete_root_vector_bytes,
             historical_custody, activation_expectations, activation_scope,
             activation_planner_public_key, operation_public_key, journal,
-            live_window, transport_deadline_ns, work):
+            live_window, transport_deadline_ns, work, _current=None):
         ledger = evidence.capture._SharedLedger(work)
         if (type(read_planner) is not planning.OidcSessionActivationDeliveryReadPlanner
                 or type(historical_custody) is not history.OidcSessionActivationHistoryCustody
@@ -197,6 +197,7 @@ class OidcSessionActivationDeliveryPlanOwner:
         if window[5] > owned["age"] or window[6] > owned["skew"]:
             _fail("consume construction window exceeds configured policy")
         _window_value, current = planning.transition.delivery._window(window, bound, work)
+        current = planning.transition.delivery._join_current(current, _current, work)
         current()
         observed = expectations._capture_on_work(owned["activationExpectations"], work=work)
         registration._same(observed["scope"]["configurationDigest"], owned["configuration"], work,
@@ -223,7 +224,8 @@ class OidcSessionActivationDeliveryPlanOwner:
         history.OidcSessionActivationHistoryCustody.bind_context_on_work(historical_custody,
             root_public_key=root, current_root_enrollment_bytes=enrolled, work=work)
         narrowed, clipped = history.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
-            historical_custody, live_window=window, transport_deadline_ns=bound, work=work)
+            historical_custody, live_window=window, transport_deadline_ns=bound, work=work,
+            _current=_current)
         historical_configuration = history.OidcSessionActivationHistoryCustody._snapshot_configuration(historical_custody)
         journal_configuration = custody.DeliveryOriginalJournal._snapshot_configuration(journal)
         if type(journal_configuration) is not tuple or len(journal_configuration) != 8:
@@ -245,7 +247,7 @@ class OidcSessionActivationDeliveryPlanOwner:
         object.__setattr__(self, "_pid", os.getpid())
         object.__setattr__(self, "_lock", threading.Lock())
         object.__setattr__(self, "_closed", False)
-        self._guard(configured, narrowed, clipped, work)()
+        self._guard(configured, narrowed, clipped, work, _current=_current)()
 
     def _snapshot_configuration(self):
         if (type(self) is not OidcSessionActivationDeliveryPlanOwner or self._closed
@@ -263,8 +265,9 @@ class OidcSessionActivationDeliveryPlanOwner:
             _fail("consume configured read, history or journal owner changed")
         return configured
 
-    def _guard(self, configured, window, bound, work):
+    def _guard(self, configured, window, bound, work, *, _current=None):
         _window_value, current = planning.transition.delivery._window(window, bound, work)
+        current = planning.transition.delivery._join_current(current, _current, work)
 
         def check():
             if self._snapshot_configuration() is not configured:
@@ -280,7 +283,7 @@ class OidcSessionActivationDeliveryPlanOwner:
             expected_session_id, expected_credential_id, expected_credential_record_id,
             expected_challenge_id, business_before_roots, authorization_before_roots,
             expected_counted_heads, head_query_bytes, head_observation_bytes, activation_originals,
-            live_window, transport_deadline_ns, work):
+            live_window, transport_deadline_ns, work, _current=None):
         configured = self._snapshot_configuration()
         lock = self._lock
         if not lock.acquire(blocking=False):
@@ -299,12 +302,13 @@ class OidcSessionActivationDeliveryPlanOwner:
                 live_window=live_window, transport_deadline_ns=transport_deadline_ns,
                 work=work, transition_inputs=subject)
             window, bound = _window(configured, owned["liveWindow"], owned["transportDeadlineNs"])
-            current = self._guard(configured, window, bound, work)
+            current = self._guard(configured, window, bound, work, _current=_current)
             current()
             window, bound = history.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
-                configured.historical_custody, live_window=window, transport_deadline_ns=bound, work=work)
+                configured.historical_custody, live_window=window, transport_deadline_ns=bound, work=work,
+                _current=_current)
             current()
-            current = self._guard(configured, window, bound, work)
+            current = self._guard(configured, window, bound, work, _current=_current)
             subject, request = owned["transitionInputs"], owned["request"]
             history.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(
                 configured.historical_custody, expected_consume_request=request, work=work)
@@ -329,7 +333,7 @@ class OidcSessionActivationDeliveryPlanOwner:
                 expected_session_id=subject["sessionId"], expected_credential_id=subject["credentialId"],
                 expected_credential_record_id=subject["credentialRecordId"], expected_challenge_id=subject["challengeId"],
                 authn_policy=scope["authenticationPolicy"], trust_policy=scope["trustPolicy"],
-                live_window=window, transport_deadline_ns=bound, work=work)
+                live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
             current()
             proof = writes._encode_on_work(request_digest=request["requestDigest"],
                 counted_before_heads=acquired.counted_before_heads, write_inputs=acquired.write_inputs, work=work)
@@ -351,11 +355,12 @@ class OidcSessionActivationDeliveryPlanOwner:
                 "historical_custody": configured.historical_custody,
                 "live_window": window, "transport_deadline_ns": bound, "work": work}
             envelope = plan._produce_on_work(context, **originals,
-                planner_private_key=configured.planner_private_key, planner_public_key=configured.planner_public_key)
+                planner_private_key=configured.planner_private_key, planner_public_key=configured.planner_public_key,
+                _current=_current)
             signed = contract._decode_on_work(envelope, envelope=True, work=work)["payload"]
             plan_digest = evidence.plan._frame(contract.IDENTITY_DOMAIN, (envelope,), work)
             # Recapture ordinary owned originals, not a cached proof result.
-            invocation = plan._capture(context, **originals)
+            invocation = plan._capture(context, **originals, _current=_current)
             journal_scope, original_bytes = retained._encode_on_work(invocation,
                 envelope_bytes=envelope, plan_digest=plan_digest, work=work)
             expiry = min(signed["expiresAtEpochNs"], payload["expiresAtEpochNs"])
@@ -363,11 +368,11 @@ class OidcSessionActivationDeliveryPlanOwner:
                 maximum_lifetime_ns=configured.maximum_plan_age_ns,
                 maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
             bound = min(bound, window[4])
-            current = self._guard(configured, window, bound, work)
+            current = self._guard(configured, window, bound, work, _current=_current)
             current()
             journal_digest = custody.DeliveryOriginalJournal.append(configured.journal,
                 scope=journal_scope, original_bytes=original_bytes,
-                live_window=window, transport_deadline_ns=bound, work=work)
+                live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
             result = PreparedDeliveryPlan(registration._wire(request, work), registration._wire(scope, work),
                 envelope, plan_digest, registration._digest(journal_digest))
             if current() >= expiry:
@@ -378,7 +383,7 @@ class OidcSessionActivationDeliveryPlanOwner:
 
     def verify_retained(self, *, envelope_bytes, expected_request, expected_scope,
             business_before_roots, authorization_before_roots, expected_counted_heads,
-            expected_journal_digest, live_window, transport_deadline_ns, work):
+            expected_journal_digest, live_window, transport_deadline_ns, work, _current=None):
         """Read only exact retained originals; never reacquire, re-sign or renew."""
         envelope = state._original(envelope_bytes, contract.MAX_BYTES, "known consume plan")
         journal_digest = registration._digest(expected_journal_digest)
@@ -393,7 +398,8 @@ class OidcSessionActivationDeliveryPlanOwner:
                     expected_scope=expected_scope, business_before_roots=business_before_roots,
                     authorization_before_roots=authorization_before_roots,
                     expected_counted_heads=expected_counted_heads, expected_journal_digest=journal_digest,
-                    live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work))
+                    live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+                    _current=_current))
             full.live()
             result = PreparedDeliveryPlan(registration._wire(full.invocation.request, work),
                 registration._wire(full.invocation.scope, work),
@@ -407,7 +413,7 @@ class OidcSessionActivationDeliveryPlanOwner:
 
     def _verify_retained_locked(self, *, configured, envelope_bytes, expected_request, expected_scope,
             business_before_roots, authorization_before_roots, expected_counted_heads,
-            expected_journal_digest, live_window, transport_deadline_ns, work):
+            expected_journal_digest, live_window, transport_deadline_ns, work, _current=None):
         """Actual same-call originals/full replay; the caller holds this owner lock."""
         if (type(self._lock) is not _LOCK_TYPE or not self._lock.locked()
                 or self._snapshot_configuration() is not configured):
@@ -433,25 +439,26 @@ class OidcSessionActivationDeliveryPlanOwner:
             maximum_lifetime_ns=configured.maximum_plan_age_ns,
             maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
         bound = min(bound, window[4])
-        current = self._guard(configured, window, bound, work)
+        current = self._guard(configured, window, bound, work, _current=_current)
         current()
         history.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(
             configured.historical_custody, expected_consume_request=request, work=work)
         window, bound = history.OidcSessionActivationHistoryCustody.processing_bounds_on_work(
-            configured.historical_custody, live_window=window, transport_deadline_ns=bound, work=work)
+            configured.historical_custody, live_window=window, transport_deadline_ns=bound, work=work,
+            _current=_current)
         current()
-        current = self._guard(configured, window, bound, work)
+        current = self._guard(configured, window, bound, work, _current=_current)
         signed = _authenticate_known(envelope, request, scope, configured, current, work)
         window = plan.windows._narrow(window, deadline_epoch_ns=signed["expiresAtEpochNs"],
             maximum_lifetime_ns=configured.maximum_plan_age_ns,
             maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
         bound = min(bound, window[4])
-        current = self._guard(configured, window, bound, work)
+        current = self._guard(configured, window, bound, work, _current=_current)
         journal_scope = _journal_scope(configured, request, envelope, work)
         current()
         original = custody.DeliveryOriginalJournal.read_bound(configured.journal,
             scope=journal_scope, expected_journal_digest=journal_digest,
-            live_window=window, transport_deadline_ns=bound, work=work)
+            live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
         if original is None:
             _fail("exact retained consume original is absent; no regeneration is authorized")
         current()
@@ -477,7 +484,7 @@ class OidcSessionActivationDeliveryPlanOwner:
             operation_public_key=configured.operation_public_key,
             historical_custody=configured.historical_custody,
             planner_public_key=configured.planner_public_key,
-            live_window=window, transport_deadline_ns=bound, work=work)
+            live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
         registration._same(full.plan_digest, journal_scope["planDigest"], work, "retained consume plan identity")
         full.live()
         current()
@@ -485,7 +492,7 @@ class OidcSessionActivationDeliveryPlanOwner:
             maximum_lifetime_ns=configured.maximum_plan_age_ns,
             maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
         bound = min(bound, full.invocation.monotonic_deadline, window[4])
-        current = self._guard(configured, window, bound, work)
+        current = self._guard(configured, window, bound, work, _current=_current)
         full.live()
         if current() >= full.valid_until_epoch_ns:
             _fail("retained consume plan expired before its private same-call return")

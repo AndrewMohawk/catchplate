@@ -220,11 +220,13 @@ def _full_original_transition_on_work(context, *, old_token_bytes,
         expected_delivery_id, expected_user_id, expected_session_id, expected_credential_id,
         expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
         business_before_roots, authorization_before_roots, before_proofs, read_heads, query_frontiers,
-        live_window, transport_deadline_ns, work, historical_plan_interval):
+        live_window, transport_deadline_ns, work, historical_plan_interval, _current=None):
     """Reverify original current proofs and possession, then derive three effects."""
     ledger = registration.capture._SharedLedger(work)
     historical = (None if historical_plan_interval is None
         else _historical_interval(historical_plan_interval))
+    if historical is not None and _current is not None:
+        _fail("historical delivery transition cannot select a live continuation")
     if (type(context) is not core.KernelContext or context.operation != OPERATION
             or type(context.selected_rows) is not tuple or len(context.selected_rows) != MAX_SELECTED_ROWS
             or context.verified_webauthn_evidence is not None):
@@ -283,6 +285,7 @@ def _full_original_transition_on_work(context, *, old_token_bytes,
         last_epoch, last_monotonic = epoch, monotonic
         return epoch
 
+    live = delivery._join_current(live, _current, work)
     live()
     selected_delivery, row, trust_digest, envelope_digest, row_expiry = _rows_on_work(
         current, values, token, owned["policy"], owned["trust"], now_ns, work)
@@ -360,7 +363,7 @@ def _full_transition_with_liveness_on_work(context, *, old_token_bytes,
         expected_delivery_id, expected_user_id, expected_session_id, expected_credential_id,
         expected_credential_record_id, expected_challenge_id, authn_policy, trust_policy,
         business_before_roots, authorization_before_roots, before_proofs, read_heads, query_frontiers,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _current=None):
     return _full_original_transition_on_work(context, old_token_bytes=old_token_bytes,
         expected_delivery_id=expected_delivery_id, expected_user_id=expected_user_id,
         expected_session_id=expected_session_id, expected_credential_id=expected_credential_id,
@@ -368,7 +371,7 @@ def _full_transition_with_liveness_on_work(context, *, old_token_bytes,
         authn_policy=authn_policy, trust_policy=trust_policy, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,
         read_heads=read_heads, query_frontiers=query_frontiers, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, work=work, historical_plan_interval=None)
+        transport_deadline_ns=transport_deadline_ns, work=work, historical_plan_interval=None, _current=_current)
 
 
 def _full_transition_historical_on_work(context, *, old_token_bytes,

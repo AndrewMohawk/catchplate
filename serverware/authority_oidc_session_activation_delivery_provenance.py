@@ -104,7 +104,7 @@ def _verify_on_work(*, consume_request, current_delivery_row,
         operation_public_key, root_public_key, configuration_digest,
         expected_authorization_digest, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        historical_custody, live_window, transport_deadline_ns, work):
+        historical_custody, live_window, transport_deadline_ns, work, _current=None):
     """Genuinely authenticate original completion and join this consume once."""
     held = _capture_on_work(consume_request=consume_request, current_delivery_row=current_delivery_row,
         response_originals=response_originals, plan_originals=plan_originals,
@@ -122,6 +122,7 @@ def _verify_on_work(*, consume_request, current_delivery_row,
     current_request = held.pop("consume_request")
     current_row = held.pop("current_delivery_row")
     _window, current = admission.delivery._window(held["live_window"], held["transport_deadline_ns"], work)
+    current = admission.delivery._join_current(current, _current, work)
     actual = None
 
     def live():
@@ -148,7 +149,8 @@ def _verify_on_work(*, consume_request, current_delivery_row,
     live()
     # The diagnostic suffix shares the existing actual verifier algorithm and
     # performs its historical replay ONCE. It accepts only the original inputs.
-    actual = response._verify_delivery_on_work(expected_consume_request=current_request, **held, work=work)
+    actual = response._verify_delivery_on_work(expected_consume_request=current_request,
+        **held, work=work, _current=_current)
     if type(actual) is not response._VerifiedDeliveryCompletion:
         _fail("delivery provenance requires the actual original completion verifier")
     live()

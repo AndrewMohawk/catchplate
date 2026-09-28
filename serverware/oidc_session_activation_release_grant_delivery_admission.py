@@ -52,7 +52,8 @@ def _verify_on_work(*, server_bootstrap_bytes, issuer_policy_bytes, proof_bootst
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(window[4], transport_deadline_ns)
     original_bytes = len(original) + len(policy_original) + len(proof_original)
-    if original_bytes > MAX_ORIGINAL_BYTES:
+    proof_reservation = producer.cold._proof_reservation(len(policy_original), len(proof_original))
+    if original_bytes + proof_reservation + 8 * len(original) > MAX_ORIGINAL_BYTES:
         _fail("release delivery exceeds its complete original inventory")
     capture._SharedLedger(work)
     work.charge(input_bytes=original_bytes)
@@ -78,6 +79,12 @@ def _verify_on_work(*, server_bootstrap_bytes, issuer_policy_bytes, proof_bootst
         proof.completion_request_bytes, proof.state_receipt_bytes,
         completion.current_root_enrollment_bytes, completion.authorization_enrollment_bytes,
         completion.grant_enrollment_bytes)
+    current_planner = proof.current_activation_planner
+    if current_planner is not None:
+        if type(current_planner) is not server.custody.planner_bootstrap._PlannerMaterial:
+            _fail("release delivery current template lacks actual proof admission")
+        embedded += (proof.current_activation_planner_bytes, current_planner.bootstrap_bytes,
+            current_planner.state_enrollment_bytes, current_planner.complete_root_vector_bytes)
     embedded_bytes = sum(map(len, embedded))
     if original_bytes + embedded_bytes > MAX_ORIGINAL_BYTES:
         _fail("release delivery independent decoded originals exceed the held inventory")
@@ -96,6 +103,33 @@ def _verify_on_work(*, server_bootstrap_bytes, issuer_policy_bytes, proof_bootst
     work.charge(input_bytes=decoded_bytes)
     producer._same_bytes(material.custody_bytes, proof.release_custody_bytes, work,
         "release delivery exact independently provisioned custody original")
+    custody = material.custody_material
+    if current_planner is None:
+        if proof.current_activation_planner_bytes is not None:
+            _fail("legacy release delivery has an unexpected current template")
+        plan._same(issuer.keys._spki_on_work(completion.evidence_root_public_key, work),
+            issuer.keys._spki_on_work(root, work), work, "legacy release delivery evidence root")
+        producer._same_bytes(custody.planner.state_enrollment_bytes, completion.current_root_enrollment_bytes,
+            work, "legacy release delivery exact state original")
+    else:
+        producer._same_bytes(custody.planner.bootstrap_bytes, proof.current_activation_planner_bytes,
+            work, "release delivery exact current custody planner")
+        producer._same_bytes(current_planner.bootstrap_bytes, proof.current_activation_planner_bytes,
+            work, "release delivery genuine current template")
+    old_state = authorization._admit_enrollment_on_work(
+        enrollment_bytes=completion.current_root_enrollment_bytes,
+        root_public_key=completion.evidence_root_public_key, work=work)
+    current()
+    current_state = authorization._admit_enrollment_on_work(
+        enrollment_bytes=custody.planner.state_enrollment_bytes, root_public_key=root, work=work)
+    current()
+    for actual, expected in ((old_state.payload, current_state.payload),
+            (old_state.enrollment_digest, completion.enrollment_digest),
+            (current_state.enrollment_digest, custody.planner.state_enrollment_digest),
+            (completion.database_id, material.database_id),
+            (completion.generation_digest, material.generation_digest),
+            (custody.delivery_key_digest, completion.custody_material.history.planner.delivery_key_digest)):
+        plan._same(actual, expected, work, "release delivery original/current state and delivery key")
     current()
     scope = proof.expected_proof_scope
     for actual, expected, label in (

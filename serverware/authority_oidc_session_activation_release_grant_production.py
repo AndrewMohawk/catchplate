@@ -16,6 +16,7 @@ from serverware import authority_current_root_delivery_records as acknowledgment
 from serverware import authority_oidc_session_activation_release_intent as intents
 from serverware import authority_oidc_session_activation_release_proof as proofs
 from serverware import oidc_session_activation_release_grant_issuer_policy as issuer
+from serverware import oidc_session_activation_release_grant_issuer_bootstrap as cold
 from serverware import oidc_session_activation_release_outcome as outcomes
 from serverware import oidc_session_activation_release_transport as transport
 
@@ -173,7 +174,8 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
     original_bytes = sum(len(raw) for raw in (*request, policy_raw, proof_bootstrap_raw))
-    if original_bytes + _OUTPUT_RESERVATION + transport.LIVE_REQUEST_HEADER_BYTES > MAX_ORIGINAL_BYTES:
+    proof_reservation = cold._proof_reservation(len(policy_raw), len(proof_bootstrap_raw))
+    if original_bytes + proof_reservation + _OUTPUT_RESERVATION + transport.LIVE_REQUEST_HEADER_BYTES > MAX_ORIGINAL_BYTES:
         _fail("release issuer complete input and output inventory exceeds 64 MiB")
     capture._SharedLedger(work)
     work.charge(input_bytes=original_bytes + transport.LIVE_REQUEST_HEADER_BYTES)
@@ -194,12 +196,19 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
     if type(material) is not issuer.proof_bootstrap._ProofMaterial:
         _fail("release issuer requires the policy-bound genuine proof bootstrap")
     cm = material.completion_material
+    evidence_root = cm.evidence_root_public_key
+    current_planner = material.current_activation_planner
     # These decoded originals are simultaneously held by the actual material.
     # Reserve them as well as both final grants before request admission/signing.
     embedded = (material.completion_bootstrap_bytes, material.proof_enrollment_bytes,
         material.release_custody_bytes, material.intent_bytes, material.intent_enrollment_bytes,
         material.completion_request_bytes, material.state_receipt_bytes,
         cm.current_root_enrollment_bytes, cm.authorization_enrollment_bytes, cm.grant_enrollment_bytes)
+    if current_planner is not None:
+        if type(current_planner) is not server.custody.planner_bootstrap._PlannerMaterial:
+            _fail("release issuer current template lacks genuine proof-original admission")
+        embedded += (material.current_activation_planner_bytes, current_planner.bootstrap_bytes,
+            current_planner.state_enrollment_bytes, current_planner.complete_root_vector_bytes)
     if original_bytes + sum(map(len, embedded)) + _OUTPUT_RESERVATION > MAX_ORIGINAL_BYTES:
         _fail("release issuer decoded originals exceed the complete held inventory")
     work.charge(input_bytes=sum(map(len, embedded)))
@@ -218,14 +227,39 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
         root_custody.opening_sample, lifetime.base, work))
     lifetime.narrow(root_custody.attestation_interval[1], root_custody.planner.maximum_plan_age_ns,
         root_custody.planner.maximum_clock_skew_ns)
-    _same_bytes(root_custody.planner.state_enrollment_bytes, cm.current_root_enrollment_bytes,
-        work, "release issuer exact activation state enrollment")
+    if current_planner is None:
+        if material.current_activation_planner_bytes is not None:
+            _fail("legacy release proof has an unexpected current template")
+        plan._same(keys._spki_on_work(evidence_root, work), keys._spki_on_work(root, work),
+            work, "legacy release issuer original root")
+        _same_bytes(root_custody.planner.state_enrollment_bytes, cm.current_root_enrollment_bytes,
+            work, "release issuer exact activation state enrollment")
+    else:
+        _same_bytes(root_custody.planner.bootstrap_bytes, material.current_activation_planner_bytes,
+            work, "release issuer exact current custody planner")
+        _same_bytes(current_planner.bootstrap_bytes, material.current_activation_planner_bytes,
+            work, "release issuer genuine current planner original")
     enrolled_state = authorization._admit_enrollment_on_work(enrollment_bytes=cm.current_root_enrollment_bytes,
-        root_public_key=root, work=work)
+        root_public_key=evidence_root, work=work)
+    current()
+    current_state = authorization._admit_enrollment_on_work(
+        enrollment_bytes=root_custody.planner.state_enrollment_bytes, root_public_key=root, work=work)
+    current()
+    for actual, expected in ((enrolled_state.payload, current_state.payload),
+            (enrolled_state.enrollment_digest, cm.enrollment_digest),
+            (current_state.enrollment_digest, root_custody.planner.state_enrollment_digest),
+            (current_state.payload["databaseId"], scope["databaseId"]),
+            (cm.database_id, scope["databaseId"]),
+            (current_state.payload["generationDigest"], scope["generationDigest"]),
+            (cm.generation_digest, scope["generationDigest"]),
+            (root_custody.delivery_key_digest, cm.custody_material.history.planner.delivery_key_digest)):
+        plan._same(actual, expected, work, "release issuer complete original/current state and delivery key")
     current()
     unique = issuer.proof_bootstrap._unique_keys
-    base_keys = unique((root_custody.planner.planner_public_key, enrolled_state.computation_public_key,
-        enrolled_state.completion_public_key, enrolled_state.state_public_key), work)
+    base_keys = unique((root_custody.planner.planner_public_key, current_state.computation_public_key,
+        current_state.completion_public_key, current_state.state_public_key,
+        enrolled_state.computation_public_key, enrolled_state.completion_public_key,
+        enrolled_state.state_public_key, evidence_root), work)
     intent_enrollment = intents.enrollments._admit_on_work(enrollment_bytes=request[4],
         root_public_key=root, expected_scope=intent_scope, forbidden_public_keys=base_keys, work=work)
     current()
@@ -233,12 +267,12 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
     caller_enrollment = completion.caller._admit_enrollment_on_work(
         authorization_enrollment_bytes=cm.authorization_enrollment_bytes,
         current_root_enrollment_bytes=cm.current_root_enrollment_bytes,
-        grant_enrollment_bytes=cm.grant_enrollment_bytes, root_public_key=root,
+        grant_enrollment_bytes=cm.grant_enrollment_bytes, root_public_key=evidence_root,
         configuration_digest=cm.configuration_digest, planner_public_key=cm.planner_public_key,
         operation_public_key=cm.operation_public_key, work=work)
     current()
     grant_enrollment = completion.grants._admit_enrollment_on_work(grant_enrollment_bytes=cm.grant_enrollment_bytes,
-        current_root_enrollment_bytes=cm.current_root_enrollment_bytes, root_public_key=root, work=work)
+        current_root_enrollment_bytes=cm.current_root_enrollment_bytes, root_public_key=evidence_root, work=work)
     current()
     proof_keys = unique((*base_keys, intent_enrollment.caller_public_key, cm.planner_public_key,
         cm.operation_public_key, caller_enrollment.caller_public_key, grant_enrollment.authorizer_public_key,
@@ -248,11 +282,11 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
     # COMPLETE/ACK originals, never from decoding the incoming proof payload.
     complete_material, complete, complete_digest = state._verify_request_on_work(
         request_bytes=material.completion_request_bytes, enrollment_bytes=cm.current_root_enrollment_bytes,
-        root_public_key=root, now_epoch_ns=current(), work=work)
+        root_public_key=evidence_root, now_epoch_ns=current(), work=work)
     current()
     acknowledged = acknowledgments._verify_ack_on_work(request_bytes=material.completion_request_bytes,
         receipt_bytes=material.state_receipt_bytes, enrollment_bytes=cm.current_root_enrollment_bytes,
-        root_public_key=root, expected_pending_sequence=cm.current_pending[0],
+        root_public_key=evidence_root, expected_pending_sequence=cm.current_pending[0],
         expected_pending_head_digest=cm.current_pending[1], work=work)
     current()
     plan._same(acknowledged.request_payload, complete, work, "release issuer exact signed COMPLETE")

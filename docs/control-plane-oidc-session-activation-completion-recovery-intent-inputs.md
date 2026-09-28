@@ -80,6 +80,12 @@ release path.
 The `.227` source join prepares a new intent only in the original global slot.
 An existing intent or proof signed under a retired, distinct authority is not
 migrated or replaced: current-enrollment re-admission fails closed, and a spent
-claim remains spent. Historical release/retained-release authority is still a
-separate implementation boundary.
+claim remains spent. The `.228` LIVE caller requires the actor's exact independent
+R1 consume selection, preserves its association with the R0 activation target,
+and re-admits only current-R2 intent/proof originals. It does not require a new
+proof-setup contact or permit regeneration when retained proof is missing.
+The separately fresh current-R2 LIVE grants remain necessary; historical
+`retained-release` and retired-intent authority remain separate implementation
+boundaries. Neither an archived root nor its endpoint becomes current effect
+authority.
 No runtime, resource provisioning or production-readiness evidence is claimed.

@@ -54,7 +54,9 @@ class _DeliveryAttempt:
         if self._purpose == "release":
             self._config, self._issuer = self._parent.release_handoff, self._parent.release_grant_acquisition
             if (type(self._config) is not handoff_config._ReleaseHandoffMaterial
-                    or type(self._issuer) is not grant_config._ReleaseGrantAcquisitionMaterial):
+                    or type(self._issuer) is not grant_config._ReleaseGrantAcquisitionMaterial
+                    or selected.consume_authority is None or actor._consume_recovery_selection is None
+                    or actor._consume_recovery_selection.authority is not selected.consume_authority):
                 execution._fail("completion delivery lacks independent LIVE caller configuration")
         elif self._purpose == "retained-release":
             self._config = self._issuer = self._parent.release_recovery_grant_acquisition
@@ -66,7 +68,8 @@ class _DeliveryAttempt:
                 != (handoff_config.client.CLIENT_UID, handoff_config.client.CLIENT_GID)):
             execution._fail("completion delivery lacks its independent caller identity")
         self._cold_seal = (actor, selected, self._owner, self._work, self._parent,
-            self._binding, self._custody, self._root, self._config, self._issuer)
+            self._binding, self._custody, self._root, self._config, self._issuer,
+            selected.authority, selected.consume_authority, actor._consume_recovery_selection)
         self._config_pin = self._cold_configuration()
         self._continuation_seal = self._grants_seal = None
         self._lifetime = self._lifetime_seal = self._window_pin = self._bound_pin = None
@@ -93,7 +96,9 @@ class _DeliveryAttempt:
 
     def _identity(self):
         observed = (self.actor, self.controls, self._owner, self._work, self._parent,
-            self._binding, self._custody, self._root, self._config, self._issuer)
+            self._binding, self._custody, self._root, self._config, self._issuer,
+            self.controls.authority, self.controls.consume_authority,
+            self.actor._consume_recovery_selection)
         if (type(self) is not _DeliveryAttempt or self._construction is not _CONSTRUCTION
                 or _ACTIVE is not self or self._closed is not False
                 or any(actual is not held for actual, held in zip(observed, self._cold_seal))
@@ -258,6 +263,25 @@ def _acquire_grants(active):
         execution._fail("LIVE acquisition cannot accept retained recovery permission")
     selected, work = active.inputs, active._work
     wire = grants_transport
+    raw = active.proof._originals
+    # Only current R2 proof/intent originals enter the LIVE issuer. The R0/R1
+    # controls were genuinely admitted separately, never substituted for these
+    # current parent grants or used to select an archived transport endpoint.
+    inputs.bookkeeping._same_bytes(raw[3], selected.proof_policy.enrollment_bytes,
+        work, "completion delivery current independently enrolled proof")
+    lengths = (len(wire.PURPOSE), len(wire.release.LIVE_PURPOSE), len(raw[2]), len(raw[3]),
+        len(active.intent.intent_bytes), len(selected.intent_policy.enrollment_bytes),
+        len(selected.old_token_bytes), live.clients.delivery.ENVELOPE_BYTES)
+    # Reserve before hints decode, journal body reads and issuer contact. All
+    # copies share the lane already included before the first target body.
+    temporary = (live._GRANT_IO_BYTES + 8 * hints.MAX_DESCRIPTOR_BYTES + 4 * sum(lengths)
+        + 4 * live.MAX_GRANT_RESPONSE_BYTES + 4 * (wire.REQUEST_HEADER_BYTES + wire.RESPONSE_HEADER_BYTES))
+    held = selected.original_reservation_bytes - live.EXCHANGE_RESERVATION_BYTES
+    if (type(selected.original_reservation_bytes) is not int or held < 0
+            or temporary > live.EXCHANGE_RESERVATION_BYTES
+            or selected.original_reservation_bytes > controls.MAX_ORIGINAL_BYTES
+            or held + temporary > controls.MAX_ORIGINAL_BYTES):
+        execution._fail("completion delivery acquisition exceeds its reserved inventory")
     kwargs = intent._persistence(selected, active._parent_current, live._GRANT_IO_BYTES)
     local = execution.custody.ControlPlaneCustodyClient
     claim, prior = local.load_oidc_session_activation_completion_recovery_release_grants(active._custody, **kwargs)
@@ -273,17 +297,11 @@ def _acquire_grants(active):
             (expires, expected["deliveryScope"]["expiresAt"], "expiry"),
             (planning.assertion._digest(envelope, work), expected["deliveryEnvelopeDigest"], "envelope")):
         inputs.plan._same(actual, value, work, "completion delivery original hint " + label)
-    raw = active.proof._originals
     request = wire._originals((wire.PURPOSE, wire.release.LIVE_PURPOSE, raw[2], raw[3],
         active.intent.intent_bytes, selected.intent_policy.enrollment_bytes,
         selected.old_token_bytes, envelope), response=False)
-    # This acquisition's temporary reads/wire copies share, not extend, the
-    # pre-reserved delivery lane. The response cap is checked before its body.
-    temporary = (live._GRANT_IO_BYTES + 4 * sum(map(len, request))
-        + 4 * live.MAX_GRANT_RESPONSE_BYTES + 4 * (wire.REQUEST_HEADER_BYTES + wire.RESPONSE_HEADER_BYTES))
-    if (temporary > live.EXCHANGE_RESERVATION_BYTES
-            or selected.original_reservation_bytes > controls.MAX_ORIGINAL_BYTES):
-        execution._fail("completion delivery acquisition exceeds its reserved inventory")
+    if tuple(map(len, request)) != lengths:
+        execution._fail("completion delivery request differs from its preallocation")
     active._parent_current()
     digest = local.claim_oidc_session_activation_completion_recovery_release_grants_attempt(active._custody, **kwargs)
     execution.shape._digest(digest)
@@ -337,7 +355,7 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
             _ACTIVE = active
             pins = {"finalization_digest": selected.finalization_digest, "phase": "consume",
                 "authorization_digest": selected.authorization_digest, "packet_digest": selected.packet_digest,
-                "recovery_configuration_digest": completion._configuration_digest(scope)}
+                "recovery_configuration_digest": completion._configuration_digest(scope, selected=selected)}
             selected.current()
             retained = execution.custody.ControlPlaneCustodyClient.load_oidc_session_activation_completion_recovery_records(
                 owner._custody, selected.finalization_digest, phase="consume", work=work,

@@ -52,6 +52,8 @@ def _exchange_on_active(active, *, _delivery=None):
     owner, work, root = active._owner, active._work, active._root
     parent, binding, custody, parent_lifetime = active._parent, active._binding, active._custody, active._lifetime
     grants = active.grants
+    activation_authority, consume_authority = controls.authority, controls.consume_authority
+    consume_selection = actor._consume_recovery_selection
     if (inputs._purpose != "release" or actor._purpose != "release"
             or inputs.actor is not actor or inputs.controls is not controls or inputs.work is not work
             or inputs.response_originals is not response or inputs.root_public_key is not root
@@ -59,6 +61,10 @@ def _exchange_on_active(active, *, _delivery=None):
             or actor._owner is not owner or owner._material is not parent
             or owner._binding is not binding or owner._custody is not custody
             or binding.runtime_root_public_key is not root
+            or activation_authority is not actor._target.authority
+            or consume_authority is None or consume_selection is None
+            or consume_selection.authority is not consume_authority
+            or controls.root_public_key is not consume_authority.root_public_key
             or (binding.caller_uid, binding.caller_gid) != (clients.CLIENT_UID, clients.CLIENT_GID)
             or type(inputs.original_reservation_bytes) is not int
             or not EXCHANGE_RESERVATION_BYTES <= inputs.original_reservation_bytes < MAX_ORIGINAL_BYTES):
@@ -79,6 +85,7 @@ def _exchange_on_active(active, *, _delivery=None):
     identity_raw, endpoint_raw, client_id = policy.client_identity_bytes, policy.endpoint_bytes, policy.client_id
     proof_scope, intent_scope, release = inputs.proof_scope, inputs.intent_scope, inputs.expected_release
     intent_enrollment, proof_enrollment = intent_policy.enrollment_bytes, proof_policy.enrollment_bytes
+    consume_root, consume_state = consume_authority.root_public_key, controls.enrollment_bytes
     held = (actor, controls, response, inputs, selected_intent, selected_proof, grants,
         owner, work, parent, binding, custody, root, parent_lifetime)
 
@@ -90,6 +97,11 @@ def _exchange_on_active(active, *, _delivery=None):
                 or active._closed is not False or active._exchange_spent is not True
                 or active._exchange_failed is not False or actor._old_token is not old
                 or actor._purpose != "release"
+                or controls.authority is not activation_authority
+                or controls.consume_authority is not consume_authority
+                or actor._consume_recovery_selection is not consume_selection
+                or consume_authority.root_public_key is not consume_root
+                or controls.enrollment_bytes is not consume_state
                 or any(actual is not original for actual, original in zip(observed, held))):
             _fail("completion release original owner changed or closed")
 
@@ -129,6 +141,7 @@ def _exchange_on_active(active, *, _delivery=None):
         len(intent_raw), len(intent_enrollment), len(old), clients.delivery.ENVELOPE_BYTES)
     fixed = (_AUTH_RESERVATION + _CLAIM_IO_BYTES + 8 * hints.MAX_DESCRIPTOR_BYTES
         + 8 * (len(identity_raw) + len(endpoint_raw)) + 4 * sum(map(len, grants))
+        + 8 * (len(consume_state) + min(state.MAX_ENROLLMENT_BYTES, len(server_raw)))
         + 4 * (transport.LIVE_REQUEST_HEADER_BYTES + transport.RESPONSE_HEADER_BYTES))
     first = receiving._reservation_bytes(lengths, client_bytes=len(client_raw),
         bootstrap_bytes=len(server_raw))
@@ -230,6 +243,25 @@ def _exchange_on_active(active, *, _delivery=None):
     _same(material.custody_bytes, proof_raw[1], work, "root server exact retained proof custody")
     root_custody = material.custody_material
     _same(root_custody.planner.bootstrap_bytes, inputs.planner_original, work, "original activation planner")
+    # R1 authenticates only the retained consume evidence. The independently
+    # current R2 server must preserve its complete state contract, not merely
+    # a database ID or generation. Both signatures are checked on this work;
+    # no retired authority becomes a grant or a token-release signer.
+    current_state = state._admit_enrollment_on_work(
+        enrollment_bytes=root_custody.planner.state_enrollment_bytes,
+        root_public_key=root, work=work)
+    current()
+    original_state = state._admit_enrollment_on_work(enrollment_bytes=consume_state,
+        root_public_key=consume_root, work=work)
+    current()
+    plan._same(current_state.payload, original_state.payload, work,
+        "completion release unchanged original/current complete state payload")
+    for actual, expected, label in (
+            (current_state.payload["databaseId"], proof_scope["databaseId"], "database"),
+            (current_state.payload["generationDigest"], proof_scope["generationDigest"], "generation"),
+            (material.delivery_key_digest, root_custody.delivery_key_digest, "custody delivery key"),
+            (root_custody.delivery_key_digest, root_custody.planner.delivery_key_digest, "planner delivery key")):
+        plan._same(actual, expected, work, "completion release original/current " + label)
     for actual, expected, label in (
             (root_custody.release_intent_digest, admitted_intent.intent_digest, "intent"),
             (root_custody.activation_request_digest, release["activationRequestDigest"], "activation request"),

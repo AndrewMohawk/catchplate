@@ -61,7 +61,9 @@ class _StagedRecoveryResponse:
         "_old", "_pid", "_thread", "_seal", "_pins", "_limits", "_ceilings", "_metrics",
         "_window", "_bound", "_epoch", "_monotonic", "_parent_continuity", "_receiver",
         "_phase", "_response", "_body", "_cookie", "_session_expiry",
-        "_purpose", "_path", "_schema", "_success_status", "_recovery_pin")
+        "_purpose", "_path", "_schema", "_success_status", "_recovery_pin",
+        "_current_config", "_current_config_pin", "_historical_config", "_historical_config_pin",
+        "_consume_selection", "_consume_selection_seal")
 
     def __init__(self):
         _fail()
@@ -89,6 +91,16 @@ class _StagedRecoveryResponse:
         parent = self._parent
         inputs = self._public[3]
         intent_policy, proof_policy, setup = inputs.intent_policy, inputs.proof_policy, inputs.setup_policy
+        consume = self._public[1].consume_authority
+        evidence = (None,)
+        if consume is not None:
+            policy = consume.consume_execution
+            evidence = (consume, consume.root_public_key, consume.configuration_payload,
+                consume.configuration_digest, consume.generation, consume.runtime_role_identities,
+                consume.authority_interval, consume.completion_recovery, policy,
+                policy.current_root_enrollment_bytes, policy.authorization_enrollment_bytes,
+                policy.grant_enrollment_bytes, policy.planner_public_key,
+                policy.operation_public_key, policy.caller_public_key)
         if self._purpose == PURPOSE:
             handoff = parent.release_handoff
             selected = (handoff, handoff.client_id, handoff.client_identity_bytes, handoff.endpoint_bytes,
@@ -100,7 +112,7 @@ class _StagedRecoveryResponse:
             selected = (configured, configured.endpoint, configured.issuer_policy_bytes,
                 configured.release_custody_bytes, configured.proof_enrollment_bytes,
                 configured.intent_enrollment_bytes)
-        return (*selected,
+        return (*selected, *evidence,
             parent.release_intent, parent.release_proof, parent.release_proof_acquisition,
             intent_policy.enrollment_bytes, intent_policy.enrollment_digest, intent_policy.expected_scope_bytes,
             intent_policy.caller_public_key, intent_policy.forbidden_public_keys,
@@ -140,7 +152,8 @@ class _StagedRecoveryResponse:
             self._source_current, self._target, self._request, self._asgi, self._original,
             self._payload, self._parent, self._binding, self._custody, self._config,
             self._root, self._work, self._parent_lifetime, self._public, self._old,
-            self._purpose, self._path, self._schema, self._success_status)
+            self._purpose, self._path, self._schema, self._success_status,
+            self._current_config, self._historical_config, self._consume_selection, self._consume_selection_seal)
         if (type(active) is not source._DeliveryAttempt or type(scope) is not actors._CompletionActorScope
                 or os.getpid() != self._pid or threading.get_ident() != self._thread
                 or type(self._seal) is not tuple or len(self._seal) != len(references)
@@ -149,7 +162,11 @@ class _StagedRecoveryResponse:
                 or owner._material is not self._parent or owner._binding is not self._binding
                 or owner._custody is not self._custody or owner._activation_permission is not None
                 or self._parent.completion_recovery is not scope._recovery
-                or self._parent.completion_recovery.consume is not self._config
+                or self._parent.completion_recovery.consume is not self._current_config
+                or scope._current_configuration is not self._current_config
+                or scope._configuration_seal is not self._config
+                or scope._consume_recovery_selection is not self._consume_selection
+                or scope._consume_recovery_selection_pin is not self._consume_selection
                 or self._binding.runtime_root_public_key is not self._root
                 or self._request.scope is not self._asgi
                 or getattr(self._request.state, actor.ORIGINAL_STATE_NAME, None) is not self._original
@@ -170,7 +187,25 @@ class _StagedRecoveryResponse:
                 or active._delivery is not self or active._delivery_seal is not self
                 or active._exchange_spent is not True
                 or any(getattr(active, name) is not held for name, held in zip(_PUBLIC_FIELDS, self._public))
-                or actors._configuration_pin("consume", self._config) != self._config_pin):
+                or actors._configuration_pin("consume", self._config) != self._config_pin
+                or actors._configuration_pin("consume", self._current_config) != self._current_config_pin
+                or scope._current_configuration_pin != self._current_config_pin
+                or actors._configuration_pin("consume", self._historical_config) != self._historical_config_pin):
+            _fail()
+        selection = self._consume_selection
+        if self._purpose == PURPOSE:
+            actors.consume_selection._identity(selection)
+            if (selection._seal is not self._consume_selection_seal
+                    or selection.owner is not owner or selection.target is not self._target
+                    or selection.work is not self._work
+                    or self._public[1].consume_authority is not selection.authority):
+                _fail()
+        elif selection is not None or self._consume_selection_seal is not None:
+            _fail()
+        historical = actors._historical_configuration(self._target, "consume", selection)
+        if (historical is not self._historical_config
+                or self._config_pin != ("consume", self._current_config.endpoint,
+                    historical.packet_digest, historical.authorization_digest, historical.current_pending)):
             _fail()
         pins = (scope._policy_pin, scope._request_pin, scope._target_pin, scope._binding_pin,
             scope._payload_digest, scope._credential, scope._count, scope._roles,
@@ -279,7 +314,12 @@ class _StagedRecoveryResponse:
             # Genuine original ancestors survive normal cleanup; ordinary
             # actor/input/proof/current methods do not and are never called.
             self._floors(*self._owner_scope.continuity(self._epoch, self._monotonic))
-            for guard in (self._source_current, self._target.live):
+            guards = (self._source_current, self._target.live)
+            if self._consume_selection is not None:
+                # This is the original base-only selection guard. Never call
+                # a closed actor, controls, input, proof or exchange descendant.
+                guards += (self._consume_selection.live,)
+            for guard in guards:
                 now = guard()
                 sampled = execution.production._callback(self._work, time.monotonic_ns)
                 self._floors(now, sampled)
@@ -427,6 +467,14 @@ def _response_on_active(active):
     staged._parent, staged._binding, staged._custody = active._parent, active._binding, active._custody
     staged._config, staged._root = scope._configuration, active._root
     staged._config_pin = actors._configuration_pin("consume", staged._config)
+    staged._current_config = scope._current_configuration
+    staged._current_config_pin = actors._configuration_pin("consume", staged._current_config)
+    staged._consume_selection = scope._consume_recovery_selection
+    staged._consume_selection_seal = (None if staged._consume_selection is None
+        else staged._consume_selection._seal)
+    staged._historical_config = actors._historical_configuration(
+        scope._target, "consume", staged._consume_selection)
+    staged._historical_config_pin = actors._configuration_pin("consume", staged._historical_config)
     staged._work, staged._parent_lifetime = active._work, active._lifetime
     staged._public = tuple(getattr(active, name) for name in _PUBLIC_FIELDS)
     staged._old = scope._old_token
@@ -435,7 +483,8 @@ def _response_on_active(active):
         staged._source_current, staged._target, staged._request, staged._asgi, staged._original,
         staged._payload, staged._parent, staged._binding, staged._custody, staged._config,
         staged._root, staged._work, staged._parent_lifetime, staged._public, staged._old,
-        staged._purpose, staged._path, staged._schema, staged._success_status)
+        staged._purpose, staged._path, staged._schema, staged._success_status,
+        staged._current_config, staged._historical_config, staged._consume_selection, staged._consume_selection_seal)
     staged._pins = (scope._policy_pin, scope._request_pin, scope._target_pin, scope._binding_pin,
         scope._payload_digest, scope._credential, scope._count, scope._roles,
         scope._rbac_pin, scope._session_pin, scope._trust_pin,

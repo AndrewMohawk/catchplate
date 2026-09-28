@@ -30,7 +30,7 @@ STAGING_PATH = "/run/serverware/oidc-session-activation-token-release/grant-issu
 STAGING_NAME = "serverware-oidc-session-activation-release-grant-issuer-bootstrap"
 ISSUER_NAME = fixed.LISTENER_NAME
 STAGING_UID, STAGING_GID = 0, 65494
-MAX_ROOT_BYTES, MAX_POLICY_BYTES = 16 * 1024, 64 * 1024
+MAX_ROOT_BYTES, MAX_POLICY_BYTES = 16 * 1024, 6 * 1024 * 1024
 MAX_AUTHORIZATION_BYTES = 64 * 1024
 MAX_COMPLETION_BYTES, MAX_ENROLLMENT_BYTES = 32 * 1024 * 1024, 16 * 1024
 MAX_ORIGINAL_BYTES = 64 * 1024 * 1024
@@ -214,13 +214,44 @@ def _graphs_on_work(graphs, work, current):
     return total
 
 
+def _activation_inventory(planner):
+    """Fixed fields from actual derived planners, not a recursive graph walk."""
+    return ((planner.bootstrap_bytes, planner.state_enrollment_bytes, planner.complete_root_vector_bytes),
+        (planner.configuration_payload, planner.generation, planner.runtime_role_identities,
+            planner.planner_identity, planner.authn_policy, planner.trust_policy, planner.tls_files, planner.launch))
+
+
 def _completion_inventory(completed):
-    return ((completed.bootstrap_bytes, completed.custody_bytes, completed.planner_bootstrap_bytes,
+    originals = (completed.bootstrap_bytes, completed.custody_bytes, completed.planner_bootstrap_bytes,
         completed.planner_history_custody_bytes, completed.receiving_history_custody_bytes,
         completed.authorization_bytes, completed.current_root_enrollment_bytes,
-        completed.grant_enrollment_bytes, completed.authorization_enrollment_bytes),
-        (completed.receiver_identity, completed.configuration_payload, completed.generation,
-            completed.runtime_role_identities, completed.expectations, completed.tls_files, completed.launch))
+        completed.grant_enrollment_bytes, completed.authorization_enrollment_bytes)
+    graphs = (completed.receiver_identity, completed.configuration_payload, completed.generation,
+        completed.runtime_role_identities, completed.expectations, completed.tls_files, completed.launch)
+    custody = completed.custody_material
+    planner = custody.planner
+    originals += (planner.bootstrap_bytes, planner.history_custody_bytes, planner.consume_request_bytes,
+        planner.state_enrollment_bytes, planner.complete_root_vector_bytes)
+    graphs += (custody.payload, custody.receiver_identity, planner.payload)
+    # Exactly the original planning and completion histories are retained.
+    # Their independently admitted bridge may hold separate R0/R1 templates.
+    for history in (planner.history_material, custody.history):
+        originals += (history.custody_bytes,)
+        graphs += (history.receiver_identity,)
+        if history.consume_request_bytes is not None:
+            originals += (history.consume_request_bytes,)
+        nested, known = _activation_inventory(history.planner)
+        originals += nested
+        graphs += known
+        policy = history.bridge_policy
+        if policy is not None:
+            originals += (policy.policy_bytes, policy.activation_planner_bootstrap_bytes)
+            graphs += (policy.payload, policy.history, policy.consume_planner)
+            for selected in (policy.activation_planner, policy.current_planner):
+                nested, known = _activation_inventory(selected)
+                originals += nested
+                graphs += known
+    return originals, graphs
 
 
 def _authorization_bytes_on_work(material, work, current):
@@ -234,6 +265,10 @@ def _authorization_bytes_on_work(material, work, current):
         material.completion_bootstrap_bytes, material.proof_enrollment_bytes, material.intent_enrollment_bytes,
         policy.policy_bytes, policy.completion_bootstrap_bytes, policy.proof_enrollment_bytes,
         policy.intent_enrollment_bytes, *nested)
+    if policy.current_activation_planner is not None:
+        current_originals, current_graphs = _activation_inventory(policy.current_activation_planner)
+        originals += (policy.current_activation_planner_bytes, *current_originals)
+        graphs += current_graphs
     total = 3 * sum(map(len, originals)) + _graphs_on_work(
         (material.payload, material.issuer_launch, policy.payload, policy.proof_scope, policy.proof_launch, *graphs),
         work, current)
@@ -251,6 +286,10 @@ def _proof_bytes_on_work(material, work, current):
     originals = (material.bootstrap_bytes, material.completion_bootstrap_bytes, material.proof_enrollment_bytes,
         material.release_custody_bytes, material.intent_bytes, material.intent_enrollment_bytes,
         material.completion_request_bytes, material.state_receipt_bytes, *nested)
+    if material.current_activation_planner is not None:
+        current_originals, current_graphs = _activation_inventory(material.current_activation_planner)
+        originals += (material.current_activation_planner_bytes, *current_originals)
+        graphs += current_graphs
     total = 3 * sum(map(len, originals)) + _graphs_on_work(
         (material.expected_proof_scope, material.expected_release, material.expected_consume_binding,
             material.launch, *graphs), work, current)
@@ -406,7 +445,9 @@ def main():
         public = tuple(_read_public(path, maximum, owned=owned, work=work, current=current)
             for path, maximum in _PUBLIC_FILES)
         root_raw, authorization_raw, policy_raw, completion_raw, proof_enrollment, intent_enrollment = public
-        if 6 * sum(map(len, public)) + fixed.MAX_KEY_BYTES >= MAX_ORIGINAL_BYTES:
+        if (8 * (len(policy_raw) + len(completion_raw))
+                + 6 * sum(len(raw) for index, raw in enumerate(public) if index not in (2, 3))
+                + fixed.MAX_KEY_BYTES >= MAX_ORIGINAL_BYTES):
             raise RuntimeError("dynamic grant issuer cold public decoding exceeds capacity")
         work.charge(input_bytes=len(root_raw))
         current()
@@ -442,7 +483,7 @@ def main():
             + issuer_transport.REQUEST_HEADER_BYTES + issuer_transport.RESPONSE_HEADER_BYTES
             + transport.REQUEST_HEADER_BYTES + transport.RESPONSE_HEADER_BYTES + transport.MAX_RESPONSE_BYTES
             + len(transport.PURPOSE) + 4 * (fixed.MAX_POLICY_BYTES + fixed.MAX_BOOTSTRAP_BYTES))
-        maximum = min(fixed.MAX_PROOF_BOOTSTRAP_BYTES, (MAX_ORIGINAL_BYTES - held - reserve) // 8)
+        maximum = min(fixed.MAX_PROOF_BOOTSTRAP_BYTES, (MAX_ORIGINAL_BYTES - held - reserve) // 16)
         if maximum < 2:
             raise RuntimeError("dynamic grant issuer cold inventory leaves no bounded staging capacity")
         current()

@@ -179,9 +179,19 @@ def _digest_on_work(original, work):
     return plan._frame(IDENTITY_DOMAIN, (raw,), work)
 
 
+def _proof_reservation(policy_size, proof_size):
+    """Length-only nested-original/capture allowance, never authority."""
+    if (type(policy_size) is not int or not 2 <= policy_size <= MAX_POLICY_BYTES
+            or type(proof_size) is not int or not 2 <= proof_size <= MAX_PROOF_BOOTSTRAP_BYTES):
+        _fail("release grant proof reservation requires exact bounded original lengths")
+    # The proof may contain separate R0/R1 history and the current R2 template.
+    # This fixed allowance precedes decode and is not an extra work budget.
+    return 16 * proof_size + 8 * policy_size + 128 * 1024
+
+
 def _inventory(size, policy_original, proof_original, key_size, work):
     total = size + len(policy_original) + len(proof_original) + key_size
-    if total > MAX_ORIGINAL_BYTES:
+    if total + _proof_reservation(len(policy_original), len(proof_original)) > MAX_ORIGINAL_BYTES:
         _fail("release issuer originals exceed the 64 MiB aggregate bound")
     work.charge(input_bytes=total)
 

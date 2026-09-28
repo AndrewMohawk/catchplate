@@ -181,8 +181,8 @@ def _maximum(value):
 def _reserve(originals, proof, maximum, work):
     # Bound nested decoded originals and complete output/readback copies before
     # either original admission allocates; owner-held resources are additional.
-    required = (8 * (len(originals[2]) + len(proof))
-        + 4 * sum(len(raw) for index, raw in enumerate(originals) if index != 2)
+    required = (8 * len(originals[2]) + 16 * len(proof) + 8 * len(originals[1])
+        + 4 * sum(len(raw) for index, raw in enumerate(originals) if index not in (1, 2))
         + _OUTPUT_RESERVATION + MAX_KEY_BYTES)
     if required > maximum:
         _fail("dynamic grant issuer originals and output reservation exceed retained capacity")

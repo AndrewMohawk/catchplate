@@ -70,8 +70,10 @@ An already retained intent signed under a retired distinct intent authority
 still fails current-authority admission; this bridge does not re-sign or replace
 it. Its independent historical readmission remains work to complete.
 
-Release-grant and protected `release` / `retained-release` recovery still require
-their own historical authority integration. Their current-only actor gate stays
-in place. Explicit older-source replay adapters and delivery-key migration also
-remain separate work. H05 is not closed by fresh intent/proof preparation, and
-no production acceptance gate advances from this source change.
+The subsequent [LIVE release connection](control-plane-live-release-history.md)
+uses separate fresh approval and current R2 grants over the same historical
+evidence. It does not reuse proof-preparation permission. `retained-release`
+still requires its own historical authority integration and retains its
+current-only gate. Explicit older-source replay adapters and delivery-key
+migration also remain separate work. H05 is not closed by these connections,
+and no production acceptance gate advances from a source change.

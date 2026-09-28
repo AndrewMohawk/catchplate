@@ -17,6 +17,14 @@ grants, old-token possession, cold configuration, work and lifetime must agree.
 The same fixed parent handoff client ID, identity and LIVE endpoint are used;
 the older static `release_client` carrier is not substituted.
 
+The `.228` caller retains two independently selected evidence authorities: R0
+for the original activation and R1 for consume completion. The actor's exact
+pre-permission consume selection must match the controls, and its selected
+pending/packet/authorization pins enter the unchanged reconciliation identity.
+Current parent enablement and transport endpoints remain separate. Intent,
+proof, client and server signatures still use current R2; an old evidence root
+is never substituted for the current grant root or policy.
+
 The optional public terminal is exactly `_StagedRecoveryResponse` from
 `control_plane_oidc_session_activation_completion_recovery_delivery_response`.
 Its actual owner association selects the terminal ancestor **before** any new
@@ -46,6 +54,15 @@ The same current admission supplies that custody material; no successful DTO is
 accepted in its place. Its launch restriction is retained and only narrows the
 original processing window.
 
+The caller also genuinely re-admits the selected R1 consume state enrollment
+and the server planner's R2 enrollment, requiring equality of their complete
+payloads and the independently expected database/generation. The exact current
+planner and custody original, including their delivery-key joins, are preserved.
+The genuine proof-v2/grant path supplies the original R0/R1-to-current-R2 bridge;
+this is not a state or delivery-key migration. Retired-RI intent/proof originals
+remain refused. This LIVE action neither chooses nor enables historical
+`retained-release`/RECOVERY authority.
+
 Canonical outcome reconstruction is a request binding, **not proof that private
 storage is empty or absent**. Missing local records cannot authorize LIVE,
 select a checkpoint, or trigger a RECOVERY fallback. Actual worker-side store
@@ -72,13 +89,17 @@ cookie-send boundary belong to the separate terminal, not to this return value.
 The owner reserves `EXCHANGE_RESERVATION_BYTES` (8 MiB) exactly once before its
 first historical target body. Grant acquisition has a temporary 2 MiB I/O slice
 inside it and a 128 KiB total raw2 response ceiling. The helper rejects larger
-retained grants before fresh admission.
+retained grants before fresh admission. Its hint captures, raw8 request, raw2
+response copies, framing and temporary journal I/O are preflighted before hint
+decode, journal body reads or issuer contact. Actual request lengths must match
+that fixed preallocation.
 
 Before decoding LIVE authority or contacting the protected worker, actual
 request/client/server lengths feed two genuine receiving reservation formulas.
 They cover the retained pre-contact admission plus the final response admission;
 fixed hint/cold-identity, raw2-copy, claim, framing and 256 KiB public-terminal
-headroom are also included. Their sum must fit that same 8 MiB lane, and the
+headroom and both state-enrollment captures are also included. Their sum must
+fit that same 8 MiB lane, and the
 already-held whole-call reservation plus this actual usage must fit 64 MiB.
 The claim receives only its separately reserved I/O capacity and charges the
 same work directly. No new ledger or transport allowance is opened.

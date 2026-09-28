@@ -1,5 +1,10 @@
 # Original-only LIVE release grant production
 
+For the subsequent actual worker connection and R0/R1/R2 split, see
+[current grants over historical evidence](oidc-session-activation-release-grant-history-bridge.md).
+The original library-only boundary below is historical, not a claim that the
+connected source worker has been executed or provisioned.
+
 `authority_oidc_session_activation_release_grant_production._produce_on_work`
 is a private root-issuance library. It returns exactly
 `(client_authorization_bytes, server_bootstrap_bytes)`, not an admitted carrier

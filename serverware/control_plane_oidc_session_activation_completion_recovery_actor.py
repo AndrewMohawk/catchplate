@@ -37,9 +37,9 @@ RETAINED_DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recove
 CONSUME_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryConsumeIntent/v1"
 CONSUME_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryConsumeOptions/v1"
 CONSUME_PATH = "/api/auth/session/activation/completion/recovery/consume"
-# These two purposes authenticate retained consume originals under independently
+# These purposes authenticate retained consume originals under independently
 # selected authority. Selection is evidence, not permission to release a token.
-_CONSUME_SELECTION_PURPOSES = frozenset({"completion", "release-intent-proof"})
+_CONSUME_SELECTION_PURPOSES = frozenset({"completion", "release-intent-proof", "release"})
 
 
 def _configuration(owner, profile):
@@ -106,7 +106,7 @@ def _current_effect_authority(owner, parent, target):
 
 
 def _require_current_effect_authority(owner, parent, target):
-    """Proof preparation history cannot authorize grant or credential release."""
+    """Retained release still requires its genuine current-mode authority."""
     if not _current_effect_authority(owner, parent, target):
         actor._deny("historical completion does not authorize a current effect continuation", 503)
 
@@ -134,6 +134,24 @@ def _require_proof_effect_authority(owner, parent, target, selected_consume, wor
         actor._deny("historical proof preparation requires its explicit current-root bridge", 503)
     history.bookkeeping._same_bytes(setup.current_activation_planner_bytes,
         planning.planner_bootstrap_bytes, work, "historical proof exact current planner")
+
+
+def _require_live_release_authority(owner, parent, target, selected_consume, work):
+    """Require current cold LIVE routing before the separate human ceremony.
+
+    This is not a grant or proof. The actual caller must readmit its retained
+    current-root intent/proof, acquire independently signed current LIVE grants,
+    and verify the exact original consume evidence before protected opening.
+    Proof-setup permission is neither required nor reused for this readmission.
+    """
+    from serverware import control_plane_oidc_session_activation_release_handoff_bootstrap as handoff
+    from serverware import control_plane_oidc_session_activation_release_grant_acquisition_bootstrap as grants
+
+    consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
+    if (owner._material is not parent
+            or type(parent.release_handoff) is not handoff._ReleaseHandoffMaterial
+            or type(parent.release_grant_acquisition) is not grants._ReleaseGrantAcquisitionMaterial):
+        actor._deny("LIVE release requires independently enabled current handoff and grant routing", 503)
 
 
 def _consume_effect_configuration(owner, parent, target, now):
@@ -436,6 +454,8 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
     configuration = _selected_configuration(target, profile, current_configuration, selected_consume)
     if _purpose == "release-intent-proof":
         _require_proof_effect_authority(owner, parent, target, selected_consume, work)
+    elif _purpose == "release":
+        _require_live_release_authority(owner, parent, target, selected_consume, work)
     elif _purpose not in ("completion", "consume"):
         _require_current_effect_authority(owner, parent, target)
     window = execution.clock._validate(target.live_window)

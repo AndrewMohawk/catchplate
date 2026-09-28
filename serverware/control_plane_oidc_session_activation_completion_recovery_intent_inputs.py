@@ -217,6 +217,7 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
     parent, binding, custody = owner._material, owner._binding, owner._custody
     activation_authority = target.authority
     consume_authority = selected.consume_authority
+    consume_selection = actor._consume_recovery_selection
     evidence_authority = activation_authority if consume_authority is None else consume_authority
     intent_policy, proof_policy, setup_policy = (parent.release_intent,
         parent.release_proof, parent.release_proof_acquisition)
@@ -231,6 +232,9 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
                 is not controls_source.consume_history._SelectedConsumeHistory)
             or selected.authority is not activation_authority):
         _fail("release preparation lacks actual independent parent configuration")
+    if purpose == "release" and (consume_authority is None or consume_selection is None
+            or consume_selection.authority is not consume_authority):
+        _fail("LIVE release requires its independently selected original consume authority")
     policy, planner_policy = activation_authority.activation_execution, parent.activation_planning
     consume_policy, current_policy = evidence_authority.consume_execution, parent.consume_execution
     if (type(policy) is not intent_configuration.activation._ActivationExecutionMaterial
@@ -256,6 +260,8 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
         (parent, "release_proof_acquisition", setup_policy), (parent, "consume_execution", current_policy),
         (parent, "activation_planning", planner_policy), (binding, "runtime_root_public_key", root),
         (target, "authority", activation_authority), (selected, "consume_authority", consume_authority),
+        (actor, "_consume_recovery_selection", consume_selection),
+        (selected, "root_public_key", evidence_authority.root_public_key),
         (activation_authority, "activation_execution", policy),
         (activation_authority, "root_public_key", activation_root),
         (activation_authority, "configuration_digest", activation_config),
@@ -352,6 +358,8 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
     lifetime.attach(authenticated.live)
     # Root rotation is not a state migration: authenticate all three originals
     # under their independently selected roots, then compare COMPLETE payloads.
+    # LIVE keeps these evidence roots distinct from the CURRENT root used for
+    # its retained intent/proof and newly issued client/server originals.
     states = []
     for original_state, selected_root in ((enrollments[1], activation_root),
             (state_originals[0], consume_root), (state_originals[1], root)):

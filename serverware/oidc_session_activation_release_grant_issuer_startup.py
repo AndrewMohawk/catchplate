@@ -592,16 +592,15 @@ def _initialize(*, work, live_window, transport_deadline_ns, delivery_current, r
             current()
             sizes = production._callback(work, lambda: tuple(os.fstat(descriptor).st_size
                 for descriptor, _maximum, _private in descriptions))
-            if (sum(sizes) + transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES
+            proof_reservation = bootstrap._proof_reservation(sizes[2], sizes[3])
+            # The admitted cold graph remains held during the producer's own
+            # original re-admission. Reserve both before the first FD body.
+            input_reservation = (sum(sizes) + 2 * proof_reservation
+                + (0 if retained_bytes is None else retained_bytes)
+                + max(0, producer._OUTPUT_RESERVATION - transport.MAX_RESPONSE_BYTES))
+            if (input_reservation + transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES
                     + transport.RESPONSE_HEADER_BYTES + transport.MAX_RESPONSE_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
                 _fail("release grant issuer cold originals and bounded exchange exceed 64 MiB")
-            if retained_bytes is not None:
-                # The original dynamic owner is still live while these sealed
-                # originals are reread and the old cold graph is re-admitted.
-                if (retained_bytes + sum(sizes) + 8 * sizes[3] + producer._OUTPUT_RESERVATION
-                        + transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES
-                        + transport.RESPONSE_HEADER_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
-                    _fail("dynamic grant issuer reread and decoding exceed complete retained capacity")
             raws = []
             for descriptor, maximum, _private, identity in sealed[:-1]:
                 current()
@@ -629,13 +628,10 @@ def _initialize(*, work, live_window, transport_deadline_ns, delivery_current, r
             if type(material) is not bootstrap._IssuerMaterial:
                 _fail("release grant issuer requires actual original launch admission")
             current()
-            input_bytes = sum(sizes)
+            input_bytes = input_reservation
             if retained_bytes is not None:
-                input_bytes += (retained_bytes + dynamic._material_bytes_on_work(material, work, current)
-                    + max(0, producer._OUTPUT_RESERVATION - transport.MAX_RESPONSE_BYTES))
-                if (input_bytes + transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES
-                        + transport.RESPONSE_HEADER_BYTES + transport.MAX_RESPONSE_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
-                    _fail("dynamic grant issuer complete held graph leaves no bounded exchange")
+                if dynamic._material_bytes_on_work(material, work, current) > proof_reservation:
+                    _fail("dynamic grant issuer decoded graph exceeds its pre-body reservation")
             selected = clock._validate(material.live_window)
             if (selected[:3] != window[:3] or material.deadline_ns > bound
                     or any(value > prior for value, prior in zip(selected[3:], window[3:]))):

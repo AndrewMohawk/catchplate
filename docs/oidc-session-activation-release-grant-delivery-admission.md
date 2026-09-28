@@ -1,5 +1,9 @@
 # Independent admission of an issued release bootstrap
 
+The source now also admits the exact v2 proof/current-template connection
+described in [current grants over historical evidence](oidc-session-activation-release-grant-history-bridge.md),
+without changing this receiving API or permitting a historical-root fallback.
+
 The dynamic receiver verifies the exact incoming signed server-bootstrap bytes
 against its independently held root, issuer policy and policy-pinned proof-worker
 bootstrap. An incoming bootstrap, issuer acknowledgement or material-shaped

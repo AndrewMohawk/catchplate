@@ -49,7 +49,7 @@ use R1. Stored completion responses likewise receive genuine verification.
 
 ## Fresh approval, old evidence, current routing
 
-Consume-profile completion and fresh release-intent/proof preparation use this
+Consume-profile completion, fresh release-intent/proof preparation and LIVE release use this
 independent selection. The actor seals
 the actual selector, owner, target, original work and narrowed processing lifetime
 before constructing its WebAuthn/two-person binding. The selected R1 scope supplies
@@ -59,7 +59,9 @@ configuration alone supplies the transport endpoint.
 The existing activation completion and separate intent/proof/release purposes
 retain their own authority rules. [Fresh proof preparation](control-plane-release-proof-history-selection.md)
 requires its explicit current-planner bridge when either evidence context is
-historical; protected release remains current-only. A completion result is not permission to
+historical. [LIVE release](control-plane-live-release-history.md) uses its own
+fresh approval and current signed grants, while retained-release remains
+current-only. A completion result is not permission to
 release a credential, a token or a browser cookie. The public actor now admits
 the distinct fresh consume purpose through the explicit signed old/current input
 bridge and purpose-specific workers. Fresh action-specific WebAuthn and approval
@@ -80,5 +82,5 @@ uncertain dispatch, infers nonexecution from missing local evidence, changes an
 old source label or extends original expiry.
 
 This is source integration only. The current tree has not been built or executed;
-retired-intent readmission, historical grant/release connections, explicit older-source replay and
+retired-intent readmission, historical retained-release recovery, explicit older-source replay and
 independent deployment and production acceptance remain separate work.

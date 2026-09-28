@@ -30,18 +30,18 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 dispatch, remains **partial**. The bar shows its named connections rather than
 an estimated percentage.
 
-Latest source: [`.199` / 893fa8b](https://github.com/example/private-deployment)
-connects the finite proof-input issuer: independent private-packet read,
-genuine bootstrap signing and exact worker staging before reply, under one
-original allowance. Next: dynamic grant-issuer intake of the per-request proof
-bootstrap under independent original policy. Resources, public
-HTTP/current-auth/cookie completion, recovery and portal remain open. This
-source is unbuilt, unexecuted and unprovisioned.
-Previous source: [`.198` proof setup/acquisition/receiving](https://github.com/example/private-deployment).
+Latest source: [`.200` / 7152f75](https://github.com/example/private-deployment)
+connects dynamic grant-issuer fresh-proof intake under independent originals,
+derives the exact existing signed policy/bootstrap, and adds two-destination
+staging in explicit proof-input v2. Next: the public HTTP sequence under one
+live permission, with fresh current-auth and cookie completion. Uncertainty
+must retain the pending cookie without retry. Resources, recovery and portal
+remain open. This source is unbuilt, unexecuted and unprovisioned.
+Previous source: [`.199` finite proof-input issuer](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-dispatch-detail)
 live in the tracker.
 
-[![Inside step 22: five facets are source-landed; RELEASE remains partial and HTTP is open. Current .199 finite proof-input issuance, independent private-packet read and exact worker staging are source-landed in 893fa8b. Dynamic grant-issuer intake of the per-request proof bootstrap under independent original policy remains next. Resources, public HTTP/current-auth/cookie completion, recovery and portal remain open. Activation 21/26, project 34/46 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Inside step 22: five facets are source-landed; RELEASE remains partial and HTTP is open. Current .200 dynamic grant-issuer fresh-proof intake, exact signed issuer originals and explicit proof-input v2 two-destination staging are source-landed in 7152f75. Next is the public HTTP sequence under one live permission, with fresh current-auth and cookie completion; uncertainty must retain the pending cookie without retry. Resources, recovery and portal remain open. Activation 21/26, project 34/46 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-dispatch-detail).

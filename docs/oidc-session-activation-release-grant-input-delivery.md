@@ -64,8 +64,8 @@ holds six protected public trust originals: runtime root,
 [dynamic authorization](oidc-session-activation-release-grant-issuer-dynamic-authorization.md), proof-input issuer policy, completion bootstrap,
 proof enrollment and intent enrollment. Admission of the fresh proof original
 precedes root-signer access. It then derives and genuinely verifies the existing
-exact issuer-policy and issuer-bootstrap originals, seals the existing six
-descriptors and continues the actual grant service after permanent same-PID
+exact issuer-policy and issuer-bootstrap originals, seals the original files
+into the existing six-FD inventory and continues the grant service after permanent same-PID
 drop to UID/GID 65496. Existing static policy and launch checks are not relaxed.
 
 The opt-in `release-grant-issuer-bootstrap.socket`, alternate

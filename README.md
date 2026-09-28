@@ -26,13 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: historical recovery
 
-[`.226` independent consume recovery](https://github.com/example/private-deployment)
-separates original consume authority from the older activation target before
-fresh approval and completion verification. Fresh historical consume is connected
-through its explicit signed bridge; historical
-intent/proof/grant/release and older-source replay remain unfinished.
+[`.227` fresh intent/proof across historical authority](https://github.com/example/private-deployment)
+separates original activation and consume evidence from current approval and
+proof signing. The producer, worker and receiver retain the same state and
+delivery key; they do not migrate either. Retired-intent readmission, historical
+grant/release, key migration and older-source replay remain unfinished.
 This is source integration, not a tested pilot. Normal-auth configuration is unchanged.
-[Details and remaining boundaries](docs/historical-authority-resolution.md).
+[Current change](docs/control-plane-release-proof-history-selection.md)
+· [Remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation
 

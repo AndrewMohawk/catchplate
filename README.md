@@ -26,8 +26,16 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: historical recovery and workload identity
 
+[`.230` source / a485aa2](https://github.com/example/private-deployment)
+adds the [independently authorized workload issuer worker](docs/workload-identity-issuer.md):
+root-signed cold bootstrap, separate issuance grant, genuine packet/CSR admission,
+durable claim before CA signing, and retained certificate re-admission.
+The actual control-plane caller, public HTTP action and explicit CLI submission
+remain unconnected; trust distribution, issuer lifecycle and authenticated
+channels remain open.
+
 [`.229` source / fcbe181](https://github.com/example/private-deployment)
-advances two unfinished lanes:
+is separately credited for:
 
 - **H05:** [Read-only retained intent/proof admission](docs/control-plane-retained-intent-history.md)
   uses independently archived signing authority (RI), without retired private
@@ -36,8 +44,7 @@ advances two unfinished lanes:
 - **N04:** The [local workload identity CLI](docs/workload-identity-provisioning.md)
   adds `--prepare-workload-identity` for key/CSR/request creation and
   `--admit-workload-certificate` for pinned-issuer certificate admission.
-  Server-side issuance, client-CA distribution, rotation and verified workload
-  channels remain open.
+  These local modes remain network-free; they do not submit to the new worker.
 
 This is source integration, not a tested pilot or new landed checkpoint.
 Normal-auth configuration is unchanged. [Remaining boundaries](docs/historical-authority-resolution.md).

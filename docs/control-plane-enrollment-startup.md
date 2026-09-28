@@ -37,7 +37,7 @@ variable is `SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR`, with
 provisioned listener has mode 0660 and owner/group `65502:65532`, with searchable
 parent directories. A read-only directory bind permits connecting, not replacing
 the listener. Actual peer credentials and signed original response admission
-remain mandatory. Select this overlay only for an explicitly enabled v5–v8 release lane;
+remain mandatory. Select this overlay only for an explicitly enabled v5–v9 release lane;
 it neither creates the worker/socket nor mounts a release or signing key.
 The existing enrollment-only offline preparer is unchanged and does not compose
 this overlay. Any separately composed artifact still requires independent
@@ -242,6 +242,37 @@ directory bind covers the independently provisioned authorizer, reserver, SQL
 and completion sockets; mounting it does not authorize or perform a request.
 The enrollment-only offline preparer is unchanged. Source remains unbuilt and
 unexecuted, and production acceptance remains 0/6.
+
+## Dedicated release-intent caller extension
+
+Explicit parent `/v9` adds nullable
+[`oidcSessionActivationReleaseIntent`](control-plane-oidc-session-activation-release-intent-bootstrap.md)
+and reserves FD207 even when null. Its closed four-field configuration holds a
+genuine intent enrollment and independently root-pinned scope6, not a future
+release target, packet digest, intent digest or outcome. It requires consume
+execution `/v4`, whose unchanged v3 field set selects only the separate
+release-hint response profile through immutable `release_hints=True`.
+Earlier versions retain false and their existing wire behavior.
+
+The actual stdlib delivery reads the fixed root-owned mode0400
+`/run/secrets/serverware-oidc-session-activation-release-intent-key` into the
+separate sealed slot. Startup requires its signed runtime inventory entry,
+genuine enrolled Ed25519 pair, original PKCS8 bytes and separation from the
+actual HTTP and other retained signing purposes. It precharges the admitted
+byte length before reading that key, retains descriptor/receipt continuity in
+`_intent_key`, `_intent_key_fd`, and `_intent_key_identity`, and drops the key
+reference on shutdown. Null v9 rejects both inherited and undeclared-open
+FD207. No issuer key is borrowed, including with a disabled issuer policy.
+
+`release_intent_enabled` reports configuration only. The no-argument
+`_authorize_oidc_session_activation_release_intent()` facade selects only this
+owner's actual active permission and calls `authorize_release_intent()`; no
+posted target, successful result carrier, new allowance or retry enters there.
+The coordinator must preserve the original work/window and old-token binding.
+Unsigned completion hints are candidate digests: later private proof admission
+must independently reconstruct and verify them. Neither the hint nor the
+intent grants committed-consumption, token-return, cookie or current-session
+authority. This source remains unbuilt and unexecuted.
 
 ## Decision and trust boundary
 

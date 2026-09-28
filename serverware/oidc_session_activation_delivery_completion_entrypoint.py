@@ -30,6 +30,7 @@ SERVICE_UID = SERVICE_GID = PEER_UID = PEER_GID = 65497
 DISPATCH_PEER_UID = DISPATCH_PEER_GID = 65532
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v1"
 DISPATCH_LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v2"
+RELEASE_LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v3"
 (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, JOURNAL_FD,
     EXECUTION_BUNDLE_KEY_FD, HISTORICAL_BUNDLE_KEY_FD, DELIVERY_KEY_FD) = range(198, 206)
 INHERITED_DESCRIPTORS = tuple(range(198, 206))
@@ -164,7 +165,7 @@ def _launch_peer(launch_schema):
         raise RuntimeError("consume completion launch profile is not a literal")
     if launch_schema == LAUNCH_SCHEMA:
         return PEER_UID, PEER_GID
-    if launch_schema == DISPATCH_LAUNCH_SCHEMA:
+    if launch_schema in (DISPATCH_LAUNCH_SCHEMA, RELEASE_LAUNCH_SCHEMA):
         return DISPATCH_PEER_UID, DISPATCH_PEER_GID
     raise RuntimeError("consume completion launch profile is not source fixed")
 

@@ -19,12 +19,12 @@ supports separately authorized recovery at 15.6. Neither alone completes row 15.
 ```text
 _verify_on_work(*, intent_bytes, enrollment_bytes, root_public_key,
     forbidden_public_keys, expected_scope, expected_release, old_token_bytes,
-    live_window, transport_deadline_ns, work)
+    live_window, transport_deadline_ns, work, _continuity=None)
     -> _AdmittedIntent(payload, intent_digest, live)
 
 _produce_on_work(*, enrollment_bytes, root_public_key, forbidden_public_keys,
     expected_scope, expected_release, old_token_bytes, caller_private_key,
-    live_window, transport_deadline_ns, work) -> original bytes
+    live_window, transport_deadline_ns, work, _continuity=None) -> original bytes
 
 _verify_historical_on_work(*, intent_bytes, enrollment_bytes, root_public_key,
     forbidden_public_keys, expected_scope, expected_release, old_token_bytes,
@@ -67,6 +67,15 @@ clipped to the unchanged processing window, caller age policy and original
 delivery expiry. The actual private/public pair must match the enrolled caller.
 The resulting original is genuinely signature-verified and joined back to the
 same independently held expectations before return.
+
+The optional private `_continuity` seam is used only by the actual
+[same-context owner](control-plane-oidc-session-activation-release-intent.md).
+It carries restrictive epoch/monotonic floors, not permission or verification
+results. Before and after mandatory clock samples, both sides retain their
+actual maxima; returned floors cannot cross the current narrowed deadlines.
+The original work object, limits and monotonically charged metrics cannot be
+replaced or reset. Standalone callers keep the existing behavior when omitted;
+the historical evidence interface is unchanged.
 
 The live `_verify_on_work` checks the enrolled maximum age/skew, signed lifetime
 and original delivery interval against actual current samples. It never accepts

@@ -49,6 +49,8 @@ V7_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v7"
 V7_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v7"
 V8_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v8"
 V8_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v8"
+V9_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v9"
+V9_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v9"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_NODES = capture.MAX_TOTAL_JSON_NODES
 MAX_DEPTH = capture.MAX_JSON_DEPTH
@@ -63,6 +65,7 @@ _V5_PAYLOAD_FIELDS = _V4_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationRelea
 _V6_PAYLOAD_FIELDS = _V5_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationExecution"})
 _V7_PAYLOAD_FIELDS = _V6_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationPlanning"})
 _V8_PAYLOAD_FIELDS = _V7_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationConsumeExecution"})
+_V9_PAYLOAD_FIELDS = _V8_PAYLOAD_FIELDS | frozenset({"oidcSessionActivationReleaseIntent"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _GENERATION_FIELDS = frozenset(configuration._GENERATION_FIELDS)
 _NUMBER_BYTES = frozenset(b"0123456789.eE+-")
@@ -93,6 +96,8 @@ class _EnrollmentMaterial:
     activation_planning: object | None = None
     consume_execution: object | None = None
     consume_slot_reserved: bool = False
+    release_intent: object | None = None
+    intent_slot_reserved: bool = False
 
 
 def _preflight(raw, work):
@@ -343,6 +348,31 @@ def _v8_shape(value):
     _v8_payload_shape(value["payload"])
 
 
+def _v9_payload_shape(value):
+    from serverware import control_plane_oidc_session_activation_consume_execution_bootstrap as consume
+    from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as intent
+
+    capability.shape._object(value, _V9_PAYLOAD_FIELDS, "v9 enrollment bootstrap payload")
+    capability.shape._literal(value["schema"], V9_PAYLOAD_SCHEMA)
+    prior = {name: value[name] for name in _V8_PAYLOAD_FIELDS}
+    prior["schema"] = V8_PAYLOAD_SCHEMA
+    _v8_payload_shape(prior)
+    if value["issuerPrivateKeyFd"] == intent.CALLER_KEY_FD:
+        raise EnrollmentBootstrapError("v9 reserves the intent caller descriptor even when disabled")
+    selected = value["oidcSessionActivationReleaseIntent"]
+    intent._shape(selected)
+    consumed = value["oidcSessionActivationConsumeExecution"]
+    if selected is not None and (consumed is None or consumed["schema"] != consume.V4_SCHEMA):
+        raise EnrollmentBootstrapError("v9 release intent requires explicit consume v4")
+
+
+def _v9_shape(value):
+    capability.shape._object(value, _ENVELOPE_FIELDS, "v9 enrollment bootstrap envelope")
+    capability.shape._literal(value["schema"], V9_SCHEMA)
+    capability.shape._base64url(value["signatureBase64Url"], signature=True)
+    _v9_payload_shape(value["payload"])
+
+
 def _canonical(raw, value, work):
     encoded = configuration._configuration_wire(value, capture._SharedLedger(work))
     work.charge(input_bytes=len(raw) + len(encoded))
@@ -510,6 +540,30 @@ def _v8_material(payload, expected_digest, root_public_key, work):
         held_consume, True)
 
 
+def _v9_material(payload, expected_digest, root_public_key, work):
+    from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as intent
+
+    material = _v8_material(payload, expected_digest, root_public_key, work)
+    held_intent = intent._admit_on_work(
+        release_intent=payload["oidcSessionActivationReleaseIntent"],
+        configuration_payload=material.configuration_payload,
+        configuration_digest=material.configuration_digest, generation=material.generation,
+        runtime_role_identities=material.runtime_role_identities,
+        runtime_root_public_key=root_public_key, activation_execution=material.activation_execution,
+        activation_planning=material.activation_planning, consume_execution=material.consume_execution,
+        issuer_public_key=material.issuer_public_key,
+        execution_caller_public_key=(None if material.execution is None else material.execution.caller_public_key),
+        finalization_caller_public_key=(None if material.finalization is None else material.finalization.caller_public_key),
+        work=work)
+    return _EnrollmentMaterial(material.configuration_payload, material.generation,
+        material.runtime_role_identities, material.configuration_digest,
+        material.issuer_private_key_fd, material.issuer_policy, material.issuer_public_key,
+        material.signer_endpoint, material.execution, material.finalization,
+        material.finalization_slot_reserved, material.release_client,
+        material.activation_execution, material.activation_slot_reserved, material.activation_planning,
+        material.consume_execution, material.consume_slot_reserved, held_intent, True)
+
+
 def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         expected_configuration_digest, work):
     """Authenticate exact originals before using their configuration or FD."""
@@ -528,7 +582,10 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         is_v6 = type(envelope) is dict and envelope.get("schema") == V6_SCHEMA
         is_v7 = type(envelope) is dict and envelope.get("schema") == V7_SCHEMA
         is_v8 = type(envelope) is dict and envelope.get("schema") == V8_SCHEMA
-        if is_v8:
+        is_v9 = type(envelope) is dict and envelope.get("schema") == V9_SCHEMA
+        if is_v9:
+            _v9_shape(envelope)
+        elif is_v8:
             _v8_shape(envelope)
         elif is_v7:
             _v7_shape(envelope)
@@ -546,10 +603,11 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         payload = envelope["payload"]
         payload_bytes = configuration._configuration_wire(payload, capture._SharedLedger(work))
         capability._signature(key, envelope["signatureBase64Url"],
-            V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
+            V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
             payload_bytes, capture._SharedLedger(work))
         _canonical(original, envelope, work)
-        material = (_v8_material(payload, expected, key, work) if is_v8
+        material = (_v9_material(payload, expected, key, work) if is_v9
+            else _v8_material(payload, expected, key, work) if is_v8
             else _v7_material(payload, expected, key, work) if is_v7
             else _v6_material(payload, expected, key, work) if is_v6
             else _v5_material(payload, expected, key, work) if is_v5
@@ -969,3 +1027,62 @@ def _produce_v8_on_work(*, configuration_payload, generation, runtime_role_ident
         if isinstance(exc, EnrollmentBootstrapError):
             raise
         raise EnrollmentBootstrapError("v8 enrollment bootstrap production failed") from exc
+
+
+def _produce_v9_on_work(*, configuration_payload, generation, runtime_role_identities,
+        configuration_digest, issuer_private_key_fd, signer_endpoint, registration_execution,
+        registration_finalization, oidc_session_activation_release, oidc_session_activation_execution,
+        oidc_session_activation_planning, oidc_session_activation_consume_execution,
+        oidc_session_activation_release_intent, runtime_root_private_key, runtime_root_public_key, work):
+    """Sign only the distinct intent-key configuration after genuine original admission."""
+    try:
+        ledger = capture._SharedLedger(work)
+        private_key, public_key = runtime_root_private_key, runtime_root_public_key
+        digest, descriptor = configuration_digest, issuer_private_key_fd
+        if not isinstance(private_key, Ed25519PrivateKey) or not isinstance(public_key, Ed25519PublicKey):
+            raise EnrollmentBootstrapError("v9 bootstrap production requires the actual admitted root pair")
+        capability.shape._digest(digest)
+        capability.shape._bounded_object(generation, 24, "v9 bootstrap provisioner launch context")
+        payload = configuration._ConfigurationCapture(ledger, maximum_bytes=MAX_BYTES).visit({
+            "schema": V9_PAYLOAD_SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
+            "configurationDigest": digest, "configurationPayload": configuration_payload,
+            "generation": {name: generation[name] for name in configuration._GENERATION_FIELDS},
+            "runtimeRoleIdentities": runtime_role_identities, "issuerPrivateKeyFd": descriptor,
+            "signerEndpoint": signer_endpoint, "registrationExecution": registration_execution,
+            "registrationFinalization": registration_finalization,
+            "oidcSessionActivationRelease": oidc_session_activation_release,
+            "oidcSessionActivationExecution": oidc_session_activation_execution,
+            "oidcSessionActivationPlanning": oidc_session_activation_planning,
+            "oidcSessionActivationConsumeExecution": oidc_session_activation_consume_execution,
+            "oidcSessionActivationReleaseIntent": oidc_session_activation_release_intent})
+        _v9_payload_shape(payload)
+        envelope = {"schema": V9_SCHEMA, "payload": payload, "signatureBase64Url": "A" * 86}
+        _v9_shape(envelope)
+        original = configuration._configuration_wire(payload, capture._SharedLedger(work))
+        _v9_material(payload, digest, public_key, work)
+        keys._pair_on_work(private_key, public_key, work)
+        _canonical(original, payload, work)
+        payload_size, payload_nodes = _measure(payload, work)
+        envelope_size, envelope_nodes = _measure(envelope, work)
+        work.charge(input_bytes=3 * payload_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
+            json_nodes=payload_nodes + envelope_nodes)
+        frame_bytes = 2 * len(V9_SCHEMA) + 9 + payload_size + 2 * 71
+        if (work.limits.max_hashes - work.hash_work < 1
+                or work.limits.max_input_bytes - work.input_bytes < frame_bytes + payload_size
+                or work.limits.max_json_nodes - work.json_nodes < 4 + payload_nodes):
+            raise EnrollmentBootstrapError("v9 bootstrap cannot reserve its signature output")
+        message = plan._ascii(plan._frame(V9_SCHEMA, (original,), work), work)
+        signature = production._sign_and_verify(private_key, public_key, message, work)
+        if _measure(payload, work) != (payload_size, payload_nodes) or _encode(payload) != original:
+            raise EnrollmentBootstrapError("v9 bootstrap payload changed during signing")
+        encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+        capability.shape._base64url(encoded, signature=True)
+        envelope["signatureBase64Url"] = encoded
+        result = _encode(envelope)
+        if len(result) != envelope_size:
+            raise EnrollmentBootstrapError("v9 bootstrap output changed after reservation")
+        return result
+    except (KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, EnrollmentBootstrapError):
+            raise
+        raise EnrollmentBootstrapError("v9 enrollment bootstrap production failed") from exc

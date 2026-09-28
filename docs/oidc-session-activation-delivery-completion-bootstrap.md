@@ -20,6 +20,12 @@ Service UID/GID, eight descriptors, private custody and reader/signing purposes
 remain unchanged. There is no request-selected profile, legacy fallback,
 peer-OR admission or generic replay widening.
 
+Explicit launch `/v3` has those same fields, peer and private resource inventory
+but selects only the [raw6 release-hints profile](oidc-session-activation-release-hints.md).
+Its two added unsigned frames grant no proof, key or release authority. Caller
+consume execution `/v4` explicitly selects that wire; v1/v2 launch behavior and
+the outer signed-bootstrap domain remain unchanged.
+
 The dispatch service compares the received authorization original byte-for-byte
 with genuinely admitted `material.authorization_bytes`. Only the server's own
 root-pinned packet digest, current pending tuple, checkpoint and replay

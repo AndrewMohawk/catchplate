@@ -12,6 +12,7 @@ from serverware import authority_current_root_completion as observations
 from serverware import authority_current_root_delivery_records as acknowledgments
 from serverware import authority_current_root_execution_admission as pending
 from serverware import authority_oidc_session_activation_delivery_completion_dispatch_transport as transport
+from serverware import authority_oidc_session_activation_delivery_completion_release_transport as release_transport
 from serverware import authority_registration_completion_response as neutral
 from serverware import control_plane_oidc_session_activation_consume_dispatch as dispatch
 from serverware import control_plane_oidc_session_activation_consume_execution_bootstrap as configured
@@ -109,9 +110,13 @@ def _complete_on_permission(permission):
             or authorization is not permission._consume_authorization_seal or signing is not permission._consume_signing_seal):
         execution._fail("consume completion is not the configured one-use SQL continuation")
     before, guard, prior_narrow, prior_bytes = continuation
-    endpoint = transport._endpoint(policy.completion_endpoint)
+    release_hints = policy.release_hints
+    if type(release_hints) is not bool:
+        execution._fail("consume completion release-hint profile is not source fixed")
+    exchange = release_transport if release_hints else transport
+    endpoint = exchange._endpoint(policy.completion_endpoint)
     predecessor = reservations._predecessor_scope(*policy.reservation_predecessor)
-    selected = transport._originals((transport.PURPOSE, originals[0]), response=False)
+    selected = exchange._originals((exchange.PURPOSE, originals[0]), response=False)
     target = permission._target[2]["localDigest"]
     caller.shape._digest(target)
     root, planner, operation_key = binding.runtime_root_public_key, policy.planner_public_key, policy.operation_public_key
@@ -120,19 +125,20 @@ def _complete_on_permission(permission):
         "grant_enrollment_bytes": policy.grant_enrollment_bytes,
         "root_public_key": root, "configuration_digest": parent.configuration_digest,
         "planner_public_key": planner, "operation_public_key": operation_key}
-    reserved_bytes = (prior_bytes + len(transport.PURPOSE) + len(originals[0])
-        + transport.REQUEST_HEADER_BYTES + transport.MAX_RESPONSE_BYTES + transport.RESPONSE_HEADER_BYTES)
+    reserved_bytes = (prior_bytes + len(exchange.PURPOSE) + len(originals[0])
+        + exchange.REQUEST_HEADER_BYTES + exchange.MAX_RESPONSE_BYTES + exchange.RESPONSE_HEADER_BYTES)
     if reserved_bytes > caller.MAX_ORIGINAL_BYTES:
         execution._fail("consume completion whole-held originals and response exceed their aggregate bound")
 
     def base_current():
         if (owner._material is not parent or owner._binding is not binding or owner._custody is not custody
                 or parent.consume_execution is not policy or policy.completion_endpoint != endpoint
+                or policy.release_hints is not release_hints
                 or policy.reservation_predecessor != predecessor or permission._consume_sql_originals is not originals
                 or permission._consume_sql_context is not continuation or permission._consume_sql_outcome is not sql_outcome
                 or permission._sql_originals is not activation_raw or permission._consume_signing is not signing
                 or permission._consume_authorization is not authorization or permission._dispatch_phase not in (
-                    "consume-completing", "consume-completion-observed")):
+                    "consume-completing", "consume-completion-observed", "release-intent-signing", "release-intent-authorized")):
             execution._fail("consume completion changed its original authority or cold resources")
         return guard()
 
@@ -196,10 +202,12 @@ def _complete_on_permission(permission):
     narrow(min(reserve["expiresAtEpochNs"], reserve["issuedAtEpochNs"] + reserve_age),
         reserve_age, state_material.payload["maxClockSkewNs"])
     current()
-    response = transport._socket_request_on_work(endpoint, originals=selected,
+    returned = exchange._socket_request_on_work(endpoint, originals=selected,
         deadline_ns=bound, work=work, current=current)
     current()
-    response = transport._originals(response, response=True)
+    returned = exchange._originals(returned, response=True)
+    response = returned[:4]
+    hints = returned[4:] if exchange is release_transport else None
     work.charge(input_bytes=retained._append_io_bytes("completion-outcome", response))
     current()
     identity = production._callback(work, lambda:
@@ -207,6 +215,14 @@ def _complete_on_permission(permission):
             custody, finalization_digest=target, activation_authorization_digest=activation_digest, originals=response))
     current()
     caller.shape._digest(identity)
+    if hints is not None:
+        work.charge(input_bytes=retained._append_io_bytes("completion-hints", hints))
+        current()
+        identity = production._callback(work, lambda:
+            execution.custody.ControlPlaneCustodyClient.append_oidc_session_activation_consume_completion_hints(
+                custody, finalization_digest=target, activation_authorization_digest=activation_digest, originals=hints))
+        current()
+        caller.shape._digest(identity)
     # Preserve the exact first response before interpreting even its selector.
     if response[0] == b"acknowledged":
         completed_material, complete, complete_digest = state._verify_request_on_work(
@@ -229,6 +245,7 @@ def _complete_on_permission(permission):
     permission._consume_completion_originals = permission._consume_completion_seal = response
     permission._consume_completion_context = permission._consume_completion_context_seal = (
         after, current, narrow, reserved_bytes)
+    permission._consume_completion_hints = permission._consume_completion_hints_seal = hints
     permission._dispatch_phase = "consume-completion-observed"
     current()
     return response

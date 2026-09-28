@@ -57,6 +57,7 @@ SCHEMA = "serverware.signedOidcSessionActivationDeliveryCompletionBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v1"
 DISPATCH_LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v2"
+RELEASE_LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v3"
 _FALSE_FIELDS = receiving._FALSE_FIELDS
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _CUSTODY_FIELDS = frozenset({"base64Url", "byteCount", "bytesDigest"})
@@ -220,7 +221,8 @@ def _state_endpoint(value):
 
 def _launch_shape(value, work):
     shape._object(value, _LAUNCH_FIELDS, "consume completion launch")
-    if type(value["schema"]) is not str or value["schema"] not in (LAUNCH_SCHEMA, DISPATCH_LAUNCH_SCHEMA):
+    if type(value["schema"]) is not str or value["schema"] not in (
+            LAUNCH_SCHEMA, DISPATCH_LAUNCH_SCHEMA, RELEASE_LAUNCH_SCHEMA):
         _fail("consume completion launch profile differs")
     peer = (PEER_UID, PEER_GID) if value["schema"] == LAUNCH_SCHEMA else (DISPATCH_PEER_UID, DISPATCH_PEER_GID)
     for name, expected in (("processMode", PROCESS_MODE),

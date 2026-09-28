@@ -49,6 +49,12 @@ launch v2 only. It must not be installed with a v1 bootstrap: mismatched
 schema/ACL admission fails. It changes no service user, key mount, journal or
 descriptor, and is not a provisioner or automatic permission change.
 
+Explicit launch v3 uses the same `65497:65532` ownership and fixed peer, but
+selects the [raw6 release-hints grammar](oidc-session-activation-release-hints.md).
+Use the separate uninstalled `release-v3.conf` instead of `dispatch-v2.conf`
+when independently provisioning that signed profile. Neither drop-in changes
+the eight private descriptors or lends AES/proof-signing custody to the caller.
+
 The five original TLS files are under
 `/run/serverware/oidc-session-activation-delivery-completion-tls/`:
 `ca.pem`, `custody.crt`, `custody.key`, `commit.crt` and `commit.key`.

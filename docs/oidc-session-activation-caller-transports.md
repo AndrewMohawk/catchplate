@@ -1,6 +1,6 @@
 # Guarded activation and consume caller transports
 
-The five fixed activation and four fixed consume transport profiles expose the same private
+The five fixed activation and five fixed consume transport profiles expose the same private
 caller API:
 
 ```text
@@ -16,7 +16,7 @@ and older helpers are unchanged. SQL's existing uncertainty and empty-frame
 grammar is not widened.
 
 `authority_oidc_session_activation_caller_transport.py` shares only the bounded
-I/O implementation. Nine literal entry functions select the exact nine
+I/O implementation. Ten literal entry functions select the exact ten
 existing transport modules; its private engine rejects any other module. It
 does not accept request-selected profiles, framing callbacks or arbitrary
 endpoints. Shape-valid response bytes and a matching local socket peer are not
@@ -107,6 +107,13 @@ The isolated service remains 65497, while the caller checks the root listener
 peer 0:0. The service joins the original authorization before using its own packet
 pin. This ninth guarded profile preserves the same original work/deadline and
 response grammar; neither a SQL locator nor a response status supplies authority.
+
+The tenth literal profile uses `SWODCM03` / `SWODCR02` only for consume caller
+`/v4` and independently signed service launch `/v3`. It appends bounded raw2
+[release hints](oidc-session-activation-release-hints.md) to the unchanged raw4
+completion frames. Those unsigned hints and encrypted delivery bytes are not
+authenticated by the completion/state signatures. Later private proof must
+independently authenticate their exact mapping before credential release.
 
 This is a source-only downstream caller seam. It does not establish completed
 public activation dispatch, installed services, runtime success or production

@@ -1,0 +1,13 @@
+# Optional source overlay for parent/v9 release-intent signing custody.
+# Requires independently admitted intent enrollment and consume caller/v4.
+# This mounts only the separate signing key; it creates no key or service.
+# No historical AES key, root signer or proof signer belongs in this process.
+services:
+  serverware:
+    volumes:
+      - type: bind
+        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_INTENT_KEY_FILE:?set root-owned mode 0400 release intent key file}
+        target: /run/secrets/serverware-oidc-session-activation-release-intent-key
+        read_only: true
+        bind:
+          create_host_path: false

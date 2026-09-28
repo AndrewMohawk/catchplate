@@ -794,6 +794,30 @@ class ControlPlaneCustodyClient:
             activation_authorization_digest=activation_authorization_digest,
             kind="completion-outcome", originals=originals)
 
+    def append_oidc_session_activation_consume_completion_hints(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain unsigned packet/effects hints without turning them into proof."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="completion-hints", originals=originals)
+
+    def claim_oidc_session_activation_consume_release_intent_attempt(self, *, finalization_digest,
+            activation_authorization_digest):
+        """Burn the intent attempt before its producer, without a replay allowance."""
+        ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-intent-claimed", originals=())
+
+    def append_oidc_session_activation_consume_release_intent(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain exact signed raw1 before return, not an admitted release proof."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-intent", originals=originals)
+
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):
         """Read bounded ordinary history, not a recovered permission to continue."""

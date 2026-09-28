@@ -133,19 +133,45 @@ def _hold(*, intent_bytes, enrollment_bytes, root_public_key, forbidden_public_k
     return _Held(original, enrolled, root, forbidden, scope, release, token, window, bound)
 
 
-def _clock(held, work):
+def _clock(held, work, continuity=None):
     window, bound = held.window, held.deadline_ns
     last_epoch, last_monotonic = window[0], window[2]
+    if continuity is not None and not callable(continuity):
+        _fail("release intent restrictive continuity is not callable")
+
+    def continue_owner():
+        nonlocal last_epoch, last_monotonic
+        if continuity is None:
+            return
+        limits, before = work.limits, work.metrics
+        ceilings = limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes
+        observed = continuity(last_epoch, last_monotonic)
+        capture._SharedLedger(work)
+        after = work.metrics
+        if (work.limits is not limits
+                or ceilings != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or after.hash_work < before.hash_work or after.input_bytes < before.input_bytes
+                or after.json_nodes < before.json_nodes):
+            _fail("release intent continuity reset the original work")
+        if (type(observed) is not tuple or len(observed) != 2
+                or any(type(value) is not int or value < 1 for value in observed)
+                or observed[0] < last_epoch or observed[1] < last_monotonic):
+            _fail("release intent continuity lowered its actual clock floors")
+        if observed[0] >= window[3] or observed[1] >= bound:
+            _fail("release intent continuity crossed the current narrowed deadline")
+        last_epoch, last_monotonic = observed
 
     def current():
         nonlocal last_epoch, last_monotonic
+        continue_owner()
         now = clock._check_on_work(window, work=work)
         monotonic = production._callback(work, time.monotonic_ns)
         shape._integer(monotonic, minimum=1)
         if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
             _fail("release intent original processing clocks expired or reversed")
         last_epoch, last_monotonic = now, monotonic
-        return now
+        continue_owner()
+        return last_epoch
 
     def narrow(expiry, age, skew):
         nonlocal window, bound
@@ -180,8 +206,8 @@ def _release(held, current, work):
     return created, expires
 
 
-def _admit(held, work):
-    current, narrow = _clock(held, work)
+def _admit(held, work, continuity=None):
+    current, narrow = _clock(held, work, continuity=continuity)
     current()
     enrolled = enrollments._admit_on_work(enrollment_bytes=held.enrollment,
         root_public_key=held.root, expected_scope=held.scope,
@@ -248,7 +274,8 @@ def _verify_original(held, original, enrolled, current, narrow, created, deliver
 
 
 def _verify_on_work(*, intent_bytes, enrollment_bytes, root_public_key, forbidden_public_keys,
-        expected_scope, expected_release, old_token_bytes, live_window, transport_deadline_ns, work):
+        expected_scope, expected_release, old_token_bytes, live_window, transport_deadline_ns, work,
+        _continuity=None):
     """Authenticate fresh intent and possession, not committed consumption."""
     held = _hold(intent_bytes=intent_bytes, enrollment_bytes=enrollment_bytes,
         root_public_key=root_public_key, forbidden_public_keys=forbidden_public_keys,
@@ -256,7 +283,7 @@ def _verify_on_work(*, intent_bytes, enrollment_bytes, root_public_key, forbidde
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
     if held.intent is None:
         _fail("release intent requires its actual signed original")
-    enrolled, current, narrow, created, expires, _window = _admit(held, work)
+    enrolled, current, narrow, created, expires, _window = _admit(held, work, continuity=_continuity)
     return _verify_original(held, held.intent, enrolled, current, narrow, created, expires, work)
 
 
@@ -297,7 +324,7 @@ def _verify_historical_on_work(*, intent_bytes, enrollment_bytes, root_public_ke
 
 def _produce_on_work(*, enrollment_bytes, root_public_key, forbidden_public_keys,
         expected_scope, expected_release, old_token_bytes, caller_private_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Sign one fresh nonce after genuine enrollment, bindings and possession.
 
     Independent present permission is a caller obligation. This constructs no
@@ -309,7 +336,7 @@ def _produce_on_work(*, enrollment_bytes, root_public_key, forbidden_public_keys
         root_public_key=root_public_key, forbidden_public_keys=forbidden_public_keys,
         expected_scope=expected_scope, expected_release=expected_release, old_token_bytes=old_token_bytes,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
-    enrolled, current, narrow, created, delivery_expiry, window = _admit(held, work)
+    enrolled, current, narrow, created, delivery_expiry, window = _admit(held, work, continuity=_continuity)
     enrollments.keys._pair_on_work(signer, enrolled.caller_public_key, work)
     current()
     work.charge(input_bytes=contract.NONCE_BYTES + 44 + 43)

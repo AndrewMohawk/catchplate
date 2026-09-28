@@ -37,7 +37,8 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
         authorization_bytes, authorization_enrollment_bytes, grant_enrollment_bytes,
         current_root_enrollment_bytes, configuration_digest, expected_authorization_digest,
         expected_database_id, expected_generation_digest, expected_pending_sequence,
-        expected_pending_head_digest, expected_fence, live_window, transport_deadline_ns, work):
+        expected_pending_head_digest, expected_fence, live_window, transport_deadline_ns, work,
+        include_release_hints=False):
     """Return a durably retained original acknowledgment, never execution authority.
 
     A retained original is authenticated and looked up before any unchanged
@@ -45,6 +46,8 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
     preserves the exact original; another call cannot sign its replacement.
     """
     evidence.capture._SharedLedger(work)
+    if type(include_release_hints) is not bool:
+        raise DeliveryCompletionRecoveryError("consume recovery hint profile is not source selected")
     if type(delivery) is not delivery_store.CurrentRootCompletionDelivery:
         raise DeliveryCompletionRecoveryError("consume recovery requires the actual completion delivery owner")
     if type(historical_custody) is not custody.OidcSessionActivationDeliveryCompletionCustody:
@@ -157,6 +160,25 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
         if sum(map(len, (raw_packet, caller_raw, caller_enrollment,
                 grant_enrollment, state_enrollment))) > packets.MAX_BYTES:
             raise DeliveryCompletionRecoveryError("consume recovered originals exceed their aggregate bound")
+        recovered = None
+
+        def finish(identity, receipt, reused):
+            current()
+            result = common.SuccessorCompletionRecoveryResult(identity, receipt, reused)
+            if not include_release_hints:
+                return result
+            from serverware import authority_oidc_session_activation_release_hints as hints
+            # Use this same root-pinned read. This decode does not replay history
+            # or reopen ciphertext; the full private proof remains mandatory.
+            decoded = recovered if recovered is not None else packets._decode_on_work(
+                raw_packet, expected_packet_digest=held_packet,
+                expected_pending_decision_digest=head, work=work)
+            current()
+            originals = hints._from_packet_on_work(packet_payload=decoded.payload,
+                packet_digest=held_packet, work=work)
+            current()
+            return result, originals
+
         if retained is None:
             original = completion._produce_from_custody_on_work(packet_bytes=raw_packet,
                 expected_packet_digest=held_packet, expectations=expected,
@@ -199,7 +221,7 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
                 if type(observed.receipt_bytes) is not bytes:
                     raise DeliveryCompletionRecoveryError("consume acknowledgment lacks its exact original")
                 current()
-                return common.SuccessorCompletionRecoveryResult(identity, observed.receipt_bytes, True)
+                return finish(identity, observed.receipt_bytes, True)
             if observed.status != "pendingUnaccepted":
                 raise DeliveryCompletionRecoveryError("consume completion remains unresolved at changed state")
             # An authenticated notRecorded observation is not database noncommit
@@ -208,4 +230,4 @@ def recover_and_deliver(*, custody_reader, commit_reader, delivery, client,
         receipt = delivery_store.CurrentRootCompletionDelivery.deliver(delivery, identity,
             client=client, live_window=window, transport_deadline_ns=bound, work=work)
         current()
-        return common.SuccessorCompletionRecoveryResult(identity, receipt, retained is not None)
+        return finish(identity, receipt, retained is not None)

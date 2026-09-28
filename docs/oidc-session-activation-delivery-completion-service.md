@@ -77,6 +77,13 @@ Old v1 wire/schema/peer acceptance stays strict, with no fallback. Both profiles
 return the existing `SWODCR01` raw4 acknowledged/uncertain grammar, not a packet
 identifier or authenticated current-session claim.
 
+Explicit signed launch v3 retains the same fixed control-plane peer and eight
+private resources, selecting `SWODCM03` / `SWODCR02` before intake. Its raw6
+response appends [bounded unsigned release hints](oidc-session-activation-release-hints.md)
+derived from the same root-pinned packet read, without another private replay.
+The appended encrypted envelope, dates and digests are candidate expectations,
+not authenticated release proof. V1/v2 remain strict raw4 profiles.
+
 One request allowance opens before peer/prefix/body intake and is capped by the
 original startup allowance. Original role and custody lifetimes and the minimum
 enrolled control/caller/planner age and skew can only narrow it; old historical

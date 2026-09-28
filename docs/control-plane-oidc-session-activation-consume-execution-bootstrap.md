@@ -85,6 +85,14 @@ same-context originals, live permission and original work/window/deadline.
 The public process receives no AES/history custody, and raw completion output
 is not a packet-currentness, token-release or current-session proof.
 
+Explicit nested `/v4` keeps exactly the `/v3` field set and selects the separate
+completion release-hint profile through immutable material `release_hints=True`.
+Versions v1–v3 retain `False`; no wire boolean or request chooses the profile.
+Hints remain unsigned candidate digests, never commit or release authority.
+The later private proof must independently reconstruct their real originals.
+The [dedicated intent-key lane](control-plane-oidc-session-activation-release-intent-bootstrap.md)
+requires this explicit version but adds no consume key or consume descriptor.
+
 ## Original admission and purpose separation
 
 Enabling this lane requires actual activation execution v4 and enabled

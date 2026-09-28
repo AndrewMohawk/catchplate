@@ -179,6 +179,7 @@ class _CompletionOwner:
         from serverware import authority_oidc_session_activation_delivery_completion_recovery as recovery
         from serverware import authority_oidc_session_activation_delivery_completion_transport as private_transport
         from serverware import authority_oidc_session_activation_delivery_completion_dispatch_transport as dispatch_transport
+        from serverware import authority_oidc_session_activation_delivery_completion_release_transport as release_transport
         from serverware import authority_successor_execution_window as processing
         from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
@@ -187,6 +188,8 @@ class _CompletionOwner:
             transport = private_transport
         elif profile == bootstrap.DISPATCH_LAUNCH_SCHEMA:
             transport = dispatch_transport
+        elif profile == bootstrap.RELEASE_LAUNCH_SCHEMA:
+            transport = release_transport
         else:
             raise DeliveryCompletionRequestError("consume completion launch profile differs")
         expected_peer = delivery._launch_peer(profile)
@@ -225,7 +228,7 @@ class _CompletionOwner:
         if (peer_uid, peer_gid) != expected_peer:
             raise DeliveryCompletionRequestError("consume completion root-selected caller peer differs")
         # Charge the selected request's complete ceiling before any
-        # prefix/body allocation. The wire helper separately reserves raw4.
+        # prefix/body allocation. The wire helper separately bounds raw4/raw6.
         work.charge(input_bytes=transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES)
         originals = transport._recv_request(connection, deadline_ns=bound)
         current()
@@ -235,7 +238,7 @@ class _CompletionOwner:
             "consume completion launch interval changed")
         bootstrap.plan._same(material.launch["schema"], profile, work,
             "consume completion root-selected profile changed")
-        if profile == bootstrap.DISPATCH_LAUNCH_SCHEMA:
+        if profile in (bootstrap.DISPATCH_LAUNCH_SCHEMA, bootstrap.RELEASE_LAUNCH_SCHEMA):
             work.charge(input_bytes=len(originals[1]) + len(material.authorization_bytes))
             if originals[1] != material.authorization_bytes:
                 raise DeliveryCompletionRequestError(
@@ -272,8 +275,16 @@ class _CompletionOwner:
                 expected_authorization_digest=material.authorization_digest,
                 expected_database_id=material.database_id, expected_generation_digest=material.generation_digest,
                 expected_pending_sequence=sequence, expected_pending_head_digest=head, expected_fence=fence,
-                live_window=window, transport_deadline_ns=bound, work=work)
+                live_window=window, transport_deadline_ns=bound, work=work,
+                include_release_hints=profile == bootstrap.RELEASE_LAUNCH_SCHEMA)
             current()
+            hints = ()
+            if profile == bootstrap.RELEASE_LAUNCH_SCHEMA:
+                if type(result) is not tuple or len(result) != 2:
+                    raise DeliveryCompletionRequestError("consume completion lacks its same-read release hints")
+                result, hints = result
+                if type(hints) is not tuple or len(hints) != 2:
+                    raise DeliveryCompletionRequestError("consume completion release hint inventory differs")
             if type(result) is not recovery.common.SuccessorCompletionRecoveryResult:
                 raise DeliveryCompletionRequestError("consume completion lacks its actual recovery result")
             original = recovery.delivery_store.CurrentRootCompletionDelivery._original_for_pending_on_work(
@@ -284,13 +295,15 @@ class _CompletionOwner:
             bootstrap.plan._same(identity, result.request_digest, work,
                 "consume completion outcome differs from its durable original")
             work.prepare_utf8(identity)
-            response = (b"acknowledged", identity.encode("ascii"), request, result.receipt_bytes)
+            response = (b"acknowledged", identity.encode("ascii"), request, result.receipt_bytes) + hints
         except Exception:
             # No exception text or invented receipt, retry or noncommit claim.
             # A poisoned journal, spent allowance or expired actual custody
             # fails this guard and emits nothing, including uncertainty.
             current()
             response = (b"uncertain", b"", b"", b"")
+            if profile == bootstrap.RELEASE_LAUNCH_SCHEMA:
+                response += (b"", b"")
         current()
         response = transport._originals(response, response=True)
         work.charge(input_bytes=transport.RESPONSE_HEADER_BYTES + sum(map(len, response)))

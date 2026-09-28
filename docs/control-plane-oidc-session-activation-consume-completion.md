@@ -25,6 +25,7 @@ are still required. No private history or AES key enters UID 65532.
 Nested [consume execution configuration v3](control-plane-oidc-session-activation-consume-execution-bootstrap.md)
 adds only the fixed completion endpoint. Earlier v1/v2 configurations cannot
 use this continuation. It adds no key, descriptor or guessed future packet pin.
+Explicit v4 selects a separate release-hint response profile; v3 remains raw4.
 
 ## One original-bound exchange
 
@@ -43,10 +44,21 @@ using its own root-pinned packet and actual private completion machinery.
 The old private selector profile and peer 65497 remain distinct and strict.
 An unsigned SQL packet locator is never selected or promoted into authority.
 
-The service returns only raw4:
+That v2 service profile returns only raw4:
 
 - `(b"acknowledged", completion_request_digest, signed_complete, state_ACK)`; or
 - `(b"uncertain", b"", b"", b"")`.
+
+The explicit v4 caller / launch-v3 worker instead exchange the separately
+versioned [`SWODCM03`/`SWODCR02` profile](oidc-session-activation-release-hints.md).
+Its response is raw6: this same raw4 plus
+packet-digest bytes and a bounded canonical release-hint descriptor. The latter
+holds an effects digest, encrypted delivery envelope and original dates, never
+a plaintext token or new authority. The caller retains raw4 first, then these
+two opaque hint originals, before interpreting either. `complete_consume()`
+still returns raw4; hints are sealed only inside the same actual context for
+[release-intent production](control-plane-oidc-session-activation-release-intent.md).
+Legacy profiles and public completion-verification claims are unchanged.
 
 Shape validation is followed by metered first-exact
 [completion-outcome retention](control-plane-oidc-session-activation-consume-records.md)

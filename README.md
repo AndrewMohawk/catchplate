@@ -26,22 +26,20 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current workflow: session activation
 
-**21/26 source steps landed · 1 active · 4 todo.** Step 22, public activation
-dispatch, remains **partial**. The bar shows its named connections rather than
-an estimated percentage.
+**22/26 source steps landed · 0 active · 4 todo.** Public actions are 2/3
+source-landed. Next is step 23: separately authorized, fresh original-bound
+recovery—never an automatic SQL retry.
 
-Latest source: [`.200` / 7152f75](https://github.com/example/private-deployment)
-connects dynamic grant-issuer fresh-proof intake under independent originals,
-derives the exact existing signed policy/bootstrap, and adds two-destination
-staging in explicit proof-input v2. Next: the public HTTP sequence under one
-live permission, with fresh current-auth and cookie completion. Uncertainty
-must retain the pending cookie without retry. Resources, recovery and portal
+Latest source: [`.201` / 0bffe70](https://github.com/example/private-deployment)
+connects the public activation POST under one live permission through protected
+delivery, fresh current-auth and the final cookie-send guard. Uncertainty keeps
+the pending cookie without automatic retry. Resources, recovery and portal
 remain open. This source is unbuilt, unexecuted and unprovisioned.
-Previous source: [`.199` finite proof-input issuer](https://github.com/example/private-deployment).
+Previous source: [`.200` dynamic grant issuer](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-dispatch-detail)
 live in the tracker.
 
-[![Inside step 22: five facets are source-landed; RELEASE remains partial and HTTP is open. Current .200 dynamic grant-issuer fresh-proof intake, exact signed issuer originals and explicit proof-input v2 two-destination staging are source-landed in 7152f75. Next is the public HTTP sequence under one live permission, with fresh current-auth and cookie completion; uncertainty must retain the pending cookie without retry. Resources, recovery and portal remain open. Activation 21/26, project 34/46 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Session activation: 22 of 26 source steps landed; 0 active and 4 todo. Step 22 public activation is source-landed in 0bffe70; step 23 separately authorized recovery is next, not active. Project 34/46 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-dispatch-detail).
@@ -49,22 +47,22 @@ Landed source does not mean tested, deployed, delivered, or a confirmed session.
 Nested counts are not additive and are not effort estimates.
 
 <details>
-<summary>All 26 activation steps and the remaining public/portal work</summary>
+<summary>Completed dispatch connections and remaining recovery/portal work</summary>
 
-[![Session activation: steps 01–21 source-landed; 22 public dispatch active; 23–26 recovery and portal todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Step 22 public activation is source-landed in 0bffe70: all seven dispatch facets and all five inner RELEASE connections are green. One live permission connects the public POST to exact protected delivery, fresh current-auth and the final cookie-send guard. Uncertainty keeps the pending cookie and forbids automatic retry. Separately authorized recovery is next; resources and portal remain open. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 | Step / stable ID | Deliverable | Status |
 | --- | --- | --- |
 | 21 · F08.5.1 | Fresh authorization for the exact user/session/credential target | [Landed · d3f8469](https://github.com/example/private-deployment) |
-| 22 · F08.5.2 | Public activation with durable dispatch/outcome tracking and truthful responses | In progress |
-| 23 · F08.5.3 | Separately authorized recovery; no automatic activation retry | Todo |
+| 22 · F08.5.2 | Public activation with durable dispatch/outcome tracking and truthful responses | [Landed · 0bffe70](https://github.com/example/private-deployment) |
+| 23 · F08.5.3 | Separately authorized recovery; no automatic activation retry | Next · todo |
 | 24 · F08.6.1 | Explicit portal activate/recover controls bound to the retained target | Todo |
 | 25 · F08.6.2 | Fresh action-bound approval; discard prompts when actor or target changes | Todo |
 | 26 · F08.6.3 | Confirm the session only after exact delivery and a fresh current-auth check | Todo |
 
 Completed private foundations and their evidence: [protected release, 16/16](docs/production-status.md#token-release-implementation-detail)
 and [release/handoff, 11/11](docs/production-status.md#exact-release-and-handoff-detail).
-These do not close the public activation flow.
+Their completed source does not close recovery, portal or production acceptance.
 
 </details>
 

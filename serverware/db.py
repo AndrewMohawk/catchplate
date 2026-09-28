@@ -67598,7 +67598,16 @@ def approve_control_plane_approval(
     allowed_approver_ids: set[str] | None = None,
     approval_threshold: int = 1,
     approver_credential_policy: Mapping[str, Any] | None = None,
+    workload_approval: object | None = None,
 ) -> dict[str, Any] | None:
+    if workload_approval is not None and (
+        require_webauthn is not True
+        or authn is not None
+        or challenge_id is not None
+    ):
+        raise MetadataStoreError(
+            "workload approval requires exclusive verified assertion evidence"
+        )
     authn_evidence = authn or {}
     approver_webauthn_credential_id = authn_evidence.get(
         "credential_record_id"
@@ -67610,7 +67619,7 @@ def approve_control_plane_approval(
         raise MetadataStoreError(
             "control-plane approval WebAuthn credential record is invalid"
         )
-    if require_webauthn and (
+    if require_webauthn and workload_approval is None and (
         set(authn_evidence)
         != {"credential_record_id", "assertion"}
         or not approver_webauthn_credential_id
@@ -67669,6 +67678,31 @@ def approve_control_plane_approval(
             )
         ):
             return None
+        if workload_approval is not None:
+            if existing["action"] != "workload.identity.issue":
+                raise MetadataStoreError(
+                    "verified workload approval action is invalid"
+                )
+            from . import control_plane_workload_identity_approval as workload_approvals
+
+            try:
+                authn_evidence = workload_approvals._consume_on_row(
+                    workload_approval, row=existing, actor_id=actor_id
+                )
+            except workload_approvals.WorkloadApprovalError as exc:
+                raise MetadataStoreError(
+                    "verified workload approval is invalid"
+                ) from exc
+            approver_webauthn_credential_id = authn_evidence.get(
+                "credential_record_id"
+            )
+            if (
+                not isinstance(approver_webauthn_credential_id, str)
+                or not approver_webauthn_credential_id
+            ):
+                raise MetadataStoreError(
+                    "control-plane approval WebAuthn credential record is invalid"
+                )
         if approver_webauthn_credential_id:
             expected_evidence = {
                 "method": "webauthn",
@@ -67700,6 +67734,13 @@ def approve_control_plane_approval(
                 raise MetadataStoreError(
                     "control-plane approval WebAuthn credential is not active for the approver"
                 )
+        if workload_approval is not None:
+            try:
+                workload_approvals._current_on_consumed(workload_approval)
+            except workload_approvals.WorkloadApprovalError as exc:
+                raise MetadataStoreError(
+                    "verified workload approval is invalid"
+                ) from exc
         cur = conn.execute(
             """
             UPDATE control_plane_approvals
@@ -67754,6 +67795,13 @@ def approve_control_plane_approval(
         row = conn.execute(
             "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
         ).fetchone()
+        if workload_approval is not None:
+            try:
+                workload_approvals._current_on_consumed(workload_approval)
+            except workload_approvals.WorkloadApprovalError as exc:
+                raise MetadataStoreError(
+                    "verified workload approval is invalid"
+                ) from exc
     return row_to_control_plane_approval(row) if row else None
 
 

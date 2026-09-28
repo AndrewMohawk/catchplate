@@ -408,6 +408,14 @@ async def _run_bounded_blocking(
 async def csrf_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
     from serverware import portal_session_activation_confirmation_routes as confirmation_routes
+    from serverware import control_plane_workload_identity_routes as workload_routes
+
+    if request.scope.get("path") in workload_routes.PATHS:
+        try:
+            _require_registration_execution_session_csrf(request)
+        except HTTPException as exc:
+            return workload_routes.error(exc.status_code)
+        return await call_next(request)
 
     if request.scope.get("path") == confirmation_routes.POST_PATH:
         try:
@@ -455,6 +463,13 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
     from serverware import portal_session_activation_confirmation_routes as confirmation_routes
+    from serverware import control_plane_workload_identity_routes as workload_routes
+
+    if request.scope.get("path") in workload_routes.PATHS:
+        refusal = await workload_routes._frame_request(request)
+        if refusal is not None:
+            return refusal
+        return await call_next(request)
 
     if request.scope.get("path") == confirmation_routes.POST_PATH:
         refusal = await confirmation_routes._frame_request(request)
@@ -1162,8 +1177,10 @@ class _SignedControlPlaneASGI:
             from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
             from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
             from serverware import control_plane_oidc_session_activation_completion_recovery_delivery_response as completion_delivery
+            from serverware import control_plane_workload_identity_routes as workload_routes
 
-            delivery = (completion_delivery if scope.get("path") in completion_delivery.POST_PATHS
+            delivery = (workload_routes if scope.get("path") in workload_routes.PATHS
+                else completion_delivery if scope.get("path") in completion_delivery.POST_PATHS
                 else recovery_delivery if scope.get("path") == recovery_delivery.POST_PATH
                 else activation_delivery)
             await delivery._send_response(scope, receive, send, response,
@@ -1175,7 +1192,9 @@ class _SignedControlPlaneASGI:
             from serverware import control_plane_oidc_session_activation_delivery as activation_delivery
             from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
             from serverware import control_plane_oidc_session_activation_completion_recovery_delivery_response as completion_delivery
+            from serverware import control_plane_workload_identity_routes as workload_routes
 
+            workload_routes._discard_scope(scope)
             activation_delivery._discard_scope(scope)
             recovery_delivery._discard_scope(scope)
             completion_delivery._discard_scope(scope)
@@ -4602,6 +4621,8 @@ def _require_control_plane_mutation_mfa(
 
 
 def _control_plane_two_person_required(action: str) -> bool:
+    if action == "workload.identity.issue":
+        return True
     if not CONTROL_PLANE_TWO_PERSON_REQUIRED:
         return False
     configured = set(CONTROL_PLANE_TWO_PERSON_ACTIONS)
@@ -4620,6 +4641,8 @@ def _control_plane_approval_id(mfa: dict[str, Any] | None) -> str | None:
 
 
 def _control_plane_approval_roles(action: str) -> set[str]:
+    if action == "workload.identity.issue":
+        return {"approver"}
     if action.startswith("setup.attestation."):
         return {"attestation_reviewer"}
     if action.startswith("policy."):
@@ -4637,6 +4660,8 @@ def _control_plane_approval_roles(action: str) -> set[str]:
 
 
 def _control_plane_requester_roles(action: str) -> set[str]:
+    if action == "workload.identity.issue":
+        return {"policy_author"}
     if action.startswith("setup.attestation."):
         return {"attestation_reviewer"}
     if action.startswith("policy."):
@@ -4696,6 +4721,7 @@ def _require_control_plane_two_person(
 
     if not _control_plane_two_person_required(action):
         return None
+    require_webauthn = action == "workload.identity.issue" or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
     approval_id = _control_plane_approval_id(mfa)
     if approval_id:
         result = db.consume_control_plane_approval(
@@ -4704,7 +4730,7 @@ def _require_control_plane_two_person(
             resource_id=resource_id,
             payload_digest=payload_digest,
             actor_id=identity.user_id,
-            require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+            require_webauthn=require_webauthn,
             required_requester_roles=_control_plane_requester_roles(action),
             required_approver_roles=_control_plane_approval_roles(action),
             _connection=connection,
@@ -4733,7 +4759,7 @@ def _require_control_plane_two_person(
         requester_id=identity.user_id,
         request=request,
         ttl_seconds=CONTROL_PLANE_TWO_PERSON_TTL_SECONDS,
-        require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+        require_webauthn=require_webauthn,
     )
     raise _ApprovalRequired(
         status_code=428,
@@ -7464,6 +7490,7 @@ def execute_control_plane_authority_operation(
 @app.post("/api/control-plane/mutations/webauthn/options")
 def control_plane_mutation_webauthn_options(
     payload: ControlPlaneMutationWebAuthnOptions,
+    request: Request,
     identity: AdminIdentity = Depends(
         require_role(
             "admin",
@@ -7476,6 +7503,14 @@ def control_plane_mutation_webauthn_options(
     ),
 ) -> dict[str, Any]:
     _control_plane_approval_roles(payload.action)
+    if payload.action == "workload.identity.issue":
+        from serverware import control_plane_workload_identity_routes as workload_routes
+
+        # Requesters derive these bindings only from genuine original grants
+        # at the dedicated options route; this generic route is approver-only.
+        if not payload.approval_id:
+            raise HTTPException(status_code=403, detail="use workload issuance original options")
+        identity = workload_routes._cookie_identity(request, approver=True)
     approval_context = None
     if payload.approval_id:
         approval_context = db.get_control_plane_approval(payload.approval_id)
@@ -7750,6 +7785,7 @@ def control_plane_approvals(
             "credential_owner",
             "policy_author",
             "attestation_reviewer",
+            "approver",
         )
     ),
 ) -> list[dict[str, Any]]:
@@ -7790,6 +7826,7 @@ def control_plane_approvals(
 @app.post("/api/control-plane/approvals/{approval_id}/approve")
 def control_plane_approval_approve(
     approval_id: str,
+    request: Request,
     payload: ControlPlaneApprovalDecision | None = Body(default=None),
     identity: AdminIdentity = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -7802,20 +7839,31 @@ def control_plane_approval_approve(
             status_code=409,
             detail=f"control-plane approval is already {approval['status']}",
         )
+    workload_issuance = approval["action"] == "workload.identity.issue"
+    if workload_issuance:
+        from serverware import control_plane_workload_identity_routes as workload_routes
+
+        identity = workload_routes._cookie_identity(request, approver=True)
     if approval["requester_id"] == identity.user_id:
         raise HTTPException(
             status_code=403,
             detail="requester cannot approve their own control-plane mutation",
         )
     _assert_control_plane_approval_role(identity, approval["action"])
-    mfa = _require_control_plane_mutation_mfa(
-        action=approval["action"],
-        resource_id=approval["resource_id"],
-        payload_digest=approval["payload_digest"],
-        mfa=decision.mfa if decision else None,
-        identity=identity,
-        approval_context=approval,
-    )
+    workload_receipt = None
+    if workload_issuance:
+        identity, workload_receipt = workload_routes._approve_assertion(
+            request, approval, decision.mfa if decision else None)
+        mfa = None
+    else:
+        mfa = _require_control_plane_mutation_mfa(
+            action=approval["action"],
+            resource_id=approval["resource_id"],
+            payload_digest=approval["payload_digest"],
+            mfa=decision.mfa if decision else None,
+            identity=identity,
+            approval_context=approval,
+        )
     try:
         authority_authn = (
             {
@@ -7830,8 +7878,7 @@ def control_plane_approval_approve(
             approval_id,
             actor_id=identity.user_id,
             note=decision.note if decision else None,
-            authn=authority_authn
-            or {
+            authn=None if workload_issuance else authority_authn or {
                 "method": identity.auth_method,
                 "user_id": identity.user_id,
             },
@@ -7840,13 +7887,21 @@ def control_plane_approval_approve(
                 if isinstance(mfa, dict)
                 else None
             ),
-            require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+            require_webauthn=workload_issuance or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+            workload_approval=workload_receipt,
             required_approver_roles=_control_plane_approval_roles(
                 str(approval["action"])
             ),
         )
     except db.MetadataStoreError as exc:
+        if workload_issuance:
+            raise HTTPException(status_code=409, detail="workload approval could not be recorded") from None
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        if workload_receipt is not None:
+            from serverware import control_plane_workload_identity_approval as approval_source
+
+            approval_source._discard(workload_receipt)
     if not updated:
         raise HTTPException(
             status_code=409,
@@ -24998,6 +25053,7 @@ from serverware import control_plane_oidc_session_activation_permission_routes a
 from serverware import control_plane_oidc_session_activation_routes as _activation_routes
 from serverware import control_plane_oidc_session_activation_recovery_routes as _activation_recovery_routes
 from serverware import portal_session_activation_confirmation_routes as _activation_confirmation_routes
+from serverware import control_plane_workload_identity_routes as _workload_identity_routes
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -25010,4 +25066,5 @@ _fastapi_app.include_router(_activation_permission_routes.router)
 _fastapi_app.include_router(_activation_routes.router)
 _fastapi_app.include_router(_activation_recovery_routes.router)
 _fastapi_app.include_router(_activation_confirmation_routes.router)
+_fastapi_app.include_router(_workload_identity_routes.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

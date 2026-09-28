@@ -2,9 +2,9 @@
 
 This is an authored, source-only worker contract. It is unbuilt, unexecuted and
 unprovisioned; no issuance, mTLS handshake, production acceptance or N04 closure
-is claimed. The control-plane startup owner, public HTTP action and explicit CLI
-submission are not connected by this worker slice. Existing local preparation
-and certificate-admission CLI modes remain network-free. The
+is claimed. The separate [control-plane caller and public action](control-plane-workload-identity-issuance.md)
+connect this worker in source; explicit CLI submission and portal orchestration
+remain open. Existing local preparation and certificate-admission CLI modes remain network-free. The
 [remaining integration plan](workload-identity-issuer-plan.md) preserves those
 boundaries and the broader lifecycle/channel requirements.
 

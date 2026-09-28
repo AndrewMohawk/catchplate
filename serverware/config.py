@@ -670,7 +670,7 @@ CONTROL_PLANE_TWO_PERSON_ACTIONS = tuple(
     item.strip()
     for item in os.getenv(
         "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS",
-        "credential.create,credential.oauth.activate,credential.oauth.uncertain.resolve,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,webauthn.credential.revoke,webauthn.oidc-session.activation.recover,webauthn.trust.publish,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant,setup.attestation.finalize",
+        "credential.create,credential.oauth.activate,credential.oauth.uncertain.resolve,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,webauthn.credential.revoke,webauthn.oidc-session.activation.recover,webauthn.trust.publish,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant,setup.attestation.finalize,workload.identity.issue",
     ).split(",")
     if item.strip()
 )

@@ -1234,6 +1234,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/workload_identity_issuer_service.py \
 	serverware/workload_identity_issuer_transport.py \
 	serverware/workload_identity_issuer_journal.py \
+	serverware/control_plane_workload_identity_bootstrap.py \
+	serverware/control_plane_workload_identity_startup.py \
+	serverware/control_plane_workload_identity_client.py \
+	serverware/control_plane_workload_identity_approval.py \
+	serverware/control_plane_workload_identity_routes.py \
 	serverware_agent_trust/workload_identity_originals.py \
 	serverware_agent_trust/_workload_signed_packet.py \
 	serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
@@ -3468,6 +3473,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/workload_identity_issuer_service.py \
 				serverware/workload_identity_issuer_transport.py \
 				serverware/workload_identity_issuer_journal.py \
+				serverware/control_plane_workload_identity_bootstrap.py \
+				serverware/control_plane_workload_identity_startup.py \
+				serverware/control_plane_workload_identity_client.py \
+				serverware/control_plane_workload_identity_approval.py \
+				serverware/control_plane_workload_identity_routes.py \
 				serverware_agent_trust/workload_identity_originals.py \
 				serverware_agent_trust/_workload_signed_packet.py \
 				serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \

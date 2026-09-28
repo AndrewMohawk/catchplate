@@ -43,6 +43,25 @@ def _same(actual, expected, work):
         _fail("workload issuer original association differs")
 
 
+def _same_association(actual, expected, work):
+    # The closed association ends in canonical SAN bytes, not a JSON scalar.
+    # Meter every scalar before equality; the JSON work walker rejects bytes.
+    if (type(actual) is not tuple or type(expected) is not tuple
+            or len(actual) != 17 or len(expected) != 17):
+        _fail("workload issuer association is not its exact seventeen-scalar tuple")
+    work.charge(input_bytes=36, json_nodes=2)
+    for index, (left, right) in enumerate(zip(actual, expected)):
+        kind = str if index < 13 else int if index < 16 else bytes
+        if type(left) is not kind or type(right) is not kind:
+            _fail("workload issuer association scalar type differs")
+        if kind is bytes:
+            work.charge(input_bytes=len(left) + len(right), json_nodes=2)
+        else:
+            work.prepare_comparison(left, right)
+    if actual != expected:
+        _fail("workload issuer original association differs")
+
+
 def _certificate_builder(owner, admitted, *, work, current, deadline_ns):
     """Prepare the fixed leaf profile; this function performs no signature."""
     raw, private = owner.material.issuer_certificate_bytes, owner.ca_private_key
@@ -134,7 +153,7 @@ def _issue_on_owner(owner, originals, *, current):
         association=admitted.association, **io)
     if type(claim) is not journal._IssuerClaim:
         _fail("workload issuer did not receive its actual durable claim")
-    _same(claim.association, admitted.association, work)
+    _same_association(claim.association, admitted.association, work)
     for actual, expected in ((claim.serial_number, admitted.serial_number),
             (claim.not_before_epoch_seconds, admitted.not_before_epoch_seconds),
             (claim.not_after_epoch_seconds, admitted.not_after_epoch_seconds)):
@@ -171,7 +190,7 @@ def _issue_on_owner(owner, originals, *, current):
             "_current": admitted_current})
     if type(verified) is not authorization._IssuanceMaterial:
         _fail("workload issuer retained certificate lacks independent original admission")
-    _same(verified.association, admitted.association, work)
+    _same_association(verified.association, admitted.association, work)
 
     def response_current():
         admitted_current()

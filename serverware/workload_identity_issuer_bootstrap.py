@@ -85,6 +85,23 @@ def _construction_on_work(work):
     return window, window[4]
 
 
+def _guard_on_work(current, work):
+    """Compose a metered ancestor without treating it as an unmetered native call."""
+    clock.evidence.capture._SharedLedger(work)
+    limits, before = work.limits, work.metrics
+    ceiling = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+    try:
+        return current()
+    finally:
+        after = work.metrics
+        if (work.limits is not limits
+                or ceiling != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or after.hash_work < before.hash_work or after.input_bytes < before.input_bytes
+                or after.json_nodes < before.json_nodes):
+            _fail()
+        clock.evidence.capture._SharedLedger(work)
+
+
 class _Budget:
     """Adapter, not a new allowance, timeout or clock authority."""
 
@@ -102,7 +119,7 @@ class _Budget:
     def current(self):
         clock.evidence.capture._SharedLedger(self.work)
         if self.ancestor is not None:
-            ancestor_epoch = clock.evidence.production._callback(self.work, self.ancestor)
+            ancestor_epoch = _guard_on_work(self.ancestor, self.work)
             _integer(ancestor_epoch, minimum=1)
             if ancestor_epoch < self.epoch:
                 _fail()

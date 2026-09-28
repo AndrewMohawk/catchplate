@@ -90,8 +90,9 @@ signing and original-only admission. Its verifier shares the local public-input
 checks while retaining the worker's original work and deadline; it does not
 turn request possession or a CA-install capability into issuance authority.
 
-The actual control-plane caller, public issuance action and explicit CLI
-submission are still missing. These local modes remain network-free. Client-CA
+The [control-plane caller and authenticated issuance action](control-plane-workload-identity-issuance.md)
+are connected in source. Explicit CLI submission and portal orchestration are
+still missing; these local modes remain network-free. Client-CA
 distribution, rotation/revocation, SPIFFE lifecycle/service, sidecar integration
 and verified runtime workload channels also remain open. N04 earns no landed
 parent credit: project status is 35/46 landed, two active (H05/N04), nine todo;

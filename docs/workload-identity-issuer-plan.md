@@ -3,9 +3,10 @@
 The dedicated worker, cold bootstrap, independent grant, durable journal,
 fixed-resource launcher and raw-original service are now authored in source.
 They have not been built, executed, provisioned or accepted in a deployment.
-The actual control-plane transport owner, public HTTP action and explicit CLI
-submission remain the next integration work; the existing local CLI stays
-network-free. N04 and all production gates remain open. No keys, certificates,
+The [control-plane caller and authenticated public action](control-plane-workload-identity-issuance.md)
+are now connected in source. Explicit CLI submission and portal orchestration
+remain open; the existing local CLI stays network-free. N04 and all production
+gates remain open. No keys, certificates,
 services, trust stores or cloud resources were provisioned. See the
 [authored worker contract](workload-identity-issuer.md) and
 [local client contract](workload-identity-provisioning.md).
@@ -16,9 +17,9 @@ services, trust stores or cloud resources were provisioned. See the
 | --- | --- |
 | `serverware/enrollment.py:build_agent_enrollment` | Produces the genuine signed packet from the current policy snapshot, attestation pins, principal and nonce. `_identity_block` includes public mTLS selectors only. Packet signing is `response_identity.sign_statement`; that response key is not a certificate-issuance key. |
 | `serverware/app.py:agent_enrollment` (`POST /api/agents/enrollment`) | Currently requires `policy_author`, builds the packet, creates a purpose-specific CA-install session, and binds the final packet to that session. This route and its session token authorize neither workload certificate signing nor an issuer key read. |
-| `serverware/control_plane_runner.py:main` | Admits custody, then enrollment, before application/DB/HTTP imports. A new public issuer-transport owner belongs in this cold sequence, with matching exceptional and normal cleanup. |
+| `serverware/control_plane_runner.py:main` | Admits custody, enrollment and the public workload-identity caller before application/DB/HTTP imports, with reverse-order exceptional and normal cleanup. |
 | `serverware/control_plane_custody_startup.py:require_started` and `control_plane_custody_client._snapshot` | Supply the actual already-admitted runtime root, original inherited descriptor inventory and current receipt. Reuse those originals; do not repeat runtime inventory admission after a journal has opened descriptors. |
-| `serverware/control_plane_startup.py:validate_control_plane_configuration` | Requires genuine startup owners. Add a check for the new optional issuer-transport owner; do not replace it with a PID environment flag or lazy app initialization. |
+| `serverware/control_plane_startup.py:validate_control_plane_configuration` | Requires the genuine workload-identity startup owner alongside existing owners; a signed disabled profile is explicit. No PID environment flag or lazy app initialization substitutes for admission. |
 | `data-plane/decision-gate-rs/src/main.rs:load_proxy_ingress_config` | `mtls` mode loads `SERVERWARE_PROXY_TLS_CERT`, `SERVERWARE_PROXY_TLS_KEY` and `SERVERWARE_PROXY_CLIENT_CA_BUNDLE`; rustls requires TLS 1.3 and client authentication. The loaded public bundle digest is recorded in `ProxyIngressAttestation.client_trust_bundle_sha256`. Issuance alone does not install that bundle or prove a handshake. |
 | `serverware_agent_trust/workload_identity_provisioning.py` | Current local producer/admitter consumes exact pinned packet, packet-signing key and issuer originals, then the retained request/key and returned leaf. Its standard CSR and signed request establish possession only. |
 
@@ -142,8 +143,8 @@ external anti-rollback witness.
 
 ## Concrete implementation split
 
-The first two groups are authored source. The last two are still proposed
-integration work and must not be presented as callable public functionality:
+All four groups below are connected in source, not built or executed. Public
+action source does not establish a provisioned callable deployment:
 
 1. `serverware/workload_identity_issuance_authorization.py` and
    `workload_identity_issuer_bootstrap.py`: closed producer/verifier contracts
@@ -161,28 +162,53 @@ integration work and must not be presented as callable public functionality:
    return. The service accepts raw `(grant, packet, request)` originals, not a
    successful verification object. Lifetime/work
    arguments are the actual service's inherited context, not posted values.
-3. `serverware/control_plane_workload_identity_startup.py` plus a small
+3. `serverware/control_plane_workload_identity_bootstrap.py`,
+   `control_plane_workload_identity_startup.py` and
    `control_plane_workload_identity_client.py`: public-only bootstrap and one
-   endpoint/peer-bound socket. Integrate the startup owner after existing
-   custody admission and before app imports in `control_plane_runner.main`,
-   then require/close it through the existing startup lifecycle. The new public
-   bootstrap must already be present in the original runtime-admitted FD
-   inventory; no second scan or inherited-descriptor bypass.
+   endpoint/peer-bound exchange. The startup owner follows existing custody and
+   enrollment admission before app imports, with genuine require/close lifecycle.
+   The new sealed public bootstrap must already be present in the original
+   runtime-admitted FD inventory; no second scan or inherited-descriptor bypass.
+   The connected server peer is independently pinned to root UID/GID 0:0 for
+   the actual systemd-created listener, not inferred from path owner 65492:65532.
 4. A separate bounded `POST /api/agents/workload-identity/issue` and matching
    action-bound options, not a semantic expansion of `/api/agents/enrollment`.
-   Use the real current-role, mutation-MFA and two-person machinery
-   (`app._require_control_plane_mutation_mfa`,
-   `app._require_control_plane_two_person`) for a new fixed action such as
-   `workload.identity.issue`; those checks are additional prerequisites, not
-   the CA grant. Route input is the original tuple plus that action's fresh
-   assertion, with no configurable CA, endpoint or signer. Enable this route
-   only after the genuine grant/worker/journal/client chain is connected.
+   `control_plane_workload_identity_routes.py` connects the actual caller with
+   a current cookie-only `policy_author` requester, fresh genuine WebAuthn and a
+   different cookie-authenticated `approver`. Action `workload.identity.issue`
+   requires two-person approval unconditionally. Explicit assertion verification
+   is mandatory; generic optional-MFA or authority-evidence shortcuts are not
+   proof. Those controls are additional prerequisites, not the CA grant. Input
+   contains only the original tuple and action assertion/approval continuation,
+   never a configurable CA, endpoint or signer. A pre-body scope binds original
+   work/window through admission, exchange and final send; options do not contact
+   the issuer.
 
-The protected worker and original authorization/response contract are authored,
-but the HTTP/CLI submission bridge must still call the real independently
-configured control-plane owner. A public-only transport helper or this operator
-plan alone does not complete that integration. Existing local CLI modes remain
-network-free until a separately explicit submission mode is implemented.
+The protected worker and HTTP action now call the real independently configured
+control-plane owner in source. Explicit CLI submission and portal orchestration
+remain missing. Existing local CLI modes stay network-free until a separate
+submission mode is implemented; an HTTP certificate response is still subject
+to local original issuer/request/private-key admission before use.
+
+### Next client submission integration
+
+Keep a distinct submission mode rather than adding network effects to local
+preparation/admission. Reuse the SDK's protected `PinnedFile` originals for
+operator cookie, CSRF and fresh assertion inputs as well as packet/request and
+local key pins. Bind the independently obtained options action/resource/payload
+and optional approval ID to those exact originals. A 428 approval continuation
+requires an explicit fresh ceremony, not an automatic resubmission.
+
+The current generic `http.request_bytes` disables redirects and proxies, but
+does not provide the required absolute per-chunk deadline or exact-origin-only
+profile. Build the dedicated one-exchange path on the existing bounded TLS/HTTP
+primitives instead of treating a urllib timeout as the original deadline. Do
+not send control-plane operator credentials through `WorkloadProxyClient`, which
+is for provider/proxy traffic. Use exclusive owner-only submission claims and
+raw response retention; admit the returned leaf through a private same-budget
+seam in the existing local certificate publisher. Its current public API opens
+a new budget and must not silently renew the submission window. No cookie,
+CSRF token, assertion or private key belongs in output logs or chat.
 
 ## Operator and deployment boundary
 
@@ -194,6 +220,13 @@ separate client input. Bind the actual ingress bundle digest and policy issuer
 selectors to deployment evidence. Never install trust from the CSR or issuance
 reply, mutate trust implicitly at HTTP request time, or claim the intended bundle
 is already loaded from a desired configuration value alone.
+
+The [trust-distribution plan](workload-identity-trust-distribution-plan.md) maps
+the actual immutable ingress snapshot. Policy reload does not update live TLS
+trust; initial distribution must use independently authorized public publication
+and explicit startup/restart admission. Native ingress and interception-CA pins
+are different commitment domains, and single-issuer policy selectors do not
+implicitly authorize an old/new overlap during rotation.
 
 Preserve explicit CA rotation, retirement, revocation, policy change and rollback
 procedures. The local first profile rejects preselected leaf/key hashes during

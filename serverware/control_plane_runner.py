@@ -7,6 +7,7 @@ def main() -> None:
     # startup may legitimately open descriptors which are not inherited trust.
     from serverware import control_plane_custody_startup as custody_startup
     enrollment_startup = None
+    workload_identity_startup = None
 
     try:
         custody_startup.initialize_from_environment()
@@ -14,6 +15,8 @@ def main() -> None:
         # journal has now opened a private handle, so never repeat admission.
         from serverware import control_plane_enrollment_startup as enrollment_startup
         enrollment_startup.initialize_from_environment()
+        from serverware import control_plane_workload_identity_startup as workload_identity_startup
+        workload_identity_startup.initialize_from_environment()
 
         import uvicorn
         from serverware.config import WEB_HOST, WEB_PORT, WEB_TLS_CERT_FILE, WEB_TLS_KEY_FILE
@@ -36,21 +39,21 @@ def main() -> None:
         )
     except BaseException:
         # Preserve the original launch/runtime error if cleanup also fails.
-        try:
-            if enrollment_startup is not None:
-                enrollment_startup.close()
-        except BaseException:
-            pass
-        try:
-            custody_startup.close()
-        except BaseException:
-            pass
+        for owner in (workload_identity_startup, enrollment_startup, custody_startup):
+            try:
+                if owner is not None:
+                    owner.close()
+            except BaseException:
+                pass
         raise
     else:
         try:
-            enrollment_startup.close()
+            workload_identity_startup.close()
         finally:
-            custody_startup.close()
+            try:
+                enrollment_startup.close()
+            finally:
+                custody_startup.close()
 
 
 if __name__ == "__main__":

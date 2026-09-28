@@ -31,11 +31,12 @@ dispatch, remains **partial**. The bar shows its named connections rather than
 an estimated percentage.
 
 The private-proof connection is source-landed in [c4270fd](https://github.com/example/private-deployment).
-The `.191` post-intent grant/socket connection is **in progress**.
+The `.191` post-intent grant/socket connection is **source-landed** in
+[68d4235](https://github.com/example/private-deployment).
 Request-scoped provisioning of fresh signed originals and the public route/cookie
 boundary remain open.
 
-[![Inside step 22: permission/planning, records, transports, activation SQL and completion are source-landed. RELEASE remains partial: prepare/export, authorization, consume SQL and completion are source-landed; intent is landed in 30009db and private proof in c4270fd. The .191 grant/socket connection is in progress. Request-scoped provisioning and public route/cookie remain open. Production acceptance is 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Inside step 22: permission/planning, records, transports, activation SQL and completion are source-landed. RELEASE remains partial: prepare/export, authorization, consume SQL and completion are source-landed; intent is landed in 30009db and private proof in c4270fd. The .191 grant/socket connection is source-landed in 68d4235. Request-scoped provisioning and public route/cookie remain open. Production acceptance is 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-dispatch-detail).

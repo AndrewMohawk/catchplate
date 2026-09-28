@@ -3,8 +3,9 @@
 One independently authorized policy slot is durably claimed before issuer
 contact. Only genuinely admitted client/server/outcome bytes are retained and
 exposed inside this context. No token, assertion or request is journaled.
-The exact retained server original is staged once before yielding; its ACK
-establishes neither recovery-worker readiness nor protected token delivery.
+The acquisition context stages the exact retained server original once; its
+ACK establishes neither worker readiness nor protected token delivery. A
+separate recovery context performs one protected exchange before yielding.
 """
 from __future__ import annotations
 
@@ -52,12 +53,16 @@ class _RecoveryAcquisition:
     __slots__ = ("_scope", "_owner", "_parent", "_binding", "_custody", "_config",
         "_config_pin", "_root", "_work", "_pid", "_thread", "_lifetime",
         "_closed", "_originals", "_result", "_selected", "_selected_pin",
-        "_stage_spent", "_capacity", "_capacity_seal")
+        "_stage_spent", "_staged", "_capacity", "_capacity_seal",
+        "_scope_seal", "_lifetime_seal", "_exchange_spent", "_exchange_in_progress",
+        "_exchange_complete", "_exchange_failed", "_receiving_current", "_receiving_seal",
+        "_token", "_token_seal")
 
     def __init__(self, construction, scope):
         if construction is not _CONSTRUCTION or type(scope) is not actor._ActorScope:
             _fail("recovery acquisition requires its actual private construction")
         self._scope, self._owner, self._work = scope, scope._owner, scope._work
+        self._scope_seal = scope
         self._parent, self._binding, self._custody = (
             self._owner._material, self._owner._binding, self._owner._custody)
         self._config = self._parent.release_recovery_grant_acquisition
@@ -71,12 +76,21 @@ class _RecoveryAcquisition:
         self._closed, self._originals, self._result = False, None, None
         self._selected, self._selected_pin = None, None
         self._stage_spent, self._capacity, self._capacity_seal = False, None, None
+        self._staged = False
+        self._exchange_spent, self._exchange_in_progress = False, False
+        self._exchange_complete, self._exchange_failed = False, False
+        self._receiving_current, self._receiving_seal = None, None
+        self._token, self._token_seal = None, None
         self._lifetime = production._Lifetime(scope._window, scope._bound,
             self._work, self._ancestor)
+        self._lifetime_seal = self._lifetime
 
     def _ancestor(self, epoch_floor, monotonic_floor):
         scope, owner, config = self._scope, self._owner, self._config
-        if (self._closed is not False or _ACTIVE is not self
+        if (self._closed is not False or self._exchange_failed is not False or _ACTIVE is not self
+                or scope is not self._scope_seal or self._lifetime is not self._lifetime_seal
+                or self._receiving_current is not self._receiving_seal
+                or self._token is not self._token_seal
                 or actor._ACTIVE is not scope or scope._active is not True
                 or scope._authorized is not True or scope._recovery_acquisition_spent is not True
                 or os.getpid() != self._pid or threading.get_ident() != self._thread
@@ -109,8 +123,50 @@ class _RecoveryAcquisition:
         lifetime.bound = min(lifetime.bound, scope._bound, window[4])
         return epoch, monotonic
 
-    def current(self):
+    def _parent_current(self):
+        """Actual actor/grant ancestors only, never the response's child guard."""
         return self._lifetime.current()
+
+    def _parent_continuity(self, epoch, monotonic):
+        lifetime = self._lifetime
+        lifetime._floors(max(lifetime.epoch, epoch), max(lifetime.monotonic, monotonic))
+        self._parent_current()
+        return lifetime.epoch, lifetime.monotonic
+
+    def _invalidate_exchange(self):
+        self._exchange_failed = True
+        self._exchange_complete = False
+        self._token, self._token_seal = None, None
+        self._receiving_current, self._receiving_seal = None, None
+
+    def current(self):
+        try:
+            epoch = self._parent_current()
+            guard = self._receiving_current
+            if guard is not None:
+                observed = guard()
+                if (type(observed) is not int or observed < epoch
+                        or observed >= self._lifetime.window[3]):
+                    _fail("recovery retained response clock reversed or expired")
+                self._lifetime.epoch = observed
+                epoch = self._parent_current()
+            return epoch
+        except BaseException:
+            self._invalidate_exchange()
+            raise
+
+    def _retain_receiving_current(self, current, window, bound):
+        """Keep only the genuine receiver's final guard during this exchange."""
+        self._parent_current()
+        if (self._exchange_spent is not True or self._exchange_in_progress is not True
+                or self._exchange_complete is not False or self._receiving_current is not None
+                or not callable(current)):
+            _fail("recovery response guard requires the one active exchange")
+        # This lifetime contains ancestors only: adopting the receiver's
+        # narrower bounds cannot call that same receiver back through itself.
+        self._lifetime.adopt(window, bound)
+        self._receiving_current, self._receiving_seal = current, current
+        self._parent_current()
 
     @property
     def originals(self):
@@ -160,16 +216,59 @@ class _RecoveryAcquisition:
         if acknowledgment[1] != identity:
             _fail("recovery staging ACK differs from this context's exact retained original")
         self.current()
+        self._staged = True
         # Deliberately no readiness flag, permission carrier or ACK result.
         return None
+
+    def exchange_token(self):
+        """One private protected exchange; expose no token in the method result."""
+        from serverware import control_plane_oidc_session_activation_recovery_exchange as exchange
+
+        self.current()
+        if (self._staged is not True or self._stage_spent is not True
+                or self._exchange_spent is not False or self._exchange_in_progress is not False):
+            self._invalidate_exchange()
+            _fail("recovery exchange requires one successfully staged, unspent context")
+        self._exchange_spent = True
+        self._exchange_in_progress = True
+        try:
+            token = exchange._exchange_on_active(self)
+            if (type(token) is not bytes or len(token) != 64
+                    or self._receiving_current is None
+                    or self._receiving_current is not self._receiving_seal):
+                _fail("recovery exchange lacks its genuine token and final receiving guard")
+            self.current()
+            self._token, self._token_seal = token, token
+            self._exchange_complete = True
+            self.current()
+        except BaseException:
+            self._invalidate_exchange()
+            raise
+        finally:
+            self._exchange_in_progress = False
+        return None
+
+    @property
+    def token_bytes(self):
+        self.current()
+        token = self._token
+        if (self._exchange_complete is not True or self._exchange_spent is not True
+                or self._exchange_in_progress is not False or self._receiving_current is None
+                or type(token) is not bytes or len(token) != 64 or token is not self._token_seal):
+            _fail("recovery token is unavailable outside its completed active exchange")
+        self.current()
+        return token
 
     def _close(self):
         global _ACTIVE
 
         self._closed = True
+        self._invalidate_exchange()
+        self._exchange_in_progress = False
         self._originals, self._result, self._selected, self._selected_pin = None, None, None, None
         self._lifetime.guards.clear()
         self._scope = None
+        self._scope_seal, self._lifetime_seal = None, None
         self._capacity, self._capacity_seal = None, None
         if _ACTIVE is self:
             _ACTIVE = None
@@ -318,3 +417,16 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
             active.current()
         finally:
             active._close()
+
+
+@contextmanager
+def _recover_on_owner(owner, *, request, recovery_bytes, live_window,
+        transport_deadline_ns, work, current):
+    """Yield the actual live context only after one genuinely verified exchange."""
+    with _acquire_on_owner(owner, request=request, recovery_bytes=recovery_bytes,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+            work=work, current=current) as active:
+        active.exchange_token()
+        active.current()
+        yield active
+        active.current()

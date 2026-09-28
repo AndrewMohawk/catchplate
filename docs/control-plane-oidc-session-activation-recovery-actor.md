@@ -1,10 +1,10 @@
 # Fresh recovery actor for the original session
 
 Source only, unbuilt and unexecuted. Genuine recovery options and the private
-live actor context now connect to same-context recovery grant acquisition and
-one-shot recovery-worker staging. This does **not** prove worker readiness,
-retry activation SQL, perform the private recovery exchange, release a token or
-confirm a session. Step 23 remains incomplete.
+live actor context now connect to same-context recovery grant acquisition,
+one-shot recovery-worker staging and a separate private protected-exchange
+context. This does **not** prove worker readiness, repeat activation SQL,
+deliver a browser cookie or confirm a session. Step 23 remains incomplete.
 
 ## Actor and target are separate
 
@@ -86,6 +86,14 @@ is not readiness, private-store evidence or permission to repeat the operation.
 Leaving the context invalidates access; retained bytes do not become a reusable
 permission carrier or retry authority.
 
+The separate private recovery facade enters this same acquisition context,
+spends a distinct exchange latch, and delegates to the genuine
+[protected exchange](control-plane-oidc-session-activation-recovery-exchange.md).
+Token access requires the actual retained receiving guard while the actor is
+still live. Response children are excluded from their own ancestor callbacks;
+cleanup invalidates the accessor and retained guards. This is not a public
+success endpoint or an authorization to send after context exit.
+
 Current guards retain original PID/thread, owner/resources, Request/body,
 Origin/CSRF/cookie, policy, RBAC, credential, trust and target-row snapshots.
 Original clock floors and delivery expiry stay attached; current session and
@@ -105,5 +113,5 @@ a full-call 64 MiB process-heap guarantee or runtime evidence.
 The [options route](control-plane-oidc-session-activation-recovery-routes.md)
 remains the only public route. The [source-connected worker handoff](oidc-session-activation-release-recovery-dynamic-delivery.md)
 does not demonstrate actual retained outcome-store behavior. Private token
-exchange, current-auth/cookie completion,
+exchange is source-connected; current-auth/cookie completion,
 portal wiring and runtime/provisioning evidence remain open.

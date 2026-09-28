@@ -14,7 +14,7 @@ _verify_on_work(
     *, response_originals, request_originals,
     client_authorization_bytes, server_bootstrap_bytes, root_public_key,
     expected_client_scope, live_window, transport_deadline_ns, work,
-    _continuity=None
+    _continuity=None, _retain_current=None, _additional_original_bytes=0
 ) -> token64
 ```
 
@@ -29,10 +29,31 @@ Client identity never substitutes for the server's `receiverIdentity`.
 All original byte references, the actual public root key and original lifetime
 are held before the complete mutable scope is captured or any native/hash
 callback runs. Every frame has its actual contract bound. The combined external
-original inventory, including both framing headers, must fit 64 MiB before
-decoding; reads, copies, cryptography and reconstruction consume the same
+original and re-admission inventory must fit 64 MiB before scope capture or
+nested admission; reads, copies, cryptography and reconstruction consume the same
 existing cumulative work. No replacement ledger, clock opening or deadline is
 created. Wire capacity does not promise enough remaining verification work.
+
+`_additional_original_bytes` is an exact integer from zero up to, but not
+including, 64 MiB. It adds the actual caller's already-held active-context
+representations to the receiving reservation; it cannot increase the allowance
+or supply authority. The default is zero. The length-only
+`_reservation_bytes(request_lengths, *, client_bytes, bootstrap_bytes,
+additional_original_bytes=0)` helper lets a source-owned exchange caller apply
+the same check before socket contact. It returns a conservative size, not an
+admission result or permission; the caller must refuse sizes above the shared
+ceiling.
+
+The reservation includes eight server-bootstrap byte footprints, four
+footprints for request/client/fixed-response originals, four for the bounded
+nested custody/planner/vector/state-enrollment/storage/recovery originals,
+eight source-maximum client-scope footprints, four source-maximum reconstructed
+outcome footprints and four framing footprints. Bounds use actual enclosing
+original lengths and source caps before nested bytes are decoded. No incoming
+graph or claimed capacity selects a larger bound. These conservative
+representation counts are **not a Python process-heap guarantee**. Existing
+LIVE/RECOVERY schemas, profiles, signature checks and historical semantics are
+unchanged; oversize combinations fail earlier.
 
 ## Genuine admission and comparisons
 
@@ -111,6 +132,23 @@ returned floors must also remain strictly below the receiver's current narrowed
 epoch deadline and monotonic bound, including after its final inner guard. The
 configured caller tail-returns this verifier's bytes without a weaker native
 suffix after the final genuine original and owner checks.
+
+When supplied, that original continuation now also reaches the genuine nested
+client/server, intent and proof admissions. Children receive a separate
+base-only floor function: it calls the original caller and retained original/
+narrowed processing guards, never the aggregate response guard or an attached
+child. Their final genuine guards remain attached to the aggregate guard, so
+actual newer observations remain sticky without recursive ancestry. With no
+external continuation the old standalone nested `None` path remains unchanged.
+
+The private `_retain_current(current, window, bound)` hook receives the full
+genuine final response guard and exact narrowed scalars after token admission.
+Its return value supplies no authority; the same ledger is checked and the
+full guard runs again before token return. A source-owned caller may retain this
+guard for an active finishing boundary, but must never feed it back into its
+own ancestor. Nor does retaining it make a closed actor/acquisition usable:
+post-cleanup delivery needs its separately defined original-preserving terminal
+continuation. Neither token nor request is passed to this retention callback.
 
 ## Remaining boundary
 

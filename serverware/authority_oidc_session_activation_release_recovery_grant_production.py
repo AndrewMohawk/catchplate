@@ -49,14 +49,24 @@ def _request_originals(values):
     return values
 
 
+def _input_reservation(request, policy, custody, proof_enrollment, intent_enrollment):
+    """Known original/capture footprints, shared by derivation and signing."""
+    return (8 * len(custody)
+        + 4 * sum(map(len, (*request, policy, proof_enrollment, intent_enrollment)))
+        + transport.RECOVERY_REQUEST_HEADER_BYTES)
+
+
 def _derive_on_work(*, request_originals, issuer_policy_bytes, release_custody_bytes,
         proof_enrollment_bytes, intent_enrollment_bytes, root_public_key,
-        live_window, transport_deadline_ns, work, _continuity=None):
+        live_window, transport_deadline_ns, work, _continuity=None,
+        _additional_original_bytes=0):
     """Re-admit originals and return private same-call derivation data only.
 
     Result order is request8, genuine policy, canonical outcome, storage scope,
     recovery scope, request identity71, lifetime. No API accepts this tuple as
     authority. Its outcome is a reconstruction, not a durable-store receipt.
+    Additional already-held representations only reduce this same 64 MiB cap;
+    no unused grant-generation maximum is reserved by a read-only derivation.
     """
     request = _request_originals(request_originals)
     policy_raw = authorization._original(issuer_policy_bytes, issuer.MAX_BYTES,
@@ -77,10 +87,14 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, release_custody_b
     # decoded/canonical graphs and later embedded-server custody readbacks.
     # Smaller originals retain four-copy capacity. These are tightening bounds,
     # not permission to allocate each individual maximum simultaneously.
-    reserved = (8 * len(custody_raw) + 4 * sum(map(len, other_originals))
-        + _OUTPUT_RESERVATION + transport.RECOVERY_REQUEST_HEADER_BYTES)
+    if (type(_additional_original_bytes) is not int
+            or not 0 <= _additional_original_bytes < MAX_ORIGINAL_BYTES):
+        _fail("recovery derivation held-original reservation is invalid")
+    reserved = (_additional_original_bytes
+        + _input_reservation(request, policy_raw, custody_raw, proof_enrolled, intent_enrolled)
+        + 3 * outcomes.MAX_BYTES)
     if MAX_ORIGINAL_BYTES != 64 * 1024 * 1024 or reserved > MAX_ORIGINAL_BYTES:
-        _fail("recovery grants exceed their complete original and output inventory")
+        _fail("recovery derivation exceeds its complete original and outcome inventory")
     capture._SharedLedger(work)
     work.charge(input_bytes=original_bytes + transport.RECOVERY_REQUEST_HEADER_BYTES)
     authorization._public(root)
@@ -179,6 +193,19 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, release_custody_
     """
     private, root = root_private_key, root_public_key
     authorization._private(private)
+    # Signing alone reserves the large generated server and readback inventory.
+    # Keep the former production bound before genuine derivation/decode, without
+    # imposing those unused outputs on an active read-only exchange re-derivation.
+    producing_request = _request_originals(request_originals)
+    producing_originals = (
+        authorization._original(issuer_policy_bytes, issuer.MAX_BYTES, "recovery issuer policy"),
+        authorization._original(release_custody_bytes, server.custody.MAX_BYTES, "recovery historical custody"),
+        authorization._original(proof_enrollment_bytes, proofs.enrollments.MAX_BYTES, "recovery proof enrollment"),
+        authorization._original(intent_enrollment_bytes, intents.enrollments.MAX_BYTES, "recovery intent enrollment"))
+    if (MAX_ORIGINAL_BYTES != 64 * 1024 * 1024
+            or _input_reservation(producing_request, *producing_originals)
+                + _OUTPUT_RESERVATION > MAX_ORIGINAL_BYTES):
+        _fail("recovery grants exceed their complete original and output inventory")
     request, policy, record, storage_scope, recovery_scope, request_identity, lifetime = _derive_on_work(
         request_originals=request_originals, issuer_policy_bytes=issuer_policy_bytes,
         release_custody_bytes=release_custody_bytes, proof_enrollment_bytes=proof_enrollment_bytes,

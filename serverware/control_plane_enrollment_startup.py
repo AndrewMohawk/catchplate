@@ -441,6 +441,16 @@ class _EnrollmentOwner:
             live_window=live_window, transport_deadline_ns=transport_deadline_ns,
             work=work, current=current)
 
+    def _recover_oidc_session_activation_token(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Return the private live recovery context, never a token or HTTP result."""
+        from serverware import control_plane_oidc_session_activation_recovery_acquisition as acquisition
+
+        _require_pid()
+        return acquisition._recover_on_owner(self, request=request, recovery_bytes=recovery_bytes,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+            work=work, current=current)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

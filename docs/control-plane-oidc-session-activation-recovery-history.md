@@ -58,5 +58,8 @@ uses its separate phase reservation on the same work. This is representation
 accounting, not a process-heap guarantee.
 
 This is source-only, not completion of public recovery. Prior-stage recovery,
-protected exchange and public cookie completion, independent resource
+public cookie completion, independent resource
 provisioning and runtime verification remain separate work.
+The private [protected exchange](control-plane-oidc-session-activation-recovery-exchange.md)
+uses the actual live actor context; historical inspection alone still grants
+no token access or permission to send a response.

@@ -69,6 +69,16 @@ reserves actual request/policy/history originals, nested custody captures and
 bounded generated output/readback capacity. Individual maxima cannot all be
 allocated together. All operations share the supplied cumulative work ledger.
 
+The read-only `_derive_on_work` path reserves canonical outcome/raw8 output,
+not the maximum server grant it never generates. Its optional
+`_additional_original_bytes=0` accepts only an exact nonnegative tightening
+reservation for the caller's already-held representations. This prevents a
+live recovery context from borrowing a second 64 MiB allowance. The signing
+producer still reserves the full generated-grant/readback inventory before
+derivation or decoding. Separating these lifetimes avoids charging the unused
+32 MiB server-generation reserve alongside the live context's parent reserve;
+it does not increase any original or aggregate cap or claim a process-heap bound.
+
 Policy, enrollment age/skew, original delivery and endpoint limits only narrow
 the original window. The optional restrictive continuity hook exchanges only
 nondecreasing epoch/monotonic floors. It threads through actual historical
@@ -76,8 +86,8 @@ intent/proof and all generated grant admissions without replacing authority
 or introducing a new allowance. Live guards remain attached through return.
 
 The private `_derive_on_work` helper freshly re-admits originals for the
-independent response verifier; no API accepts its tuple as authority. Actual
-independent issuer key custody, finite acquisition/staging service, protected
-recovery exchange, public recovery orchestration and guarded cookie delivery
-remain separate work. Reconstruction does not authorize automatic SQL retry
+independent response verifier and the [live recovery exchange](control-plane-oidc-session-activation-recovery-exchange.md);
+no API accepts its tuple as authority. Independent resource provisioning,
+public recovery orchestration and guarded cookie delivery remain separate work.
+Reconstruction does not authorize automatic SQL retry
 or establish a current session, delivery acknowledgment or production readiness.

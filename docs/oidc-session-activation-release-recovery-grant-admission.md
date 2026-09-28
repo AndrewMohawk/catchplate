@@ -51,7 +51,9 @@ original maxima total less than 25 MiB, leaving more than 22 MiB of the unchange
 
 A further conservative reservation covers eight custody-original sizes, four
 other request/independent-original sizes, and two response-original sizes plus
-the nested originals. The shared derivation has its own stricter output reserve.
+the nested originals. Shared derivation separately reserves its read-only
+outcome/raw8 path; it does not generate another server or client grant. The
+signing producer alone reserves generated-grant output and readback capacity.
 Measured finite scope graphs reserve comparison encodings before client/server
 admission. Consequently some individually valid large originals are refused;
 no maximum is increased and no new work allowance is created. This is a bounded

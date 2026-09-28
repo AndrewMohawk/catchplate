@@ -6,9 +6,12 @@ original-only recovery-grant production and admission. A dedicated cold private
 issuer and finite verified client now connect to independently signed parent
 configuration, the live private actor and durable acquisition records. The same
 context stages its retained server original through a separate recovery-only
-root receiver and same-process worker continuation. Protected exchange and the
-public recovery route remain open. This does **not** recover a token or close
-activation step 23. Source remains unbuilt, unexecuted and unprovisioned.
+root receiver and same-process worker continuation. A separate private recovery
+context now connects the protected exchange and genuine token response
+verification while the fresh actor remains live. Public recovery and guarded
+cookie delivery remain open; this does **not** close activation step 23 or
+demonstrate a recovered browser session. Source remains unbuilt, unexecuted and
+unprovisioned.
 
 ## Why the activation permission cannot be reused
 
@@ -43,7 +46,8 @@ flowchart LR
   I --> D[Durable acquisition claim before issuer contact]
   D --> G[Verified and retained recovery grants]
   G --> S[Independent recovery worker staging]
-  S -. unfinished exchange and public completion .-> C[Verified token and guarded cookie delivery]
+  S --> X[One claimed protected exchange and verified token]
+  X -. unfinished public completion .-> C[Fresh current-auth and guarded cookie delivery]
 ```
 
 ## Public options; no permission-success endpoint
@@ -134,6 +138,13 @@ exposes only preprovisioned issuer and recovery staging sockets, refuses
 host-path creation and does not install services or deliver signing keys to the
 application.
 
+The separate private `_recover_oidc_session_activation_token` owner facade
+enters that actual acquisition context and performs one protected exchange
+before yielding. It does not change the acquisition-only facade into an
+implicit token request. Its guarded token accessor is available only inside
+the live context; neither retaining the Python object nor leaving the context
+preserves permission or makes the token safe for a later HTTP send.
+
 ## Recovery integration and remaining work
 
 ### Fresh recovery grants, distinct from execution authority
@@ -181,7 +192,8 @@ flowchart LR
   O --> V
   V --> D[Independent root admission and resource staging]
   D --> S[Same-process recovery worker and checkpoint-one reads]
-  S -. unfinished protected exchange .-> R[Verified token and guarded cookie delivery]
+  S --> X[Claimed protected exchange and original response verification]
+  X -. unfinished public completion .-> R[Fresh current-auth and guarded cookie delivery]
 ```
 
 ### Service, storage and public completion
@@ -226,12 +238,30 @@ and native checkpoint-one reads. Outcome body allocation is capped at 64 KiB.
 No outcome is created or appended by staging; ACK precedes actual store recovery
 and cannot prove that the retained record exists or that serving succeeded.
 
+The [private exchange coordinator](control-plane-oidc-session-activation-recovery-exchange.md)
+reconstructs its request inside the actual live actor context from the selected
+intent/proof/hints, independently configured enrollments and old-token
+possession. Genuine historical derivation reconstructs the exact outcome and
+raw8 identity; independent policy supplies the expected client scope. Actual
+client/server admission precedes the existing token-free durable release claim
+and one RECOVERY exchange. The real worker's unchanged-outcome path and the
+genuine response verifier are used; a staged ACK or prior admission result is
+not substituted for either.
+
+Only a normally closed exchange followed by original response admission can
+make the exact token available inside that live context. The receiving guard
+retains the original actor, work, clocks and admitted evidence; its ancestors
+exclude their own response child. All held representations reduce the same
+capacity before processing. No token/request frame is journaled, no outcome is
+appended, and no activation or consume SQL is repeated. A failed or uncertain
+exchange cannot resume under the same client authorization.
+
 This slice requires a retained release intent. Failures before that stage still
 need a distinct original-bound completion/recovery path; they are not treated
-as safe activation retries. Full recovery still needs the private recovery
-exchange with genuine outcome observation, token response verification and a
-final public current-auth/cookie boundary. The source-connected worker handoff
-does not complete those remaining steps or demonstrate runtime storage behavior.
+as safe activation retries. Full recovery still needs a final public
+current-auth/cookie boundary and evidence that the protected path works at
+runtime. The source-connected exchange does not complete those remaining steps
+or demonstrate actual private-store behavior.
 The existing LIVE staging path is not reused
 as recovery admission. A once-checked actor, retained triple or intent result
 cannot replace any of these checks.

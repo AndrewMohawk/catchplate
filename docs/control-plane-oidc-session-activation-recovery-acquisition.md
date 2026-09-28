@@ -64,15 +64,56 @@ enrollment. No root signing key is present in this public configuration.
    normal close. The method returns `None`, never a readiness or permission
    result. No repeated call, recovered-context resume or automatic retry exists.
 
-The yielded private `_RecoveryAcquisition` exposes only guarded `originals`
-and `current()`, not the admitted material or a reusable permission. Staging is
-already spent when the context is yielded; attempting it again fails. Genuine
+The acquisition-only facade still yields after grants and staging; it does not
+automatically exchange or return a token. The private `_RecoveryAcquisition`
+exposes guarded `originals` and `current()`, not the admitted material or a
+reusable permission. Staging is already spent when the context is yielded;
+attempting it again fails. Genuine
 policy and response guards remain attached under the same original work,
 PID/thread, owner resources and narrowing clocks. The ancestor callback invokes
 only the actual actor guard; it never cycles through a child guard or recursively
 selects records under the journal I/O lock. Normal or exceptional context exit
 revokes the continuation and clears its actor reference before the actor's own
 cleanup. Byte copies alone provide no recovery authorization.
+
+## Separate protected recovery context
+
+`_recover_on_owner(owner, *, request, recovery_bytes, live_window,
+transport_deadline_ns, work, current)` enters that same acquisition context,
+calls its one-shot `exchange_token()` and yields only after genuine response
+verification. The actual startup owner exposes this through the separate
+`_recover_oidc_session_activation_token` facade with the same original kwargs.
+The existing `_acquire_oidc_session_activation_recovery_grants` facade retains
+its grants-and-staging-only behavior. Neither facade supplies a fresh processing
+window, a successful permission DTO, current-auth evidence or an HTTP result.
+
+Exchange requires the explicit successful-stage marker, not merely the spent
+staging latch. The context spends its exchange latch before the actual exchange
+helper, which derives the request from the retained intent/proof/encrypted
+hints and actual actor's ephemeral old token. The exchange helper owns the
+durable token-free attempt before protected socket contact and genuine original
+response admission. The method itself returns `None`; only the guarded
+`token_bytes` accessor exposes the genuine exact 64-byte token, and only while
+the actual authorized context remains active after successful exchange.
+No request, old token, recovered token or response body is added to the journal.
+
+The actual receiver retains its final narrowed guard through the private
+`_retain_receiving_current(current, window, bound)` hook, exactly once during
+exchange. `_parent_current` and `_parent_continuity` retain the original actor,
+policy, acquired-grant, clock and resource restrictions but never call this
+response child. The outer `current()` checks parent → genuine response child →
+parent; the child can therefore retain its actual ancestors without a cycle.
+The original scope/lifetime identities and token/guard identities are held by
+source-owned seals. Narrowing preserves the original clock opening and cannot
+increase its deadline or allowance.
+
+Any exchange or retained-guard failure poisons the context and clears its token
+and receiving guard. Repeated exchange is forbidden. Normal or exceptional exit
+also clears them and revokes access before actor cleanup; keeping an immutable
+byte copy cannot carry this authority beyond the live context. This source path
+does not perform fresh current-auth, replace a cookie, send an HTTP success or
+make a recipient-acknowledgment claim. Those require a separate guarded public
+delivery integration.
 
 ## Capacity and remaining boundary
 
@@ -114,11 +155,13 @@ This closes the earlier post-load aggregate-check gap in source. Both phases
 still use one cumulative work allowance, and neither claims a 64 MiB process
 heap bound or runtime verification.
 
-The source-connected staging handoff does not establish worker readiness or
-genuine checkpoint-one private outcome observation. Protected recovery exchange,
-current-auth/cookie completion and a public
-recovery dispatch route remain open. A reconstructed canonical outcome and its
-fresh signed expectations are not proof that the private store contains it.
+The staged ACK does not establish worker readiness or genuine checkpoint-one
+private outcome observation. The separate recovery context now connects the
+protected exchange and genuine response verifier; this is source integration,
+not observed store recovery, runtime delivery or recipient acknowledgment.
+Fresh current-auth/cookie completion and a public recovery dispatch route remain
+open. A reconstructed canonical outcome and its fresh signed expectations are
+not proof that the private store contains it.
 Prior-stage completion recovery remains separate; neither activation nor SQL
 may be repeated. See the [full public recovery boundaries](oidc-session-activation-public-recovery.md).
 Source only: unbuilt, unexecuted and unprovisioned.

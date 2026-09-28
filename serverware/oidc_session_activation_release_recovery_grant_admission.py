@@ -80,7 +80,8 @@ def _reserve(request, response, independent, work):
     held = _unique_bytes(originals)
     # Original-byte capacity and cumulative charged work are separate limits.
     # Also retain conservative custody/canonical capture and response-readback
-    # capacity. The shared derivation imposes its own stricter output reserve.
+    # capacity. Shared derivation reserves its read-only outcome/raw8 path;
+    # grant-generation output capacity belongs to the separate producer.
     other = _unique_bytes((*request, policy, proof_enrollment, intent_enrollment))
     reserved = max(held + nested,
         8 * len(custody) + 4 * other + 2 * _unique_bytes(response) + nested)

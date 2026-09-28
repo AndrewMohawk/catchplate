@@ -36,7 +36,13 @@ The `.191` post-intent grant/socket connection is **source-landed** in
 Request-scoped provisioning of fresh signed originals and the public route/cookie
 boundary remain open.
 
-[![Inside step 22: permission/planning, records, transports, activation SQL and completion are source-landed. RELEASE remains partial: prepare/export, authorization, consume SQL and completion are source-landed; intent is landed in 30009db and private proof in c4270fd. The .191 grant/socket connection is source-landed in 68d4235. Request-scoped provisioning and public route/cookie remain open. Production acceptance is 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+The `.192` issuer-policy, grant-production and transport foundation plus the
+bounded public request contract are **source-landed** in
+[18cf710](https://github.com/example/private-deployment). The
+[acquisition boundary](docs/oidc-session-activation-input-acquisition.md) separates
+these source components from the required resource delivery and live service.
+
+[![Inside step 22: permission/planning, records, transports, activation SQL and completion are source-landed. RELEASE remains partial: prepare/export, authorization, consume SQL and completion are source-landed; intent is landed in 30009db and private proof in c4270fd. The .191 grant/socket connection is source-landed in 68d4235; the .192 issuer foundation is source-landed in 18cf710. Request-scoped provisioning and public route/cookie remain open. Production acceptance is 0/6.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-dispatch-detail).
@@ -67,6 +73,26 @@ Beyond activation, unfinished checkpoints cover historical authority,
 workload/native/enclave integration, provider operations and recovery, rollback
 witnessing, and signed telemetry. The [46-checkpoint tracker](docs/production-status.md#next-source-milestones)
 lists every remaining item and its evidence.
+
+<details>
+<summary>All 12 unfinished project checkpoints</summary>
+
+| ID | Checkpoint | Source status |
+| --- | --- | --- |
+| H05 | Historical authority across configuration/key changes | Todo |
+| F08 | Public session activation/recovery and portal/session flow | In progress |
+| N04 | Workload identity provisioning and authenticated channels | Todo |
+| N05 | Native enrollment, verified CA installation and proxy setup | Todo |
+| N06 | Enclave TLS/proxy execution and credential custody | Todo |
+| O01 | OAuth ownership across deployments and applications | Todo |
+| O02 | Measured provider issuance and interrupted-exchange recovery | Todo |
+| O03 | Public revocation and authenticated recovery | Todo |
+| O04 | Protected provider and filesystem side effects | Todo |
+| O05 | Interrupted policy-publication recovery | Todo |
+| O06 | Independent RBAC rollback witness | Todo |
+| O07 | Authenticated, signed and sequenced telemetry | Todo |
+
+</details>
 
 **Production gates remain separate.** Immutable dependencies, frozen verification
 and independent release evidence are pending. Signing, Nitro/KMS and witness

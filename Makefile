@@ -1158,6 +1158,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_release_handoff.py \
 	serverware/oidc_session_activation_release_grant_issuer_policy.py \
 	serverware/oidc_session_activation_release_recovery_issuer_policy.py \
+	serverware/oidc_session_activation_release_recovery_issuer_bootstrap.py \
+	serverware/oidc_session_activation_release_recovery_issuer_entrypoint.py \
+	serverware/oidc_session_activation_release_recovery_issuer_startup.py \
+	serverware/oidc_session_activation_release_recovery_issuer_launcher.py \
+	serverware/oidc_session_activation_release_recovery_issuer_runner.py \
+	serverware/authority_oidc_session_activation_release_recovery_grant_transport.py \
+	serverware/control_plane_oidc_session_activation_release_recovery_grant_acquisition.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 	serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
@@ -3320,6 +3327,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_release_handoff.py \
 				serverware/oidc_session_activation_release_grant_issuer_policy.py \
 				serverware/oidc_session_activation_release_recovery_issuer_policy.py \
+				serverware/oidc_session_activation_release_recovery_issuer_bootstrap.py \
+				serverware/oidc_session_activation_release_recovery_issuer_entrypoint.py \
+				serverware/oidc_session_activation_release_recovery_issuer_startup.py \
+				serverware/oidc_session_activation_release_recovery_issuer_launcher.py \
+				serverware/oidc_session_activation_release_recovery_issuer_runner.py \
+				serverware/authority_oidc_session_activation_release_recovery_grant_transport.py \
+				serverware/control_plane_oidc_session_activation_release_recovery_grant_acquisition.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 				serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \

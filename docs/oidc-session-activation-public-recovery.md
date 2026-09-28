@@ -2,10 +2,11 @@
 
 Recovery is a separate user action, not another activation attempt. The source
 contains bounded recovery options, a private live actor context, and separate
-original-only recovery-grant production and admission. These libraries are not
-yet connected through a recovery issuer service and public dispatch. They do
-**not** recover a token or close activation step 23. Source remains unbuilt,
-unexecuted and unprovisioned.
+original-only recovery-grant production and admission. A dedicated cold private
+issuer and finite verified client connect those libraries, but their actual
+control-plane actor/configuration and recovery-worker staging remain open.
+They do **not** recover a token or close activation step 23. Source remains
+unbuilt, unexecuted and unprovisioned.
 
 ## Why the activation permission cannot be reused
 
@@ -131,20 +132,50 @@ flowchart LR
   G --> O[Exact canonical outcome]
   C --> V[Independent grant admission]
   O --> V
-  V -. unfinished service and actor integration .-> S[Read actual retained outcome]
+  V -. unfinished staging and actor integration .-> S[Read actual retained outcome]
   S -.-> R[Private recovery and guarded cookie delivery]
 ```
 
 ### Service, storage and public completion
 
+The separate [cold recovery issuer](oidc-session-activation-release-recovery-issuer-service.md)
+uses role `oidc-session-activation-release-recovery-issuer`, UID/GID 65493, and
+the fixed private `recovery-grants.sock` listener. Its
+[root resource intake](oidc-session-activation-release-recovery-issuer-delivery.md)
+admits the actual signed launch and all four independent policy/history
+originals before opening the independently pinned signer. The eight inherited
+descriptors carry only the root public key, signed bootstrap, listener, policy,
+historical release custody, proof enrollment, intent enrollment and root
+signing key. There is no AES key, outcome directory or SQL/state writer.
+
+The original construction ledger, opening and narrowed deadlines survive the
+permanent privilege drop in the same process. One accepted request contains
+the issuer purpose plus recovery prefix7; only the exact three-original
+response is returned. The private client admits independent policy before
+contact and genuinely verifies the returned originals. Neither a successful
+socket exchange nor a signed response establishes actor permission, a stored
+outcome, release-worker readiness or token delivery. There is no automatic
+retry or replacement processing allowance.
+
+The [service template](../ops/systemd/serverware-oidc-session-activation-release-recovery-issuer.service.in)
+and [socket unit](../ops/systemd/serverware-oidc-session-activation-release-recovery-issuer.socket)
+are unrendered/uninstalled source. They require an independently supplied
+immutable runtime root, exact public trust files, private signer and signed
+resource identities. The image recipe includes the isolated launcher and these
+templates; it does not provision them or turn this trusted-host-local process
+into a measured enclave/HSM boundary. No production credentials or account
+resources are created by this source integration.
+
 This slice requires a retained release intent. Failures before that stage still
 need a distinct original-bound completion/recovery path; they are not treated
-as safe activation retries. Full recovery still needs actual fresh-grant
-acquisition through independently provisioned services, exact retained
-outcome/storage admission, the finite private recovery exchange, genuine token
-response verification and a final current-auth/cookie boundary. The pure grant
-libraries do not complete those connections. A once-checked actor or intent
-result cannot replace any of these checks.
+as safe activation retries. Full recovery still needs the actual independently
+configured actor-to-acquisition connection, recovery-specific release-worker
+staging and durable original retention, exact retained outcome/storage
+admission, the private recovery exchange, genuine token response verification
+and a final current-auth/cookie boundary. The new private issuer/client does
+not complete those connections. The existing LIVE staging path is not reused
+as recovery admission. A once-checked actor or intent result cannot replace
+any of these checks.
 
 No protected activation or consume SQL is repeated here. WebAuthn challenge
 issuance and assertion-counter updates remain their normal authentication

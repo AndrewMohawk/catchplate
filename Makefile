@@ -1241,6 +1241,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_workload_identity_startup.py \
 	serverware/control_plane_workload_identity_client.py \
 	serverware/control_plane_workload_identity_approval.py \
+	serverware/control_plane_approval_verification.py \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
 	serverware_agent_trust/workload_identity_submission.py \
@@ -3488,6 +3489,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_workload_identity_startup.py \
 				serverware/control_plane_workload_identity_client.py \
 				serverware/control_plane_workload_identity_approval.py \
+				serverware/control_plane_approval_verification.py \
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \
 				serverware_agent_trust/workload_identity_originals.py \

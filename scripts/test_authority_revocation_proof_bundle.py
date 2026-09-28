@@ -34,7 +34,7 @@ BUNDLE_SCHEMA = "serverware.policyAuthorityRevocationProofBundle/v1"
 BUNDLE_PROFILE = "serverware.policyAuthorityRevocationProofBundleProfile/v1"
 TRANSITION_SCHEMA = "serverware.policyAuthorityRevocationReadWriteTransition/v1"
 TRANSITION_PROFILE = "serverware.policyAuthorityRevocationReadWriteTransitionProfile/v1"
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.233"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.234"
 COUNTED_PROFILE = "serverware.policyAuthorityCountedIndex/v1"
 PHASES = (("generation", "generation"), ("declarationBinding", "declaration_binding"),
     ("observationValidation", "observation_validation"), ("pointBinding", "point_binding"),

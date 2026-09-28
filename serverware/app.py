@@ -7852,44 +7852,35 @@ def control_plane_approval_approve(
         )
     _assert_control_plane_approval_role(identity, approval["action"])
     workload_receipt = None
+    verified_receipt = None
     if workload_issuance:
         identity, workload_receipt = workload_routes._approve_assertion(
             request, approval, decision.mfa if decision else None)
-        mfa = None
-    else:
-        mfa = _require_control_plane_mutation_mfa(
-            action=approval["action"],
-            resource_id=approval["resource_id"],
-            payload_digest=approval["payload_digest"],
-            mfa=decision.mfa if decision else None,
-            identity=identity,
-            approval_context=approval,
-        )
+    elif CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED:
+        from serverware import control_plane_approval_verification as approval_verification
+
+        try:
+            identity, verified_receipt = approval_verification._verify_on_request(
+                request, approval=approval, mfa=decision.mfa if decision else None)
+        except approval_verification.ApprovalVerificationError:
+            raise HTTPException(status_code=403,
+                detail="control-plane approval verification is unavailable") from None
     try:
-        authority_authn = (
-            {
-                "assertion": mfa["assertion"],
-                "credential_record_id": mfa["credential_record_id"],
-            }
-            if isinstance(mfa, dict)
-            and "challenge_id" in mfa
-            else mfa
-        )
+        # The fresh verifier has consumed its challenge. Only its private,
+        # one-use receipt crosses into the transaction; metadata is not a new
+        # raw assertion. Optional-MFA authentication remains a separate branch.
         updated = db.approve_control_plane_approval(
             approval_id,
             actor_id=identity.user_id,
             note=decision.note if decision else None,
-            authn=None if workload_issuance else authority_authn or {
+            authn=None if workload_issuance or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED else {
                 "method": identity.auth_method,
                 "user_id": identity.user_id,
             },
-            challenge_id=(
-                mfa.get("challenge_id")
-                if isinstance(mfa, dict)
-                else None
-            ),
+            challenge_id=None,
             require_webauthn=workload_issuance or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
             workload_approval=workload_receipt,
+            verified_approval=verified_receipt,
             required_approver_roles=_control_plane_approval_roles(
                 str(approval["action"])
             ),
@@ -7903,6 +7894,8 @@ def control_plane_approval_approve(
             from serverware import control_plane_workload_identity_approval as approval_source
 
             approval_source._discard(workload_receipt)
+        if verified_receipt is not None:
+            approval_verification._discard(verified_receipt)
     if not updated:
         raise HTTPException(
             status_code=409,

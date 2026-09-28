@@ -82,10 +82,12 @@ current credential, role, distinct-requester and conditional-update checks.
 The live cookie and original processing guard remain required through the effect;
 the application discards the receipt on both success and failure.
 
-This dedicated path does not repair the legacy generic approval contract, whose
-raw-assertion input check conflicts with its later verified-metadata requirement.
-That separate integration debt remains tracked; other actions are not claimed
-operational merely because this workload-specific branch is connected.
+This dedicated path remains separate from the later [generic approval repair](control-plane-approval-verification.md),
+which connects genuine verification to a one-use receipt while preserving the
+generic route's own authentication modes and optional-MFA policy. Neither repair
+closes the remaining protected provider/filesystem side-effect workflows.
+Both remain source-only; connected approval code is not evidence that an action
+has passed runtime acceptance.
 
 The closed request has schema `serverware.workloadIdentityIssuanceRequest/v1`
 and three members, `authorization`, `packet` and `request`. Each contains exactly

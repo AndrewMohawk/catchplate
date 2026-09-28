@@ -37,6 +37,10 @@ CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEn
 CONTROL_PLANE_ENROLLMENT_V10_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v10"
 CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v11"
 CONTROL_PLANE_ENROLLMENT_V11_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v11"
+CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v12"
+CONTROL_PLANE_ENROLLMENT_V12_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v12"
+CONTROL_PLANE_GRANT_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseGrantAcquisition/v1"
+CONTROL_PLANE_GRANT_ACQUISITION_SOCKET = "/run/serverware/oidc-session-activation-token-release/grants.sock"
 CONTROL_PLANE_HANDOFF_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseHandoff/v1"
 CONTROL_PLANE_HANDOFF_SOCKET = "/run/serverware/oidc-session-activation-token-release/release.sock"
 CONTROL_PLANE_PROOF_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseProof/v1"
@@ -1085,8 +1089,24 @@ def _control_plane_handoff_public_shape(value, *, intent_value, proof_value):
         raise RuntimeError("release handoff endpoint differs from the fixed live worker")
 
 
+def _control_plane_grant_acquisition_public_shape(value, *, handoff_value):
+    """Closed v12 public endpoint only; no additional purpose-key slot."""
+    if value is None:
+        return
+    if (type(value) is not dict or set(value) != {"schema", "endpoint"}
+            or value["schema"] != CONTROL_PLANE_GRANT_ACQUISITION_SCHEMA
+            or type(handoff_value) is not dict):
+        raise RuntimeError("release grant acquisition requires closed endpoint and enabled handoff")
+    endpoint = value["endpoint"]
+    if (type(endpoint) is not dict or set(endpoint) != {"path", "timeoutSeconds", "peerUid", "peerGid"}
+            or type(endpoint["path"]) is not str or endpoint["path"] != CONTROL_PLANE_GRANT_ACQUISITION_SOCKET
+            or type(endpoint["timeoutSeconds"]) is not int or not 1 <= endpoint["timeoutSeconds"] <= 30
+            or any(type(endpoint[name]) is not int or endpoint[name] != 0 for name in ("peerUid", "peerGid"))):
+        raise RuntimeError("release grant acquisition endpoint differs from the fixed issuer")
+
+
 def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
-    """Project closed v2-v11 slots; child admission alone supplies authority."""
+    """Project closed v2-v12 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -1112,7 +1132,8 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
                     CONTROL_PLANE_ENROLLMENT_V8_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V9_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
         is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
@@ -1123,29 +1144,33 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
         is_v9 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V9_BOOTSTRAP_SCHEMA
         is_v10 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA
         is_v11 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA
+        is_v12 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA
         payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
             "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
-        if is_v3 or is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11:
+        if is_v3 or is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12:
             payload_fields.add("registrationExecution")
-        if is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11:
+        if is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12:
             payload_fields.add("registrationFinalization")
-        if is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11:
+        if is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12:
             payload_fields.add("oidcSessionActivationRelease")
-        if is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11:
+        if is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12:
             payload_fields.add("oidcSessionActivationExecution")
-        if is_v7 or is_v8 or is_v9 or is_v10 or is_v11:
+        if is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12:
             payload_fields.add("oidcSessionActivationPlanning")
-        if is_v8 or is_v9 or is_v10 or is_v11:
+        if is_v8 or is_v9 or is_v10 or is_v11 or is_v12:
             payload_fields.add("oidcSessionActivationConsumeExecution")
-        if is_v9 or is_v10 or is_v11:
+        if is_v9 or is_v10 or is_v11 or is_v12:
             payload_fields.add("oidcSessionActivationReleaseIntent")
-        if is_v10 or is_v11:
+        if is_v10 or is_v11 or is_v12:
             payload_fields.add("oidcSessionActivationReleaseProof")
-        if is_v11:
+        if is_v11 or is_v12:
             payload_fields.add("oidcSessionActivationReleaseHandoff")
+        if is_v12:
+            payload_fields.add("oidcSessionActivationReleaseGrantAcquisition")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V11_PAYLOAD_SCHEMA if is_v11
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V12_PAYLOAD_SCHEMA if is_v12
+                    else CONTROL_PLANE_ENROLLMENT_V11_PAYLOAD_SCHEMA if is_v11
                     else CONTROL_PLANE_ENROLLMENT_V10_PAYLOAD_SCHEMA if is_v10
                     else CONTROL_PLANE_ENROLLMENT_V9_PAYLOAD_SCHEMA if is_v9
                     else CONTROL_PLANE_ENROLLMENT_V8_PAYLOAD_SCHEMA if is_v8
@@ -1178,39 +1203,42 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
         if target is not None and (type(target) is not int or not 32 <= target <= 1023):
             raise RuntimeError("control-plane enrollment key descriptor is outside its exact range")
         execution_target = (_control_plane_execution_key_slot(payload["registrationExecution"],
-            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 or is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 else None)
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v3 or is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12 else None)
         finalization_target = (_control_plane_finalization_key_slot(payload["registrationFinalization"],
-            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 else None)
-        if is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11:
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12 else None)
+        if is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12:
             _control_plane_release_public_shape(payload["oidcSessionActivationRelease"])
         activation_target = (_control_plane_activation_key_slot(payload["oidcSessionActivationExecution"],
-            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 else None)
-        if is_v7 or is_v8 or is_v9 or is_v10 or is_v11:
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12 else None)
+        if is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12:
             _control_plane_activation_planning_shape(payload["oidcSessionActivationPlanning"],
                 activation_target=activation_target)
         consume_target = (_control_plane_consume_key_slot(payload["oidcSessionActivationConsumeExecution"],
             issuer_descriptor=target, bootstrap_descriptor=descriptor,
             activation_value=payload["oidcSessionActivationExecution"],
-            planning_value=payload["oidcSessionActivationPlanning"]) if is_v8 or is_v9 or is_v10 or is_v11 else None)
+            planning_value=payload["oidcSessionActivationPlanning"]) if is_v8 or is_v9 or is_v10 or is_v11 or is_v12 else None)
         intent_target = (_control_plane_intent_key_slot(payload["oidcSessionActivationReleaseIntent"],
             issuer_descriptor=target, bootstrap_descriptor=descriptor,
-            consume_value=payload["oidcSessionActivationConsumeExecution"]) if is_v9 or is_v10 or is_v11 else None)
-        if is_v10 or is_v11:
+            consume_value=payload["oidcSessionActivationConsumeExecution"]) if is_v9 or is_v10 or is_v11 or is_v12 else None)
+        if is_v10 or is_v11 or is_v12:
             _control_plane_proof_public_shape(payload["oidcSessionActivationReleaseProof"],
                 intent_value=payload["oidcSessionActivationReleaseIntent"])
-        if is_v11:
+        if is_v11 or is_v12:
             _control_plane_handoff_public_shape(payload["oidcSessionActivationReleaseHandoff"],
                 intent_value=payload["oidcSessionActivationReleaseIntent"],
                 proof_value=payload["oidcSessionActivationReleaseProof"])
+        if is_v12:
+            _control_plane_grant_acquisition_public_shape(payload["oidcSessionActivationReleaseGrantAcquisition"],
+                handoff_value=payload["oidcSessionActivationReleaseHandoff"])
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:
             raise RuntimeError("control-plane enrollment bootstrap is not original canonical JSON")
     except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
         raise RuntimeError("control-plane enrollment bootstrap is invalid") from exc
-    return (target, execution_target, finalization_target, is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11,
-        activation_target, is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11, consume_target, is_v8 or is_v9 or is_v10 or is_v11,
-        intent_target, is_v9 or is_v10 or is_v11)
+    return (target, execution_target, finalization_target, is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12,
+        activation_target, is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12, consume_target, is_v8 or is_v9 or is_v10 or is_v11 or is_v12,
+        intent_target, is_v9 or is_v10 or is_v11 or is_v12)
 
 
 def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:

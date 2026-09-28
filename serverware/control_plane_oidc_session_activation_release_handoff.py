@@ -13,6 +13,7 @@ from serverware import authority_oidc_session_activation_release_hints as hints
 from serverware import authority_oidc_session_activation_release_intent as intents
 from serverware import authority_oidc_session_activation_release_proof as proofs
 from serverware import authority_oidc_session_activation_release_response as receiving
+from serverware import authority_oidc_session_activation_release_grant_transport as grant_transport
 from serverware import control_plane_oidc_session_activation_consume_completion as completion
 from serverware import control_plane_oidc_session_activation_consume_records as retained
 from serverware import control_plane_oidc_session_activation_execution as execution
@@ -30,15 +31,17 @@ capture, production, delivery = clients.capture, clients.production, clients.del
 planning, reservations = completion.planning, completion.reservations
 
 
-def _release_on_permission(permission, *, client_authorization_bytes, server_bootstrap_bytes):
+def _release_on_permission(permission, *, client_authorization_bytes, server_bootstrap_bytes,
+        _current=None, _additional_original_bytes=0):
     """No posted target, successful carrier, key, possession or allowance input."""
     if type(permission) is not execution._ActivationPermission:
         execution._fail("release handoff requires the actual active permission")
     # Hold both caller-supplied originals before any original-owner callback.
-    client_raw = authorization._original(client_authorization_bytes, clients.MAX_BYTES,
-        "same-permission release client authorization")
-    server_raw = authorization._original(server_bootstrap_bytes, clients.MAX_SERVER_BOOTSTRAP_BYTES,
-        "same-permission release server bootstrap")
+    client_raw, server_raw = grant_transport._originals(
+        (client_authorization_bytes, server_bootstrap_bytes), response=True)
+    if _current is not None and not callable(_current):
+        execution._fail("release handoff restrictive acquisition guard is not callable")
+    shape._integer(_additional_original_bytes, minimum=0, maximum=receiving.MAX_ORIGINAL_BYTES)
     permission._identity()
     owner, work = permission._owner, permission._work
     parent, binding, custody = owner._material, owner._binding, owner._custody
@@ -87,7 +90,7 @@ def _release_on_permission(permission, *, client_authorization_bytes, server_boo
     old = delivery._token(cookie.encode("ascii"), work)
     request_bytes = (len(transport.LIVE_PURPOSE) + len(proof_raw[2]) + len(proof_raw[3])
         + len(intent_raw) + len(intent_enrollment) + len(old) + delivery.ENVELOPE_BYTES)
-    total = (prior_bytes + len(client_raw) + len(server_raw) + len(identity_raw) + len(endpoint_raw)
+    total = (prior_bytes + _additional_original_bytes + len(client_raw) + len(server_raw) + len(identity_raw) + len(endpoint_raw)
         + clients.MAX_BYTES + outcomes.MAX_BYTES + request_bytes
         + transport.LIVE_REQUEST_HEADER_BYTES + transport.RESPONSE_HEADER_BYTES + transport.MAX_RESPONSE_BYTES)
     if total > receiving.MAX_ORIGINAL_BYTES:
@@ -124,7 +127,14 @@ def _release_on_permission(permission, *, client_authorization_bytes, server_boo
                 or permission._dispatch_phase != "release-handoff-requesting"
                 or permission._release_handoff_spent is not True):
             execution._fail("release handoff changed its original owner, target or public pins")
-        return prior_current()
+        now = prior_current()
+        if _current is not None:
+            observed = _current()
+            after_guard = prior_current()
+            if type(observed) is not int or observed < now or observed > after_guard:
+                execution._fail("release handoff acquisition guard reversed its original clocks")
+            now = after_guard
+        return now
 
     def continuity(epoch, monotonic):
         permission._continuity(epoch, monotonic)
@@ -172,6 +182,10 @@ def _release_on_permission(permission, *, client_authorization_bytes, server_boo
             originals=grants))
     current()
     shape._digest(retained_digest)
+    # Retain even an empty or malformed bounded reply before rejecting it.
+    authorization._original(client_raw, clients.MAX_BYTES, "same-permission release client authorization")
+    authorization._original(server_raw, clients.MAX_SERVER_BOOTSTRAP_BYTES,
+        "same-permission release server bootstrap")
 
     client_identity = configured._identity_on_work(identity_raw, work)
     endpoint_graph = configured._endpoint_on_work(endpoint_raw, work)

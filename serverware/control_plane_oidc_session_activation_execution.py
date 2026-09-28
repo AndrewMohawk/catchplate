@@ -780,6 +780,25 @@ class _ActivationPermission:
             raise
 
 
+    def acquire_and_release_token(self):
+        """Acquire one fresh grant pair and hand off on this same live call."""
+        from serverware import control_plane_oidc_session_activation_release_grant_acquisition as acquisition
+
+        try:
+            self._identity()
+            if (self._state != "active" or self._dispatch_phase != "release-proof-verified"
+                    or self._release_handoff_spent is not False):
+                _fail("release grant acquisition requires the unspent actual proof continuation")
+            # The already-durable proof attempt cannot be reentered after
+            # recovery. Spend this shared handoff latch before any issuer I/O.
+            self._release_handoff_spent = True
+            self._dispatch_phase = "release-handoff-requesting"
+            return acquisition._acquire_on_permission(self)
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
     def release_token(self, *, client_authorization_bytes, server_bootstrap_bytes):
         """One original-bound token handoff on this call's verified proof lane."""
         from serverware import control_plane_oidc_session_activation_release_handoff as release

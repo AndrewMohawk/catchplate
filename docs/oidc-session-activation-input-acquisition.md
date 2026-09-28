@@ -58,14 +58,20 @@ object. The public application receives no root signing key.
 The [grant transport](oidc-session-activation-release-grant-transport.md) carries
 only that fixed request and opaque client/server originals. Policy, proof-worker
 bootstrap, resource paths/inodes, signing keys and expected authority graphs do
-not enter through its request. An actual service must independently obtain and
-authenticate its policy and resource inputs before invoking the producer.
+not enter through its request. The source-only [one-shot issuer service](oidc-session-activation-release-grant-issuer-service.md)
+now admits separately sealed launch, issuer-policy and proof-bootstrap originals
+before using its privately delivered root key. The public application's
+[same-permission acquisition](oidc-session-activation-release-grant-acquisition.md)
+retains raw2 before genuine handoff admission and receives no root key.
 
 A signed empty checkpoint is an independent authorization expectation, not an
 observation that a directory is empty. Likewise, signed device/inode values do
 not prove that resources were opened, remain owned, or were delivered to a
 worker. Existing release startup must authenticate and observe its exact
-resources; issuer deployment and delivery remain necessary.
+resources; issuer deployment and delivery remain necessary. In particular,
+returning a newly signed server bootstrap to the caller does not install those
+exact bytes in the separate release worker. That resource/delivery connection,
+consume-input acquisition and per-request proof provisioning remain open.
 
 ## Public request and truthful response
 

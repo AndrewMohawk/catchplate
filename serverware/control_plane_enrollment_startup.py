@@ -400,6 +400,22 @@ class _EnrollmentOwner:
             server_bootstrap_bytes=server_bootstrap_bytes)
 
     @property
+    def release_grant_acquisition_enabled(self):
+        """Cold endpoint availability, not grants, permission or resource proof."""
+        _continuity(self)
+        return self._material is not None and self._material.release_grant_acquisition is not None
+
+    def _acquire_oidc_session_activation_release_token(self):
+        """No posted grants or targets; continue this parent's actual permission."""
+        from serverware import control_plane_oidc_session_activation_execution as execution
+
+        _require_pid()
+        permission = self._activation_permission
+        if type(permission) is not execution._ActivationPermission or permission._owner is not self:
+            raise EnrollmentStartupError("release grant acquisition requires the actual active parent permission")
+        return permission.acquire_and_release_token()
+
+    @property
     def finalization_reservation_enabled(self):
         _live(self)
         finalization = None if self._material is None else self._material.finalization

@@ -1146,6 +1146,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_release_grant_issuer_policy.py \
 	serverware/authority_oidc_session_activation_release_grant_production.py \
 	serverware/authority_oidc_session_activation_release_grant_transport.py \
+	serverware/oidc_session_activation_release_grant_issuer_bootstrap.py \
+	serverware/oidc_session_activation_release_grant_issuer_entrypoint.py \
+	serverware/oidc_session_activation_release_grant_issuer_startup.py \
+	serverware/oidc_session_activation_release_grant_issuer_launcher.py \
+	serverware/oidc_session_activation_release_grant_issuer_runner.py \
+	serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
+	serverware/control_plane_oidc_session_activation_release_grant_acquisition.py \
 	serverware/oidc_session_activation_http_contract.py \
 	serverware/control_plane_oidc_session_activation_consume_planning.py \
 	serverware/control_plane_oidc_session_activation_consume_records.py \
@@ -3253,6 +3260,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_release_grant_issuer_policy.py \
 				serverware/authority_oidc_session_activation_release_grant_production.py \
 				serverware/authority_oidc_session_activation_release_grant_transport.py \
+				serverware/oidc_session_activation_release_grant_issuer_bootstrap.py \
+				serverware/oidc_session_activation_release_grant_issuer_entrypoint.py \
+				serverware/oidc_session_activation_release_grant_issuer_startup.py \
+				serverware/oidc_session_activation_release_grant_issuer_launcher.py \
+				serverware/oidc_session_activation_release_grant_issuer_runner.py \
+				serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
+				serverware/control_plane_oidc_session_activation_release_grant_acquisition.py \
 				serverware/oidc_session_activation_http_contract.py \
 				serverware/control_plane_oidc_session_activation_consume_planning.py \
 				serverware/control_plane_oidc_session_activation_consume_records.py \

@@ -26,16 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.237` source / f4f9572](https://github.com/example/private-deployment)
-adds the [original-evidence native enrollment receiver](docs/native-enrollment-verification.md):
-independent assignment, purpose-specific packet signature and genuine role-3/role-5
-Nitro checks on the actual retained TLS stream. Its result is diagnostic only,
-with `okForAction: false`; it does not approve packet semantics or installation.
-The [`.236` assignment/key foundation](https://github.com/example/private-deployment)
-remains dormant: native signing is private and inaccessible, without a serving route.
-
-Earlier [`.235` / 8ff93af](https://github.com/example/private-deployment)
-connects [native workload-issuer verification before CONNECT](docs/native-workload-trust.md).
+[`.238` source / b1fff21](https://github.com/example/private-deployment)
+adds [cold authority and actual policy/TLS admission](docs/native-enrollment-admission.md):
+explicit startup-v2 public authorizer/key separation, current Snapshot/full-principal
+checks, and the exact handshake configuration and accepted vsock listener binding.
+This admits **existing identities**, not first-certificate bootstrap. Native signing
+and the request route remain inaccessible. The earlier
+[original-evidence receiver](docs/native-enrollment-verification.md) remains diagnostic,
+with `okForAction: false`; neither path approves packet semantics or installation.
 
 The four active checkpoints remain partial:
 
@@ -45,10 +43,11 @@ The four active checkpoints remain partial:
   authenticated service/sidecar journeys and runtime verification remain open.
 - **H05 · Historical recovery:** [retained intent/proof readmission](docs/control-plane-retained-intent-history.md)
   is source-connected; historical release delivery, migration and older-source replay remain open.
-- **N05 · Native enrollment:** the original-evidence receiver is source-connected;
-  signing remains inaccessible. Actual Snapshot/packet semantics, cold roots,
-  TLS acquisition, durable claims/recovery, SDK/issuer integration, scoped CA
-  installation and proxy/egress/canary setup remain open.
+- **N05 · Native enrollment:** cold authority, existing-identity policy/TLS admission
+  and original-evidence receiving are source-connected; signing stays inaccessible.
+  First-time bootstrap needs a distinct authorized caller and target grant/CSR.
+  Packet semantics, durable claims/recovery, request/acquisition, SDK/issuer,
+  scoped CA installation and proxy/egress/canary setup remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
   is source-connected; protected provider/filesystem effects and durable
   interruption outcomes remain open.
@@ -118,7 +117,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; original-evidence receiver source-connected |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; existing-identity admission source-connected |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

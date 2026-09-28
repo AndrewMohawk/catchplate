@@ -203,9 +203,10 @@ class _ActivationPermission:
                 or type(self._owner) is not startup._EnrollmentOwner
                 or self._owner._activation_permission is not self or not self._locked):
             _fail("activation permission context is no longer the active parent-owned call")
-        if self._dispatch_phase not in ("new", "preparing", "sql", "closed"):
+        if self._dispatch_phase not in ("new", "preparing", "preparing-completion",
+                "sql", "sql-completion", "closed"):
             _fail("activation permission dispatch phase is not source fixed")
-        if self._dispatch_phase == "sql" and (
+        if self._dispatch_phase in ("sql", "sql-completion") and (
                 self._spent is not True or self._planning_spent is not True
                 or type(self._sql_originals) is not tuple or len(self._sql_originals) != 8
                 or self._sql_originals is not self._sql_seal
@@ -224,7 +225,7 @@ class _ActivationPermission:
             epoch_floor = max(self._planning_observed[0], epoch_floor or 0)
             monotonic_floor = max(self._planning_observed[1], monotonic_floor or 0)
         scope.current(epoch_floor, monotonic_floor)
-        if self._target is not None and self._dispatch_phase != "sql":
+        if self._target is not None and self._dispatch_phase not in ("sql", "sql-completion"):
             from serverware import control_plane_registration_finalization_completion_pending as pending
 
             application, session_scope, binding, credential, count = self._target
@@ -438,6 +439,25 @@ class _ActivationPermission:
             original, challenge = planning._planning_inputs(assertion_bytes, expected_challenge_id)
             self._dispatch_phase = "preparing"
             return dispatch._dispatch_on_permission(self,
+                assertion_bytes=original, expected_challenge_id=challenge)
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+    def dispatch_completion(self, *, assertion_bytes, expected_challenge_id):
+        """One fixed SQL/completion continuation returning only original raw4s."""
+        from serverware import control_plane_oidc_session_activation_dispatch as dispatch
+        from serverware import control_plane_oidc_session_activation_planning as planning
+
+        try:
+            self._identity()
+            if (self._state != "active" or self._spent is not False
+                    or self._planning_spent is not False or self._dispatch_phase != "new"):
+                _fail("activation completion dispatch has already been spent")
+            original, challenge = planning._planning_inputs(assertion_bytes, expected_challenge_id)
+            self._dispatch_phase = "preparing-completion"
+            return dispatch._dispatch_completion_on_permission(self,
                 assertion_bytes=original, expected_challenge_id=challenge)
         except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:

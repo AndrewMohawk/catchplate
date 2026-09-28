@@ -65,6 +65,34 @@ replay. No history/replay key moves into the public control-plane process.
 Configuration is not permission to dispatch, proof of a SQL commit, token
 delivery or a completed public session. Source remains unbuilt and unexecuted.
 
+## Explicit completion endpoint profile
+
+Source `.184` adds nested
+`serverware.controlPlaneOidcSessionActivationExecution/v3`: exactly the v2
+fields plus `completionEndpoint`. V1 and v2 stay closed and cannot carry this
+field. V3 retains the genuine v2 original-enrollment and independent predecessor
+admission, including database/generation, genesis and reserve/completion
+capacity joins. It adds no key, FD, top-level version or new processing window.
+
+The endpoint has the same exact `socketPath`, `requestTimeoutSeconds`,
+`listenerUid` and `listenerGid` fields. Its only path is
+`/run/serverware/oidc-session-activation/completion.sock`; timeout is an exact
+integer from 1 through 30 and the independently expected listener peer is 0:0.
+`_ActivationExecutionMaterial` appends `completion_endpoint=None`; only v3
+populates it. The stdlib-only FD205 selector recognizes the identical v3 shape
+before reading any key, while actual child admission still authenticates all
+root/enrollment originals. The descriptor inventory is unchanged.
+
+This endpoint opts into the separate original-bound completion dispatch
+transport, not the old packet-selector recovery request. The caller sends its
+exact signed authorization original. An independently configured completion
+service must opt into that profile, compare the bytes to its genuinely
+root-held authorization original, and select its own independently root-pinned
+packet. This caller configuration carries no guessed future packet identity or
+authorization-digest pin. It neither imports the service's historical keys nor
+replaces its original packet/commit admission. Endpoint configuration alone
+does not prove completion, release a token, update a cookie or admit recovery.
+
 The stdlib-only cold selector explicitly recognizes v6 without importing
 repository crypto. Its actual entrypoint calls the fixed activation-key
 delivery helper, which reads only the already-provisioned root-owned mode0400

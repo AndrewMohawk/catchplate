@@ -60,6 +60,7 @@ MAX_RECEIPT_AGE_NS = planner_bootstrap.MAX_RECEIPT_AGE_NS
 SCHEMA = "serverware.signedOidcSessionActivationCompletionBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationCompletionBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationCompletionLaunch/v1"
+DISPATCH_LAUNCH_SCHEMA = "serverware.oidcSessionActivationCompletionLaunch/v2"
 _FALSE_FIELDS = receiving._FALSE_FIELDS
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount", "bytesDigest", "identityDigest"})
@@ -224,7 +225,12 @@ def _state_endpoint(value):
 
 def _launch_shape(value, work):
     shape._object(value, _LAUNCH_FIELDS, "activation completion launch")
-    for name, expected in (("schema", LAUNCH_SCHEMA), ("processMode", PROCESS_MODE),
+    if (type(value["schema"]) is not str
+            or value["schema"] not in (LAUNCH_SCHEMA, DISPATCH_LAUNCH_SCHEMA)):
+        _fail("activation completion launch request profile differs")
+    # The signed nested version selects exactly one request grammar. V1 stays
+    # packet-selector-only; v2 binds the caller original to the server's pin.
+    for name, expected in (("processMode", PROCESS_MODE),
             ("listenerPath", LISTENER_PATH), ("journalDirectoryPath", JOURNAL_PATH)):
         shape._literal(value[name], expected)
     for name, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID),

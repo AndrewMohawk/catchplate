@@ -2,10 +2,13 @@
 
 [`control_plane_oidc_session_activation_dispatch.py`](../serverware/control_plane_oidc_session_activation_dispatch.py)
 connects actual present permission, post-permission planning and caller signing
-to the isolated activation authorizer, reserver and SQL roles. This is source
-implementation, unbuilt, unexecuted and unprovisioned. It adds no public route,
-completion/consume/release continuation, active-session cookie or public
-recovery permission. Step 22 remains in progress; production acceptance is 0/6.
+to the isolated activation authorizer, reserver and SQL roles. Its existing
+`dispatch(...)` method remains SQL-only; the separate
+[completion continuation](control-plane-oidc-session-activation-completion.md)
+opts into a fixed completion exchange through `dispatch_completion(...)`.
+This is source implementation, unbuilt, unexecuted and unprovisioned. Neither
+method adds a public route, consume/release handoff, active-session cookie or
+public recovery permission. Step 22 remains in progress; production acceptance is 0/6.
 
 ## One actual parent continuation
 
@@ -110,7 +113,9 @@ ACK identity. This consistency check still does not authenticate the marker,
 prove commit/completion/current state or authorize token delivery.
 
 Failure after possible SQL send is terminal even when no response is retained.
-The SQL claim survives; absence of a marker never proves nonexecution. Separate
-original-based completion, consume/release, public dispatch response and
-independently authorized recovery remain necessary before any user-facing
-activation or cookie-delivery claim.
+The SQL claim survives; absence of a marker never proves nonexecution. The
+separate completion variant proceeds only from an actually received, retained
+SQL response; it does not retry a failed exchange or change this method's
+return contract. Consume/release, public dispatch response and independently
+authorized recovery remain necessary before any user-facing activation or
+cookie-delivery claim.

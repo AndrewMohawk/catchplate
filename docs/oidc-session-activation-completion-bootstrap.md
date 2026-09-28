@@ -11,11 +11,22 @@ F08.4e.6 remains partial until its complete named integration is landed.
 
 The closed schemas are
 `serverware.signedOidcSessionActivationCompletionBootstrap/v1`,
-`serverware.oidcSessionActivationCompletionBootstrap/v1` and
-`serverware.oidcSessionActivationCompletionLaunch/v1`.
+`serverware.oidcSessionActivationCompletionBootstrap/v1` and the nested launch
+`serverware.oidcSessionActivationCompletionLaunch/v1` or explicit `/v2`.
 The operation is `oidc.session.activate`; the sole role/process mode is
 `oidc-session-activation-completion`, UID/GID **65503**, with request peer
 **65532**. Other receiving roles are not widened.
+
+The nested launch versions have the same closed fields and resource inventory;
+their root-signed schema selects one request grammar before receiving. Launch
+v1 stays strictly the original packet-selector profile. Launch v2 selects the
+separate [dispatch profile](oidc-session-activation-completion-dispatch-transport.md):
+fixed purpose plus the exact signed caller authorization original. The service
+must compare those bytes with its genuinely admitted root-held original, then
+use only its own independent packet pin. No request-selected fallback, unsigned
+SQL authority, public AES custody or returned packet-identity claim is added.
+Neither version skips actual private historical replay or starts a new
+processing allowance after request reads.
 
 The root signs the exact canonical outer bytes. Its payload embeds the genuine
 historical-custody original, not previously returned material. That original

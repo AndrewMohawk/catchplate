@@ -22,7 +22,7 @@ Dedicated token-free release claims burn one exact root client authorization;
 they are not prepared records or members of any generic forwarding family.
 Separate token-free activation claims burn the retained finalization locator
 before the planner request; even exact recovered claims prohibit dispatch.
-Five fixed activation stage records retain only opaque public/cipher originals
+Six fixed activation stage records retain only opaque public/cipher originals
 beneath that claim. Recovery permits reads, never resumed stage publication.
 
 The private directory open-file description owns the singleton flock. The
@@ -175,8 +175,8 @@ class CustodyJournal:
     reservations remain intact.
     Public-only release and activation claims share prepared-record logical capacity and
     the unchanged physical/quota ceilings, without reserving legacy markers.
-    An activation claim has exactly five possible stage siblings: six total
-    files, below its seven-file logical allowance. No stage adds another slot.
+    An activation claim has exactly six possible stage siblings: seven total
+    files, exhausting its unchanged allowance. No stage adds another slot.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -1326,6 +1326,10 @@ class CustodyJournal:
     def append_oidc_session_activation_sql_outcome(self, finalization_digest, originals):
         """Retain unsigned raw4 before interpreting it; never a commit proof."""
         return self._append_activation_record(finalization_digest, "sql-outcome", originals)
+
+    def append_oidc_session_activation_completion_outcome(self, finalization_digest, originals):
+        """Retain exact unverified raw4 before completion admission; no resend."""
+        return self._append_activation_record(finalization_digest, "completion-outcome", originals)
 
     def load_oidc_session_activation_records(self, finalization_digest):
         """Read bounded historical originals without permitting any new effect."""

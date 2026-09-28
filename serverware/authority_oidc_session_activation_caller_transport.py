@@ -1,4 +1,4 @@
-"""Guarded caller I/O for three source-fixed activation wire profiles.
+"""Guarded caller I/O for five source-fixed activation wire profiles.
 
 These private adapters preserve the actual caller's work and current guard;
 they do not admit requests, replies, socket peers or callback results as proof.
@@ -15,6 +15,8 @@ from serverware import authority_revocation_writer_transport as io
 from serverware import authority_oidc_session_activation_execution_authorizer_transport as authorizer
 from serverware import authority_oidc_session_activation_reservation_transport as reservation
 from serverware import authority_oidc_session_activation_sql_transport as sql
+from serverware import authority_oidc_session_activation_completion_transport as completion
+from serverware import authority_oidc_session_activation_completion_dispatch_transport as completion_dispatch
 
 
 AuthorityTransportError = authority_transport.AuthorityTransportError
@@ -22,10 +24,15 @@ capture = production.capability.capture
 
 
 def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, current):
-    # The three literal entry functions below choose this closed source set.
+    # The five literal entry functions below choose this closed source set.
     # No path, framing callback or caller-selected profile is accepted instead.
-    if not (profile is authorizer or profile is reservation or profile is sql):
+    if not (profile is authorizer or profile is reservation or profile is sql
+            or profile is completion or profile is completion_dispatch):
         raise AuthorityTransportError("activation caller transport profile is not source fixed")
+    # Completion's MAX_BYTES intentionally means only its fixed raw2 request;
+    # its separate source exchange ceiling covers the bounded raw4 response.
+    exchange_maximum = (profile.MAX_EXCHANGE_BYTES
+        if profile is completion or profile is completion_dispatch else profile.MAX_BYTES)
     capture._SharedLedger(work)
     if type(deadline_ns) is not int or deadline_ns <= 0 or not callable(current):
         raise AuthorityTransportError("activation caller transport requires its original deadline and guard")
@@ -77,7 +84,7 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
         check()
 
     def receive_precharged(size):
-        if type(size) is not int or not 0 <= size <= profile.MAX_BYTES:
+        if type(size) is not int or not 0 <= size <= exchange_maximum:
             raise AuthorityTransportError("activation caller response allocation differs")
         check()
         if size == 0:
@@ -132,14 +139,14 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
         length_header = receive_precharged(8 * len(profile.RESPONSE_LIMITS))
         lengths = tuple(int.from_bytes(length_header[offset:offset + 8], "big")
             for offset in range(0, len(length_header), 8))
-        if profile is sql:
-            sql._response_lengths(lengths)
+        if profile is sql or profile is completion or profile is completion_dispatch:
+            profile._response_lengths(lengths)
         else:
             profile._lengths(lengths, response=True)
         response_bytes = sum(lengths)
         if (response_bytes > profile.MAX_RESPONSE_BYTES
                 or request_bytes + response_bytes + profile.REQUEST_HEADER_BYTES
-                    + profile.RESPONSE_HEADER_BYTES > profile.MAX_BYTES):
+                    + profile.RESPONSE_HEADER_BYTES > exchange_maximum):
             raise AuthorityTransportError("activation caller whole exchange exceeds its fixed bound")
         # All response lengths and aggregate limits are admitted before any
         # body allocation. Reserve bytearray, received chunks and owned bytes
@@ -178,4 +185,14 @@ def _reservation_on_work(endpoint, *, originals, deadline_ns, work, current):
 
 def _sql_on_work(endpoint, *, originals, deadline_ns, work, current):
     return _exchange_on_work(sql, endpoint, originals=originals,
+        deadline_ns=deadline_ns, work=work, current=current)
+
+
+def _completion_on_work(endpoint, *, originals, deadline_ns, work, current):
+    return _exchange_on_work(completion, endpoint, originals=originals,
+        deadline_ns=deadline_ns, work=work, current=current)
+
+
+def _completion_dispatch_on_work(endpoint, *, originals, deadline_ns, work, current):
+    return _exchange_on_work(completion_dispatch, endpoint, originals=originals,
         deadline_ns=deadline_ns, work=work, current=current)

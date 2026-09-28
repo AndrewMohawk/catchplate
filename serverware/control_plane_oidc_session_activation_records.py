@@ -14,20 +14,23 @@ from serverware import authority_current_root_vector as vector
 from serverware import authority_oidc_session_activation_execution_authorizer_transport as grant
 from serverware import authority_oidc_session_activation_reservation_transport as reserve
 from serverware import authority_oidc_session_activation_sql_transport as sql
+from serverware import authority_oidc_session_activation_completion_transport as completion
 from serverware import control_plane_custody_records as records
 from serverware import control_plane_oidc_session_activation_dispatch_attempt as attempts
 
 
 MAGIC = b"SWCAO001"
-KINDS = ("prepared", "grant", "reserved", "sql-claimed", "sql-outcome")
-_COUNTS = (5, 1, 3, 0, 4)
+# Append-only profile indices: all five original encodings/domains stay fixed.
+KINDS = ("prepared", "grant", "reserved", "sql-claimed", "sql-outcome", "completion-outcome")
+_COUNTS = (5, 1, 3, 0, 4, 4)
 _PREFIX_BYTES = 11
 _MAX_HEADER_BYTES = _PREFIX_BYTES + records.MAX_SOURCE_REVISION_BYTES + 32
 _BODY_MAXIMA = (authority.MAX_RESULT_BYTES, grant.MAX_RESPONSE_BYTES,
-    reserve.MAX_RESPONSE_BYTES, 0, sql.MAX_RESPONSE_BYTES)
+    reserve.MAX_RESPONSE_BYTES, 0, sql.MAX_RESPONSE_BYTES, completion.MAX_RESPONSE_BYTES)
 _MAXIMA = tuple(_MAX_HEADER_BYTES + count * 8 + maximum
     for count, maximum in zip(_COUNTS, _BODY_MAXIMA))
-MAX_PREPARED_BYTES, MAX_GRANT_BYTES, MAX_RESERVATION_BYTES, MAX_SQL_CLAIM_BYTES, MAX_SQL_OUTCOME_BYTES = _MAXIMA
+(MAX_PREPARED_BYTES, MAX_GRANT_BYTES, MAX_RESERVATION_BYTES, MAX_SQL_CLAIM_BYTES,
+    MAX_SQL_OUTCOME_BYTES, MAX_COMPLETION_OUTCOME_BYTES) = _MAXIMA
 MAX_RECORD_BYTES = max(_MAXIMA)
 MAX_LOAD_IO_BYTES = attempts.MAX_RECORD_BYTES + sum(_MAXIMA)
 _DOMAINS = tuple("serverware.controlPlaneOidcSessionActivationRecord/" + kind + "/v1"
@@ -57,6 +60,7 @@ class ActivationRecords:
     reservation: ActivationRecord | None
     sql_attempt: ActivationRecord | None
     sql_outcome: ActivationRecord | None
+    completion_outcome: ActivationRecord | None = None
 
 
 def _profile(kind):
@@ -84,6 +88,8 @@ def _lengths(profile, lengths):
             reserve._lengths(lengths, response=True)
         elif profile == 4:
             sql._response_lengths(lengths)
+        elif profile == 5:
+            completion._response_lengths(lengths)
         if sum(lengths) > _BODY_MAXIMA[profile]:
             raise CustodyRecordError("activation stage exceeds its aggregate bound")
     except grant.AuthorityTransportError as exc:
@@ -104,6 +110,8 @@ def _originals(profile, originals):
             reserve._originals(originals, response=True)
         elif profile == 4:
             sql._originals(originals, response=True)
+        elif profile == 5:
+            completion._originals(originals, response=True)
     except grant.AuthorityTransportError as exc:
         raise CustodyRecordError("activation stage original carrier differs") from exc
     return originals

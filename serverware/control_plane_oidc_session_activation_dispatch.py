@@ -121,11 +121,22 @@ def _reserve(*, originals, held, authorized, grant_payload, grant_digest,
 
 
 def _dispatch_on_permission(permission, *, assertion_bytes, expected_challenge_id):
+    return _dispatch_fixed_on_permission(permission, assertion_bytes=assertion_bytes,
+        expected_challenge_id=expected_challenge_id, include_completion=False)
+
+
+def _dispatch_completion_on_permission(permission, *, assertion_bytes, expected_challenge_id):
+    return _dispatch_fixed_on_permission(permission, assertion_bytes=assertion_bytes,
+        expected_challenge_id=expected_challenge_id, include_completion=True)
+
+
+def _dispatch_fixed_on_permission(permission, *, assertion_bytes, expected_challenge_id,
+        include_completion):
     """Fixed live continuation; no external original/result carrier ingress."""
     if type(permission) is not execution._ActivationPermission:
         execution._fail("activation dispatch requires the actual active permission context")
     permission._identity()
-    if permission._dispatch_phase != "preparing":
+    if permission._dispatch_phase != ("preparing-completion" if include_completion else "preparing"):
         execution._fail("activation dispatch is not the original one-use continuation")
     assertion_original, challenge_id = planning._planning_inputs(assertion_bytes, expected_challenge_id)
     owner, work = permission._owner, permission._work
@@ -137,6 +148,13 @@ def _dispatch_on_permission(permission, *, assertion_bytes, expected_challenge_i
     grant_endpoint = grant_io._endpoint(policy.authorizer_endpoint)
     reserve_endpoint = reserve_io._endpoint(policy.reservation_endpoint)
     sql_endpoint = sql_io._endpoint(policy.sql_endpoint)
+    completion_endpoint = None
+    if include_completion:
+        from serverware import authority_oidc_session_activation_completion_dispatch_transport as completion_io
+
+        if policy.completion_endpoint is None:
+            execution._fail("activation completion dispatch is not independently configured")
+        completion_endpoint = completion_io._endpoint(policy.completion_endpoint)
     predecessor = reservations._predecessor_scope(*policy.reservation_predecessor)
     finalization_digest = permission._target[2]["localDigest"]
     caller.shape._digest(finalization_digest)
@@ -168,7 +186,8 @@ def _dispatch_on_permission(permission, *, assertion_bytes, expected_challenge_i
                 or parent.activation_planning is not planning_policy
                 or policy.authorizer_endpoint != grant_endpoint
                 or policy.reservation_endpoint != reserve_endpoint
-                or policy.sql_endpoint != sql_endpoint or policy.reservation_predecessor != predecessor):
+                or policy.sql_endpoint != sql_endpoint or policy.reservation_predecessor != predecessor
+                or include_completion and policy.completion_endpoint != completion_endpoint):
             execution._fail("activation dispatch changed its original cold configuration")
         permission._narrow_planning(window, bound)
         now, monotonic = authorized.live()
@@ -182,6 +201,16 @@ def _dispatch_on_permission(permission, *, assertion_bytes, expected_challenge_i
         if reserve_request is not None:
             state._fresh(reserve_request, state_material, now)
         return now
+
+    def narrow_completion(expires, maximum_age, maximum_skew):
+        # Only the fixed original-consuming completion suffix calls this;
+        # values can tighten, never replace, the same signed-authority guard.
+        nonlocal window, bound
+        window = caller.window_policy._narrow(window, deadline_epoch_ns=expires,
+            maximum_lifetime_ns=min(window[5], maximum_age),
+            maximum_clock_skew_ns=min(window[6], maximum_skew))
+        bound = min(bound, window[4])
+        current()
 
     current()
     grant_enrollment = grants._admit_enrollment_on_work(
@@ -199,6 +228,10 @@ def _dispatch_on_permission(permission, *, assertion_bytes, expected_challenge_i
     reserved_bytes = base_bytes + grant_io.MAX_RESPONSE_BYTES + reserve_io.MAX_RESPONSE_BYTES + sql_io.MAX_RESPONSE_BYTES
     reserved_bytes += sum(module.REQUEST_HEADER_BYTES + module.RESPONSE_HEADER_BYTES
         for module in (grant_io, reserve_io, sql_io))
+    if include_completion:
+        reserved_bytes += (len(completion_io.PURPOSE) + len(authorization)
+            + completion_io.REQUEST_HEADER_BYTES + completion_io.RESPONSE_HEADER_BYTES
+            + completion_io.MAX_RESPONSE_BYTES)
     if reserved_bytes > grants.replay.MAX_ORIGINAL_BYTES:
         execution._fail("activation complete dispatch originals exceed their aggregate bound")
     current()
@@ -239,7 +272,7 @@ def _dispatch_on_permission(permission, *, assertion_bytes, expected_challenge_i
     # durable exact retention/claim and the last pending-target check. No API
     # accepts a boolean phase, socket outcome or success DTO to reach it.
     permission._sql_originals = permission._sql_seal = sql_originals
-    permission._dispatch_phase = "sql"
+    permission._dispatch_phase = "sql-completion" if include_completion else "sql"
     response = sql_io._socket_request_on_work(sql_endpoint, originals=sql_originals,
         deadline_ns=bound, work=work, current=current)
     current()
@@ -249,6 +282,12 @@ def _dispatch_on_permission(permission, *, assertion_bytes, expected_challenge_i
     if response[1] and response[1] != pending_digest.encode("ascii"):
         execution._fail("activation SQL observation names another original pending decision")
     current()
+    if include_completion:
+        from serverware import control_plane_oidc_session_activation_completion as completion
+
+        return response, completion._complete_on_permission(permission,
+            before_vector_bytes=held.before, current=current, narrow=narrow_completion,
+            deadline_ns=bound)
     # Exact unsigned raw4 only. The durable claim prevents automatic replay;
     # completion, recovery and token handoff require separate original authority.
     return response

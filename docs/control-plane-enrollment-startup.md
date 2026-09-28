@@ -117,6 +117,45 @@ session. No public route or cookie transition is added by this private method.
 Completion/consume/release receiving and public dispatch remain in step 22;
 independently authorized recovery and portal work retain their separate scope.
 
+## Original-bound completion continuation
+
+Source `.184` adds the private actual-owner facade
+`_dispatch_oidc_session_activation_completion(*, request, permission_bytes,
+assertion_bytes, expected_challenge_id, live_window, transport_deadline_ns, work)`.
+It accepts the same original inputs as `_dispatch_oidc_session_activation`,
+enters the same genuine permission context, and returns only the exact pair
+`(sql_raw4, completion_raw4)`. No successful permission, SQL or completion DTO
+is accepted as authority. The original work, window, sticky clock observations
+and narrowed deadline remain held through the continuation.
+
+This path requires explicit nested [execution/v3](control-plane-oidc-session-activation-execution-bootstrap.md#explicit-completion-endpoint-profile)
+and an independently provisioned completion service with its new launch/v2
+profile. Older caller and service profiles do not silently opt in. The caller
+sends its exact signed authorization original; the service byte-joins that
+original to its independently root-held authorization and chooses its own
+root-pinned packet. There are no additional caller keys or FDs and no history,
+AES or service-signing keys move into the control-plane process.
+
+The SQL raw4 remains an unsigned observation. Completion raw4 is durably
+retained in the sole remaining [activation stage slot](control-plane-oidc-session-activation-records.md)
+before branch, digest or signature interpretation. Genuine public original
+control checks can authenticate the signed complete request and state ACK
+against the exact admitted grant/reservation; they do not replace the service's
+private replay/commit admission or establish present currentness. Neither pair
+return nor missing response releases a token, updates a cookie or permits
+another SQL/completion send. Recovery requires separate authority.
+
+No new completion overlay is needed: the existing
+[`docker-compose.oidc-session-activation-planning.yml`](../docker-compose.oidc-session-activation-planning.yml)
+mount already exposes the fixed `/run/serverware/oidc-session-activation`
+directory read-only, with `create_host_path: false`. Its preprovisioned host
+directory must contain the authorized `completion.sock` as well as the planner
+listener. The endpoint remains fixed; the environment variable is only the
+mount source, not an endpoint override. This source change creates no directory,
+socket, key or service, activates nothing, and changes no live deployment.
+Public dispatch, consume/release continuation and the cookie boundary remain
+open; source is unbuilt/unexecuted and production acceptance stays 0/6.
+
 ## Decision and trust boundary
 
 The runtime root has one additional, explicitly domain-separated bootstrap

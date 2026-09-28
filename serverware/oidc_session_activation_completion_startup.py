@@ -142,11 +142,22 @@ class _CompletionOwner:
 
     def _recover_on_work(self, originals, *, live_window, deadline, work):
         from serverware import authority_oidc_session_activation_completion_recovery as recovery
+        from serverware import oidc_session_activation_completion_bootstrap as bootstrap
 
         material = self._material
-        work.charge(input_bytes=len(originals[1]) + len(material.packet_digest))
-        if originals[1] != material.packet_digest.encode("ascii"):
-            raise CompletionRequestError("activation completion packet differs from its cold pin")
+        if material.launch["schema"] == bootstrap.DISPATCH_LAUNCH_SCHEMA:
+            # The request carries no packet selector. Only byte equality with
+            # the actual root-admitted caller original may select this owner's
+            # independently pinned packet; SQL raw4 never chooses authority.
+            work.charge(input_bytes=len(originals[1]) + len(material.authorization_bytes))
+            if originals[1] != material.authorization_bytes:
+                raise CompletionRequestError("activation completion caller differs from its cold original")
+        elif material.launch["schema"] == bootstrap.LAUNCH_SCHEMA:
+            work.charge(input_bytes=len(originals[1]) + len(material.packet_digest))
+            if originals[1] != material.packet_digest.encode("ascii"):
+                raise CompletionRequestError("activation completion packet differs from its cold pin")
+        else:
+            raise CompletionRequestError("activation completion launch profile changed")
         sequence, head, fence = material.current_pending
         # This is the actual pre-read window/work. Recovery may only narrow
         # the existing bound, never reopen an allowance after body reading.
@@ -186,11 +197,20 @@ class _CompletionOwner:
             return b"uncertain", b"", b"", b""
 
     def _serve_connection(self, connection):
-        from serverware import authority_oidc_session_activation_completion_transport as transport
+        from serverware import authority_oidc_session_activation_completion_transport as selector_transport
+        from serverware import authority_oidc_session_activation_completion_dispatch_transport as dispatch_transport
         from serverware import authority_oidc_session_activation_completion_recovery as recovery
+        from serverware import oidc_session_activation_completion_bootstrap as bootstrap
         from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
         self._live()
+        profile = self._material.launch["schema"]
+        if profile == bootstrap.LAUNCH_SCHEMA:
+            transport = selector_transport
+        elif profile == bootstrap.DISPATCH_LAUNCH_SCHEMA:
+            transport = dispatch_transport
+        else:
+            raise CompletionRequestError("activation completion launch profile differs")
         work = _ValidationWork(QueryReadValidationLimits())
         window = recovery.clock._open_on_work(deadline_epoch_ns=self._interval[1],
             maximum_lifetime_ns=min(self._material.launch["requestTimeoutSeconds"] * 1_000_000_000,
@@ -206,6 +226,8 @@ class _CompletionOwner:
         originals = transport._recv_request(connection, deadline_ns=deadline)
         recovery.clock._check_on_work(window, work=work)
         self._live()
+        if self._material.launch["schema"] != profile:
+            raise CompletionRequestError("activation completion request profile changed")
         if self._spent:
             raise CompletionStartupError("activation completion cold request was already spent")
         self._spent = True

@@ -62,11 +62,22 @@ These checks are not a hard watchdog for arbitrary native calls.
 
 ## Durable recovery and wire result
 
-The fixed transport uses `SWOACM01` / `SWOACR01`. Its raw2 request is the literal
-purpose `recover-oidc-session-activation-completion` plus the canonical packet
-digest. The digest must equal the independent cold pin. Lengths and aggregate
-bounds precede body allocation; one inherited deadline covers peer checking,
-framing, half-close and exact EOF. Socket framing alone is not semantic proof.
+The root-admitted nested launch schema selects exactly one transport before
+peer and frame reads. Launch v1 remains strict `SWOACM01`: raw2 is the literal
+`recover-oidc-session-activation-completion` plus a canonical packet digest
+equal to the independent cold pin. The explicit nested launch v2 instead uses
+[dispatch `SWOACM02`](oidc-session-activation-completion-dispatch-transport.md):
+raw2 is `complete-oidc-session-activation` plus the exact signed caller
+authorization original. The service charges and compares those bytes with its
+genuinely admitted root-held authorization, then uses only its own independently
+pinned packet, pending scope and recovery originals. There is no profile
+sniffing, fallback or packet selection from unsigned SQL output.
+
+Both profiles retain `SWOACR01` raw4 responses and the same fixed role/resources.
+Lengths and aggregate bounds precede body allocation; the actual pre-read
+request work/window and deadline continue into recovery without renewal.
+Framing, half-close and exact EOF do not authenticate completion, expose private
+historical AES custody to the public caller or make a returned packet-ID claim.
 
 The actual [recovery composition](oidc-session-activation-completion-recovery.md)
 holds the durable owner's recovery lock. A first completion genuinely replays

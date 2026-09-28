@@ -266,6 +266,25 @@ class _EnrollmentOwner:
             return permission.dispatch(assertion_bytes=assertion,
                 expected_challenge_id=challenge)
 
+    def _dispatch_oidc_session_activation_completion(self, *, request, permission_bytes,
+            assertion_bytes, expected_challenge_id, live_window, transport_deadline_ns, work):
+        """One dispatch plus completion exchange; return only exact originals.
+
+        The pair is an unsigned SQL observation and an original completion
+        response. Public control authenticity does not replace private replay,
+        prove current state, release a token or authorize another SQL attempt.
+        """
+        from serverware import control_plane_oidc_session_activation_planning as planning
+
+        _require_pid()
+        assertion, challenge = planning._planning_inputs(assertion_bytes, expected_challenge_id)
+        with _EnrollmentOwner._oidc_session_activation_permission(self,
+                request=request, permission_bytes=permission_bytes,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+                work=work) as permission:
+            return permission.dispatch_completion(assertion_bytes=assertion,
+                expected_challenge_id=challenge)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

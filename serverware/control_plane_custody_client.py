@@ -677,6 +677,11 @@ class ControlPlaneCustodyClient:
         return ControlPlaneCustodyClient._append_activation_stage(
             self, finalization_digest, "sql-outcome", originals)
 
+    def append_oidc_session_activation_completion_outcome(self, finalization_digest, originals):
+        """Retain actual completion originals before interpreting their authority."""
+        return ControlPlaneCustodyClient._append_activation_stage(
+            self, finalization_digest, "completion-outcome", originals)
+
     def load_oidc_session_activation_records(self, finalization_digest):
         """Ordinary read-only history, never a resume/retry authority carrier."""
         from serverware import control_plane_oidc_session_activation_records as activation

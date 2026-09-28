@@ -28,10 +28,14 @@ production = configuration.production
 PURPOSE = "issue-oidc-session-activation-consume-inputs"
 SCHEMA = "serverware.signedOidcSessionActivationConsumeInputIssuerPolicy/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationConsumeInputIssuerPolicy/v1"
+V2_SCHEMA = "serverware.signedOidcSessionActivationConsumeInputIssuerPolicy/v2"
+V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationConsumeInputIssuerPolicy/v2"
 SIGNATURE_DOMAIN = SCHEMA
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationConsumeInputIssuerPolicyIdentity/v1"
 ACTIVATION_PLANNER_BOOTSTRAP_IDENTITY_DOMAIN = "serverware.oidcSessionActivationConsumeInputIssuerActivationPlannerBootstrapIdentity/v1"
-MAX_BYTES = 64 * 1024
+V1_MAX_BYTES = 64 * 1024
+V2_MAX_BYTES = 6 * 1024 * 1024
+MAX_BYTES = V2_MAX_BYTES
 MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES = activation.MAX_BYTES
 MAX_ORIGINAL_BYTES = 64 * 1024 * 1024
 MAX_NODES, MAX_DEPTH = 512, 6
@@ -70,6 +74,9 @@ class _IssuerPolicyMaterial:
     live_window: tuple
     deadline_ns: int
     live: object
+    historical_root_public_key: object = None
+    current_planner: object = None
+    bridge: object = None
 
 
 class _Capture(capture._JSONCapture):
@@ -87,14 +94,19 @@ def _capture(value, work):
 
 
 def _wire(value, work):
-    return capability._wire(value, capture._SharedLedger(work), MAX_BYTES, MAX_NODES)
+    maximum = V1_MAX_BYTES if value.get("schema") in (SCHEMA, PAYLOAD_SCHEMA) else V2_MAX_BYTES
+    return capability._wire(value, capture._SharedLedger(work), maximum, MAX_NODES)
 
 
 def _canonical(original, value, work):
-    return capability._canonical(original, value, capture._SharedLedger(work), MAX_BYTES, MAX_NODES)
+    maximum = V1_MAX_BYTES if value.get("schema") in (SCHEMA, PAYLOAD_SCHEMA) else V2_MAX_BYTES
+    return capability._canonical(original, value, capture._SharedLedger(work), maximum, MAX_NODES)
 
 
 def _payload_shape(payload, work):
+    if type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA:
+        from serverware import oidc_session_activation_consume_input_bridge_policy as bridge
+        return bridge._payload_shape(payload, work)
     shape._object(payload, PAYLOAD_FIELDS, "consume input issuer policy")
     for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("trustMode", "trusted-host-local")):
@@ -146,8 +158,13 @@ def _read(original, work):
         maximum_nodes=MAX_NODES, maximum_depth=MAX_DEPTH)
     owned = _capture(decoded, work)
     shape._object(owned, _ENVELOPE_FIELDS, "signed consume input issuer policy")
-    shape._literal(owned["schema"], SCHEMA)
+    if type(owned["schema"]) is not str or owned["schema"] not in (SCHEMA, V2_SCHEMA):
+        _fail("consume input issuer policy schema is not supported")
+    maximum = V2_MAX_BYTES if owned["schema"] == V2_SCHEMA else V1_MAX_BYTES
+    authorization._original(raw, maximum, "versioned consume input issuer policy")
     shape._base64url(owned["signatureBase64Url"], signature=True)
+    shape._literal(owned["payload"]["schema"],
+        V2_PAYLOAD_SCHEMA if owned["schema"] == V2_SCHEMA else PAYLOAD_SCHEMA)
     _payload_shape(owned["payload"], work)
     _canonical(raw, owned, work)
     return owned
@@ -243,8 +260,9 @@ class _Lifetime:
 
 def _signature(envelope, root, work):
     unsigned = _wire(envelope["payload"], work)
+    domain = V2_SCHEMA if envelope["schema"] == V2_SCHEMA else SIGNATURE_DOMAIN
     try:
-        capability._signature(root, envelope["signatureBase64Url"], SIGNATURE_DOMAIN,
+        capability._signature(root, envelope["signatureBase64Url"], domain,
             unsigned, capture._SharedLedger(work))
     except InvalidSignature as exc:
         raise OidcSessionActivationConsumeInputIssuerPolicyError(
@@ -349,7 +367,7 @@ def _join_planner(payload, original, root, lifetime, work):
     lifetime.narrow(interval[1], min(planner.maximum_plan_age_ns,
         launch["requestTimeoutSeconds"] * 1_000_000_000), planner.maximum_clock_skew_ns)
     decoded_size = len(planner.state_enrollment_bytes) + len(planner.complete_root_vector_bytes)
-    if MAX_BYTES + len(original) + decoded_size > MAX_ORIGINAL_BYTES:
+    if V1_MAX_BYTES + len(original) + decoded_size > MAX_ORIGINAL_BYTES:
         _fail("consume input issuer decoded original inventory exceeds 64 MiB")
     current()
     return planner, public
@@ -374,7 +392,13 @@ def _verify_on_work(*, policy_bytes, activation_planner_bootstrap_bytes, root_pu
     _signature(envelope, root, work)
     lifetime.current()
     payload = envelope["payload"]
-    planner, public = _join_planner(payload, original, root, lifetime, work)
+    if envelope["schema"] == V2_SCHEMA:
+        from serverware import oidc_session_activation_consume_input_bridge_policy as bridge
+        planner, public, historical_root, current_planner, bridge_material = bridge._join_on_work(
+            payload, original, root, lifetime, work)
+    else:
+        planner, public = _join_planner(payload, original, root, lifetime, work)
+        historical_root, current_planner, bridge_material = root, planner, None
     _canonical(raw, envelope, work)
     lifetime.current()
     identity = _digest_on_work(raw, work)
@@ -386,7 +410,8 @@ def _verify_on_work(*, policy_bytes, activation_planner_bootstrap_bytes, root_pu
     predecessor = reservation._predecessor_scope(predecessor["sequence"], predecessor["headDigest"], predecessor["fence"])
     lifetime.current()
     return _IssuerPolicyMaterial(raw, original, identity, owned, planner, selected_history,
-        selected, predecessor, public, lifetime.window, lifetime.bound, lifetime.current)
+        selected, predecessor, public, lifetime.window, lifetime.bound, lifetime.current,
+        historical_root, current_planner, bridge_material)
 
 
 def _produce_on_work(*, payload, activation_planner_bootstrap_bytes, root_private_key,
@@ -397,27 +422,34 @@ def _produce_on_work(*, payload, activation_planner_bootstrap_bytes, root_privat
     original = authorization._original(activation_planner_bootstrap_bytes,
         MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES, "independent activation planner bootstrap")
     owned = _capture(payload, work)
-    _inventory(MAX_BYTES, original, work)
     authorization._private(private)
     authorization._public(root)
     _payload_shape(owned, work)
+    is_bridge = owned["schema"] == V2_PAYLOAD_SCHEMA
+    schema = V2_SCHEMA if is_bridge else SCHEMA
+    maximum = V2_MAX_BYTES if is_bridge else V1_MAX_BYTES
+    _inventory(maximum, original, work)
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     lifetime = _Lifetime(window, min(transport_deadline_ns, window[4]), work, _continuity)
     lifetime.current()
-    _join_planner(owned, original, root, lifetime, work)
+    if is_bridge:
+        from serverware import oidc_session_activation_consume_input_bridge_policy as bridge
+        bridge._join_on_work(owned, original, root, lifetime, work)
+    else:
+        _join_planner(owned, original, root, lifetime, work)
     live = lifetime.current
     live()
     keys._pair_on_work(private, root, work)
     live()
-    envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+    envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     unsigned_size, unsigned_nodes = work.measure(owned)
     envelope_size, envelope_nodes = work.measure(envelope)
-    if max(unsigned_size, envelope_size) > MAX_BYTES or max(unsigned_nodes, envelope_nodes) > MAX_NODES:
+    if max(unsigned_size, envelope_size) > maximum or max(unsigned_nodes, envelope_nodes) > MAX_NODES:
         _fail("consume input issuer signature exceeds its output bounds")
     work.charge(input_bytes=4 * unsigned_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=2 * unsigned_nodes + envelope_nodes)
-    frame_bytes = 2 * len(SIGNATURE_DOMAIN) + 9 + unsigned_size + 2 * 71
+    frame_bytes = 2 * len(schema) + 9 + unsigned_size + 2 * 71
     if (work.limits.max_hashes - work.hash_work < 1
             or work.limits.max_input_bytes - work.input_bytes < frame_bytes + unsigned_size
             or work.limits.max_json_nodes - work.json_nodes < 4 + unsigned_nodes):
@@ -425,7 +457,7 @@ def _produce_on_work(*, payload, activation_planner_bootstrap_bytes, root_privat
     unsigned = plan.core.canonical_bytes(owned)
     if len(unsigned) != unsigned_size:
         _fail("consume input issuer payload changed after measurement")
-    message = plan._ascii(plan._frame(SIGNATURE_DOMAIN, (unsigned,), work), work)
+    message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
     live()
     signature = production._sign_and_verify(private, root, message, work)
     live()
@@ -433,7 +465,7 @@ def _produce_on_work(*, payload, activation_planner_bootstrap_bytes, root_privat
         _fail("consume input issuer policy changed during signing")
     encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
     shape._base64url(encoded, signature=True)
-    raw = plan.core.canonical_bytes({"schema": SCHEMA, "payload": owned, "signatureBase64Url": encoded})
+    raw = plan.core.canonical_bytes({"schema": schema, "payload": owned, "signatureBase64Url": encoded})
     if len(raw) != envelope_size:
         _fail("consume input issuer output differs from its reservation")
     live()

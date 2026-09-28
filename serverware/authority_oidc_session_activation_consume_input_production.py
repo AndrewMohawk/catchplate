@@ -210,6 +210,13 @@ def _activation_controls(raw, expected, before, policy, root, lifetime, work):
         transport_deadline_ns=lifetime.bound, work=work, _continuity=lifetime.continuity)
     lifetime.continuity(authorized.last_epoch_ns, authorized.last_monotonic_ns)
     lifetime.attach(authorized.live)
+    if policy.bridge is not None:
+        for actual, expected, label in (
+                (plan._frame(caller.ENROLLMENT_IDENTITY_DOMAIN, (raw[11],), work),
+                    policy.bridge.authorization_enrollment_digest, "caller enrollment"),
+                (authorized.grant_enrollment_digest, policy.bridge.grant_enrollment_digest, "grant enrollment"),
+                (authorized.current_root_enrollment_digest, policy.bridge.state_enrollment_digest, "state enrollment")):
+            plan._same(actual, expected, work, "consume bridge independent historical " + label)
     current()
     grant, grant_digest = caller.grants._verify_historical_control_on_work(grant_bytes=raw[10],
         grant_enrollment_bytes=raw[12], current_root_enrollment_bytes=enrollment,
@@ -247,6 +254,13 @@ def _activation_controls(raw, expected, before, policy, root, lifetime, work):
     if (reserve["issuedAtEpochNs"] != grant["issuedAtEpochNs"]
             or reserve["expiresAtEpochNs"] > grant["expiresAtEpochNs"]):
         _fail("consume input reserve retimes its historical grant")
+    if policy.bridge is not None:
+        start, end = policy.bridge.historical_interval
+        intervals = ((authorized.issued_at_epoch_ns, authorized.expires_at_epoch_ns),
+            *((value["issuedAtEpochNs"], value["expiresAtEpochNs"])
+                for value in (original_plan, grant, reserve)))
+        if any(not start <= issued < expires <= end for issued, expires in intervals):
+            _fail("consume bridge original controls escape the authorized historical interval")
     _same_bytes(state.vector._encode_on_work(reserve["beforeVector"], work=work), before,
         work, "consume input signed reserve before-vector")
     after = state.vector._encode_on_work(reserve["afterVector"], work=work)
@@ -294,6 +308,16 @@ def _activation_controls(raw, expected, before, policy, root, lifetime, work):
     return arguments, activation_scope, after
 
 
+def _cold_derivation_reservation(policy_bytes, activation_bytes):
+    """Fixed cold capture inventory before any request body is admitted."""
+    if (type(policy_bytes) is not int or not 2 <= policy_bytes <= issuer.MAX_BYTES
+            or type(activation_bytes) is not int
+            or not 2 <= activation_bytes <= issuer.MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES):
+        _fail("consume input cold derivation requires bounded original lengths")
+    return (16 * activation_bytes + 8 * policy_bytes
+        + 8 * history.MAX_CONSUME_REQUEST_BYTES + 8 * state.vector.MAX_BYTES + 64 * 1024)
+
+
 def _derivation_reservation(request_lengths, policy_bytes, activation_bytes):
     """Length-only capture inventory, before decoding any candidate original.
 
@@ -307,8 +331,7 @@ def _derivation_reservation(request_lengths, policy_bytes, activation_bytes):
             or not 2 <= activation_bytes <= issuer.MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES):
         _fail("consume input derivation requires bounded original lengths")
     transport._request_lengths((len(transport.PURPOSE), *request_lengths))
-    return (16 * activation_bytes + 8 * (sum(request_lengths) + policy_bytes)
-        + 8 * history.MAX_CONSUME_REQUEST_BYTES + 8 * state.vector.MAX_BYTES + 64 * 1024)
+    return _cold_derivation_reservation(policy_bytes, activation_bytes) + 8 * sum(request_lengths)
 
 
 def _derive_on_work(*, request_originals, issuer_policy_bytes, activation_planner_bootstrap_bytes,
@@ -350,17 +373,20 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, activation_planne
         _fail("consume input policy requires genuine original admission")
     lifetime.attach(policy.live)
     lifetime.adopt(policy.live_window, policy.deadline_ns)
-    material = policy.activation_planner
-    embedded = len(material.complete_root_vector_bytes) + len(material.state_enrollment_bytes)
+    material, output = policy.activation_planner, policy.current_planner
+    bridged = policy.bridge is not None
+    embedded = sum(len(raw) for raw in (material.complete_root_vector_bytes,
+        material.state_enrollment_bytes, output.complete_root_vector_bytes, output.state_enrollment_bytes))
     if total + embedded + 2 * len(activation_raw) > reservation:
         _fail("consume input decoded and wrapped originals exceed the held inventory")
     work.charge(input_bytes=embedded)
     issued = policy.payload["issuedAtEpochNs"]
     expires = min(policy.payload["expiresAtEpochNs"],
-        issued + min(material.maximum_plan_age_ns, activation.MAX_RECEIPT_AGE_NS))
+        issued + min(output.maximum_plan_age_ns, activation.MAX_RECEIPT_AGE_NS))
     if issued >= expires:
         _fail("consume input deterministic output interval is empty")
-    lifetime.narrow(expires, material.maximum_plan_age_ns, material.maximum_clock_skew_ns)
+    lifetime.narrow(expires, min(material.maximum_plan_age_ns, output.maximum_plan_age_ns),
+        min(material.maximum_clock_skew_ns, output.maximum_clock_skew_ns))
     raw = consumption._activation_originals(request[:13], work)
     before = authorization._original(request[14], state.vector.MAX_BYTES, "activation before-vector")
     decoded = issuer.capability.wire._decode_object(request[13], work=work,
@@ -368,7 +394,8 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, activation_planne
         maximum_depth=12)
     expected = expectations_wire._capture_on_work(decoded, work=work)
     _same_bytes(request[13], registration._wire(expected, work), work, "canonical activation expectations")
-    arguments, activation_scope, after = _activation_controls(raw, expected, before, policy, root, lifetime, work)
+    arguments, activation_scope, after = _activation_controls(raw, expected, before, policy,
+        policy.historical_root_public_key, lifetime, work)
     old_token = assertion._token(request[15], work)
     plan._same(_bytes_digest(old_token, work, current), arguments["old_token_digest"], work,
         "consume input actual old-token possession")
@@ -393,28 +420,33 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, activation_planne
     common = {"sourceRevision": authority.SOURCE_REVISION, "trustMode": "trusted-host-local",
         "issuedAtEpochNs": issued, "expiresAtEpochNs": expires,
         **{name: False for name in activation._FALSE_FIELDS}}
-    history_payload = {**common, "schema": history.CONSUME_PAYLOAD_SCHEMA,
-        "operation": history.CONSUME_OPERATION, "consumerRole": history.CONSUME_CONSUMER_ROLE,
+    history_payload = {**common, "schema": (history.BRIDGE_CONSUME_PAYLOAD_SCHEMA
+            if bridged else history.CONSUME_PAYLOAD_SCHEMA),
+        "operation": history.CONSUME_OPERATION, "consumerRole": (history.BRIDGE_CONSUME_CONSUMER_ROLE
+            if bridged else history.CONSUME_CONSUMER_ROLE),
         "processMode": history.CONSUME_PROCESS_MODE, "serviceUid": history.CONSUME_SERVICE_UID,
         "serviceGid": history.CONSUME_SERVICE_GID, **policy.history,
         "configurationDigest": material.configuration_digest,
         "generationDigest": material.generation["digest"], "runtimeClosureDigest": material.runtime_closure_digest,
         "plannerBootstrap": _wrapped(activation_raw, work, current),
         "consumeRequest": _wrapped(consume_bytes, work, current)}
+    if bridged:
+        history_payload["issuerPolicy"] = _wrapped(policy_raw, work, current)
     vector = _wrapped(after, work, current)
     vector["identityDigest"] = state.vector._digest_on_work(after, work=work)
-    enrollment = _wrapped(material.state_enrollment_bytes, work, current)
-    enrollment["identityDigest"] = material.state_enrollment_digest
-    planner_payload = {**common, "schema": bootstrap.PAYLOAD_SCHEMA, "role": bootstrap.ROLE,
+    enrollment = _wrapped(output.state_enrollment_bytes, work, current)
+    enrollment["identityDigest"] = output.state_enrollment_digest
+    planner_payload = {**common, "schema": (bootstrap.BRIDGE_PAYLOAD_SCHEMA
+            if bridged else bootstrap.PAYLOAD_SCHEMA), "role": bootstrap.ROLE,
         "operation": bootstrap.OPERATION, **policy.consume_planner,
-        "configurationPayload": material.configuration_payload, "configurationDigest": material.configuration_digest,
-        "generation": material.generation, "runtimeRoleIdentities": material.runtime_role_identities,
-        "runtimeClosureDigest": material.runtime_closure_digest, "authenticationPolicy": material.authn_policy,
-        "trustPolicy": material.trust_policy, "maximumPlanAgeNs": material.maximum_plan_age_ns,
-        "maximumClockSkewNs": material.maximum_clock_skew_ns,
+        "configurationPayload": output.configuration_payload, "configurationDigest": output.configuration_digest,
+        "generation": output.generation, "runtimeRoleIdentities": output.runtime_role_identities,
+        "runtimeClosureDigest": output.runtime_closure_digest, "authenticationPolicy": output.authn_policy,
+        "trustPolicy": output.trust_policy, "maximumPlanAgeNs": output.maximum_plan_age_ns,
+        "maximumClockSkewNs": output.maximum_clock_skew_ns,
         "consumeRequest": consume_request, "activationExpectations": expected, "activationScope": activation_scope,
         "historyReceiverIdentity": policy.history["receiverIdentity"],
-        "queryManifestDigest": material.configuration_payload["queryManifestDigest"],
+        "queryManifestDigest": output.configuration_payload["queryManifestDigest"],
         "completeRootVector": vector, "databaseId": activation_scope["databaseId"], "stateEnrollment": enrollment}
     current()
     return policy, lifetime, history_payload, planner_payload
@@ -446,11 +478,15 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, activation_plann
     current()
     keys._pair_on_work(private, root, work)
     current()
-    custody = history._produce_consume_on_work(payload=history_payload, root_private_key=private,
+    produce_history = (history._produce_bridge_consume_on_work if policy.bridge is not None
+        else history._produce_consume_on_work)
+    verify_history = (history._verify_bridge_consume_on_work if policy.bridge is not None
+        else history._verify_consume_on_work)
+    custody = produce_history(payload=history_payload, root_private_key=private,
         root_public_key=root, work=work, live_window=lifetime.window,
         transport_deadline_ns=lifetime.bound, _continuity=lifetime.continuity)
     current()
-    admitted_history = history._verify_consume_on_work(custody_bytes=custody, root_public_key=root,
+    admitted_history = verify_history(custody_bytes=custody, root_public_key=root,
         work=work, live_window=lifetime.window, transport_deadline_ns=lifetime.bound,
         _continuity=lifetime.continuity)
     actual_history = history._decode(custody, work)["payload"]

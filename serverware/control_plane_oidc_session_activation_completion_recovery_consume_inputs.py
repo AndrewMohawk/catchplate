@@ -39,8 +39,14 @@ def _originals_on_active(active):
     if (type(scope) is not actors._CompletionActorScope
             or type(selected) is not controls_source._CompletionControls):
         _fail("requires genuine actor and historical activation controls")
-    policy = parent.activation_execution
     request, target = scope._request, scope._target
+    historical = target.authority
+    if (type(historical) is not actors.history.historical._SelectedActivationHistory
+            or selected.authority is not historical):
+        _fail("requires the target's genuine historical activation authority")
+    policy, historical_root = historical.activation_execution, historical.root_public_key
+    if type(policy) is not execution.configured._ActivationExecutionMaterial:
+        _fail("lacks its independently admitted original activation enrollments")
     raw, completed, receiving = selected.originals, active.response, active.completion_current
     reconciliation = active.reconciliation_digest
     before, old = selected.before_bytes, scope._old_token
@@ -84,12 +90,15 @@ def _originals_on_active(active):
                 or request.scope.get("query_string", b"") != b""
                 or owner._material is not parent or owner._binding is not binding
                 or owner._custody is not custody or owner._activation_permission is not None
-                or binding.runtime_root_public_key is not root or parent.activation_execution is not policy
+                or binding.runtime_root_public_key is not root
+                or target.authority is not historical or selected.authority is not historical
+                or historical.activation_execution is not policy
+                or historical.root_public_key is not historical_root
                 or policy.authorization_enrollment_bytes is not authorization_enrollment
                 or policy.grant_enrollment_bytes is not grant_enrollment
                 or policy.current_root_enrollment_bytes is not current_root_enrollment
                 or selected._actor is not scope or selected.profile != "activation"
-                or selected.work is not work or selected.root_public_key is not root
+                or selected.work is not work or selected.root_public_key is not historical_root
                 or selected.enrollment_bytes is not current_root_enrollment
                 or selected.originals is not raw or selected.before_bytes is not before):
             _fail("changed its same-call owner, original evidence or possession")
@@ -108,6 +117,9 @@ def _originals_on_active(active):
     # Only fixed reference/identity bookkeeping is added here. The complete
     # future lane was reserved before the actor's first historical body read.
     work.charge(input_bytes=INPUT_RESERVATION_BYTES)
+    # Request grammar is unchanged. These two enrollments authenticate the
+    # original activation, not a new consume issuer/caller. The active owner's
+    # current root remains separate and cannot replace their historical root.
     activation = (*completed, raw[1], raw[2], raw[5], raw[7], raw[6], raw[0], raw[4],
         authorization_enrollment, grant_enrollment)
     originals = (*activation, expectation_bytes, before, old)

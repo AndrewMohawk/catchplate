@@ -84,3 +84,46 @@ This source-only configuration does not provision an issuer, listener, key,
 database role, TLS identity or planner/history resource. It is unbuilt and
 unexecuted and supplies no token release, public HTTP/cookie, recovery, portal
 or production-readiness evidence.
+
+## Separate historical bridge in parent v21
+
+Parent v21 adds the nullable `historicalConsumeInputAcquisition` field. It does
+not replace or widen the ordinary v1 acquisition above. Its closed nested v2
+shape keeps the same endpoint and original-policy wrapper, but requires the
+[current-root-signed issuer policy v2](oidc-session-activation-consume-input-bridge-policy.md).
+Null disables historical acquisition; older parents retain a null material
+field. No additional descriptor or private key is delivered.
+
+`_admit_historical_on_work` uses the actual admitted activation archive and the
+inherited startup work/window/deadline. The signed configuration and planner
+receipt select exactly one archived scope. Its old root, generation, original
+interval and genuine caller/grant/state enrollment identities must match the
+bridge. The helper re-admits the original policy and old planner, then requires
+the embedded current planner to equal the actual current parent's original.
+Current consume state, planner key and measurement must match the actual current
+execution lanes. Complete state-payload equality permits independent root
+signatures, not a database or generation migration.
+
+The returned material appends `historical_scope` and `bridge_interval`; these
+are same-call cold admission results, not externally accepted authority. Startup
+rechecks exact archive membership and bridge lifetime before private-key intake.
+Request processing must later re-admit the original policy under its own live
+permission and unchanged cumulative allowance.
+
+```text
+_produce_v21_on_work(*, payload, history_current_interval,
+    history_now_epoch_ns, history_live_window, history_transport_deadline_ns,
+    runtime_root_private_key, runtime_root_public_key, work)
+```
+
+The provisioner accepts the complete closed v21 payload as configuration data,
+genuinely admits all nested lanes, checks the current root pair, reserves output
+and signs in the v21 domain. It rechecks archive/bridge lifetime and original
+stability around signing; a successful material object is not a producer input.
+The policy's 6 MiB individual ceiling does not increase the sealed parent's
+4 MiB aggregate or the original work ceiling. Oversized combinations are refused.
+
+This is cold configuration only. The real request caller and protected
+delivery-plan old/current authority split remain unfinished; the historical
+effect actor is still disabled. Merely configuring v21 cannot authorize consume,
+retry an uncertain operation or release a credential.

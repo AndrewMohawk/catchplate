@@ -55,6 +55,8 @@ CONTROL_PLANE_ENROLLMENT_V19_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEn
 CONTROL_PLANE_ENROLLMENT_V19_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v19"
 CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v20"
 CONTROL_PLANE_ENROLLMENT_V20_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v20"
+CONTROL_PLANE_ENROLLMENT_V21_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v21"
+CONTROL_PLANE_ENROLLMENT_V21_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v21"
 CONTROL_PLANE_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationCompletionRecovery/v1"
 CONTROL_PLANE_ACTIVATION_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationCompletionRecoveryScope/v1"
 CONTROL_PLANE_CONSUME_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeCompletionRecoveryScope/v1"
@@ -63,6 +65,7 @@ CONTROL_PLANE_RECOVERY_GRANT_ACQUISITION_SOCKET = "/run/serverware/oidc-session-
 CONTROL_PLANE_PROOF_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseProofAcquisition/v1"
 CONTROL_PLANE_PROOF_ACQUISITION_SOCKET = "/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock"
 CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeInputAcquisition/v1"
+CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeInputAcquisition/v2"
 CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_SOCKET = "/run/serverware/oidc-session-activation-consume-inputs/grants.sock"
 CONTROL_PLANE_GRANT_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseGrantAcquisition/v1"
 CONTROL_PLANE_GRANT_ACQUISITION_SOCKET = "/run/serverware/oidc-session-activation-token-release/grants.sock"
@@ -1130,12 +1133,15 @@ def _control_plane_grant_acquisition_public_shape(value, *, handoff_value):
         raise RuntimeError("release grant acquisition endpoint differs from the fixed issuer")
 
 
-def _control_plane_consume_input_acquisition_public_shape(value, *, planning_value, activation_value):
+def _control_plane_consume_input_acquisition_public_shape(value, *, planning_value, activation_value,
+        allow_history=False):
     """Closed v13 public policy/endpoint data; no new FD or crypto authority."""
     if value is None:
         return
     if (type(value) is not dict or set(value) != {"schema", "endpoint", "issuerPolicy"}
-            or value["schema"] != CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_SCHEMA
+            or value["schema"] not in ((CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_SCHEMA,
+                CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_V2_SCHEMA) if allow_history else
+                (CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_SCHEMA,))
             or type(planning_value) is not dict or type(activation_value) is not dict
             or activation_value.get("schema") != CONTROL_PLANE_ACTIVATION_V4_SCHEMA):
         raise RuntimeError("consume input acquisition requires closed policy and enabled planning/execution")
@@ -1150,7 +1156,9 @@ def _control_plane_consume_input_acquisition_public_shape(value, *, planning_val
         raise RuntimeError("consume input issuer policy original is not closed")
     encoded, size = original["base64Url"], original["byteCount"]
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-    if (type(size) is not int or not 2 <= size <= 64 * 1024 or type(encoded) is not str
+    maximum = (6 * 1024 * 1024 if value["schema"] == CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_V2_SCHEMA
+        else 64 * 1024)
+    if (type(size) is not int or not 2 <= size <= maximum or type(encoded) is not str
             or len(encoded) != (4 * size + 2) // 3 or any(character not in alphabet for character in encoded)):
         raise RuntimeError("consume input issuer policy exceeds its original bound")
     unused = 4 if size % 3 == 1 else 2 if size % 3 == 2 else 0
@@ -1291,7 +1299,7 @@ def _control_plane_history_public_shape(payload, *, registration, finalization, 
 
 
 def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
-    """Project closed v2-v20 slots; child admission alone supplies authority."""
+    """Project closed v2-v21 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -1326,7 +1334,8 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
                     CONTROL_PLANE_ENROLLMENT_V17_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V18_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V19_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V21_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
         is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
@@ -1338,15 +1347,16 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
         is_v10 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA
         is_v11 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA
         is_v12 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA
-        is_v20 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA
+        is_v21 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V21_BOOTSTRAP_SCHEMA
+        is_v20 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA or is_v21
         is_v19 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V19_BOOTSTRAP_SCHEMA or is_v20
         is_v18 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V18_BOOTSTRAP_SCHEMA or is_v19
         is_v17 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V17_BOOTSTRAP_SCHEMA or is_v18
         is_v16 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V16_BOOTSTRAP_SCHEMA or is_v17
         is_v15 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V15_BOOTSTRAP_SCHEMA or is_v16
         is_v14 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA or is_v15
-        # v14-v20 preserve the exact v13 prefix and all ten purpose slots.
-        # v17-v20 historical inventories are data, never additional FDs.
+        # v14-v21 preserve the exact v13 prefix and all ten purpose slots.
+        # v17-v21 historical inventories and bridge policies add no FDs.
         is_v13 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA or is_v14
         payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
             "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
@@ -1384,9 +1394,12 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             payload_fields.add("finalizationHistory")
         if is_v19:
             payload_fields.add("activationHistory")
+        if is_v21:
+            payload_fields.add("historicalConsumeInputAcquisition")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V20_PAYLOAD_SCHEMA if is_v20
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V21_PAYLOAD_SCHEMA if is_v21
+                    else CONTROL_PLANE_ENROLLMENT_V20_PAYLOAD_SCHEMA if is_v20
                     else CONTROL_PLANE_ENROLLMENT_V19_PAYLOAD_SCHEMA if is_v19
                     else CONTROL_PLANE_ENROLLMENT_V18_PAYLOAD_SCHEMA if is_v18
                     else CONTROL_PLANE_ENROLLMENT_V17_PAYLOAD_SCHEMA if is_v17
@@ -1459,6 +1472,17 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             _control_plane_consume_input_acquisition_public_shape(payload["oidcSessionActivationConsumeInputAcquisition"],
                 planning_value=payload["oidcSessionActivationPlanning"],
                 activation_value=payload["oidcSessionActivationExecution"])
+        if is_v21:
+            historical_consume = payload["historicalConsumeInputAcquisition"]
+            if historical_consume is not None and (
+                    type(historical_consume) is not dict
+                    or historical_consume.get("schema") != CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_V2_SCHEMA
+                    or payload["activationHistory"] is None
+                    or payload["oidcSessionActivationConsumeExecution"] is None):
+                raise RuntimeError("historical consume acquisition requires its archive and current consume lane")
+            _control_plane_consume_input_acquisition_public_shape(historical_consume,
+                planning_value=payload["oidcSessionActivationPlanning"],
+                activation_value=payload["oidcSessionActivationExecution"], allow_history=True)
         if is_v14:
             _control_plane_proof_acquisition_public_shape(payload["oidcSessionActivationReleaseProofAcquisition"],
                 intent_value=payload["oidcSessionActivationReleaseIntent"],

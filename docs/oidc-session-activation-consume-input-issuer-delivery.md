@@ -27,6 +27,16 @@ source revision and `trusted-host-local` trust mode. Explicit launch v2 is
 `deliveryEndpoint` to the otherwise unchanged launch fields. Both envelope and
 payload schemas remain v1. No request-selected profile or v2-to-v1 fallback exists.
 
+Issuer **policy v2 is a separate version axis**, not a new launch profile. It
+embeds a current-root-authenticated historical verification bridge and the exact
+wrapped current output planner original. FD202 still contains the old activation
+planner original, while FD198/203 remain the current public/private signing pair.
+The bridge supplies an independently admitted old verifier root; it never
+supplies a private signing key or replaces the current root. Policy v1 retains
+its 64 KiB closed-schema bound and same-context behavior. Policy v2 permits at
+most 6 MiB, subject to the stricter combined representation reservation below.
+Both versions use the same six descriptors and unchanged original-only APIs.
+
 The v2 endpoint has exactly `path`, `timeoutSeconds`, `peerUid`, `peerGid`:
 `/run/serverware/oidc-session-activation/consume-bootstrap.sock`, an integer
 timeout 1..30 no greater than the signed request timeout, and root peer 0:0.
@@ -69,7 +79,7 @@ Public trust files live only under
 | 198 | `root-public-key.pem` | 16 KiB |
 | 199 | `bootstrap.json` | 16 KiB |
 | 200 | Fixed activated listener | One socket |
-| 201 | `issuer-policy.json` | 64 KiB |
+| 201 | `issuer-policy.json` | v1: 64 KiB; v2: 6 MiB |
 | 202 | `activation-planner-bootstrap.json` | 4 MiB |
 | 203 | Runtime root signer | 16 KiB |
 
@@ -91,6 +101,18 @@ the actual Ed25519 private key must pair with the runtime root. Metered key
 helpers are invoked directly, never inside a stable callback that forbids work
 changes. Six inherited descriptors remain CLOEXEC, with sealed public/private
 originals and exact listener pins. No bootstrap file is written or replaced.
+
+After fixed-bound public sealing, root delivery checks actual sealed lengths
+before decoded admission or private-key access. Startup repeats this preflight
+before its first inherited original body read. Eight cold-original footprints,
+the producer's separate cold derivation reserve, future output and framing share
+the unchanged 64 MiB ceiling. The remaining request cap is divided by eight to
+reserve request derivation before its header-authorized body allocation. Wrapped
+current-policy originals are counted inside the policy; they get no additional
+allowance. Both actual planner/state/vector inventories are checked against this
+reserve after admission, deduplicating only the identical v1 planner object.
+These are source representation limits, not heap/RSS or a full-call preallocation
+guarantee for earlier file sealing; large valid originals can fail closed.
 
 There is no delivery AES key, history bundle key, completion signer, SQL/state
 writer, journal, TLS private key or token store in this issuer inventory.
@@ -128,3 +150,8 @@ The ACK is not worker readiness, private replay, commit or token delivery. V1
 continues to return originals without staging. Neither closes the public
 dispatch/HTTP/cookie path. Installation, provisioning, runtime verification and
 production acceptance remain separate.
+
+The historical bridge does not yet authorize archived-effect public actors.
+Their explicit current-material gate remains closed until the lower delivery-plan
+historical joins are connected. No missing record selects an old root, renews an
+expiry or permits retry, and no source-only intake change proves worker readiness.

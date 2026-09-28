@@ -22,7 +22,7 @@ MAX_ORIGINAL_BYTES = issuer.MAX_ORIGINAL_BYTES
 DECODED_RESERVATION_BYTES = (3 * planner.MAX_BYTES + 2 * history.MAX_BYTES
     + 2 * issuer.MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES
     + 2 * history.MAX_CONSUME_REQUEST_BYTES + 4 * state.MAX_ENROLLMENT_BYTES
-    + 4 * state.vector.MAX_BYTES + 4 * issuer.MAX_BYTES)
+    + 4 * state.vector.MAX_BYTES + 4 * issuer.V1_MAX_BYTES)
 
 
 class ConsumeInputDeliveryAdmissionError(ValueError):
@@ -74,7 +74,8 @@ def _verify_on_work(*, planner_bootstrap_bytes, history_custody_bytes, issuer_po
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(window[4], transport_deadline_ns)
     original_bytes = sum(map(len, (original, custody, policy_original, activation_original)))
-    if original_bytes + DECODED_RESERVATION_BYTES > MAX_ORIGINAL_BYTES:
+    bridge_capture = 8 * max(0, len(policy_original) - issuer.V1_MAX_BYTES)
+    if original_bytes + DECODED_RESERVATION_BYTES + bridge_capture > MAX_ORIGINAL_BYTES:
         _fail("consume staging exceeds its complete original and decoded inventory")
     capture._SharedLedger(work)
     work.charge(input_bytes=original_bytes)
@@ -92,15 +93,16 @@ def _verify_on_work(*, planner_bootstrap_bytes, history_custody_bytes, issuer_po
         _fail("consume staging requires genuine independent policy admission")
     lifetime.attach(policy.live)
     lifetime.adopt(policy.live_window, policy.deadline_ns)
-    activation = policy.activation_planner
+    activation, output = policy.activation_planner, policy.current_planner
     if type(activation) is not issuer.activation._PlannerMaterial:
         _fail("consume staging lacks the genuine policy-bound historical activation original")
     issued = policy.payload["issuedAtEpochNs"]
     expires = min(policy.payload["expiresAtEpochNs"],
-        issued + min(activation.maximum_plan_age_ns, issuer.activation.MAX_RECEIPT_AGE_NS))
+        issued + min(output.maximum_plan_age_ns, issuer.activation.MAX_RECEIPT_AGE_NS))
     if issued >= expires:
         _fail("consume staging deterministic policy-derived interval is empty")
-    lifetime.narrow(expires, activation.maximum_plan_age_ns, activation.maximum_clock_skew_ns)
+    lifetime.narrow(expires, min(activation.maximum_plan_age_ns, output.maximum_plan_age_ns),
+        min(activation.maximum_clock_skew_ns, output.maximum_clock_skew_ns))
     current()
     material = planner._verify_on_work(bootstrap_bytes=original, history_custody_bytes=custody,
         root_public_key=root, live_window=lifetime.window, transport_deadline_ns=lifetime.bound,
@@ -115,7 +117,7 @@ def _verify_on_work(*, planner_bootstrap_bytes, history_custody_bytes, issuer_po
             (material.history_custody_bytes, custody, "exact history original"),
             (nested.custody_bytes, custody, "genuinely admitted history original"),
             (nested.planner.bootstrap_bytes, activation_original, "independent historical planner original"),
-            (material.state_enrollment_bytes, activation.state_enrollment_bytes, "state enrollment original"),
+            (material.state_enrollment_bytes, output.state_enrollment_bytes, "current state enrollment original"),
             (material.consume_request_bytes, nested.consume_request_bytes, "paired consume request")):
         producer._same_bytes(actual, expected, work, "consume staging " + label)
         current()
@@ -127,29 +129,29 @@ def _verify_on_work(*, planner_bootstrap_bytes, history_custody_bytes, issuer_po
     current()
     expected_static = {
         **policy.consume_planner,
-        "configurationPayload": activation.configuration_payload,
-        "configurationDigest": activation.configuration_digest,
-        "generation": activation.generation,
-        "runtimeRoleIdentities": activation.runtime_role_identities,
-        "runtimeClosureDigest": activation.runtime_closure_digest,
-        "authenticationPolicy": activation.authn_policy,
-        "trustPolicy": activation.trust_policy,
-        "maximumPlanAgeNs": activation.maximum_plan_age_ns,
-        "maximumClockSkewNs": activation.maximum_clock_skew_ns,
+        "configurationPayload": output.configuration_payload,
+        "configurationDigest": output.configuration_digest,
+        "generation": output.generation,
+        "runtimeRoleIdentities": output.runtime_role_identities,
+        "runtimeClosureDigest": output.runtime_closure_digest,
+        "authenticationPolicy": output.authn_policy,
+        "trustPolicy": output.trust_policy,
+        "maximumPlanAgeNs": output.maximum_plan_age_ns,
+        "maximumClockSkewNs": output.maximum_clock_skew_ns,
         "historyReceiverIdentity": policy.history["receiverIdentity"],
-        "queryManifestDigest": activation.configuration_payload["queryManifestDigest"],
+        "queryManifestDigest": output.configuration_payload["queryManifestDigest"],
     }
     _same_graph({name: payload[name] for name in expected_static}, expected_static,
         work, current, "consume staging complete independent static planner configuration")
     # This independently admitted state original pins database/generation; do
     # not infer database identity from a DSN or incoming dynamic request graph.
-    enrollment = state._admit_enrollment_on_work(enrollment_bytes=activation.state_enrollment_bytes,
+    enrollment = state._admit_enrollment_on_work(enrollment_bytes=output.state_enrollment_bytes,
         root_public_key=root, work=work)
     current()
     plan._same((payload["databaseId"], payload["activationScope"]["databaseId"],
         payload["activationScope"]["generationDigest"], material.state_enrollment_digest),
         (enrollment.payload["databaseId"], enrollment.payload["databaseId"],
-            activation.generation["digest"], activation.state_enrollment_digest), work,
+            activation.generation["digest"], output.state_enrollment_digest), work,
         "consume staging independently enrolled database and generation")
     predecessor = policy.activation_predecessor
     plan._same((payload["activationScope"]["pendingSequence"], payload["activationScope"]["fence"]),

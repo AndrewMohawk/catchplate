@@ -1133,6 +1133,16 @@ def initialize_from_environment():
                         or not activation_history.valid_from_epoch_ns
                             <= history_now < activation_history.valid_until_epoch_ns):
                     raise EnrollmentStartupError("activation history changed or expired during cold admission")
+            acquisition = material.historical_consume_input_acquisition
+            if acquisition is not None and acquisition.historical_scope is not None:
+                interval = acquisition.bridge_interval
+                if (material.activation_history is None
+                        or not any(scope is acquisition.historical_scope for scope in material.activation_history.scopes)
+                        or type(interval) is not tuple or len(interval) != 2
+                        or any(type(value) is not int or value <= 0 for value in interval)
+                        or interval[0] > history_now + history_window[6]
+                        or not interval[0] < interval[1] or history_now >= interval[1]):
+                    raise EnrollmentStartupError("consume bridge changed or expired before private-key intake")
             key_fd, policy, public_key = (material.issuer_private_key_fd,
                 material.issuer_policy, material.issuer_public_key)
             key, key_identity, response_path, response_pin = None, None, None, None

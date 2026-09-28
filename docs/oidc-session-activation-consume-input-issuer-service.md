@@ -25,6 +25,14 @@ match the runtime root. No AES, private history, completion signer, database
 connection or journal is opened by this owner. Explicit signed launch v2 adds
 one fixed public-original staging channel, not private resource custody.
 
+Policy v2, independently of launch v2, carries the current-root-signed historical
+bridge and wrapped current output planner. The existing FD202 retains its old
+planner meaning; no descriptor, producer argument or received material object is
+added. The original-only producer re-admits the policy and uses its independent
+historical root only for old controls, while the inherited current root key pair
+signs new output. V1 retains its same-context behavior and 64 KiB policy limit;
+v2 permits at most 6 MiB before the combined limits tighten it further.
+
 Original process/PID, closed environment, permanent credentials, immutable
 configuration references, sealed descriptors and listener pins remain checked.
 Only the actual accepted, peer-checked socket and the v2 owner's actual single
@@ -43,9 +51,18 @@ carrier can replace the independently inherited originals.
 Before body allocation, the native header must fit a tightening request cap
 computed from the actual held cold/decoded/wrapped original inventory, both
 output originals, derived payload reservation and framing within 64 MiB.
+The pre-body cold reserve includes eight actual sealed-original footprints plus
+the shared producer cold-derivation reserve, output and both wire headers. Only
+one eighth of the remaining bytes is available to the request body, so request
+captures cannot obtain a separate 64 MiB allowance. Both old and current decoded
+planner/state/vector representations must fit the already held reserve; only an
+identical v1 planner object is deduplicated. These are source-accounting bounds,
+not heap/RSS measurements.
 The signed request timeout is applied once to the original opening. Policy
 and deterministic output expiry, maximum age and skew can only shorten that
 same allowance; accept, parsing and signing never open a new one.
+The deterministic new-output interval comes from the admitted current planner;
+historical and current age/skew constraints both remain restrictive.
 
 The service invokes the genuine original-only producer once with the exact
 raw16 suffix, held independent policy/planner originals and actual root key
@@ -93,3 +110,7 @@ the base Compose file is unchanged. None of these source definitions performs
 installation, provisioning or a production acceptance check. The separate opt-in
 issuer staging drop-in is required only for launch v2 and leaves v1 packaging
 independent of the dynamic receiver.
+
+This bridged intake does not open the public archived-effects gate: the lower
+delivery-plan historical-authority join remains separate. No retry, old-expiry
+renewal, current-session result or production acceptance is established here.

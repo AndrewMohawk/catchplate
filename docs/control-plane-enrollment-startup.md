@@ -10,11 +10,18 @@ Actual deployment provisioning and public orchestration remain open.
 
 ## Historical inventory projection
 
-The `.222` launcher connection recognizes the exact v17–v20 enrollment envelope
+The `.223` launcher connection recognizes the exact v17–v21 enrollment envelope
 and payload schemas. These preserve the existing ten-field purpose projection:
 registration, finalization and activation histories are bounded data namespaces,
 not additional key descriptors or live permissions. V19 accepts activation
 history v1 only; v20 also accepts v2's independent completion expectations.
+V21 adds a separate nullable historical consume-input acquisition lane, leaving
+the ordinary v1 acquisition unchanged. Its policy and archive are public data,
+not an additional purpose slot. Genuine child admission joins both old and
+current contexts; startup checks exact archive membership and the fresh bridge
+interval before private-key intake. The real historical effect caller remains
+disabled pending its protected planning connection. See the
+[v21 cold bridge contract](control-plane-oidc-session-activation-consume-input-acquisition-bootstrap.md#separate-historical-bridge-in-parent-v21).
 The earlier launcher allowlist stopped at v16, so child history admission alone
 was insufficient to start those newer profiles.
 

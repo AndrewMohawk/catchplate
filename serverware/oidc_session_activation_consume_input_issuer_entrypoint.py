@@ -34,7 +34,7 @@ ENVIRONMENT = {"PATH": "/runtime/python/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "
     "LD_LIBRARY_PATH": "/runtime/python/lib", "PYTHONDONTWRITEBYTECODE": "1",
     "SERVERWARE_PROCESS_MODE": PROCESS_MODE, ROOT_ENV: str(ROOT_FD), BOOTSTRAP_ENV: str(BOOTSTRAP_FD)}
 MAX_ROOT_BYTES = MAX_BOOTSTRAP_BYTES = MAX_KEY_BYTES = 16 * 1024
-MAX_POLICY_BYTES = 64 * 1024
+MAX_POLICY_BYTES = 6 * 1024 * 1024
 MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES = 4 * 1024 * 1024
 MAX_ORIGINAL_BYTES = 64 * 1024 * 1024
 _TRUST_FILES = ((ROOT_PATH, ROOT_FD, MAX_ROOT_BYTES),
@@ -242,6 +242,14 @@ def main():
             _retain(source, target, reservations, owned)
             if not _close_owned_descriptor(source, owned):
                 raise RuntimeError("consume issuer public source cleanup is uncertain")
+        # Public sealing above has its fixed raw bounds. Before decoded
+        # admission or private access, reserve both cold captures and this
+        # worker's future original-only derivation inside the same 64 MiB.
+        current()
+        public_sizes = tuple(_sealed_identity(descriptor, maximum)[0][6]
+            for _path, descriptor, maximum in _TRUST_FILES)
+        bootstrap._intake_reservation((*public_sizes, MAX_KEY_BYTES))
+        current()
         public = []
         for _path, descriptor, maximum in _TRUST_FILES:
             current()

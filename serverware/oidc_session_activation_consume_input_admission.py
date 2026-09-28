@@ -100,6 +100,9 @@ def _verify_on_work(*, response_originals, request_originals, issuer_policy_byte
         material.state_enrollment_bytes, material.history_material.planner.bootstrap_bytes,
         material.history_material.planner.complete_root_vector_bytes,
         material.history_material.planner.state_enrollment_bytes)
+    if policy.bridge is not None:
+        decoded += (policy.current_planner.bootstrap_bytes, policy.current_planner.state_enrollment_bytes,
+            policy.current_planner.complete_root_vector_bytes)
     # Reserve comparison encodings as well as the retained graph originals
     # before making either pair of canonical byte buffers.
     if original_bytes + 2 * graph_bytes + sum(map(len, decoded)) > captures:

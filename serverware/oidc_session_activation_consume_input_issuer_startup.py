@@ -91,6 +91,7 @@ def _cleanup_inherited():
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
 class _Configuration:
     material: object
+    policy_contexts: tuple
     root: object
     key: object
     work: object
@@ -204,6 +205,11 @@ class _IssuerOwner:
             _fail("consume input issuer replaced its original clock or work lifetime")
         if configured.material.delivery_endpoint is not configured.delivery_endpoint:
             _fail("consume input issuer replaced its admitted staging endpoint")
+        policy = configured.material.policy_material
+        if any(actual is not expected for actual, expected in zip((policy,
+                policy.activation_planner, policy.current_planner,
+                policy.historical_root_public_key, policy.bridge), configured.policy_contexts)):
+            _fail("consume input issuer replaced its historical or current policy context")
         _process(configured.namespace)
         for descriptor, maximum, private, identity in configured.sealed:
             if delivery._sealed_identity(descriptor, maximum, private=private) != identity:
@@ -510,9 +516,7 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
                 for descriptor, _maximum, _private in descriptions))
             # Reject before any original body read. Request-specific intake is
             # bounded again after authenticating the actual decoded inventory.
-            cold_reservation = sum(sizes) + producer._OUTPUT_RESERVATION
-            if cold_reservation + transport.REQUEST_HEADER_BYTES + transport.RESPONSE_HEADER_BYTES >= bootstrap.MAX_ORIGINAL_BYTES:
-                _fail("consume input issuer cold inventory leaves no bounded exchange")
+            held_reservation, reserved_request_bytes = bootstrap._intake_reservation(sizes)
             raws = []
             for descriptor, maximum, _private, identity in sealed[:-1]:
                 current()
@@ -544,21 +548,35 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
                 _fail("consume input issuer launch changed the fixed inventory or peer")
             policy = material.policy_material
             historical = policy.activation_planner
+            output_context = policy.current_planner
+            if (type(historical) is not producer.activation._PlannerMaterial
+                    or type(output_context) is not producer.activation._PlannerMaterial):
+                _fail("consume input issuer requires genuine old and current planner originals")
+            bootstrap.authorization._public(policy.historical_root_public_key)
+            if policy.bridge is None and (output_context is not historical
+                    or policy.historical_root_public_key is not root):
+                _fail("consume input issuer v1 changed its original same-root context")
+            policy_contexts = (policy, historical, output_context,
+                policy.historical_root_public_key, policy.bridge)
             issued = policy.payload["issuedAtEpochNs"]
             expiry = min(policy.payload["expiresAtEpochNs"],
-                issued + min(historical.maximum_plan_age_ns, producer.activation.MAX_RECEIPT_AGE_NS))
+                issued + min(output_context.maximum_plan_age_ns, producer.activation.MAX_RECEIPT_AGE_NS))
             timeout_ns = launch["requestTimeoutSeconds"] * 1_000_000_000
+            # Original execution constraints remain restrictive, but fresh
+            # output derives from the independently admitted current context.
+            lifetime.narrow(lifetime.window[3], historical.maximum_plan_age_ns,
+                historical.maximum_clock_skew_ns)
             lifetime.narrow(min(expiry, lifetime.window[0] + timeout_ns),
-                min(historical.maximum_plan_age_ns, timeout_ns), historical.maximum_clock_skew_ns)
+                min(output_context.maximum_plan_age_ns, timeout_ns), output_context.maximum_clock_skew_ns)
             listener_pins = tuple(launch[name] for name in ("listenerSocketDevice", "listenerSocketInode",
                 "listenerPathDevice", "listenerPathInode"))
-            decoded = len(historical.complete_root_vector_bytes) + len(historical.state_enrollment_bytes)
-            held_bytes = sum(sizes) + decoded + 2 * len(activation_raw)
-            maximum_request_bytes = min(transport.MAX_REQUEST_BYTES,
-                bootstrap.MAX_ORIGINAL_BYTES - held_bytes - producer._OUTPUT_RESERVATION
-                - transport.REQUEST_HEADER_BYTES - transport.RESPONSE_HEADER_BYTES)
-            if maximum_request_bytes <= 0:
-                _fail("consume input issuer decoded inventory leaves no bounded request")
+            contexts = ((historical,) if output_context is historical else
+                (historical, output_context))
+            decoded = sum(len(value.complete_root_vector_bytes) + len(value.state_enrollment_bytes)
+                + 2 * len(value.bootstrap_bytes) for value in contexts)
+            if sum(sizes) + decoded > held_reservation:
+                _fail("consume input issuer decoded contexts exceed their pre-body reservation")
+            held_bytes, maximum_request_bytes = held_reservation, reserved_request_bytes
             current()
             key = delivery._key_on_work(material, root, work, current=current)
             current()
@@ -570,7 +588,7 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
             work.charge(input_bytes=4096)
             production._callback(work, wrap_listener)
             current()
-            configured = _Configuration(material, root, key, work, work.limits, lifetime.ceilings,
+            configured = _Configuration(material, policy_contexts, root, key, work, work.limits, lifetime.ceilings,
                 lifetime, tuple(lifetime.guards), lifetime.window, lifetime.bound, namespace, sealed,
                 _listener_object, listener_pins, held_bytes, maximum_request_bytes, material.delivery_endpoint)
             owner = object.__new__(_IssuerOwner)

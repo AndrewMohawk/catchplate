@@ -47,6 +47,8 @@ TLS_LIMITS, MIN_TLS_BYTES = shared.TLS_LIMITS, shared.MIN_TLS_BYTES
 MAX_BYTES = 4 * 1024 * 1024
 SCHEMA = "serverware.signedOidcSessionActivationDeliveryPlannerBootstrap/v2"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryPlannerBootstrap/v2"
+BRIDGE_SCHEMA = "serverware.signedOidcSessionActivationDeliveryPlannerBootstrap/v3"
+BRIDGE_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryPlannerBootstrap/v3"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryPlannerLaunch/v2"
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "role", "operation", "configurationPayload",
     "configurationDigest", "generation", "runtimeRoleIdentities", "runtimeClosureDigest", "planner",
@@ -143,7 +145,9 @@ def _launch(value, work):
 
 def _payload(value, work):
     shape._object(value, _PAYLOAD_FIELDS, "consume planner bootstrap")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    if value["schema"] not in (PAYLOAD_SCHEMA, BRIDGE_PAYLOAD_SCHEMA):
+        _fail("consume planner payload has an unsupported fixed profile")
+    for name, expected in (("sourceRevision", authority.SOURCE_REVISION),
             ("role", ROLE), ("operation", OPERATION), ("trustMode", "trusted-host-local")):
         shape._literal(value[name], expected)
     for name in ("configurationDigest", "runtimeClosureDigest", "queryManifestDigest", "journalKeyDigest", "executionBundleKeyDigest"):
@@ -207,6 +211,9 @@ def _planner_key(payload, configured, nested, root, work):
     roles = configured["roles"]
     shape._object(roles, frozenset(configuration._ROLE_NAMES), "consume configured roles")
     forbidden = [keys._spki_on_work(root, work), nested.planner.planner_spki_digest]
+    if nested.bridge_policy is not None:
+        forbidden.extend((keys._spki_on_work(nested.historical_root_public_key, work),
+            nested.bridge_policy.current_planner.planner_spki_digest))
     for name in configuration._ROLE_NAMES:
         role = roles[name]
         shape._literal(role["processMode"], "policy-authority-" + name)
@@ -260,21 +267,43 @@ def _material(payload, original, custody, root, window, bound, opening, current,
     if len(custody) != pin["byteCount"]:
         _fail("consume history original length differs")
     plan._same(_sha(custody, work), pin["bytesDigest"], work, "consume history original digest differs")
-    verifier = history._verify_historical_consume_on_work if historical else history._verify_consume_on_work
+    bridged = payload["schema"] == BRIDGE_PAYLOAD_SCHEMA
+    if bridged and historical:
+        _fail("bridged consume planner has no implicit historical execution profile")
+    verifier = (history._verify_bridge_consume_on_work if bridged else
+        history._verify_historical_consume_on_work if historical else history._verify_consume_on_work)
     continuity_arguments = {}
     if _continuity is not None:
         continuity_arguments["_continuity"] = _continuity
     nested = verifier(custody_bytes=custody, root_public_key=root,
         work=work, live_window=window, transport_deadline_ns=bound, **continuity_arguments)
     current()
+    if bridged and nested.bridge_policy is None:
+        _fail("bridged consume planner lacks the genuine current-root policy original")
+    output = nested.bridge_policy.current_planner if bridged else nested.planner
     plan._same((payload["configurationDigest"], generation["digest"], payload["runtimeClosureDigest"],
-        payload["historyReceiverIdentity"]), (nested.planner.configuration_digest, nested.planner.generation["digest"],
-        nested.planner.runtime_closure_digest, nested.receiver_identity), work, "consume/history cohort differs")
-    plan._same(payload["runtimeRoleIdentities"], nested.planner.runtime_role_identities, work,
+        payload["historyReceiverIdentity"]), (output.configuration_digest, output.generation["digest"],
+        output.runtime_closure_digest, nested.receiver_identity), work, "consume independently authorized output cohort differs")
+    plan._same(payload["runtimeRoleIdentities"], output.runtime_role_identities, work,
         "consume/history runtime identity cohort differs")
-    if (payload["maximumPlanAgeNs"] > nested.planner.maximum_plan_age_ns
-            or payload["maximumClockSkewNs"] > nested.planner.maximum_clock_skew_ns):
+    if (payload["maximumPlanAgeNs"] > output.maximum_plan_age_ns
+            or payload["maximumClockSkewNs"] > output.maximum_clock_skew_ns):
         _fail("consume processing policy widens nested historical custody")
+    if bridged:
+        policy = nested.bridge_policy
+        expected_static = {**policy.consume_planner,
+            "configurationPayload": output.configuration_payload,
+            "authenticationPolicy": output.authn_policy, "trustPolicy": output.trust_policy,
+            "maximumPlanAgeNs": output.maximum_plan_age_ns,
+            "maximumClockSkewNs": output.maximum_clock_skew_ns}
+        actual_bytes = configuration._configuration_wire(
+            {name: payload[name] for name in expected_static}, capture._SharedLedger(work))
+        expected_bytes = configuration._configuration_wire(expected_static, capture._SharedLedger(work))
+        _same_bytes(actual_bytes, expected_bytes, work, "bridged consume independent current configuration")
+        plan._same((payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]),
+            nested.attestation_interval, work, "bridged consume paired fresh policy interval")
+        policy.live()
+        current()
     if payload["journalKeyDigest"] in (nested.bundle_key_digest, nested.delivery_key_digest,
             nested.planner.journal_key_digest):
         _fail("consume journal key reuses an activation custody purpose")
@@ -301,10 +330,15 @@ def _material(payload, original, custody, root, window, bound, opening, current,
         work, "activation expectations differ from historical planner")
     planner = _planner_key(payload, configured, nested, root, work)
     state_original, state_digest = shared._state_enrollment(payload, generation, root, work)
-    _same_bytes(state_original, nested.planner.state_enrollment_bytes, work,
-        "consume/history current-root enrollment original differs")
+    _same_bytes(state_original, output.state_enrollment_bytes, work,
+        "consume independently authorized current-root enrollment original differs")
     plan._same((payload["activationScope"]["databaseId"], payload["activationScope"]["generationDigest"]),
         (payload["databaseId"], generation["digest"]), work, "activation provenance database/generation differs")
+    if bridged:
+        # The bridge authenticates equal COMPLETE state payloads under their
+        # separate roots. It authorizes key rotation, not state migration.
+        plan._same(payload["activationScope"]["generationDigest"], nested.planner.generation["digest"],
+            work, "bridged consume retains original activation generation")
     record = payload["completeRootVector"]
     vector = authorization.transport._decode(record["base64Url"], record["byteCount"], shared.vector.MAX_BYTES, work)
     plan._same(_sha(vector, work), record["bytesDigest"], work, "consume vector bytes differ")
@@ -342,16 +376,19 @@ def _verify_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
         inherited()
         envelope = shared.codec._decode(original, work)
         shape._object(envelope, shared._ENVELOPE_FIELDS, "signed consume bootstrap")
-        shape._literal(envelope["schema"], SCHEMA)
+        schema = envelope["schema"]
+        if schema not in (SCHEMA, BRIDGE_SCHEMA):
+            _fail("consume planner has an unsupported signed profile")
         shape._base64url(envelope["signatureBase64Url"], signature=True)
         if type(envelope["payload"]) is not dict:
             _fail("consume bootstrap payload is not an exact object")
         shared.codec._canonical(original, envelope, work)
         unsigned = configuration._configuration_wire(envelope["payload"], capture._SharedLedger(work))
-        capability._signature(root, envelope["signatureBase64Url"], SCHEMA, unsigned, capture._SharedLedger(work))
+        capability._signature(root, envelope["signatureBase64Url"], schema, unsigned, capture._SharedLedger(work))
         inherited()
         payload = envelope["payload"]
         _payload(payload, work)
+        shape._literal(payload["schema"], BRIDGE_PAYLOAD_SCHEMA if schema == BRIDGE_SCHEMA else PAYLOAD_SCHEMA)
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = shared._fresh(interval, work)
         current = shared._launch_guard(interval, opening, inherited, work, _continuity=_continuity)
@@ -425,13 +462,14 @@ def _produce_on_work(*, payload, history_custody_bytes, root_private_key, root_p
     inherited = shared._processing(window, bound, work, _continuity=_continuity)
     inherited()
     _payload(owned, work)
+    schema = BRIDGE_SCHEMA if owned["schema"] == BRIDGE_PAYLOAD_SCHEMA else SCHEMA
     interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
     opening = shared._fresh(interval, work)
     current = shared._launch_guard(interval, opening, inherited, work, _continuity=_continuity)
     _material(owned, b"", custody, root, window, bound, opening, current, work, _continuity=_continuity)
     unsigned = configuration._configuration_wire(owned, capture._SharedLedger(work))
     current()
-    original = shared.signing._sign(owned, SCHEMA, MAX_BYTES, private, root, work)
+    original = shared.signing._sign(owned, schema, MAX_BYTES, private, root, work)
     shared.codec._canonical(unsigned, owned, work)
     current()
     return original

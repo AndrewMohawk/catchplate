@@ -28,6 +28,14 @@ there is no second journal read or reconstructed preparation body:
 | 13–14 | Original expectations bytes and independently joined before-vector |
 | 15 | Actual fresh actor's 64-byte old-token possession |
 
+The `.223` extractor takes the caller/grant enrollment originals from the exact
+selected historical target authority and requires the controls to retain that
+same authority object. Their old root is distinct from the owner's current
+root; neither current enrollment substitution nor a root supplied by request
+data is accepted. This source connection does not lift the actor's historical
+effect refusal. The signed input bridge and actual current-authority planning
+and caller joins remain separate from raw16 extraction.
+
 Existing transport/frame limits and raw13 activation framing are applied on the
 same work. The actual old token is grammar-checked and hashed against the genuine
 historical target commitment. Expectation bytes are preserved unchanged: the

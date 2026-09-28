@@ -2,7 +2,8 @@
 
 Implementation decision after `.218`, connected for registration in `.219`,
 finalization history in `.220`, activation recovery targets in `.221`, and
-activation/consume completion recovery in `.222`:
+activation/consume completion recovery in `.222`, and consume-input bridging
+in `.223`:
 reuse the existing independently
 root-admitted historical archive and genuine original replay. Do not create a
 second trust catalog, infer retired keys from stored records, or weaken a
@@ -18,8 +19,11 @@ archived authority when deriving its target and old-token possession. The
 [completion recovery connection](control-plane-oidc-session-activation-completion-recovery.md)
 now carries independently archived completion expectations through fresh actor
 binding, actual original-control verification, durable response retention and
-genuine receiving. Fresh consume effects, proof, grant and release authorities
-still need their own historical joins. Explicit older-source replay
+genuine receiving. The [signed consume-input bridge](oidc-session-activation-consume-input-bridge.md)
+now authenticates old activation evidence separately from current input issuance
+and worker intake. The actual protected delivery-plan and caller connection is
+still open. Fresh consume effects, proof, grant and release authorities
+still need their remaining historical joins. Explicit older-source replay
 implementations also remain open.
 
 ## Existing components and the actual gap
@@ -41,9 +45,12 @@ v18 adds optional finalization inventory and v19 adds optional activation
 inventory against that **same** archive and its independently authenticated roots.
 V20 adds activation-history v2's independently configured completion packet,
 authorization and pending pins; v19 remains v1-only. The actual descriptor
-launcher now recognizes v17–v20 data fields without extracting any historical
+launcher now recognizes v17–v21 data fields without extracting any historical
 key slots or adding live purpose descriptors. Full child admission still
-authenticates the original sealed parent and all selected history.
+authenticates the original sealed parent and all selected history. V21 adds a
+separate nullable `historicalConsumeInputAcquisition` lane with genuine archived
+and current-context joins; ordinary acquisition remains v1. The bridge policy
+does not enable an archived effect actor or introduce another private key.
 Older schemas leave the corresponding history
 lane disabled. Null is explicit disablement, not archive discovery or fallback.
 The existing sealed parent bootstrap is also capped at 4 MiB: archived originals
@@ -84,6 +91,8 @@ the real producer, startup, bounded loader and public recovery continuation.
 `.220` advances step 4 through finalization and its activation prerequisites;
 `.221` adds the two actual activation recovery target/possession consumers and
 `.222` connects actual activation/consume completion controls and receiving.
+`.223` adds signed old/current consume-input bridging and cold intake, with
+same-database/generation complete state-payload equality under independent roots.
 Downstream effect/release history and step 5 remain open. None is runtime-verified.
 
 1. Cold-admit the operation-specific historical enrollment originals alongside
@@ -109,8 +118,13 @@ Downstream effect/release history and step 5 remain open. None is runtime-verifi
    Independent completion packet/auth/pending pins now join the phase's archived
    caller, planner, grant, reservation and state originals; their original
    intervals remain contained in the selected archive interval. The current
-   enabled endpoint remains separate. Fresh consume, proof, grant and release
-   policies still require their own historical joins.
+   enabled endpoint remains separate. The current-root-signed consume-input
+   bridge now authenticates both old and current planner/state originals, and
+   produces history v7 and planner v3 inputs without renewing original expiry.
+   The next connection is the actual protected delivery-plan old-provenance/
+   current-state split and the real caller using the separate v21 lane. Do not
+   lift the actor gate until those joins exist. Fresh consume effects, proof,
+   grant and release policies still require their remaining historical joins.
 5. Admit older source revisions only through explicit versioned replay code
    covering their original schemas and semantics. Unsupported revisions and
    unknown or ambiguous cohorts continue to fail closed. Do not rewrite signed
@@ -147,7 +161,10 @@ flowchart TD
     T --> N[Fresh actor and current enabled endpoint]
     E --> N
     N --> Q[Original controls, durable response and genuine completion receiving]
-    Q --> D[Separate fresh consume and protected-release authority still required]
+    Q --> B[Current-root-signed bridge: old evidence and current consume inputs]
+    B --> I[History v7 and planner v3 production, receiving and cold intake]
+    I --> D[Protected planner and caller integration still required; actor closed]
+    D --> L[Separate fresh proof, grant and protected-release authority]
 ```
 
 Retained headers locate admitted entries; signatures and complete semantic replay

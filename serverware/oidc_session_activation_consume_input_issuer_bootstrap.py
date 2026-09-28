@@ -4,6 +4,8 @@ The independent policy and activation planner remain separate public originals.
 Actual policy admission precedes private signer access by the cold owner. This
 v1 has no worker staging endpoint. Explicit launch v2 adds only fixed staging;
 neither version creates resources or acquires historical private-key custody.
+Issuer policy v2 separately admits historical verification and current output
+contexts inside the existing policy original; it adds no launch descriptor.
 """
 from __future__ import annotations
 
@@ -196,6 +198,29 @@ def _inventory(size, policy_original, activation_original, work):
     if total > MAX_ORIGINAL_BYTES:
         _fail("consume issuer originals exceed their 64 MiB aggregate bound")
     work.charge(input_bytes=total)
+
+
+def _intake_reservation(sizes):
+    """Fixed cold captures plus future derivation, before decoded intake.
+
+    Root delivery supplies the sealed public lengths and a conservative private
+    key maximum; startup supplies all five actual sealed lengths. The current
+    planner original is already contained in policy v2, not an extra allowance.
+    """
+    limits = (MAX_BYTES, MAX_BYTES, MAX_POLICY_BYTES,
+        MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES, MAX_KEY_BYTES)
+    if (type(sizes) is not tuple or len(sizes) != len(limits)
+            or any(type(size) is not int or not 2 <= size <= maximum
+                for size, maximum in zip(sizes, limits))):
+        _fail("consume issuer intake requires its exact bounded cold lengths")
+    held = (8 * sum(sizes)
+        + primitives._cold_derivation_reservation(sizes[2], sizes[3]))
+    remaining = (MAX_ORIGINAL_BYTES - held - primitives._OUTPUT_RESERVATION
+        - transport.REQUEST_HEADER_BYTES - transport.RESPONSE_HEADER_BYTES)
+    maximum_request = min(transport.MAX_REQUEST_BYTES, remaining // 8)
+    if maximum_request <= len(transport.PURPOSE):
+        _fail("consume issuer cold captures leave no bounded request derivation")
+    return held, maximum_request
 
 
 def _signature(envelope, root, work):

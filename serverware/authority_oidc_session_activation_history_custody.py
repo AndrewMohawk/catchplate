@@ -52,6 +52,7 @@ class _Configuration:
     consume_planning: bool
     consume_request_bytes: bytes | None
     consumer_role: str
+    historical_root_public_key: object
 
 
 def _identity(value, work):
@@ -99,6 +100,8 @@ def _verifier(purpose):
         return bootstrap._verify_on_work
     if purpose == bootstrap.CONSUME_CONSUMER_ROLE:
         return bootstrap._verify_consume_on_work
+    if purpose == bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE:
+        return bootstrap._verify_bridge_consume_on_work
     if purpose == bootstrap.CONSUME_GRANT_CONSUMER_ROLE:
         return bootstrap._verify_consume_grant_on_work
     if purpose == bootstrap.CONSUME_RESERVE_CONSUMER_ROLE:
@@ -152,7 +155,7 @@ class OidcSessionActivationHistoryCustody:
     def for_consume_planning(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
             expected_consume_request, bundle_key, delivery_custody_key, live_window,
             transport_deadline_ns, work, _current=None):
-        """Fixed v2 factory; never reinterpret a completion owner or material."""
+        """Fixed v2/v7 originals; never reinterpret another purpose's material."""
         if cls is not OidcSessionActivationHistoryCustody:
             _fail("consume history requires the exact configured owner class")
         owner = object.__new__(cls)
@@ -161,7 +164,7 @@ class OidcSessionActivationHistoryCustody:
             expected_consume_request=expected_consume_request, bundle_key=bundle_key,
             delivery_custody_key=delivery_custody_key, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work,
-            purpose=bootstrap.CONSUME_CONSUMER_ROLE, _current=_current)
+            purpose=bootstrap._planning_purpose_on_work(custody_bytes, work), _current=_current)
         return owner
 
     @classmethod
@@ -270,7 +273,8 @@ class OidcSessionActivationHistoryCustody:
             material.planner.maximum_plan_age_ns, material.planner.maximum_clock_skew_ns,
             material.planner.attestation_interval,
             material.attestation_interval, material.opening_sample, receiver,
-            purpose == bootstrap.CONSUME_CONSUMER_ROLE, expected_request, purpose)
+            purpose in (bootstrap.CONSUME_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE),
+            expected_request, purpose, material.historical_root_public_key)
         object.__setattr__(self, "_configured", configured)
         object.__setattr__(self, "_seal", configured)
         object.__setattr__(self, "_pid", os.getpid())
@@ -290,7 +294,8 @@ class OidcSessionActivationHistoryCustody:
         configured = self._configured
         consume = bootstrap._requires_consume_request(configured.consumer_role)
         if (type(configured.consume_planning) is not bool
-                or configured.consume_planning is not (configured.consumer_role == bootstrap.CONSUME_CONSUMER_ROLE)
+                or configured.consume_planning is not (configured.consumer_role in (
+                    bootstrap.CONSUME_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE))
                 or (consume and (type(configured.consume_request_bytes) is not bytes
                     or not 2 <= len(configured.consume_request_bytes) <= bootstrap.MAX_CONSUME_REQUEST_BYTES))
                 or (not consume and configured.consume_request_bytes is not None)):
@@ -341,6 +346,9 @@ class OidcSessionActivationHistoryCustody:
             "original historical receiving interval")
         registration._same(material.planner.attestation_interval, configured.planner_interval, work,
             "original historical planner interval")
+        registration._same(evidence.keys._spki_on_work(material.historical_root_public_key, work),
+            evidence.keys._spki_on_work(configured.historical_root_public_key, work), work,
+            "original independently authorized historical root")
         registration._same((material.planner.maximum_plan_age_ns, material.planner.maximum_clock_skew_ns),
             (configured.maximum_age_ns, configured.maximum_clock_skew_ns), work,
             "original historical processing policy")
@@ -390,7 +398,7 @@ class OidcSessionActivationHistoryCustody:
             _fail("historical activation custody is already in use")
         try:
             registration._same(evidence.keys._spki_on_work(root, work),
-                evidence.keys._spki_on_work(configured.root_public_key, work), work, "historical receiving root")
+                evidence.keys._spki_on_work(configured.historical_root_public_key, work), work, "historical receiving root")
             history.replay._bytes_equal(original, configured.state_enrollment_bytes, work,
                 "historical receiving state enrollment")
             if self._snapshot_configuration() is not configured:
@@ -406,7 +414,8 @@ class OidcSessionActivationHistoryCustody:
 
     def _require_consume_planning_on_work(self, *, work):
         evidence.capture._SharedLedger(work)
-        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_CONSUMER_ROLE:
+        if self._snapshot_configuration().consumer_role not in (
+                bootstrap.CONSUME_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE):
             _fail("consume planning requires its separate root-signed history purpose")
 
     def require_consume_grant_on_work(self, *, work):
@@ -434,7 +443,8 @@ class OidcSessionActivationHistoryCustody:
         evidence.capture._SharedLedger(work)
         if self._snapshot_configuration().consumer_role not in (
                 bootstrap.CONSUME_CONSUMER_ROLE, bootstrap.CONSUME_GRANT_CONSUMER_ROLE,
-                bootstrap.CONSUME_RESERVE_CONSUMER_ROLE, bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE):
+                bootstrap.CONSUME_RESERVE_CONSUMER_ROLE, bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE,
+                bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE):
             _fail("historical completion custody cannot authorize live consume planning")
 
     def require_consume_reserve_on_work(self, *, work):
@@ -547,9 +557,9 @@ class OidcSessionActivationHistoryCustody:
             current()
             admitted = material.planner
             registration._same(evidence.keys._spki_on_work(root, work),
-                evidence.keys._spki_on_work(configured.root_public_key, work), work, "historical receiving root")
+                evidence.keys._spki_on_work(configured.historical_root_public_key, work), work, "historical receiving root")
             registration._same(evidence.keys._spki_on_work(operation_key, work),
-                evidence.keys._spki_on_work(configured.root_public_key, work), work, "historical operation root")
+                evidence.keys._spki_on_work(configured.historical_root_public_key, work), work, "historical operation root")
             evidence.keys._public_binding(planner, admitted.planner_spki_digest, work)
             registration._same(config, admitted.configuration_digest, work, "historical receiving configuration")
             history.replay._bytes_equal(state_enrollment, configured.state_enrollment_bytes, work,

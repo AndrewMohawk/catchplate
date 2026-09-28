@@ -18,32 +18,30 @@ long-lived credential.
 
 Checkpoint: **2026-09-28 — pre-production, source-only.**
 
-**34/46 source checkpoints landed · 1 in progress · 11 todo.**
+**35/46 source checkpoints landed · 0 active · 11 todo.**
 
 **Production acceptance: 0/6 verified.** Current source is unbuilt and unexecuted.
 
-[![Project checkpoints, one segment per task: evidence handoff 10/10 landed; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 7/8; workloads and native 3/6; providers and operations 0/7. Source status, not product readiness.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Project checkpoints, one segment per task: 35 of 46 source-landed; 0 active and 11 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05 is next, not active. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current workflow: session activation
+### Source-landed workflow: session activation
 
-**23/26 source steps landed · 0 active · 3 todo.** Step 23, separately
-authorized recovery, is source-landed. Portal step 24 is next; steps 24–26
-remain todo. Public actions are 3/3 and F08 direct children 5/6 source-landed.
+**26/26 source steps landed · 0 active · 0 todo.** Public actions are 3/3,
+F08 direct children 6/6, and the F08 parent is source-landed.
 
-Latest source: [`.217` / dde38d8](https://github.com/example/private-deployment)
-connects the [public consume completion receipt](docs/control-plane-oidc-session-activation-completion-recovery-consume-response.md)
-to the existing separately fresh proof, LIVE/RECOVERY release, current-auth and
-signed cookie continuations through the same retained originals. The receipt
-itself releases no token or cookie and keeps session state unknown. COMPLETE
-and step 23 are source-landed; portal actions, fresh approvals and truthful
-session confirmation (24–26), then production acceptance, remain open.
-Missing records do not authorize automatic retry or renew original expiry.
-Source is unbuilt, unexecuted and unprovisioned.
-Previous source: [`.216` private fresh consume dispatch and completion](https://github.com/example/private-deployment).
+Latest source: [`.218` / 170d0ac](https://github.com/example/private-deployment)
+connects [explicit portal actions](docs/portal-session-activation.md), fresh
+cookie-only WebAuthn and approval continuation, and a separate exact-target
+current-cookie check. Activation uses two distinct fresh ceremonies; historical
+acknowledgments and delivery reports do not establish a current session.
+No automatic retry, profile fallback or original-expiry renewal is authorized.
+Source is unbuilt, unexecuted and unprovisioned. **H05 historical authority is
+next, not active; production acceptance remains open.**
+Previous source: [`.217` public consume completion and recovery closure](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-recovery-detail)
 live in the tracker.
 
-[![Session activation: 23 of 26 source steps landed; 0 active and 3 todo. Step 23 recovery is source-landed in dde38d8; portal steps 24–26 remain open, with step 24 next. TARGET and ACTOR are source-landed in 9f03664, AUTHORITY in 097ce54, EXCHANGE in 272a40e and HTTP in dbd99f6. COMPLETE is source-landed in dde38d8: public data-only consume completion connects through the same retained originals to existing separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Missing records do not authorize automatic retry or renew original expiry. Public actions 3/3 and F08 direct 5/6 are source-landed; project 34/46 and production 0/6 are unchanged. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation: all 26 source steps landed; 0 active and 0 todo. Portal steps 24–26 and F08 are source-landed in 170d0ac: explicit target-bound actions, fresh cookie-only WebAuthn and approval continuation, and separate exact-target current-cookie confirmation. Activation uses two distinct fresh ceremonies; generic failures never authorize automatic retry. Step 23 recovery remains credited to dde38d8. Public actions 3/3 and F08 direct children 6/6 are source-landed; project 35/46 has 0 active and 11 todo, with H05 next. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-recovery-detail).
@@ -53,7 +51,7 @@ Nested counts are not additive and are not effort estimates.
 <details>
 <summary>Completed step 23 recovery and step 22 dispatch details</summary>
 
-[![Step 23 recovery is source-landed in dde38d8. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY independent original admission and same-PID worker staging is source-landed in 097ce54. EXCHANGE—one claimed RECOVERY socket and genuine response verification—is source-landed in 272a40e. HTTP—the recovery route, fresh current-auth, normal cleanup and final signed cookie-send guard—is source-landed in dbd99f6. COMPLETE is source-landed in dde38d8: public data-only consume completion connects through the same retained originals to existing separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Missing records do not authorize automatic retry or renew original expiry. Portal steps 24–26 remain open, with step 24 next. These six facets are not new milestones or effort percentages. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
+[![Step 23 recovery is source-landed in dde38d8. TARGET and ACTOR are source-landed in 9f03664; AUTHORITY in 097ce54; EXCHANGE in 272a40e; HTTP in dbd99f6; COMPLETE in dde38d8. Public data-only consume completion connects through the same retained originals to separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Portal steps 24–26 subsequently landed in 170d0ac, completing activation 26/26 and F08 direct 6/6. Project 35/46 has 0 active and 11 todo; H05 is next. These six recovery facets are not new milestones or effort percentages. No automatic retry or original-expiry renewal is authorized. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
 
 The completed dispatch graphic below preserves the **historical .201 checkpoint**,
 including its then-current 0 active / 4 todo rollup; step 23 is now source-landed.
@@ -65,13 +63,13 @@ including its then-current 0 active / 4 todo rollup; step 23 is now source-lande
 | 21 · F08.5.1 | Fresh authorization for the exact user/session/credential target | [Landed · d3f8469](https://github.com/example/private-deployment) |
 | 22 · F08.5.2 | Public activation with durable dispatch/outcome tracking and truthful responses | [Landed · 0bffe70](https://github.com/example/private-deployment) |
 | 23 · F08.5.3 | Separately authorized recovery; no automatic activation retry | [Landed · dde38d8](https://github.com/example/private-deployment) |
-| 24 · F08.6.1 | Explicit portal activate/recover controls bound to the retained target | Todo · next |
-| 25 · F08.6.2 | Fresh action-bound approval; discard prompts when actor or target changes | Todo |
-| 26 · F08.6.3 | Confirm the session only after exact delivery and a fresh current-auth check | Todo |
+| 24 · F08.6.1 | Explicit portal activate/recover controls bound to the retained target | [Landed · 170d0ac](https://github.com/example/private-deployment) |
+| 25 · F08.6.2 | Fresh action-bound approval; discard prompts when actor or target changes | [Landed · 170d0ac](https://github.com/example/private-deployment) |
+| 26 · F08.6.3 | Confirm the session only after exact delivery and a fresh current-auth check | [Landed · 170d0ac](https://github.com/example/private-deployment) |
 
 Completed private foundations and their evidence: [protected release, 16/16](docs/production-status.md#token-release-implementation-detail)
 and [release/handoff, 11/11](docs/production-status.md#exact-release-and-handoff-detail).
-Source-landed recovery does not close portal or production acceptance.
+Source-landed activation and portal do not close production acceptance.
 
 </details>
 
@@ -81,12 +79,11 @@ witnessing, and signed telemetry. The [46-checkpoint tracker](docs/production-st
 lists every remaining item and its evidence.
 
 <details>
-<summary>All 12 unfinished project checkpoints</summary>
+<summary>All 11 unfinished project checkpoints</summary>
 
 | ID | Checkpoint | Source status |
 | --- | --- | --- |
-| H05 | Historical authority across configuration/key changes | Todo |
-| F08 | Public session activation/recovery and portal/session flow | In progress |
+| H05 | Historical authority across source/configuration/key changes | Todo · next |
 | N04 | Workload identity provisioning and authenticated channels | Todo |
 | N05 | Native enrollment, verified CA installation and proxy setup | Todo |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |

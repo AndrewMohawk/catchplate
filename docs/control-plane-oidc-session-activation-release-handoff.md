@@ -111,19 +111,24 @@ the same current guard, work and deadline. Its raw2 response is unverified
 `(request_identity, token64)` data. Neither raw7 nor raw2 nor either token is
 appended to a journal, status object or retained success carrier.
 
-The final operation is a tail return from the actual original-only response
-verifier. It receives the exact request/response originals, original fresh
-client/server controls, independently derived scope17, original processing
+The default final operation is a tail return from the actual original-only
+response verifier. It receives the exact request/response originals, original
+fresh client/server controls, independently derived scope17, original processing
 bounds and same-permission continuity hook. Only that genuine receiver may
-return the private 64-byte token. No weaker post-verification owner callback,
-token-bearing DTO or application cookie issuance follows in this helper.
+return the private 64-byte token. The source-owned public HTTP delivery path
+additionally retains this actual receiver's narrowed guard through its private
+`_delivery` continuation; it does not substitute a weaker owner callback or a
+token-bearing success DTO. Cookie issuance remains in the separate
+[final delivery boundary](control-plane-oidc-session-activation-delivery.md).
 
 ## Remaining integration boundary
 
-This composition requires real independently authorized, request-scoped
-acquisition of the fresh client authorization and exact server bootstrap.
-It does not implement that acquisition, mint a root authorization from proof
-output, provision a live worker, or treat root-signed identity pins as a
-durability witness. That acquisition and the public HTTP/cookie connection
-remain separate open integration work. Source landing is not execution,
-deployment, current-session proof, or production acceptance.
+This helper requires real independently authorized, request-scoped acquisition
+of the fresh client authorization and exact server bootstrap. The separate
+acquisition and [public HTTP sequence](oidc-session-activation-public-http.md)
+are now source-connected; they do not mint authority from proof output or turn
+root-signed identity pins into a durability witness. This helper still selects
+only the LIVE profile. Separately authorized
+[public recovery](oidc-session-activation-public-recovery.md), portal integration
+and independent resource provisioning remain open. Source landing is not
+execution, deployment, current-session proof or production acceptance.

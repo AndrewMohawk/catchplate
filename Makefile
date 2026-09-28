@@ -1194,6 +1194,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_http.py \
 	serverware/control_plane_oidc_session_activation_delivery.py \
 	serverware/control_plane_oidc_session_activation_routes.py \
+	serverware/oidc_session_activation_recovery_http_contract.py \
+	serverware/control_plane_oidc_session_activation_recovery_selection.py \
+	serverware/control_plane_oidc_session_activation_recovery_history.py \
+	serverware/control_plane_oidc_session_activation_recovery_actor.py \
+	serverware/control_plane_oidc_session_activation_recovery_routes.py \
 	serverware/control_plane_oidc_session_activation_consume_planning.py \
 	serverware/control_plane_oidc_session_activation_consume_records.py \
 	serverware/authority_oidc_session_activation_completion_dispatch_transport.py \
@@ -3348,6 +3353,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_http.py \
 				serverware/control_plane_oidc_session_activation_delivery.py \
 				serverware/control_plane_oidc_session_activation_routes.py \
+				serverware/oidc_session_activation_recovery_http_contract.py \
+				serverware/control_plane_oidc_session_activation_recovery_selection.py \
+				serverware/control_plane_oidc_session_activation_recovery_history.py \
+				serverware/control_plane_oidc_session_activation_recovery_actor.py \
+				serverware/control_plane_oidc_session_activation_recovery_routes.py \
 				serverware/control_plane_oidc_session_activation_consume_planning.py \
 				serverware/control_plane_oidc_session_activation_consume_records.py \
 				serverware/authority_oidc_session_activation_completion_dispatch_transport.py \

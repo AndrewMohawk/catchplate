@@ -1751,6 +1751,104 @@ class CustodyJournal:
                 self._io.poison()
                 raise
 
+    def load_oidc_session_activation_recovery_target(self, finalization_digest, *, work, current):
+        """Read only the two original claims and target intent, never authority.
+
+        The guard must be the original owner-scope guard, not a callback that
+        reenters selection or acquires this journal's I/O lock. Unlike a stable
+        native callback, this fixed method charges the supplied work directly.
+        """
+        from serverware.authority_query_read_work import _ValidationWork
+
+        target = _digest(finalization_digest)
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("recovery selection requires the original work and guard")
+        work.charge(json_nodes=128)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            # This index is populated only by admitted recovery or a successful
+            # first claim. There is no filesystem scan or caller-selected slot.
+            slot = self._consume_targets.get(target)
+            if slot is None:
+                current()
+                self._require_ready()
+                return None
+            try:
+                claim = self._consume_claims.get(slot)
+                by_kind = self._consume_records.get(slot, {})
+                if (type(claim) is not consume_records.ConsumeRecord
+                        or claim.finalization_digest != target or claim.slot_digest != slot):
+                    raise CustodyJournalError("recovery target index differs from its original claim")
+                predecessor = self._consume_scope(slot, by_kind)
+                if predecessor is not claim:
+                    raise CustodyJournalError("recovery target claim identity changed")
+                # Missing intent is an ordinary incomplete prefix. Existing
+                # metadata still receives its immutable checks, without reads
+                # of prepared ciphertext or any other stage body.
+                current()
+                self._consume_metadata_current(slot, by_kind)
+                current()
+                has_intent = "release-intent" in by_kind
+                if has_intent:
+                    names = (_name(activation_attempts.KIND, target),
+                        _name("activation-consume-claimed", slot),
+                        _name("activation-consume-release-intent", slot))
+                    maxima = (activation_attempts.MAX_RECORD_BYTES,
+                        consume_records.MAX_CLAIM_BYTES, consume_records.MAX_RELEASE_INTENT_BYTES)
+                    identities = tuple(self._file_identities.get(name) for name in names)
+                    if any(type(identity) is not tuple or len(identity) != 9
+                            or type(identity[6]) is not int or not 1 <= identity[6] <= maximum
+                            for identity, maximum in zip(identities, maxima)):
+                        raise CustodyJournalError("recovery target retained size metadata differs")
+                    sizes = tuple(identity[6] for identity in identities)
+                    if sizes[2] != by_kind["release-intent"][2]:
+                        raise CustodyJournalError("recovery intent size differs from admitted metadata")
+            except BaseException:
+                self._io.poison()
+                raise
+            if not has_intent:
+                current()
+                self._require_ready()
+                return None
+            # Capacity refusal happens before the first body read and does not
+            # poison a valid journal. Charge read/owned decode/hash byte work
+            # from actual immutable sizes, never full-prefix maximums.
+            work.charge(input_bytes=3 * sum(sizes) + len(sizes), hashes=4)
+            try:
+                loaded = []
+                for name, size, identity in zip(names, sizes, identities):
+                    current()
+                    try:
+                        raw, observed = self._read_file(name, maximum_bytes=size)
+                    finally:
+                        current()
+                    if observed != identity:
+                        raise CustodyJournalError("recovery target original identity changed")
+                    loaded.append(raw)
+                activation = activation_attempts.decode(loaded[0])
+                retained_claim = consume_records.decode(loaded[1])
+                intent = consume_records.decode(loaded[2])
+                metadata = by_kind["release-intent"]
+                if (activation != self._activation_dispatch_attempts.get(target)
+                        or retained_claim != claim or retained_claim.kind != "claimed"
+                        or intent.kind != "release-intent" or len(intent.originals) != 1
+                        or intent.finalization_digest != target or intent.slot_digest != slot
+                        or intent.activation_authorization_digest != claim.activation_authorization_digest
+                        or (intent.source_revision, intent.digest, len(loaded[2]), b"") != metadata
+                        or activation.source_revision != claim.source_revision
+                        or intent.source_revision != claim.source_revision):
+                    raise CustodyJournalError("recovery target originals differ from their retained association")
+                current()
+                self._consume_metadata_current(slot, by_kind)
+                self._require_ready()
+                current()
+                return activation, retained_claim, intent
+            except BaseException:
+                self._io.poison()
+                raise
+
     def claim_attempt(self, localdigest):
         digest = _digest(localdigest)
         self._require_process()

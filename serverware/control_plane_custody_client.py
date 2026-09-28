@@ -879,6 +879,43 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while reading consume originals")
         return retained
 
+    def load_oidc_session_activation_recovery_target(self, finalization_digest, *, work, current):
+        """Select bounded original target evidence; None means unavailable only.
+
+        This method charges work directly. Its original owner-scope guard must
+        not recursively load records or acquire the journal's I/O lock.
+        """
+        from serverware import control_plane_oidc_session_activation_dispatch_attempt as attempts
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+
+        target = journal._digest(finalization_digest)
+        if not callable(current):
+            raise CustodyClientError("recovery target selection lacks its original guard")
+        current()
+        binding = _snapshot(self)
+        retained = journal.CustodyJournal.load_oidc_session_activation_recovery_target(
+            binding.journal, target, work=work, current=current)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while selecting recovery target")
+        if retained is None:
+            return None
+        if (type(retained) is not tuple or len(retained) != 3
+                or type(retained[0]) is not attempts.ActivationDispatchAttemptRecord
+                or any(type(record) is not consume.ConsumeRecord for record in retained[1:])):
+            raise CustodyClientError("recovery target original inventory differs")
+        activation, claim, intent = retained
+        if (activation.finalization_digest != target or claim.finalization_digest != target
+                or intent.finalization_digest != target or claim.kind != "claimed"
+                or claim.originals != () or intent.kind != "release-intent" or len(intent.originals) != 1
+                or claim.slot_digest != intent.slot_digest
+                or claim.activation_authorization_digest != intent.activation_authorization_digest
+                or activation.source_revision != claim.source_revision
+                or intent.source_revision != claim.source_revision):
+            raise CustodyClientError("recovery target originals have a different association")
+        current()
+        return retained
+
     def append_registration_finalization_sql_outcome(self, finalization_digest, originals):
         """Retain first unsigned raw4 without a renewed clock or success assertion."""
         local = journal._digest(finalization_digest)

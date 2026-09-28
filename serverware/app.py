@@ -399,6 +399,17 @@ async def _run_bounded_blocking(
 
 @app.middleware("http")
 async def csrf_middleware(request: Request, call_next):
+    from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
+
+    if request.scope.get("path") == recovery_routes.OPTIONS_PATH:
+        # The old cookie is possession evidence only on this route. Do not
+        # send it through generic current-session authentication even to
+        # choose a CSRF branch; the actor repeats this exact cookie check.
+        try:
+            _require_registration_execution_session_csrf(request)
+        except HTTPException as exc:
+            return recovery_routes.error(exc.status_code)
+        return await call_next(request)
     try:
         validate_csrf_request(request)
     except HTTPException as exc:
@@ -427,6 +438,13 @@ async def csrf_middleware(request: Request, call_next):
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
+    from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
+
+    if request.scope.get("path") == recovery_routes.OPTIONS_PATH:
+        refusal = await recovery_routes._frame_request(request)
+        if refusal is not None:
+            return refusal
+        return await call_next(request)
 
     if request.scope.get("path") == activation_routes.POST_PATH:
         refusal = await activation_routes._frame_request(request)
@@ -4612,6 +4630,7 @@ def _control_plane_requester_roles(action: str) -> set[str]:
         "webauthn.registration.finalization.complete",
         "webauthn.registration.finalization.recover",
         "webauthn.oidc-session.activation.authorize",
+        "webauthn.oidc-session.activation.recover",
         "webauthn.credential.revoke",
         "break_glass.grant",
     }:
@@ -24914,6 +24933,7 @@ from serverware import control_plane_registration_finalization_sql_routes as _re
 from serverware import control_plane_registration_finalization_completion_routes as _registration_finalization_completion_routes
 from serverware import control_plane_oidc_session_activation_permission_routes as _activation_permission_routes
 from serverware import control_plane_oidc_session_activation_routes as _activation_routes
+from serverware import control_plane_oidc_session_activation_recovery_routes as _activation_recovery_routes
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -24924,4 +24944,5 @@ _fastapi_app.include_router(_registration_finalization_sql_routes.router)
 _fastapi_app.include_router(_registration_finalization_completion_routes.router)
 _fastapi_app.include_router(_activation_permission_routes.router)
 _fastapi_app.include_router(_activation_routes.router)
+_fastapi_app.include_router(_activation_recovery_routes.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

@@ -53,6 +53,25 @@ class _HistoricalIntentEvidence:
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalIntentTarget:
+    """Authenticated target/possession only, never full release admission."""
+
+    intent_digest: str
+    delivery_scope: dict
+    old_token_digest: str
+    live_window: tuple
+    deadline_ns: int
+    live: object
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _TargetClock:
+    # No token reference is retained by the returned lifetime closure.
+    window: tuple
+    deadline_ns: int
+
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
 class _Held:
     intent: bytes | None
     enrollment: bytes
@@ -320,6 +339,110 @@ def _verify_historical_on_work(*, intent_bytes, enrollment_bytes, root_public_ke
     owned = contract._capture(payload, work)
     live()
     return _HistoricalIntentEvidence(owned, identity, live)
+
+
+def _inspect_historical_target_on_work(*, intent_bytes, enrollment_bytes,
+        root_public_key, forbidden_public_keys, expected_scope, expected_target,
+        expected_caller_public_key, expected_enrollment_digest, old_token_bytes,
+        live_window, transport_deadline_ns, work, _continuity=None):
+    """Authenticate one historical target, not expected release/consume claims.
+
+    The independent target comes from genuine finalization replay. The other
+    signed release fields are deliberately NOT supplied back as expectations
+    to the full intent verifier. Fresh recovery permission and full original
+    outcome admission remain separate obligations.
+    """
+    capture._SharedLedger(work)
+    original = authorization._original(intent_bytes, MAX_BYTES, "historical target intent")
+    enrollment = authorization._original(enrollment_bytes, enrollments.MAX_BYTES,
+        "historical target independent intent enrollment")
+    root, caller, forbidden = root_public_key, expected_caller_public_key, forbidden_public_keys
+    authorization._public(root)
+    authorization._public(caller)
+    if type(forbidden) is not tuple or not 1 <= len(forbidden) <= enrollments.MAX_FORBIDDEN_PUBLIC_KEYS:
+        _fail("historical target requires independently held purpose keys")
+    for key in forbidden:
+        authorization._public(key)
+    enrollment_digest = expected_enrollment_digest
+    shape._digest(enrollment_digest)
+    _closed(expected_target, frozenset({"userId", "sessionId", "credentialId"}),
+        "historical target independent finalization subject")
+    target = _scalars(expected_target,
+        {"userId": 1024, "sessionId": 128, "credentialId": 1366}, "historical target subject")
+    scope = enrollments._scope(expected_scope, work)
+    token = delivery._token(old_token_bytes, work)
+    if len(original) + len(enrollment) + len(token) > MAX_ORIGINAL_BYTES:
+        _fail("historical target originals exceed their fixed bound")
+    work.charge(input_bytes=len(original) + len(enrollment) + len(token))
+    window = clock._validate(live_window)
+    shape._integer(transport_deadline_ns, minimum=1)
+    bound = min(transport_deadline_ns, window[4])
+    current, narrow = _clock(_TargetClock(window, bound), work, continuity=_continuity)
+    current()
+    enrolled = enrollments._admit_on_work(enrollment_bytes=enrollment,
+        root_public_key=root, expected_scope=scope, forbidden_public_keys=forbidden, work=work)
+    current()
+    plan._same(enrolled.enrollment_digest, enrollment_digest, work,
+        "historical target actual cold enrollment original")
+    plan._same(enrollments.keys._spki_on_work(enrolled.caller_public_key, work),
+        enrollments.keys._spki_on_work(caller, work), work,
+        "historical target actual cold intent public key")
+    current()
+    envelope = contract._read(original, work)
+    current()
+    contract._signature(envelope, enrolled.caller_public_key, work)
+    current()
+    payload, policy = envelope["payload"], enrolled.payload
+    for name in SCOPE_FIELDS:
+        plan._same(payload[name], scope[name], work, "historical target independent " + name)
+    plan._same(payload["enrollmentDigest"], enrolled.enrollment_digest, work,
+        "historical target signed enrollment")
+    plan._same(payload["callerMeasurementDigest"], policy["callerKey"]["measurementDigest"], work,
+        "historical target signed caller measurement")
+    delivery_scope = _scalars(payload["deliveryScope"], delivery._SCOPE_LIMITS,
+        "historical target authenticated delivery scope")
+    created, expires = bootstrap._scope(delivery_scope, work)
+    for name in target:
+        plan._same(delivery_scope[name], target[name], work,
+            "historical target independently replayed " + name)
+    # These are consistency checks over authenticated historical claims, not
+    # independently proven activation/consume execution or release authority.
+    operation = plan._frame("serverware.policyAuthorityOperation/v2",
+        (plan._ascii(bootstrap.ACTIVATION_OPERATION, work),
+            plan._ascii(payload["activationRequestDigest"], work)), work)
+    plan._same(operation, payload["activationOperationId"], work,
+        "historical target activation operation consistency")
+    delivery_id = registration.core._deterministic_uuid(operation=bootstrap.ACTIVATION_OPERATION,
+        request_digest=payload["activationRequestDigest"], purpose="activation-delivery", work=work)
+    plan._same(delivery_id, delivery_scope["deliveryId"], work,
+        "historical target deterministic delivery consistency")
+    age, skew = policy["maximumAgeNs"], policy["maximumClockSkewNs"]
+    authorization._interval(payload, age)
+    issued, intent_expiry = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
+    if intent_expiry > expires or issued + skew < created:
+        _fail("historical target intent escapes its original delivery interval")
+    window = narrow(expires, age, skew)
+    bound = min(bound, window[4])
+    current()
+    token_digest = delivery._token_digest(token, work, current)
+    plan._same(token_digest, delivery_scope["oldTokenDigest"], work,
+        "historical target original old-token possession")
+    del token
+    identity = contract._digest(original, work)
+    fields = tuple(sorted(delivery._SCOPE_LIMITS))
+    sealed_scope = tuple(delivery_scope[name] for name in fields)
+
+    def live():
+        if (type(delivery_scope) is not dict or set(delivery_scope) != set(fields)
+                or tuple(delivery_scope[name] for name in fields) != sealed_scope):
+            _fail("historical target returned delivery scope changed")
+        now = current()
+        if issued > now + window[6] or created > now + window[6] or now >= expires:
+            _fail("historical target evidence is future-dated or original delivery expired")
+        return now
+
+    live()
+    return _HistoricalIntentTarget(identity, delivery_scope, token_digest, window, bound, live)
 
 
 def _produce_on_work(*, enrollment_bytes, root_public_key, forbidden_public_keys,

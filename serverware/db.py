@@ -64566,6 +64566,34 @@ def get_oidc_browser_session(token_digest: str) -> dict[str, Any] | None:
     return _oidc_session_with_bound_credential(row) if row else None
 
 
+def get_oidc_browser_session_recovery_target(
+    *, user_id: str, session_id: str,
+) -> dict[str, Any] | None:
+    """Read an exact historical target, never authenticate its actor or token.
+
+    Only the recovery owner supplies these two IDs after genuine retained
+    original admission. This lookup neither aliases an old token to a new one
+    nor activates, refreshes, recovers or rewrites the selected session.
+    """
+    identity_id = _oidc_browser_session_text("user_id", user_id)
+    target_id = _oidc_browser_session_text("session_id", session_id)
+    with connect() as conn:
+        now_s = _metadata_utcnow(conn).isoformat()
+        row = conn.execute(
+            """
+            SELECT * FROM oidc_browser_sessions
+            WHERE user_id = ? AND id = ?
+              AND revoked_at IS NULL
+              AND provider_expires_at IS NOT NULL
+              AND provider_expires_at > ? AND expires_at > ?
+              AND (status = 'active'
+                   OR (status = 'pending_webauthn' AND pending_expires_at > ?))
+            """,
+            (identity_id, target_id, now_s, now_s, now_s),
+        ).fetchone()
+    return row_to_oidc_browser_session(row) if row else None
+
+
 def get_active_oidc_browser_session(token_digest: str) -> dict[str, Any] | None:
     token_hash = _oidc_browser_session_digest("token_digest", token_digest)
     with connect() as conn:

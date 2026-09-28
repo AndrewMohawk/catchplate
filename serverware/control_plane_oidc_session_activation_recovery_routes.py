@@ -1,0 +1,81 @@
+"""Bounded recovery OPTIONS issuance only; there is no dispatch route here."""
+from __future__ import annotations
+
+import re
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+
+from serverware import oidc_session_activation_recovery_http_contract as contract
+
+
+router = APIRouter()
+OPTIONS_PATH = "/api/auth/session/activation/recovery/options"
+ORIGINAL_STATE_NAME = "oidc_session_activation_recovery_bytes"
+MAX_REQUEST_BYTES = contract.MAX_REQUEST_BYTES
+HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache",
+    "X-Content-Type-Options": "nosniff"}
+_STATUSES = frozenset({400, 401, 403, 405, 409, 413, 415, 422, 429, 503})
+
+
+def error(status_code=503):
+    status = status_code if type(status_code) is int and status_code in _STATUSES else 503
+    return JSONResponse(status_code=status, headers=HEADERS, content=contract.unavailable())
+
+
+async def _frame_request(request):
+    """Reject oversized chunks before accumulation; never parse a graph here."""
+    if not isinstance(request, Request) or request.scope.get("path") != OPTIONS_PATH:
+        return error(400)
+    if request.method != "POST":
+        return error(405)
+    lengths = request.headers.getlist("content-length")
+    if (len(lengths) != 1 or re.fullmatch(r"[1-9][0-9]{0,5}", lengths[0]) is None
+            or request.headers.getlist("transfer-encoding")
+            or request.headers.getlist("content-encoding")
+            or request.scope.get("query_string", b"") != b""):
+        return error(400)
+    if request.headers.getlist("content-type") != ["application/json"]:
+        return error(415)
+    length = int(lengths[0])
+    if length > MAX_REQUEST_BYTES:
+        return error(413)
+    if length < 2:
+        return error(400)
+    body = bytearray()
+    try:
+        async for chunk in request.stream():
+            if type(chunk) is not bytes:
+                return error(400)
+            if len(chunk) > MAX_REQUEST_BYTES - len(body):
+                return error(413)
+            if len(chunk) > length - len(body):
+                return error(400)
+            body.extend(chunk)
+    except Exception:
+        return error(400)
+    if len(body) != length:
+        return error(400)
+    original = bytes(body)
+    request._body = original
+    request._stream_consumed = False
+    setattr(request.state, ORIGINAL_STATE_NAME, original)
+    return None
+
+
+@router.post(OPTIONS_PATH)
+async def recovery_options(request: Request):
+    from serverware import control_plane_oidc_session_activation_recovery_actor as actor
+
+    original = getattr(request.state, ORIGINAL_STATE_NAME, None)
+    if type(original) is not bytes or not 2 <= len(original) <= MAX_REQUEST_BYTES:
+        return error(400)
+    try:
+        # Same ASGI thread for the bounded owner/trust scope, never a new
+        # worker allowance. The result is only fresh WebAuthn options data.
+        result = actor._options(request, recovery_bytes=original)
+        return JSONResponse(status_code=200, headers=HEADERS, content=result)
+    except HTTPException as exc:
+        return error(exc.status_code)
+    except Exception:
+        return error(503)

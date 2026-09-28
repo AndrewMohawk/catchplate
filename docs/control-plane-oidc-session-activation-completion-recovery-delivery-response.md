@@ -1,24 +1,34 @@
 # Guarded completion recovery release response
 
 `control_plane_oidc_session_activation_completion_recovery_delivery_response`
-owns the final token-to-cookie boundary for the distinct fresh `release` actor.
-It accepts only the actual source-owned `_DeliveryAttempt`, with retained raw2
-grant originals and the genuine same-call completion/input/intent/proof chain.
+owns one final token-to-cookie boundary for the distinct fresh `release` and
+`retained-release` actors. It accepts only the actual source-owned `_DeliveryAttempt`,
+with retained raw2 LIVE grants or exact raw3 RECOVERY client/server/outcome originals
+and the genuine same-call completion/input/intent/proof chain.
 It does not accept an incoming token, successful result object, preparation
-permission or caller-selected checkpoint. Genuine LIVE-only grant, request and
-response admission remains the exchange's responsibility.
+permission or caller-selected checkpoint. Each fixed action's genuine grant,
+request and response admission remains the exchange's responsibility. The actual
+actor fixes purpose, route and response schema; neither request data nor a failed
+LIVE contact can select the other profile.
 
 `_response_on_active(active)` selects `_StagedRecoveryResponse` before any new
-LIVE admission or protected contact. The exchange selects its base-only
+final LIVE or RECOVERY derivation/admission or protected contact. For the retained
+action, genuine raw3 admission and the single root-worker staging exchange finish
+before terminal construction. The exact admission result/original references and
+completed staging flags remain pinned, but its historical acquisition guard is
+never invoked after cleanup. The exchange selects its base-only
 continuity using `_exchange_on_active`, and `_retain_receiver` records the same
 genuine receiving guard both on the live attempt and the terminal. That child is
 never attached to its own ancestor. Private ordinary actor/input/proof/exchange
 guards remain unusable after closure.
 
 During the live call, exact public-original references, fixed input graph
-snapshots, parent handoff/client/endpoint pins, root/key/enrollment resources,
+snapshots, source-selected cold pins, root/key/enrollment resources,
 actor purpose, request/Origin/CSRF, target, work ledger, PID/thread and narrowing
-clock/window bounds are retained. The actual returned token is admitted with
+clock/window bounds are retained. LIVE uses the original handoff/client/endpoint
+configuration. Retained release uses only the independent recovery acquisition
+endpoint and four policy/custody/enrollment originals; LIVE handoff configuration
+is not required. The actual returned token is admitted with
 the normal current-session lookup. User/session identity, signed new-token
 commitment, sole credential and counter, current authenticator trust, explicit
 active RBAC, roles and session/provider expiry must match the fresh actor.
@@ -50,10 +60,19 @@ Success uses
 The same schema/purpose identifies rejected-before-dispatch responses (400 by
 default, or an explicit source-selected error status) and fixed outcome-unknown
 503 responses without claiming current-session success.
+The distinct retained action uses
+`serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryResponse/v1`,
+purpose `retained-release`, and success status `recovered`. Its own options/action
+routes use the same strict original grammar, Origin/CSRF and fresh WebAuthn/approval
+checks, selecting literal startup methods rather than accepting a profile field.
+Its fixed unknown/rejected responses retain that schema/purpose. `POST_PATHS`
+contains only the two action paths so final signed-send guarding covers both.
+Before headers, failure preserves the existing browser cookie and discards any
+staged replacement. No action permits automatic retry or profile fallback.
 `_AUTH_RESERVATION` is source-defined representation accounting under the
 original whole-call budget, not a new work allowance or a process-heap bound.
 
 This terminal supplies no grant issuance, resource provisioning, SQL retry,
-checkpoint fallback, delivery-expiry renewal, RECOVERY outcome-store evidence,
+checkpoint fallback, delivery-expiry renewal, independent outcome-store evidence,
 or preparation-permission reuse. Source only: unbuilt, unexecuted and
 unprovisioned; no production acceptance gate is implied.

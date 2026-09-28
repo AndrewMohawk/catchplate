@@ -56,7 +56,7 @@ no ordinary closed-actor fallback is introduced.
 ## Separate release-only readmission
 
 `_readmit_on_intent` accepts only the actual intent continuation belonging to a
-fresh actor with sealed purpose `release`. The separate delivery orchestrator's
+fresh actor with sealed purpose `release` or `retained-release`. The separate delivery orchestrator's
 one-use proof hook is required even for this read-only call. Its existing proof
 claim and raw4 must already be present; absence refuses before setup, proof
 contact or publication. It uses the same genuine historical custody/proof
@@ -66,7 +66,9 @@ guard. The preparation entrypoint explicitly refuses a release-purpose actor.
 The root owner may consume the identity-sealed `_originals` raw4 as original
 data; it is not an independently sufficient success or permission object. The
 owner must genuinely re-admit current intent/proof and independently root-signed
-LIVE/checkpoint-zero client/server originals before a protected release exchange.
+LIVE/checkpoint-zero client/server originals for `release`, or genuine historical
+evidence under fresh independent RECOVERY/checkpoint-one policy and grants for
+`retained-release`, before the respective protected exchange.
 This helper makes no checkpoint choice, infers no private-store absence and
 provides no RECOVERY fallback. Expired authority is not renewed. No preparation
 permission or closed actor is reused.

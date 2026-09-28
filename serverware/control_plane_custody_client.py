@@ -709,6 +709,27 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller or global release claim changed")
         return digest
 
+    def claim_oidc_session_activation_completion_recovery_retained_release_attempt(self, *,
+            client_authorization_digest, request_identity, profile, server_bootstrap_digest,
+            expected_outcome_digest, work, current, maximum_original_bytes=None):
+        """Spend the same global release slot under guarded fixed RECOVERY work."""
+        from serverware import control_plane_oidc_session_activation_release_attempt as attempts
+
+        scalars = tuple(journal._digest(value) for value in (client_authorization_digest,
+            request_identity, server_bootstrap_digest, expected_outcome_digest))
+        if type(profile) is not str or profile != attempts.RECOVERY_PROFILE or not callable(current):
+            raise CustodyClientError("retained release dispatch requires its fixed RECOVERY profile and guard")
+        current()
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.claim_oidc_session_activation_completion_recovery_retained_release_attempt(
+            binding.journal, client_authorization_digest=scalars[0], request_identity=scalars[1],
+            profile=profile, server_bootstrap_digest=scalars[2], expected_outcome_digest=scalars[3],
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes)
+        current()
+        if digest != scalars[0] or _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller or retained release claim changed")
+        return digest
+
     def claim_oidc_session_activation_dispatch(self, *, finalization_digest,
             request_binding_digest, authorization_enrollment_digest, source_revision):
         """Durably burn one retained activation target without storing secrets.
@@ -1110,6 +1131,96 @@ class ControlPlaneCustodyClient:
             completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
             work=work, current=current, maximum_original_bytes=maximum_original_bytes,
             kind="release-grants", originals=originals)
+
+    def _completion_retained_grant_operation(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest,
+            completion_originals, reconciliation_digest, work, current, maximum_original_bytes,
+            kind=None, originals=()):
+        from serverware import control_plane_oidc_session_activation_recovery_records as recovery
+        from serverware import control_plane_oidc_session_activation_completion_recovery_records as completion
+
+        scalars = tuple(journal._digest(value) for value in (finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest))
+        slot = recovery._slot_digest(*scalars)
+        if reconciliation_digest is not None:
+            reconciliation_digest = journal._digest(reconciliation_digest)
+        completed = completion._originals("consume", completion_originals)
+        if kind is not None and (type(kind) is not str or kind not in recovery.KINDS):
+            raise CustodyClientError("retained recovery publication kind is not source fixed")
+        if kind == "grants":
+            held = recovery._originals(originals)
+        else:
+            if type(originals) is not tuple or originals:
+                raise CustodyClientError("retained recovery load or claim has no response body")
+            held = ()
+        if not callable(current):
+            raise CustodyClientError("retained recovery requires its original resource guard")
+        current()
+        binding = _snapshot(self)
+        result = journal.CustodyJournal._completion_retained_grant_operation(binding.journal,
+            finalization_digest=scalars[0], activation_authorization_digest=scalars[1],
+            release_intent_digest=scalars[2], issuer_policy_digest=scalars[3],
+            completion_originals=completed, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind=kind, originals=held)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed during guarded recovery retention")
+        if kind is not None:
+            journal._digest(result)
+            if kind == "claimed" and result != slot:
+                raise CustodyClientError("retained recovery claim returned a different policy slot")
+            return result
+        if result is None:
+            return None
+        if (type(result) is not recovery.RecoveryGrantRecords
+                or type(result.claim) is not recovery.RecoveryGrantRecord
+                or result.claim.kind != "claimed" or result.claim.originals != ()
+                or result.claim.slot_digest != slot
+                or (result.claim.finalization_digest, result.claim.activation_authorization_digest,
+                    result.claim.release_intent_digest, result.claim.issuer_policy_digest) != scalars):
+            raise CustodyClientError("retained recovery originals have a different policy claim")
+        grants = result.grants
+        if grants is not None and (type(grants) is not recovery.RecoveryGrantRecord
+                or grants.kind != "grants" or grants.slot_digest != slot
+                or grants.source_revision != result.claim.source_revision
+                or grants.intent_record_digest != result.claim.intent_record_digest
+                or (grants.finalization_digest, grants.activation_authorization_digest,
+                    grants.release_intent_digest, grants.issuer_policy_digest) != scalars):
+            raise CustodyClientError("retained recovery grants differ from their original claim")
+        current()
+        return result
+
+    def load_oidc_session_activation_completion_recovery_retained_grants(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest,
+            completion_originals, reconciliation_digest, work, current, maximum_original_bytes=None):
+        """Return None or existing policy claim/raw3 DATA, never permission to retry."""
+        return ControlPlaneCustodyClient._completion_retained_grant_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            release_intent_digest=release_intent_digest, issuer_policy_digest=issuer_policy_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes)
+
+    def claim_oidc_session_activation_completion_recovery_retained_grant_attempt(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest,
+            completion_originals, reconciliation_digest, work, current, maximum_original_bytes=None):
+        """Spend the existing global recovery-policy slot before issuer contact."""
+        return ControlPlaneCustodyClient._completion_retained_grant_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            release_intent_digest=release_intent_digest, issuer_policy_digest=issuer_policy_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="claimed")
+
+    def append_oidc_session_activation_completion_recovery_retained_grants(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest,
+            completion_originals, reconciliation_digest, originals, work, current, maximum_original_bytes=None):
+        """Retain opaque client/server/outcome DATA before admission under this work's claim."""
+        return ControlPlaneCustodyClient._completion_retained_grant_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            release_intent_digest=release_intent_digest, issuer_policy_digest=issuer_policy_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind="grants", originals=originals)
 
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):

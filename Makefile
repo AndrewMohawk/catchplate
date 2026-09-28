@@ -1189,6 +1189,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_completion_recovery_delivery_exchange.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_delivery_response.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_delivery_http.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery_retained_acquisition.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 	serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
@@ -3386,6 +3388,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_completion_recovery_delivery_exchange.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_delivery_response.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_delivery_http.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery_retained_acquisition.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 				serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \

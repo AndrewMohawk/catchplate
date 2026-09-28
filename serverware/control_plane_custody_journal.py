@@ -339,6 +339,9 @@ class CustodyJournal:
         # Only this work's newly successful existing-family intent/proof/grant claim
         # permits its corresponding publication; recovery never restores it.
         self._completion_release_live_claims = {}
+        # The guarded completion path shares the existing recovery-policy slot,
+        # but only this exact work may publish after its own successful claim.
+        self._completion_retained_grant_live_claims = {}
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -1691,12 +1694,33 @@ class CustodyJournal:
             client_authorization_digest, request_identity, profile, server_bootstrap_digest,
             expected_outcome_digest, work, current, maximum_original_bytes=None):
         """Guarded LIVE dispatch claim in the unchanged global authorization slot."""
+        return self._claim_completion_release_attempt(
+            client_authorization_digest=client_authorization_digest, request_identity=request_identity,
+            profile=profile, server_bootstrap_digest=server_bootstrap_digest,
+            expected_outcome_digest=expected_outcome_digest, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes, required_profile=release_attempts.LIVE_PROFILE)
+
+    def claim_oidc_session_activation_completion_recovery_retained_release_attempt(self, *,
+            client_authorization_digest, request_identity, profile, server_bootstrap_digest,
+            expected_outcome_digest, work, current, maximum_original_bytes=None):
+        """Guarded RECOVERY dispatch claim in that same global authorization slot."""
+        return self._claim_completion_release_attempt(
+            client_authorization_digest=client_authorization_digest, request_identity=request_identity,
+            profile=profile, server_bootstrap_digest=server_bootstrap_digest,
+            expected_outcome_digest=expected_outcome_digest, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes, required_profile=release_attempts.RECOVERY_PROFILE)
+
+    def _claim_completion_release_attempt(self, *, client_authorization_digest, request_identity,
+            profile, server_bootstrap_digest, expected_outcome_digest, work, current,
+            maximum_original_bytes, required_profile):
         from serverware.authority_query_read_work import _ValidationWork
 
         scalars = tuple(_digest(value) for value in (client_authorization_digest,
             request_identity, server_bootstrap_digest, expected_outcome_digest))
-        if type(profile) is not str or profile != release_attempts.LIVE_PROFILE:
-            raise CustodyJournalError("completion release dispatch admits only independently authorized LIVE")
+        if (type(required_profile) is not str
+                or required_profile not in (release_attempts.LIVE_PROFILE, release_attempts.RECOVERY_PROFILE)
+                or type(profile) is not str or profile != required_profile):
+            raise CustodyJournalError("completion release dispatch differs from its source-fixed profile")
         maximum = completion_recovery.MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
         _integer(maximum, minimum=0, maximum=completion_recovery.MAX_ORIGINAL_BYTES,
             label="completion release dispatch remaining capacity")
@@ -3092,6 +3116,223 @@ class CustodyJournal:
             except BaseException:
                 self._io.poison()
                 raise
+
+    def _completion_retained_grant_inventory(self, target, authorization, intent_digest,
+            policy_digest, reconciliation_digest, current):
+        inventory = self._completion_release_inventory(target, authorization, reconciliation_digest, current)
+        if inventory is None:
+            return None
+        activation, consume, stages, selected = inventory
+        # Root setup is not needed to bind already retained intent/proof. Admit
+        # its immutable metadata with the fixed prefix, but do not read its body.
+        selected = tuple(item for item in selected if item[0] != "release-proof-setup")
+        slot = recovery_records._slot_digest(target, authorization, intent_digest, policy_digest)
+        claim = self._recovery_grant_claims.get(slot)
+        metadata = self._recovery_grant_records.get(slot)
+        if claim is not None or metadata is not None:
+            self._recovery_grant_scope(slot)
+            additions = []
+            for index, kind in enumerate(recovery_records.KINDS):
+                if kind == "grants" and metadata is None:
+                    continue
+                name = _name(recovery_records.FILE_KINDS[index], slot)
+                identity = self._file_identities.get(name)
+                self._completion_history_metadata(name, recovery_records._maximum(kind), identity, current)
+                if kind == "grants" and identity[6] != metadata[2]:
+                    raise CustodyJournalError("retained recovery grant encoded size changed")
+                additions.append(("recovery-" + kind, name, identity, recovery_records.decode))
+            selected += tuple(additions)
+        return activation, consume, stages, selected
+
+    def _completion_retained_grant_operation(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest,
+            completion_originals, reconciliation_digest, work, current, maximum_original_bytes,
+            kind=None, originals=()):
+        """Guarded raw3 DATA in the unchanged independently pinned policy slot."""
+        from serverware.authority_query_read_work import _ValidationWork
+
+        scalars = tuple(_digest(value) for value in (finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest))
+        target, authorization, intent_digest, policy_digest = scalars
+        slot = recovery_records._slot_digest(*scalars)
+        if reconciliation_digest is not None:
+            reconciliation_digest = _digest(reconciliation_digest)
+        completed = completion_recovery._originals("consume", completion_originals)
+        consume_records.completion._originals(completed[:4], response=True)
+        if completed[0] != b"acknowledged":
+            raise CustodyJournalError("retained release requires acknowledged completion DATA")
+        if kind is not None and (type(kind) is not str or kind not in recovery_records.KINDS):
+            raise CustodyJournalError("retained recovery publication kind is not source fixed")
+        if kind == "grants":
+            held = recovery_records._originals(originals)
+        else:
+            if type(originals) is not tuple or originals:
+                raise CustodyJournalError("retained recovery load or claim contains no response body")
+            held = ()
+        publication_bytes = (0 if kind is None else 3 * (recovery_records.MAX_CLAIM_BYTES
+            + (24 + sum(map(len, held)) if kind == "grants" else 0)))
+        maximum = completion_recovery.MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
+        _integer(maximum, minimum=0, maximum=completion_recovery.MAX_ORIGINAL_BYTES,
+            label="retained recovery remaining original capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("retained recovery requires original work and resource guard")
+        work.charge(json_nodes=512)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            try:
+                inventory = self._completion_retained_grant_inventory(*scalars, reconciliation_digest, current)
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if inventory is None:
+                raise CustodyJournalError("retained recovery acknowledged completion history is unavailable")
+            activation, consume, stages, selected = inventory
+            if "release-intent" not in stages or "release-proof" not in stages:
+                raise CustodyJournalError("retained recovery requires its existing intent and proof")
+            total = sum(item[2][6] for item in selected)
+            if 3 * total + publication_bytes + consume_records.COMPLETION_RECOVERY_METADATA_BYTES > maximum:
+                raise CustodyJournalError("retained recovery exceeds remaining preallocation capacity")
+            scans = 0 if kind is None else 3 * (len(self._file_identities) + 1)
+            work.charge(input_bytes=3 * total + len(selected) + publication_bytes + scans * 512,
+                hashes=2 * len(selected) + 1 + (16 if kind is not None else 0), json_nodes=scans * 16)
+            loaded = {}
+            try:
+                for label, name, identity, decoder in selected:
+                    raw = self._read_completion_history_file(name, identity, current)
+                    record = decoder(raw)
+                    if label == 0:
+                        valid = record == activation
+                    elif label == 1:
+                        valid = record == consume
+                    elif label == "reconciliation-claimed":
+                        recovery_slot = completion_recovery._slot_digest(target, "consume")
+                        valid = record == self._completion_recovery_claims[recovery_slot]
+                    elif label == "reconciliation-response":
+                        recovery_slot = completion_recovery._slot_digest(target, "consume")
+                        valid = (record.slot_digest == recovery_slot and record.kind == "response"
+                            and self._completion_recovery_response_metadata(record, len(raw))
+                            == self._completion_recovery_responses[recovery_slot])
+                    elif label in ("recovery-claimed", "recovery-grants"):
+                        valid = (record.slot_digest == slot
+                            and record.source_revision == consume.source_revision
+                            and (record.finalization_digest, record.activation_authorization_digest,
+                                record.release_intent_digest, record.issuer_policy_digest) == scalars
+                            and record.intent_record_digest == stages["release-intent"][1])
+                        if label == "recovery-claimed":
+                            valid = valid and record == self._recovery_grant_claims[slot]
+                        else:
+                            valid = (valid and record.kind == "grants"
+                                and (record.source_revision, record.digest, len(raw), record.intent_record_digest,
+                                    *scalars) == self._recovery_grant_records[slot])
+                    else:
+                        stage = "completion-outcome" if label == 7 else "completion-hints" if label == 8 else label
+                        valid = (record.kind == stage and record.slot_digest == consume.slot_digest
+                            and record.finalization_digest == target
+                            and record.activation_authorization_digest == authorization
+                            and (record.source_revision, record.digest, len(raw), b"") == stages[stage])
+                    if not valid:
+                        raise CustodyJournalError("retained recovery original differs from its immutable association")
+                    loaded[label] = record
+                    del raw
+                    current()
+                refreshed = self._completion_retained_grant_inventory(*scalars, reconciliation_digest, current)
+                if refreshed is None or refreshed[3] != selected:
+                    raise CustodyJournalError("retained recovery selected immutable inventory changed")
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if reconciliation_digest is None:
+                retained = loaded[7].originals + loaded[8].originals
+            else:
+                response = loaded["reconciliation-response"]
+                if response.digest != reconciliation_digest:
+                    raise CustodyJournalError("retained recovery reconciliation locator differs")
+                retained = response.originals
+            if retained != completed:
+                raise CustodyJournalError("retained recovery completion differs from acknowledged retained DATA")
+            intent = loaded["release-intent"]
+            if recovery_records._intent_identity(intent.originals[0]) != intent_digest:
+                raise CustodyJournalError("retained recovery intent identity differs from its original")
+            current()
+            claim = loaded.get("recovery-claimed")
+            if kind is None:
+                return None if claim is None else recovery_records.RecoveryGrantRecords(
+                    claim, loaded.get("recovery-grants"))
+            if consume.source_revision != recovery_records.authority.SOURCE_REVISION:
+                raise CustodyJournalError("retained recovery cannot migrate a different source cohort")
+            binding = (work, reconciliation_digest, intent.digest)
+            if kind == "claimed":
+                if claim is not None:
+                    raise CustodyJournalError("recovery issuer policy was already claimed; acquisition cannot repeat")
+            else:
+                saved = self._completion_retained_grant_live_claims.get(slot)
+                if (claim is None or saved is None or saved[0] is not work or saved[1:] != binding[1:]):
+                    raise CustodyJournalError("retained recovery publication lacks this work's new guarded claim")
+                if "recovery-grants" in loaded:
+                    raise CustodyJournalError("retained recovery grants cannot be replaced or appended twice")
+            record, encoded = recovery_records.encode(kind, finalization_digest=target,
+                activation_authorization_digest=authorization, release_intent_digest=intent_digest,
+                issuer_policy_digest=policy_digest, intent_record_digest=intent.digest,
+                originals=held, source_revision=consume.source_revision)
+            logical = (len(self._entries) + len(self._release_attempts) + len(self._activation_dispatch_attempts)
+                + len(self._consume_claims) + len(self._recovery_grant_claims) + len(self._completion_recovery_claims))
+            if ((kind == "claimed" and logical >= self._maximum_records)
+                    or len(self._file_identities) >= self._physical_limit()
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("retained recovery publication capacity is exhausted")
+            try:
+                index = recovery_records.KINDS.index(kind)
+                self._publish_guarded_completion_name(_name(recovery_records.FILE_KINDS[index], slot), encoded, current)
+                self._used_bytes += len(encoded)
+                if kind == "claimed":
+                    self._recovery_grant_claims[slot] = record
+                else:
+                    self._recovery_grant_records[slot] = (record.source_revision, record.digest,
+                        len(encoded), record.intent_record_digest, *scalars)
+                self._recovery_grant_scope(slot)
+                self._require_ready()
+                current()
+                if kind == "claimed":
+                    self._completion_retained_grant_live_claims[slot] = binding
+                else:
+                    del self._completion_retained_grant_live_claims[slot]
+                return slot if kind == "claimed" else record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_oidc_session_activation_completion_recovery_retained_grants(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest,
+            completion_originals, reconciliation_digest, work, current, maximum_original_bytes=None):
+        return self._completion_retained_grant_operation(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest, release_intent_digest=release_intent_digest,
+            issuer_policy_digest=issuer_policy_digest, completion_originals=completion_originals,
+            reconciliation_digest=reconciliation_digest, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes)
+
+    def claim_oidc_session_activation_completion_recovery_retained_grant_attempt(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest,
+            completion_originals, reconciliation_digest, work, current, maximum_original_bytes=None):
+        return self._completion_retained_grant_operation(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest, release_intent_digest=release_intent_digest,
+            issuer_policy_digest=issuer_policy_digest, completion_originals=completion_originals,
+            reconciliation_digest=reconciliation_digest, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes, kind="claimed")
+
+    def append_oidc_session_activation_completion_recovery_retained_grants(self, *, finalization_digest,
+            activation_authorization_digest, release_intent_digest, issuer_policy_digest,
+            completion_originals, reconciliation_digest, originals, work, current, maximum_original_bytes=None):
+        return self._completion_retained_grant_operation(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest, release_intent_digest=release_intent_digest,
+            issuer_policy_digest=issuer_policy_digest, completion_originals=completion_originals,
+            reconciliation_digest=reconciliation_digest, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes, kind="grants", originals=originals)
 
     def load_oidc_session_activation_completion_recovery_release_records(self, *, finalization_digest,
             activation_authorization_digest, completion_originals, reconciliation_digest, work, current,

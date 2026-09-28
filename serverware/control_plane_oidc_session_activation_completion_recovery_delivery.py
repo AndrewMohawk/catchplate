@@ -1,9 +1,9 @@
-"""Fresh release-only ownership after retained completion/intent/proof.
+"""Fresh purpose-bound ownership after retained completion/intent/proof.
 
-This source path selects LIVE only. The independent signed client and server
-originals must actually authorize checkpoint zero; a missing local record is
-never evidence about the private outcome store. Lost acquisition or delivery
-is terminal. Preparation, SQL and completion are never repeated here.
+First release and retained recovery are separate literal actions, never a
+fallback choice. Independent originals must authorize the selected checkpoint;
+missing local records say nothing about the private outcome store. Each lost
+attempt is terminal. Preparation, SQL and completion are never repeated here.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from serverware import control_plane_oidc_session_activation_completion_recovery
 from serverware import control_plane_oidc_session_activation_completion_recovery_delivery_exchange as live
 from serverware import control_plane_oidc_session_activation_release_grant_acquisition_bootstrap as grant_config
 from serverware import control_plane_oidc_session_activation_release_handoff_bootstrap as handoff_config
+from serverware import control_plane_oidc_session_activation_release_recovery_grant_acquisition_bootstrap as recovery_config
 
 
 completion, inputs, intent, proof = preparation.completion, preparation.inputs, preparation.intent, preparation.proof
@@ -35,7 +36,9 @@ class _DeliveryAttempt:
         "_config_pin", "_continuation_seal", "_grants_seal", "_lifetime", "_lifetime_seal",
         "_window_pin", "_bound_pin", "_delivery", "_delivery_seal", "_receiving_current",
         "_receiving_seal", "_token", "_token_seal", "_exchange_spent", "_exchange_in_progress",
-        "_exchange_complete", "_exchange_failed", "_closed", "_normal_exit")
+        "_exchange_complete", "_exchange_failed", "_closed", "_normal_exit",
+        "_purpose", "_purpose_pin", "_recovery_result", "_recovery_result_seal",
+        "_stage_spent", "_staged")
 
     def __init__(self, construction, actor, selected):
         if construction is not _CONSTRUCTION:
@@ -47,22 +50,46 @@ class _DeliveryAttempt:
         self._owner, self._work = actor._owner, selected.work
         self._parent, self._binding, self._custody = self._owner._material, self._owner._binding, self._owner._custody
         self._root = self._binding.runtime_root_public_key
-        self._config, self._issuer = self._parent.release_handoff, self._parent.release_grant_acquisition
-        if (type(self._config) is not handoff_config._ReleaseHandoffMaterial
-                or type(self._issuer) is not grant_config._ReleaseGrantAcquisitionMaterial
-                or (self._binding.caller_uid, self._binding.caller_gid)
-                    != (handoff_config.client.CLIENT_UID, handoff_config.client.CLIENT_GID)):
-            execution._fail("completion delivery lacks independent LIVE caller configuration")
+        self._purpose = self._purpose_pin = actor._purpose
+        if self._purpose == "release":
+            self._config, self._issuer = self._parent.release_handoff, self._parent.release_grant_acquisition
+            if (type(self._config) is not handoff_config._ReleaseHandoffMaterial
+                    or type(self._issuer) is not grant_config._ReleaseGrantAcquisitionMaterial):
+                execution._fail("completion delivery lacks independent LIVE caller configuration")
+        elif self._purpose == "retained-release":
+            self._config = self._issuer = self._parent.release_recovery_grant_acquisition
+            if type(self._config) is not recovery_config._RecoveryGrantAcquisitionMaterial:
+                execution._fail("completion delivery lacks independent RECOVERY configuration")
+        else:
+            execution._fail("completion delivery purpose is not a fixed release action")
+        if ((self._binding.caller_uid, self._binding.caller_gid)
+                != (handoff_config.client.CLIENT_UID, handoff_config.client.CLIENT_GID)):
+            execution._fail("completion delivery lacks its independent caller identity")
         self._cold_seal = (actor, selected, self._owner, self._work, self._parent,
             self._binding, self._custody, self._root, self._config, self._issuer)
-        self._config_pin = (self._config.client_id, self._config.client_identity_bytes,
-            self._config.endpoint_bytes, self._issuer.endpoint)
+        self._config_pin = self._cold_configuration()
         self._continuation_seal = self._grants_seal = None
         self._lifetime = self._lifetime_seal = self._window_pin = self._bound_pin = None
         self._delivery = self._delivery_seal = self._receiving_current = self._receiving_seal = None
         self._token = self._token_seal = None
         self._exchange_spent = self._exchange_in_progress = self._exchange_complete = False
         self._exchange_failed = self._closed = self._normal_exit = False
+        self._recovery_result = self._recovery_result_seal = None
+        self._stage_spent = self._staged = False
+
+    def _cold_configuration(self):
+        if self._purpose == "release":
+            if (self._parent.release_handoff is not self._config
+                    or self._parent.release_grant_acquisition is not self._issuer):
+                execution._fail("completion LIVE configuration changed")
+            return (self._config.client_id, self._config.client_identity_bytes,
+                self._config.endpoint_bytes, self._issuer.endpoint)
+        if (self._purpose != "retained-release" or self._config is not self._issuer
+                or self._parent.release_recovery_grant_acquisition is not self._config):
+            execution._fail("completion RECOVERY configuration changed")
+        return (self._config.endpoint, self._config.issuer_policy_bytes,
+            self._config.release_custody_bytes, self._config.proof_enrollment_bytes,
+            self._config.intent_enrollment_bytes)
 
     def _identity(self):
         observed = (self.actor, self.controls, self._owner, self._work, self._parent,
@@ -73,11 +100,9 @@ class _DeliveryAttempt:
                 or self._owner._material is not self._parent or self._owner._binding is not self._binding
                 or self._owner._custody is not self._custody
                 or self._binding.runtime_root_public_key is not self._root
-                or self._parent.release_handoff is not self._config
-                or self._parent.release_grant_acquisition is not self._issuer
-                or (self._config.client_id, self._config.client_identity_bytes,
-                    self._config.endpoint_bytes, self._issuer.endpoint) != self._config_pin
-                or self.actor._purpose != "release" or self.actor._profile != "consume"
+                or self._purpose is not self._purpose_pin
+                or self._cold_configuration() != self._config_pin
+                or self.actor._purpose != self._purpose or self.actor._profile != "consume"
                 or actors._ACTIVE is not self.actor or self.actor._authorized is not True
                 or self.actor._completion_recovery_spent is not True
                 or self.controls._actor is not self.actor):
@@ -88,6 +113,12 @@ class _DeliveryAttempt:
                 execution._fail("completion delivery changed its retained continuation")
         if self.grants is not self._grants_seal:
             execution._fail("completion delivery changed its retained grant originals")
+        if (self._recovery_result is not self._recovery_result_seal
+                or type(self._stage_spent) is not bool or type(self._staged) is not bool
+                or self._staged and not self._stage_spent
+                or self._purpose == "release" and (self._recovery_result is not None
+                    or self._stage_spent or self._staged)):
+            execution._fail("completion delivery changed its recovery admission or staging")
         if self._lifetime is not None:
             lifetime = self._lifetime
             if lifetime is not self._lifetime_seal or lifetime.work is not self._work:
@@ -140,7 +171,14 @@ class _DeliveryAttempt:
         self._delivery = self._delivery_seal = _delivery
         self._exchange_spent = self._exchange_in_progress = True
         try:
-            token = live._exchange_on_active(self, _delivery=_delivery)
+            if self._purpose == "release":
+                token = live._exchange_on_active(self, _delivery=_delivery)
+            else:
+                from serverware import control_plane_oidc_session_activation_completion_recovery_retained_exchange as retained
+
+                if self._stage_spent is not True or self._staged is not True:
+                    execution._fail("completion recovery has no same-call staged original")
+                token = retained._exchange_on_active(self, _delivery=_delivery)
             if (type(token) is not bytes or len(token) != handoff_config.client.delivery.TOKEN_BYTES
                     or not callable(self._receiving_current)
                     or self._receiving_current is not self._receiving_seal):
@@ -216,6 +254,8 @@ def _require_proof_call(selected):
 def _acquire_grants(active):
     """Claim the same target slot before contact; retain raw2 before admission."""
     active._parent_current()
+    if active._purpose != "release":
+        execution._fail("LIVE acquisition cannot accept retained recovery permission")
     selected, work = active.inputs, active._work
     wire = grants_transport
     kwargs = intent._persistence(selected, active._parent_current, live._GRANT_IO_BYTES)
@@ -262,15 +302,23 @@ def _acquire_grants(active):
 
 @contextmanager
 def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
-        transport_deadline_ns, work, current):
+        transport_deadline_ns, work, current, _purpose="release"):
     """Retained originals plus fresh release permission; never preparation."""
     global _ACTIVE
 
     if _ACTIVE is not None or completion._ACTIVE is not None or preparation._ACTIVE is not None:
         execution._fail("completion delivery cannot overlap another source call")
+    if _purpose == "release":
+        release_reservation = live.EXCHANGE_RESERVATION_BYTES
+    elif _purpose == "retained-release":
+        from serverware import control_plane_oidc_session_activation_completion_recovery_retained_acquisition as retained_acquisition
+
+        release_reservation = retained_acquisition._reservation_on_owner(owner)
+    else:
+        execution._fail("completion delivery purpose is not a fixed source action")
     future = (inputs.INPUT_RESERVATION_BYTES + intent._additional_original_bytes(owner)
         + exchange._exchange_reservation("consume") + preparation._RECONCILIATION_IO_BYTES
-        + completion._CONFIGURATION_RESERVATION + live.EXCHANGE_RESERVATION_BYTES)
+        + completion._CONFIGURATION_RESERVATION + release_reservation)
     if type(future) is not int or not 0 < future < controls.MAX_ORIGINAL_BYTES:
         execution._fail("completion delivery future inventory exceeds its original allowance")
     active, scope = None, None
@@ -278,9 +326,9 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
         with actors._authorize_on_owner(owner, profile="consume", request=request,
                 recovery_bytes=recovery_bytes, live_window=live_window,
                 transport_deadline_ns=transport_deadline_ns, work=work, current=current,
-                _purpose="release", _additional_original_bytes=future) as scope:
+                _purpose=_purpose, _additional_original_bytes=future) as scope:
             scope.current()
-            if (scope._purpose != "release" or scope._authorized is not True
+            if (scope._purpose != _purpose or scope._authorized is not True
                     or scope._completion_recovery_spent is not False):
                 execution._fail("completion delivery requires its fresh release-purpose actor")
             scope._completion_recovery_spent = True
@@ -306,8 +354,12 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
             receiving_current()
             active.response, active.completion_current = response, receiving_current
             scope._completion_receiving_current = receiving_current
-            active.inputs = inputs._admit_for_release_on_controls(selected,
-                response_originals=response, receiving_current=receiving_current)
+            if _purpose == "release":
+                active.inputs = inputs._admit_for_release_on_controls(selected,
+                    response_originals=response, receiving_current=receiving_current)
+            else:
+                active.inputs = inputs._admit_for_retained_release_on_controls(selected,
+                    response_originals=response, receiving_current=receiving_current)
             active.intent = intent._readmit_on_inputs(active.inputs)
             active.proof = proof._readmit_on_intent(active.intent)
             proof._require_proof(active.proof)
@@ -320,7 +372,10 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
             active._lifetime = active._lifetime_seal = bookkeeping._Lifetime(
                 parent_lifetime.window, parent_lifetime.bound, work, active._proof_continuity)
             active._window_pin, active._bound_pin = parent_lifetime.window, parent_lifetime.bound
-            _acquire_grants(active)
+            if _purpose == "release":
+                _acquire_grants(active)
+            else:
+                retained_acquisition._acquire_and_stage(active)
             yield active
             active._parent_current()
             if active._exchange_complete is not True or active._exchange_failed is not False:
@@ -335,3 +390,11 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
             active._close()
         if _ACTIVE is active:
             _ACTIVE = None
+
+
+def _recover_on_owner(owner, *, request, recovery_bytes, live_window,
+        transport_deadline_ns, work, current):
+    """Separate fresh retained-release action; never a first-release fallback."""
+    return _acquire_on_owner(owner, request=request, recovery_bytes=recovery_bytes,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, current=current, _purpose="retained-release")

@@ -30,6 +30,9 @@ RELEASE_PATH = "/api/auth/session/activation/consume/completion/recovery/release
 DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1"
 DELIVERY_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryOptions/v1"
 DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recovery/release"
+RETAINED_DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1"
+RETAINED_DELIVERY_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryOptions/v1"
+RETAINED_DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recovery/retained-release"
 
 
 def _configuration(owner, profile):
@@ -102,6 +105,11 @@ class _CompletionActorScope(actor._ActorScope):
             # A separate fresh assertion and approval select release. Neither
             # completion nor intent/proof preparation can authorize this use.
             self._binding["schema"] = DELIVERY_SCHEMA
+            self._binding["recoveryPurpose"] = purpose
+        elif purpose == "retained-release":
+            # Retained-outcome authority is a separate fresh action, never a
+            # fallback selected by a LIVE failure or preparation permission.
+            self._binding["schema"] = RETAINED_DELIVERY_SCHEMA
             self._binding["recoveryPurpose"] = purpose
         self._binding_pin = actor._snapshot(self._binding, work)
         self._payload_digest = None
@@ -181,12 +189,18 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
     from serverware import app as application
 
     actor._request(request, recovery_bytes)
-    if (type(_purpose) is not str or _purpose not in ("completion", "release-intent-proof", "release")
+    if (type(_purpose) is not str
+            or _purpose not in ("completion", "release-intent-proof", "release", "retained-release")
             or type(_additional_original_bytes) is not int
             or not 0 <= _additional_original_bytes < history.MAX_ORIGINAL_BYTES):
         actor._deny("completion recovery purpose or held capacity differs", 503)
-    if _purpose in ("release-intent-proof", "release"):
-        action_path = RELEASE_PATH if _purpose == "release-intent-proof" else DELIVERY_PATH
+    if _purpose in ("release-intent-proof", "release", "retained-release"):
+        if _purpose == "release-intent-proof":
+            action_path = RELEASE_PATH
+        elif _purpose == "release":
+            action_path = DELIVERY_PATH
+        else:
+            action_path = RETAINED_DELIVERY_PATH
         path = action_path + "/options" if options else action_path
         if (profile != "consume" or request.method != "POST"
                 or request.scope.get("path") != path
@@ -197,7 +211,7 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         actor._deny("completion recovery requires a non-overlapping actual owner", 409)
     current()
     parent, recovery, configuration = _configuration(owner, profile)
-    if (_purpose in ("release-intent-proof", "release")
+    if (_purpose in ("release-intent-proof", "release", "retained-release")
             and (parent.release_intent is None or parent.release_proof is None)):
         actor._deny("completion release purpose lacks independent cold intent/proof configuration", 503)
     configuration_pin = _configuration_pin(profile, configuration)
@@ -303,6 +317,9 @@ def _options_on_owner(owner, *, profile, request, recovery_bytes, live_window,
                     result["recoveryPurpose"] = _purpose
                 elif _purpose == "release":
                     result["schema"] = DELIVERY_OPTIONS_SCHEMA
+                    result["recoveryPurpose"] = _purpose
+                elif _purpose == "retained-release":
+                    result["schema"] = RETAINED_DELIVERY_OPTIONS_SCHEMA
                     result["recoveryPurpose"] = _purpose
                 scope.current()
             scope._guard()

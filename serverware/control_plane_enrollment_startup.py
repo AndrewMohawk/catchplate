@@ -553,6 +553,27 @@ class _EnrollmentOwner:
             recovery_bytes=recovery_bytes, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work, current=current)
 
+    def _oidc_session_activation_completion_retained_delivery_options(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Fresh retained-release challenge, never first-release fallback permission."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actor
+
+        _require_pid()
+        return actor._options_on_owner(self, profile="consume", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current,
+            _purpose="retained-release")
+
+    def _acquire_oidc_session_activation_completion_retained_delivery(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Distinct fresh RECOVERY owner; no implicit retry or checkpoint selection."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as delivery
+
+        _require_pid()
+        return delivery._recover_on_owner(self, request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

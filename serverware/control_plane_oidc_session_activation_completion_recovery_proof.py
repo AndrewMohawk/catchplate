@@ -110,7 +110,7 @@ def _proof_on_intent(selected_intent):
 def _readmit_on_intent(selected_intent):
     """Existing original only; never contact setup/proof services or publish."""
     intent_source._require_intent(selected_intent)
-    if selected_intent.inputs._purpose != "release":
+    if selected_intent.inputs._purpose not in ("release", "retained-release"):
         _fail("proof readmission requires its separate fresh release actor")
     return _proof_from_intent(selected_intent)
 
@@ -119,7 +119,7 @@ def _proof_from_intent(selected_intent):
     intent_source._require_intent(selected_intent)
     if selected_intent.inputs._purpose == "release-intent-proof":
         from serverware import control_plane_oidc_session_activation_completion_recovery_release as owner_call
-    elif selected_intent.inputs._purpose == "release":
+    elif selected_intent.inputs._purpose in ("release", "retained-release"):
         from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as owner_call
     else:
         _fail("proof continuation has no actual source owner")

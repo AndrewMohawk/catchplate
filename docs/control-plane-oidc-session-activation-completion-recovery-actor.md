@@ -56,9 +56,21 @@ substitute for the fresh release authorization. The exact purpose remains pinned
 through every guard and cleanup. Preparation permission is never broadened, and
 its closed actor is never reused.
 
-Both consume purposes require actual parent intent/proof configuration and use
+The separate source-fixed `retained-release` purpose selects only
+`POST /api/auth/session/activation/consume/completion/recovery/retained-release`
+and its `/options` action. `RETAINED_DELIVERY_SCHEMA` is
+`serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1`;
+`RETAINED_DELIVERY_OPTIONS_SCHEMA` is
+`serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryOptions/v1`.
+The signed assertion/approval binding includes `recoveryPurpose: retained-release`.
+Neither a LIVE `release` assertion nor preparation permission can select this
+action, and a failed LIVE request cannot switch to it automatically. Independently
+root-admitted RECOVERY/checkpoint-one originals remain necessary; an absent local
+record or reconstructed outcome is not private-store evidence.
+
+All three consume release purposes require actual parent intent/proof configuration and use
 the same genuine historical target, old-possession check, fresh session/key/trust
-admission and original future-reservation accounting. The `release` actor is an
+admission and original future-reservation accounting. A release actor is an
 authorization prerequisite only: these actor changes add no release checkpoint,
 grant selection, socket exchange, private store read or cookie effect. Any such
 continuation must independently admit its original release authority while this
@@ -87,7 +99,7 @@ inside the live context. Final guards and normal trust/startup-lock cleanup
 precede a normal-exit marker; cleanup revokes the actor and clears old-token
 access. The ordinary actor remains closed and cannot supply a post-cleanup guard.
 Only the separate [source-owned release terminal](control-plane-oidc-session-activation-completion-recovery-delivery-response.md),
-selected before genuine LIVE admission, can retain the final receiver across
+selected before the new genuine LIVE or RECOVERY receiving chain, can retain the final receiver across
 known successful normal cleanup using captured independent original ancestors.
 It does not revive this actor or broaden preparation permission. The ordinary
 intent-stage actor and exact-type token-acquisition entrypoint remain distinct.
@@ -104,8 +116,9 @@ Private AES/history replay stays in the isolated completion service.
 
 The separate [fresh intent/proof coordinator](control-plane-oidc-session-activation-completion-recovery-release.md)
 now uses this distinct purpose for retained acknowledged consume originals.
-Full recovery still needs independently admitted release-profile/checkpoint and
-current-auth/cookie continuation. Missing evidence is unavailable
+The two fixed release actions use independently admitted release-profile/checkpoint
+and guarded current-auth/cookie continuations; the actor alone establishes neither.
+Missing evidence is unavailable
 or unknown, not SQL nonexecution, private-outcome absence or retry authority.
 COMPLETE and activation step 23 remain incomplete; these actor methods and the
 completion-only response establish no cookie, active session or production claim.

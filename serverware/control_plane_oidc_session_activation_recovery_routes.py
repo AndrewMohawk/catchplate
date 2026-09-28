@@ -25,7 +25,7 @@ _STATUSES = frozenset({400, 401, 403, 405, 409, 413, 415, 422, 429, 503})
 
 def error(status_code=503, *, path=None):
     if path in delivery.PATHS:
-        return delivery.error(status_code)
+        return delivery.error(status_code, path=path)
     if path in release.PATHS:
         return release.error(status_code)
     if path in completion.PATHS:
@@ -159,5 +159,17 @@ async def completion_delivery_options(request: Request):
 
 @router.post(delivery.POST_PATH)
 async def complete_first_release(request: Request):
+    return delivery._run(request, options=False,
+        recovery_bytes=getattr(request.state, ORIGINAL_STATE_NAME, None))
+
+
+@router.post(delivery.RETAINED_OPTIONS_PATH)
+async def completion_retained_delivery_options(request: Request):
+    return delivery._run(request, options=True,
+        recovery_bytes=getattr(request.state, ORIGINAL_STATE_NAME, None))
+
+
+@router.post(delivery.RETAINED_POST_PATH)
+async def complete_retained_release(request: Request):
     return delivery._run(request, options=False,
         recovery_bytes=getattr(request.state, ORIGINAL_STATE_NAME, None))

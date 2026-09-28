@@ -79,9 +79,11 @@ original current guard through native publication and normal-close readback.
 These source bounds can refuse large valid inputs; they are not heap/RSS proof.
 
 COMPLETE and step 23 remain partial. The existing post-intent RECOVERY path is
-unchanged. **RECOVERY/checkpoint-one delivery for separately reconciled completion
-and unattempted-consume recovery remain open**; this first-LIVE path cannot
-recover unknown prior release. Fresh intent changes evidence identity, and
+unchanged. The separate [.214 retained-release action](control-plane-oidc-session-activation-completion-recovery-retained-delivery.md)
+connects independently authorized RECOVERY/checkpoint-one delivery for separately
+reconciled completion; it is not fallback permission for this first-LIVE action.
+This LIVE action cannot retry or switch profiles after an unknown result.
+**Unattempted-consume recovery remains open.** Fresh intent changes evidence identity, and
 absence or reconstruction establishes neither private-store existence nor
 non-execution. Portal/resources and all production gates remain required.
 Project **34/46**, activation **22/26** and production **0/6 verified** are

@@ -152,7 +152,8 @@ def _identity(value):
     actor = value.actor
     if (type(actor) is not actors._CompletionActorScope or actor._active is not True
             or actor._authorized is not True or actor._completion_recovery_spent is not True
-            or type(value._purpose) is not str or value._purpose not in ("release-intent-proof", "release")
+            or type(value._purpose) is not str
+            or value._purpose not in ("release-intent-proof", "release", "retained-release")
             or actor._purpose != value._purpose or actor._profile != "consume"
             or actor._work is not value.work or actor._old_token is not value.old_token_bytes
             or value.controls._actor is not actor):
@@ -178,6 +179,12 @@ def _admit_for_release_on_controls(selected, *, response_originals, receiving_cu
         receiving_current=receiving_current, purpose="release")
 
 
+def _admit_for_retained_release_on_controls(selected, *, response_originals, receiving_current):
+    """Fresh retained-release actor; no preparation or LIVE authority is reused."""
+    return _admit_for_purpose(selected, response_originals=response_originals,
+        receiving_current=receiving_current, purpose="retained-release")
+
+
 def _admit_for_purpose(selected, *, response_originals, receiving_current, purpose):
     # Literal source owners, not a supplied callback, select the one-use
     # provenance handshake. Neither owner can borrow the other's actor purpose.
@@ -185,7 +192,7 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
         _fail("release inputs require a literal actor purpose")
     if purpose == "release-intent-proof":
         from serverware import control_plane_oidc_session_activation_completion_recovery_release as source
-    elif purpose == "release":
+    elif purpose in ("release", "retained-release"):
         from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as source
     else:
         _fail("release inputs require an exact source-selected actor purpose")

@@ -1,6 +1,6 @@
-"""LIVE release receiving through fresh current authentication and signed send.
+"""Fixed LIVE or RECOVERY receiving through current authentication and send.
 
-This source-owned terminal is selected before LIVE admission, not after a token
+This source-owned terminal is selected before final admission, not after a token
 is returned. Only successful normal actor/owner cleanup permits its receiver to
 continue against captured original ancestors. Preparation permission and closed
 ordinary actor, input, proof and exchange guards are never reused.
@@ -19,17 +19,21 @@ from serverware import control_plane_oidc_session_activation_completion_recovery
 from serverware import control_plane_oidc_session_activation_completion_recovery_intent_inputs as inputs_source
 from serverware import control_plane_oidc_session_activation_completion_recovery_intent as intent_source
 from serverware import control_plane_oidc_session_activation_completion_recovery_proof as proof_source
+from serverware import control_plane_oidc_session_activation_release_recovery_grant_acquisition_bootstrap as recovery_config
+from serverware import oidc_session_activation_release_recovery_grant_admission as recovery_grants
 
 
 actor, execution = actors.actor, actors.execution
 permission, pending = actor.permission, actor.pending
 POST_PATH = actors.DELIVERY_PATH
+RETAINED_POST_PATH = actors.RETAINED_DELIVERY_PATH
+POST_PATHS = frozenset({POST_PATH, RETAINED_POST_PATH})
 RESPONSE_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryResponse/v1"
+RETAINED_RESPONSE_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryResponse/v1"
 PURPOSE = "release"
+RETAINED_PURPOSE = "retained-release"
 _SCOPE_KEY = "serverware.oidc-session-activation.completion-recovery-final-delivery"
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
-_SUCCESS = {"schema": RESPONSE_SCHEMA, "purpose": PURPOSE, "status": "released",
-    "sessionState": "active", "automaticRetryAllowed": False}
 _AUTH_RESERVATION = 256 * 1024
 _PUBLIC_FIELDS = ("actor", "controls", "response", "inputs", "intent", "proof", "grants",
     "reconciliation_digest")
@@ -37,6 +41,14 @@ _PUBLIC_FIELDS = ("actor", "controls", "response", "inputs", "intent", "proof", 
 
 def _fail():
     raise execution.startup.EnrollmentStartupError("completion recovery release delivery is unavailable")
+
+
+def _action(purpose):
+    if type(purpose) is str and purpose == PURPOSE:
+        return POST_PATH, RESPONSE_SCHEMA, "released"
+    if type(purpose) is str and purpose == RETAINED_PURPOSE:
+        return RETAINED_POST_PATH, RETAINED_RESPONSE_SCHEMA, "recovered"
+    _fail()
 
 
 class _StagedRecoveryResponse:
@@ -48,7 +60,8 @@ class _StagedRecoveryResponse:
         "_parent_lifetime", "_public", "_evidence_refs_pin", "_evidence_values_pin", "_cold_pin",
         "_old", "_pid", "_thread", "_seal", "_pins", "_limits", "_ceilings", "_metrics",
         "_window", "_bound", "_epoch", "_monotonic", "_parent_continuity", "_receiver",
-        "_phase", "_response", "_body", "_cookie", "_session_expiry")
+        "_phase", "_response", "_body", "_cookie", "_session_expiry",
+        "_purpose", "_path", "_schema", "_success_status", "_recovery_pin")
 
     def __init__(self):
         _fail()
@@ -76,9 +89,18 @@ class _StagedRecoveryResponse:
         parent = self._parent
         inputs = self._public[3]
         intent_policy, proof_policy, setup = inputs.intent_policy, inputs.proof_policy, inputs.setup_policy
-        handoff = parent.release_handoff
-        return (handoff, handoff.client_id, handoff.client_identity_bytes, handoff.endpoint_bytes,
-            parent.release_grant_acquisition, parent.release_grant_acquisition.endpoint,
+        if self._purpose == PURPOSE:
+            handoff = parent.release_handoff
+            selected = (handoff, handoff.client_id, handoff.client_identity_bytes, handoff.endpoint_bytes,
+                parent.release_grant_acquisition, parent.release_grant_acquisition.endpoint)
+        else:
+            configured = parent.release_recovery_grant_acquisition
+            if type(configured) is not recovery_config._RecoveryGrantAcquisitionMaterial:
+                _fail()
+            selected = (configured, configured.endpoint, configured.issuer_policy_bytes,
+                configured.release_custody_bytes, configured.proof_enrollment_bytes,
+                configured.intent_enrollment_bytes)
+        return (*selected,
             parent.release_intent, parent.release_proof, parent.release_proof_acquisition,
             intent_policy.enrollment_bytes, intent_policy.enrollment_digest, intent_policy.expected_scope_bytes,
             intent_policy.caller_public_key, intent_policy.forbidden_public_keys,
@@ -88,6 +110,27 @@ class _StagedRecoveryResponse:
             parent.activation_planning, parent.activation_planning.planner_bootstrap_bytes,
             self._owner._response_path, self._owner._response_pin)
 
+    def _recovery_refs(self):
+        active = self._active
+        result = active._recovery_result
+        if self._purpose == PURPOSE:
+            if (result is not None or active._recovery_result_seal is not None
+                    or active._stage_spent is not False or active._staged is not False):
+                _fail()
+            return (None, None, False, False)
+        if (type(result) is not recovery_grants._RecoveryGrantMaterial
+                or result is not active._recovery_result_seal
+                or active._stage_spent is not True or active._staged is not True
+                or any(raw is not held for raw, held in zip(active.grants,
+                    (result.client_authorization_bytes, result.server_bootstrap_bytes, result.outcome_bytes)))):
+            _fail()
+        # The old admission guard belongs to acquisition/staging. Retain its
+        # exact evidence identity, but never invoke it after actor cleanup.
+        return (result, active._recovery_result_seal, True, True,
+            result.client_authorization_bytes, result.server_bootstrap_bytes, result.outcome_bytes,
+            result.client_material, result.issuer_policy_material, result.live_window,
+            result.deadline_ns, result.live)
+
     def _identity(self):
         """Identity only: never call a receiving child or closed private guard."""
         from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as source
@@ -96,7 +139,8 @@ class _StagedRecoveryResponse:
         references = (active, scope, self._application, owner, self._owner_scope,
             self._source_current, self._target, self._request, self._asgi, self._original,
             self._payload, self._parent, self._binding, self._custody, self._config,
-            self._root, self._work, self._parent_lifetime, self._public, self._old)
+            self._root, self._work, self._parent_lifetime, self._public, self._old,
+            self._purpose, self._path, self._schema, self._success_status)
         if (type(active) is not source._DeliveryAttempt or type(scope) is not actors._CompletionActorScope
                 or os.getpid() != self._pid or threading.get_ident() != self._thread
                 or type(self._seal) is not tuple or len(self._seal) != len(references)
@@ -114,7 +158,10 @@ class _StagedRecoveryResponse:
                 or scope._payload is not self._payload or scope._work is not self._work
                 or scope._owner_scope is not self._owner_scope or scope._target is not self._target
                 or scope._target_seal is not self._target or scope._source_current is not self._source_current
-                or scope._purpose != "release" or scope._purpose is not scope._purpose_pin
+                or scope._purpose is not self._purpose or scope._purpose is not scope._purpose_pin
+                or active._purpose is not self._purpose or active._purpose is not active._purpose_pin
+                or _action(self._purpose) != (self._path, self._schema, self._success_status)
+                or self._asgi.get("path") != self._path
                 or scope._profile != "consume" or scope._configuration is not self._config
                 or active._owner is not owner or active._work is not self._work
                 or active._parent is not self._parent or active._binding is not self._binding
@@ -131,10 +178,12 @@ class _StagedRecoveryResponse:
             scope._future_original_bytes, scope._future_original_bytes_pin)
         if pins != self._pins:
             _fail()
-        refs, cold = self._evidence_refs(), self._cold_refs()
+        refs, cold, recovery = self._evidence_refs(), self._cold_refs(), self._recovery_refs()
         if (len(refs) != len(self._evidence_refs_pin) or len(cold) != len(self._cold_pin)
+                or len(recovery) != len(self._recovery_pin)
                 or any(actual is not held for actual, held in zip(refs, self._evidence_refs_pin))
                 or any(actual is not held for actual, held in zip(cold, self._cold_pin))
+                or any(actual is not held for actual, held in zip(recovery, self._recovery_pin))
                 or self._evidence_values() != self._evidence_values_pin):
             _fail()
         if active._closed is False:
@@ -312,6 +361,7 @@ class _StagedRecoveryResponse:
 
     def _before_send(self, scope, status_code, headers, body):
         if (scope is not self._asgi or scope.get(_SCOPE_KEY) is not self or self._phase != "finished"
+                or scope.get("path") != self._path
                 or type(status_code) is not int or status_code != 200 or body != self._body
                 or [(name, value) for name, value in headers if name.lower() == b"set-cookie"]
                     != [(b"set-cookie", self._cookie)]):
@@ -339,9 +389,11 @@ def _response_on_active(active):
         _fail()
     active._parent_current()
     scope = active.actor
+    path, schema, success_status = _action(scope._purpose)
     if (type(scope) is not actors._CompletionActorScope or actors._ACTIVE is not scope
             or actor._ACTIVE is not None or scope._application is not application
-            or scope._purpose != "release" or scope._profile != "consume"
+            or scope._purpose is not scope._purpose_pin or scope._profile != "consume"
+            or active._purpose is not scope._purpose or active._purpose is not active._purpose_pin
             or scope._authorized is not True or scope._normal_exit is not False
             or active._normal_exit is not False or active._closed is not False
             or active._exchange_spent is not False or active._delivery is not None
@@ -350,20 +402,23 @@ def _response_on_active(active):
             or type(scope._owner_scope) is not execution._Scope
             or type(scope._target) is not actors.history._CompletionRecoveryTarget
             or type(active.controls) is not controls_source._CompletionControls
-            or type(active.inputs) is not inputs_source._IntentInputs or active.inputs._purpose != "release"
+            or type(active.inputs) is not inputs_source._IntentInputs or active.inputs._purpose != scope._purpose
             or type(active.intent) is not intent_source._IntentContinuation
             or type(active.proof) is not proof_source._ProofContinuation
             or active.inputs.actor is not scope or active.inputs.controls is not active.controls
             or active.intent.inputs is not active.inputs or active.proof.intent is not active.intent
             or active.response is not active.inputs.response_originals
             or active.reconciliation_digest is not active.inputs.reconciliation_digest
-            or type(active.grants) is not tuple or len(active.grants) != 2
+            or type(active.grants) is not tuple
+            or len(active.grants) != (2 if scope._purpose == PURPOSE else 3)
             or any(type(raw) is not bytes or len(raw) < 2 for raw in active.grants)
-            or scope._request.method != "POST" or scope._request.scope.get("path") != POST_PATH
+            or scope._request.method != "POST" or scope._request.scope.get("path") != path
             or scope._request.scope.get("query_string", b"") != b""
             or scope._request.scope.get(_SCOPE_KEY) is not None):
         _fail()
     staged = object.__new__(_StagedRecoveryResponse)
+    staged._purpose, staged._path, staged._schema = scope._purpose, path, schema
+    staged._success_status = success_status
     staged._active, staged._actor, staged._application = active, scope, application
     staged._owner, staged._owner_scope = active._owner, scope._owner_scope
     staged._source_current, staged._target = scope._source_current, scope._target
@@ -379,13 +434,15 @@ def _response_on_active(active):
     staged._seal = (active, scope, application, staged._owner, staged._owner_scope,
         staged._source_current, staged._target, staged._request, staged._asgi, staged._original,
         staged._payload, staged._parent, staged._binding, staged._custody, staged._config,
-        staged._root, staged._work, staged._parent_lifetime, staged._public, staged._old)
+        staged._root, staged._work, staged._parent_lifetime, staged._public, staged._old,
+        staged._purpose, staged._path, staged._schema, staged._success_status)
     staged._pins = (scope._policy_pin, scope._request_pin, scope._target_pin, scope._binding_pin,
         scope._payload_digest, scope._credential, scope._count, scope._roles,
         scope._rbac_pin, scope._session_pin, scope._trust_pin,
         scope._future_original_bytes, scope._future_original_bytes_pin)
     staged._evidence_refs_pin, staged._evidence_values_pin = staged._evidence_refs(), staged._evidence_values()
     staged._cold_pin = staged._cold_refs()
+    staged._recovery_pin = staged._recovery_refs()
     work, lifetime = staged._work, staged._parent_lifetime
     staged._limits, staged._metrics = work.limits, work.metrics
     staged._ceilings = (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes)
@@ -435,7 +492,9 @@ def _response_on_active(active):
             _fail()
         work.charge(input_bytes=2048, json_nodes=16)
         response = permission._native(staged._current, work,
-            lambda: JSONResponse(status_code=200, headers=_HEADERS, content=dict(_SUCCESS)))
+            lambda: JSONResponse(status_code=200, headers=_HEADERS, content={
+                "schema": staged._schema, "purpose": staged._purpose, "status": staged._success_status,
+                "sessionState": "active", "automaticRetryAllowed": False}))
         permission._native(staged._current, work, lambda: response.set_cookie(
             application.OIDC_SESSION_COOKIE_NAME, active_token, max_age=max_age, httponly=True,
             secure=staged._request.url.scheme == "https", samesite="strict", path="/"))
@@ -459,11 +518,25 @@ def _unknown_response():
         "sessionState": "unknown", "automaticRetryAllowed": False})
 
 
+def _retained_unknown_response():
+    return JSONResponse(status_code=503, headers=_HEADERS, content={"schema": RETAINED_RESPONSE_SCHEMA,
+        "purpose": RETAINED_PURPOSE, "status": "release-outcome-unknown", "dispatchState": "unknown",
+        "sessionState": "unknown", "automaticRetryAllowed": False})
+
+
 def _rejected_response(*, status_code=400):
     if type(status_code) is not int or status_code not in (400, 401, 403, 405, 409, 413, 415, 422, 429, 503):
         _fail()
     return JSONResponse(status_code=status_code, headers=_HEADERS, content={"schema": RESPONSE_SCHEMA,
         "purpose": PURPOSE, "status": "release-rejected-before-dispatch", "dispatchState": "not-started",
+        "sessionState": "unknown", "automaticRetryAllowed": False})
+
+
+def _retained_rejected_response(*, status_code=400):
+    if type(status_code) is not int or status_code not in (400, 401, 403, 405, 409, 413, 415, 422, 429, 503):
+        _fail()
+    return JSONResponse(status_code=status_code, headers=_HEADERS, content={"schema": RETAINED_RESPONSE_SCHEMA,
+        "purpose": RETAINED_PURPOSE, "status": "release-rejected-before-dispatch", "dispatchState": "not-started",
         "sessionState": "unknown", "automaticRetryAllowed": False})
 
 
@@ -475,24 +548,27 @@ def _discard_scope(scope):
 
 async def _send_response(scope, receive, send, response, *, before_dispatch=False, downstream_failed=False):
     """Guard the actual response start after buffering/signing on this thread."""
-    if scope.get("path") == POST_PATH and before_dispatch:
+    path = scope.get("path")
+    rejected = _retained_rejected_response if path == RETAINED_POST_PATH else _rejected_response
+    unknown = _retained_unknown_response if path == RETAINED_POST_PATH else _unknown_response
+    if path in POST_PATHS and before_dispatch:
         _discard_scope(scope)
-        await _rejected_response()(scope, receive, send)
+        await rejected()(scope, receive, send)
         return
-    if scope.get("path") == POST_PATH and downstream_failed:
+    if path in POST_PATHS and downstream_failed:
         _discard_scope(scope)
-        await _unknown_response()(scope, receive, send)
+        await unknown()(scope, receive, send)
         return
     staged = scope.get(_SCOPE_KEY)
     if staged is None:
-        if (scope.get("path") == POST_PATH and (response.status_code == 200
+        if (path in POST_PATHS and (response.status_code == 200
                 or any(name.lower() == b"set-cookie" for name, _value in response.raw_headers))):
-            await _unknown_response()(scope, receive, send)
+            await unknown()(scope, receive, send)
         else:
             await response(scope, receive, send)
         return
     if type(staged) is not _StagedRecoveryResponse:
-        await _unknown_response()(scope, receive, send)
+        await unknown()(scope, receive, send)
         return
     started = False
 
@@ -519,6 +595,6 @@ async def _send_response(scope, receive, send, response, *, before_dispatch=Fals
                 raise
             # Discard the stale success/cookie/signature; never send a second
             # header set or re-sign, retry contact, or renew the allowance.
-            await _unknown_response()(scope, receive, send)
+            await unknown()(scope, receive, send)
     finally:
         staged._discard()

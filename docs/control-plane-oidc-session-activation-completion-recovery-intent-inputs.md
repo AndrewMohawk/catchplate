@@ -3,7 +3,8 @@
 The private `control_plane_oidc_session_activation_completion_recovery_intent_inputs`
 module derives release-intent expectations only inside an actual fresh consume
 completion actor. Preparation uses purpose `release-intent-proof`; read-only
-admission for token release uses a separate fresh actor with purpose `release`.
+admission for token release uses a separate fresh actor with purpose `release`
+or `retained-release`. These are distinct action-bound permissions.
 It accepts the exact sealed historical controls and exact raw6/receiving guard
 associated by the matching source orchestrator's one-use `_require_inputs_call`.
 The receiving guard is retained; a caller-supplied successful result or callback
@@ -30,7 +31,9 @@ the expectations. This helper neither opens a token nor signs an intent.
 preparation-only. `_admit_for_release_on_controls` has the same keywords but
 requires the distinct release actor and the actual
 `control_plane_oidc_session_activation_completion_recovery_delivery` provenance
-hook. Both return only the source-private sealed `_IntentInputs`; its literal
+hook. `_admit_for_retained_release_on_controls` uses the same private owner hook
+but requires the separate literal `retained-release` actor. All three return
+only the source-private sealed `_IntentInputs`; its literal
 purpose is sealed and must continue matching the original actor. Fixed graph
 snapshots, original references, actor association and cold pins are checked by
 `_require_inputs` and `current()`. `window`, `deadline_ns`, `narrow()` and
@@ -57,6 +60,9 @@ This source connection grants no SQL retry, completion retry, release checkpoint
 private store access, token exchange or cookie delivery. Missing retained intent
 or a reconstructed expected outcome proves neither private-outcome presence nor
 absence. A closed preparation actor cannot become a release actor. The separate
-release owner must independently admit current originals and root-signed
-LIVE/checkpoint-zero authority; these inputs select no profile or fallback.
+release owner must independently admit the appropriate original evidence and
+root-signed authority: LIVE/checkpoint zero for `release`, or a fresh independent
+RECOVERY/checkpoint-one policy and grants for `retained-release`. These inputs
+select no profile or fallback and create no intent or proof on either read-only
+release path.
 No runtime, resource provisioning or production-readiness evidence is claimed.

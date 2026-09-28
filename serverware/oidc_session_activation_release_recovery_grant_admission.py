@@ -62,7 +62,10 @@ def _unique_bytes(originals):
     return total
 
 
-def _reserve(request, response, independent, work):
+def _reserve(request, response, independent, work, *, additional_original_bytes=0):
+    if (type(additional_original_bytes) is not int
+            or not 0 <= additional_original_bytes < MAX_ORIGINAL_BYTES):
+        _fail("recovery grant admission held-original capacity is invalid")
     policy, custody, proof_enrollment, intent_enrollment = independent
     planner = server.custody.planner_bootstrap
     # A decoded original cannot exceed its enclosing base64 JSON original.
@@ -83,7 +86,7 @@ def _reserve(request, response, independent, work):
     # capacity. Shared derivation reserves its read-only outcome/raw8 path;
     # grant-generation output capacity belongs to the separate producer.
     other = _unique_bytes((*request, policy, proof_enrollment, intent_enrollment))
-    reserved = max(held + nested,
+    reserved = additional_original_bytes + max(held + nested,
         8 * len(custody) + 4 * other + 2 * _unique_bytes(response) + nested)
     if MAX_ORIGINAL_BYTES != 64 * 1024 * 1024 or reserved > MAX_ORIGINAL_BYTES:
         _fail("recovery grant admission exceeds its complete retained-original capacity")
@@ -93,7 +96,8 @@ def _reserve(request, response, independent, work):
 
 def _verify_on_work(*, response_originals, request_originals, issuer_policy_bytes,
         release_custody_bytes, proof_enrollment_bytes, intent_enrollment_bytes,
-        root_public_key, live_window, transport_deadline_ns, work, _continuity=None):
+        root_public_key, live_window, transport_deadline_ns, work, _continuity=None,
+        _additional_original_bytes=0):
     """Authenticate fresh recovery originals against independent original pins.
 
     Request input is prefix7, without an outcome. Genuine historical admission
@@ -111,13 +115,15 @@ def _verify_on_work(*, response_originals, request_originals, issuer_policy_byte
         "independent recovery proof enrollment")
     intent_raw = authorization._original(intent_enrollment_bytes, issuer.MAX_INTENT_ENROLLMENT_BYTES,
         "independent recovery intent enrollment")
-    reserved = _reserve(request, response, (policy_raw, custody_raw, proof_raw, intent_raw), work)
+    reserved = _reserve(request, response, (policy_raw, custody_raw, proof_raw, intent_raw), work,
+        additional_original_bytes=_additional_original_bytes)
     root = root_public_key
     actual_request, policy, record, storage_scope, recovery_scope, request_identity, lifetime = (
         production._derive_on_work(request_originals=request, issuer_policy_bytes=policy_raw,
             release_custody_bytes=custody_raw, proof_enrollment_bytes=proof_raw,
             intent_enrollment_bytes=intent_raw, root_public_key=root, live_window=live_window,
-            transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity))
+            transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity,
+            _additional_original_bytes=_additional_original_bytes + 4 * _unique_bytes(response)))
     if type(policy) is not issuer._IssuerPolicyMaterial:
         _fail("recovery grant admission requires genuine original policy derivation")
     current = lifetime.current

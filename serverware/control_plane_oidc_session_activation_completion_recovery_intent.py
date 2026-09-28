@@ -157,7 +157,7 @@ def _intent_on_inputs(inputs):
 def _readmit_on_inputs(inputs):
     """Existing original only; never sign or publish on a release-purpose call."""
     inputs_source._require_inputs(inputs)
-    if inputs._purpose != "release":
+    if inputs._purpose not in ("release", "retained-release"):
         _fail("intent readmission requires its separate fresh release actor")
     return _intent_from_inputs(inputs)
 
@@ -166,7 +166,7 @@ def _intent_from_inputs(inputs):
     inputs_source._require_inputs(inputs)
     if inputs._purpose == "release-intent-proof":
         from serverware import control_plane_oidc_session_activation_completion_recovery_release as owner_call
-    elif inputs._purpose == "release":
+    elif inputs._purpose in ("release", "retained-release"):
         from serverware import control_plane_oidc_session_activation_completion_recovery_delivery as owner_call
     else:
         _fail("intent continuation has no actual source owner")

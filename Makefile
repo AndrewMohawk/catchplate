@@ -1226,6 +1226,16 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_release_grant_issuer_startup.py \
 	serverware/oidc_session_activation_release_grant_issuer_launcher.py \
 	serverware/oidc_session_activation_release_grant_issuer_runner.py \
+	serverware/workload_identity_issuance_authorization.py \
+	serverware/workload_identity_issuer_bootstrap.py \
+	serverware/workload_identity_issuer_entrypoint.py \
+	serverware/workload_identity_issuer_startup.py \
+	serverware/workload_identity_issuer_launcher.py \
+	serverware/workload_identity_issuer_service.py \
+	serverware/workload_identity_issuer_transport.py \
+	serverware/workload_identity_issuer_journal.py \
+	serverware_agent_trust/workload_identity_originals.py \
+	serverware_agent_trust/_workload_signed_packet.py \
 	serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_release_grant_acquisition.py \
 	serverware/oidc_session_activation_release_grant_delivery_admission.py \
@@ -3450,6 +3460,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_release_grant_issuer_startup.py \
 				serverware/oidc_session_activation_release_grant_issuer_launcher.py \
 				serverware/oidc_session_activation_release_grant_issuer_runner.py \
+				serverware/workload_identity_issuance_authorization.py \
+				serverware/workload_identity_issuer_bootstrap.py \
+				serverware/workload_identity_issuer_entrypoint.py \
+				serverware/workload_identity_issuer_startup.py \
+				serverware/workload_identity_issuer_launcher.py \
+				serverware/workload_identity_issuer_service.py \
+				serverware/workload_identity_issuer_transport.py \
+				serverware/workload_identity_issuer_journal.py \
+				serverware_agent_trust/workload_identity_originals.py \
+				serverware_agent_trust/_workload_signed_packet.py \
 				serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_release_grant_acquisition.py \
 				serverware/oidc_session_activation_release_grant_delivery_admission.py \

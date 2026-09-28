@@ -53,6 +53,13 @@ _DIGEST_PINS = frozenset({
 _PIN_FIELDS = _DIGEST_PINS | {"rollbackEpoch", "policySequence", "releaseChannel"}
 
 
+def _charge(budget, **amounts) -> None:
+    """An inherited server ledger may meter the actual shared primitives."""
+    charge = getattr(budget, "charge", None)
+    if charge is not None:
+        charge(**amounts)
+
+
 def _preflight_json(raw: bytes, budget: Budget) -> None:
     """Bound nesting and every container/key/scalar before allocating JSON data.
 
@@ -107,6 +114,7 @@ def _preflight_json(raw: bytes, budget: Budget) -> None:
             raise WorkloadClientError("signed workload JSON exceeds its node bound")
     if stack:
         raise WorkloadClientError("signed workload JSON structure is incomplete")
+    _charge(budget, input_bytes=size, json_nodes=nodes)
     budget.check()
 
 
@@ -168,6 +176,7 @@ def _parse_packet(raw: bytes, budget: Budget) -> dict[str, object]:
                 item.encode("utf-8")
             except UnicodeError:
                 raise WorkloadClientError("signed workload JSON text is invalid") from None
+    _charge(budget, json_nodes=visited)
     budget.check()
     return value
 
@@ -184,10 +193,13 @@ def _canonical(value: object, maximum: int, budget: Budget) -> bytes:
     budget.check()
     if len(original) > maximum:
         raise WorkloadClientError("signed workload canonical encoding exceeds its bound")
+    _charge(budget, input_bytes=len(original))
     return original
 
 
-def _digest(original: bytes) -> str:
+def _digest(original: bytes, budget=None) -> str:
+    if budget is not None:
+        _charge(budget, input_bytes=len(original), hashes=1)
     return "sha256:" + hashlib.sha256(original).hexdigest()
 
 
@@ -217,6 +229,7 @@ def _public_key(raw: bytes, budget: Budget) -> Ed25519PublicKey:
     if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_KEY_BYTES:
         raise WorkloadClientError("signed workload public key original exceeds its bound")
     budget.check()
+    _charge(budget, input_bytes=len(raw))
     try:
         key = serialization.load_pem_public_key(raw)
         if not isinstance(key, Ed25519PublicKey) or key.public_bytes(
@@ -298,15 +311,15 @@ def verify_signed_workload_packet(
         if statement[field] != pins[field]:
             raise WorkloadClientError("signed workload statement pins do not match")
     unsigned_packet = {field: value for field, value in packet.items() if field != "authenticity"}
-    if statement["packetSha256"] != _digest(_canonical(unsigned_packet, _MAX_PACKET_BYTES, budget)):
+    if statement["packetSha256"] != _digest(_canonical(unsigned_packet, _MAX_PACKET_BYTES, budget), budget):
         raise WorkloadClientError("signed workload packet digest does not match")
     statement_original = _canonical(statement, _MAX_STATEMENT_BYTES, budget)
-    if authenticity["statementSha256"] != _digest(statement_original):
+    if authenticity["statementSha256"] != _digest(statement_original, budget):
         raise WorkloadClientError("signed workload statement digest does not match")
     key = _public_key(signing_key_raw, budget)
     key_id = _digest(key.public_bytes(
         serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,
-    ))
+    ), budget)
     if key_id != pins["responseSigningKeyId"]:
         raise WorkloadClientError("signed workload public key does not match the signed pin")
     encoded = authenticity["signature"]
@@ -321,6 +334,7 @@ def verify_signed_workload_packet(
         ):
             raise ValueError("signature profile")
         budget.check()
+        _charge(budget, hashes=1, input_bytes=len(statement_original))
         key.verify(signature, statement_original)
     except (InvalidSignature, ValueError, binascii.Error):
         raise WorkloadClientError("signed workload signature verification failed") from None

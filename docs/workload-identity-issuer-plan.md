@@ -1,10 +1,14 @@
 # N04: independently authorized workload certificate issuance
 
-This is the next implementation contract, not an implemented issuer, an issuance
-authorization or a deployment instruction. The local client preparation/admission
-lane is source-only; N04 and all production gates remain open. No keys,
-certificates, services, trust stores or cloud resources were provisioned for this
-plan. See [the local client contract](workload-identity-provisioning.md).
+The dedicated worker, cold bootstrap, independent grant, durable journal,
+fixed-resource launcher and raw-original service are now authored in source.
+They have not been built, executed, provisioned or accepted in a deployment.
+The actual control-plane transport owner, public HTTP action and explicit CLI
+submission remain the next integration work; the existing local CLI stays
+network-free. N04 and all production gates remain open. No keys, certificates,
+services, trust stores or cloud resources were provisioned. See the
+[authored worker contract](workload-identity-issuer.md) and
+[local client contract](workload-identity-provisioning.md).
 
 ## Existing integration points
 
@@ -25,7 +29,7 @@ the workload issuer or called to satisfy missing issuer configuration.
 
 ## Chosen smallest usable server
 
-Add one dedicated local issuer worker, distinct from ASGI and the existing
+The authored source adds one dedicated local issuer worker, distinct from ASGI and the existing
 enrollment owner. The initial profile matches the client exactly: new P-256
 workload keys, explicitly permitted DNS/URI SANs, an empty subject, one directly
 issuing independently provisioned CA, and client-auth leaves. It is not a general
@@ -34,8 +38,9 @@ CA path builder, key-rotation service or SPIFFE registration server.
 The worker receives a root-signed closed bootstrap and original descriptors for
 its public roots/configuration, preprovisioned CA key, bounded durable journal
 and listener. A distinct source-fixed UID/GID, descriptor inventory, process
-mode and private-resource separation must be selected in the implementation's
-actual launcher contract; no currently allocated enrollment key slot is reused.
+mode and private-resource separation are fixed in the actual launcher contract:
+UID/GID 65492, peer 65532, descriptors 198–202 and process mode
+`workload-identity-issuer`. No currently allocated enrollment key slot is reused.
 Public originals, CA/key SPKI pairing, independent authorization-key exclusion,
 directory/listener ownership and original intervals are admitted before private
 operations. The worker alone can use the CA signer. ASGI receives no CA key,
@@ -57,11 +62,11 @@ the same original contract, not bypass it.
 
 ## Original-only issuance contract
 
-Proposed new closed domains are
+The implemented closed payload domains are
 `serverware.workloadIdentityIssuerBootstrap/v1` and
 `serverware.workloadIdentityIssuanceAuthorization/v1`, each with an explicitly
-paired signed envelope. The implementation must freeze canonical encoding and
-bounded originals before exposing a service.
+paired signed envelope. Their canonical encoding, Ed25519 domain separation and
+original-byte bounds are source-fixed; this is not a deployed service claim.
 
 Each issuance authorization pins:
 
@@ -71,7 +76,7 @@ Each issuance authorization pins:
   identity; exact packet-signing-key digest and permitted policy/runtime pins.
 - Exact signed packet bytes digest, principal, nonce, signed identity request
   bytes digest, CSR bytes digest and workload public SPKI digest.
-- Exact selected SANs, the fixed client-auth certificate profile, and the
+- Exact selected SANs, an independently authorized serial number, the fixed client-auth certificate profile, and the
   authorized certificate validity bounds. These cannot exceed the original
   packet/request interval or the issuing CA's validity.
 - The configured journal namespace/checkpoint and one issuance for that
@@ -104,7 +109,7 @@ verified in the bounded invocation, not copied into this new journal family.
 
 ## Durable boundary and retry semantics
 
-Use a new purpose-specific issuer journal, not a registration/activation record
+The source uses a new purpose-specific issuer journal, not a registration/activation record
 disguised as an issuance permission. Reuse the existing bounded descriptor and
 exclusive-publication primitives behind `authority_witness_journal.WitnessJournalIO`
 and the control-plane journal's fsync/readback pattern, with a separate closed
@@ -130,23 +135,31 @@ window. Reserve inputs, decoded originals, journal frames and certificate output
 before bodies or signing. Original grant, packet, request and CA limits remain
 hard. Filesystem fsync/locking is not rollback resistance against a privileged
 writer; independent checkpoint/witness or equivalent protected monotonic state
-is a production gate, not an implicit property of the local journal.
+is a production gate, not an implicit property of the local journal. The signed
+checkpoint is a minimum retained chain prefix: its exact head at the supplied
+record count must exist, and valid later extensions are allowed. It is not an
+external anti-rollback witness.
 
 ## Concrete implementation split
 
-The following names are proposed new files/interfaces, not existing APIs:
+The first two groups are authored source. The last two are still proposed
+integration work and must not be presented as callable public functionality:
 
 1. `serverware/workload_identity_issuance_authorization.py` and
    `workload_identity_issuer_bootstrap.py`: closed producer/verifier contracts
-   and original-only cold admission. Reuse the client request encoding and
-   genuine packet verifier, factoring shared public verification only through
-   an explicitly coordinated source change. Do not accept the local
+   and original-only cold admission. Both have `_produce_on_work` and
+   `_verify_on_work`; the grant module also has the original-only
+   `_verify_certificate_on_work`. Shared public verification is factored into
+   `serverware_agent_trust/workload_identity_originals.py`, with optional actual
+   inherited-work metering in the existing signed-packet verifier. Neither accepts the local
    `PreparedIdentity` or `ProvisionedIdentity` objects as authority.
 2. `serverware/workload_identity_issuer_startup.py`,
    `workload_identity_issuer_service.py`, `workload_identity_issuer_journal.py`
-   and a fixed-role entrypoint: exact cold resource ownership, one guarded
-   `issue_on_work(authorization_bytes, packet_bytes, request_bytes, ...)`,
-   irreversible claim and bounded original certificate return. Lifetime/work
+   plus `workload_identity_issuer_entrypoint.py`, its launcher and transport:
+   exact cold resource ownership, one guarded `_serve_on_owner` using the actual
+   private startup owner, irreversible claim and bounded original certificate
+   return. The service accepts raw `(grant, packet, request)` originals, not a
+   successful verification object. Lifetime/work
    arguments are the actual service's inherited context, not posted values.
 3. `serverware/control_plane_workload_identity_startup.py` plus a small
    `control_plane_workload_identity_client.py`: public-only bootstrap and one
@@ -165,10 +178,10 @@ The following names are proposed new files/interfaces, not existing APIs:
    assertion, with no configurable CA, endpoint or signer. Enable this route
    only after the genuine grant/worker/journal/client chain is connected.
 
-The protected worker and original authorization/response contract can be
-implemented first, independently of portal polish. The HTTP/CLI submission
-bridge must then call that actual owner; neither an unused helper nor an
-operator plan alone completes the server slice. Existing local CLI modes remain
+The protected worker and original authorization/response contract are authored,
+but the HTTP/CLI submission bridge must still call the real independently
+configured control-plane owner. A public-only transport helper or this operator
+plan alone does not complete that integration. Existing local CLI modes remain
 network-free until a separately explicit submission mode is implemented.
 
 ## Operator and deployment boundary

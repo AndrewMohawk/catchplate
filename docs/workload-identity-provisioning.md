@@ -84,9 +84,15 @@ and `enrollmentComplete` remain false. Never place private-key contents in chat.
 
 ## Remaining N04 boundary
 
-Actual server issuance, one-use issuer authorization, client-CA distribution,
-rotation/revocation, SPIFFE lifecycle/service, sidecar integration and verified
-runtime workload channels remain open. This local source slice adds no landed
+The separate [software-key issuer worker](workload-identity-issuer.md) now has
+source for independent issuance authorization, durable one-use claims, certificate
+signing and original-only admission. Its verifier shares the local public-input
+checks while retaining the worker's original work and deadline; it does not
+turn request possession or a CA-install capability into issuance authority.
+
+The actual control-plane caller, public issuance action and explicit CLI
+submission are still missing. These local modes remain network-free. Client-CA
+distribution, rotation/revocation, SPIFFE lifecycle/service, sidecar integration
+and verified runtime workload channels also remain open. N04 earns no landed
 parent credit: project status is 35/46 landed, two active (H05/N04), nine todo;
-production acceptance remains 0/6. Source is unbuilt, unexecuted and
-unprovisioned.
+production acceptance remains 0/6. Source is unbuilt, unexecuted and unprovisioned.

@@ -604,6 +604,102 @@ def emit_packet(packet: dict[str, object]) -> None:
     print()
 
 
+def _workload_issuance_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
+    """Explicit one-exchange operator modes, separate from local provisioning."""
+    if not (args.request_workload_issuance_options or args.submit_workload_issuance):
+        return False
+    common_pins = ("packet", "packet-signing-key", "issuer", "authorization", "request",
+        "tls-ca", "cookie", "csrf")
+    issue_pins = ("private-key", "options", "assertion")
+    pin_names = (*common_pins, *issue_pins, "approval")
+    allowed = {
+        "--request-workload-issuance-options", "--submit-workload-issuance",
+        "--expected-principal", "--expected-nonce", "--workload-output-directory",
+        "--workload-timeout-ms", "--workload-origin", "--workload-endpoint-address",
+        "--workload-endpoint-port", "--workload-server-name", "--workload-server-spki-sha256",
+        *("--workload-" + name + suffix for name in pin_names for suffix in ("", "-sha256")),
+    }
+    supplied = {item.split("=", 1)[0] for item in sys.argv[1:] if item.startswith("--")}
+    if supplied - allowed:
+        parser.error("operator workload issuance accepts only its explicit pinned inputs; no bearer or proxy options")
+
+    def argument(name: str):
+        return getattr(args, "workload_" + name.replace("-", "_"))
+
+    required = [
+        ("--expected-principal", args.expected_principal),
+        ("--expected-nonce", args.expected_nonce),
+        *(("--workload-" + name, argument(name)) for name in (
+            "output-directory", "origin", "endpoint-address", "endpoint-port", "server-name",
+            "server-spki-sha256")),
+    ]
+    required_pins = common_pins
+    if args.submit_workload_issuance:
+        required_pins += issue_pins
+        if argument("approval") is not None or argument("approval-sha256") is not None:
+            required_pins += ("approval",)
+    elif any(argument(name + suffix) is not None
+            for name in (*issue_pins, "approval") for suffix in ("", "-sha256")):
+        parser.error("options-only mode cannot accept a private key, assertion or continuation receipt")
+    required.extend(("--workload-" + name + suffix, argument(name + suffix))
+        for name in required_pins for suffix in ("", "-sha256"))
+    missing = [flag for flag, value in required if value is None or value == ""]
+    if missing:
+        parser.error("operator workload issuance requires " + ", ".join(missing))
+
+    from . import workload_identity_submission as submission
+    from ._workload_operator_http import OperatorEndpoint
+    from ._workload_stream import WorkloadClientError
+    from ._workload_tls import PinnedFile
+
+    def pin(name: str) -> PinnedFile:
+        return PinnedFile(argument(name), argument(name + "-sha256"))
+
+    def description(value: PinnedFile) -> dict[str, str]:
+        return {"path": os.fspath(value.path), "sha256": value.sha256}
+
+    connection = OperatorEndpoint(origin=args.workload_origin,
+        endpoint=(args.workload_endpoint_address, args.workload_endpoint_port),
+        server_name=args.workload_server_name, trust=pin("tls-ca"),
+        server_spki_sha256=args.workload_server_spki_sha256,
+        cookie=pin("cookie"), csrf=pin("csrf"))
+    common = {"packet": pin("packet"), "packet_signing_key": pin("packet-signing-key"),
+        "issuer": pin("issuer"), "authorization": pin("authorization"), "request": pin("request"),
+        "expected_principal": args.expected_principal, "expected_nonce": args.expected_nonce,
+        "output_directory": args.workload_output_directory, "timeout_ms": args.workload_timeout_ms,
+        "connection": connection}
+    try:
+        exit_code = 0
+        if args.request_workload_issuance_options:
+            options = submission.request_issuance_options(**common)
+            result = {"status": "options-received", "response": description(options.response),
+                "action": options.action, "resourceId": options.resource_id,
+                "payloadDigest": options.payload_digest}
+        else:
+            submitted = submission.submit_issuance(**common, private_key=pin("private-key"),
+                options=pin("options"), assertion=pin("assertion"),
+                approval=pin("approval") if args.workload_approval is not None else None)
+            statuses = {"certificate-issued": 0, "approval-required": 3,
+                "issuance-outcome-unknown": 4, "refused": 5}
+            if type(submitted.status) is not str or submitted.status not in statuses:
+                raise WorkloadClientError("operator workload submission status is invalid")
+            exit_code = statuses[submitted.status]
+            result = {"status": submitted.status, "response": description(submitted.response)}
+            if submitted.identity is not None:
+                result["clientCertificate"] = description(submitted.identity.client_certificate)
+                result["clientPrivateKey"] = description(submitted.identity.client_private_key)
+        print(json.dumps({"schema": "serverware.workloadIdentitySubmissionResult/v1", **result,
+            "proxyAuthenticated": False, "enrollmentComplete": False, "automaticRetryAllowed": False},
+            indent=2, sort_keys=True))
+        if exit_code:
+            raise SystemExit(exit_code)
+    except (OSError, ValueError):
+        raise WorkloadClientError(
+            "operator workload request did not complete; retain all artifacts and do not automatically retry"
+        ) from None
+    return True
+
+
 def _workload_identity_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
     """Local-only provisioning; never fall through into enrollment networking."""
     selected = args.prepare_workload_identity or args.admit_workload_certificate
@@ -728,9 +824,19 @@ def main() -> None:
         help="locally prepare one packet-bound P-256 key and public CSR/request; never contact an issuer")
     workload_modes.add_argument("--admit-workload-certificate", action="store_true",
         help="locally admit one directly issued workload leaf against retained originals and a pinned issuer")
-    for name in ("packet", "packet-signing-key", "issuer", "request", "private-key", "certificate"):
+    workload_modes.add_argument("--request-workload-issuance-options", action="store_true",
+        help="make one pinned operator HTTPS options request; never submit issuance")
+    workload_modes.add_argument("--submit-workload-issuance", action="store_true",
+        help="explicitly submit once with pinned options and fresh assertion; never automatically retry")
+    for name in ("packet", "packet-signing-key", "issuer", "request", "private-key", "certificate",
+            "authorization", "tls-ca", "cookie", "csrf", "options", "assertion", "approval"):
         parser.add_argument("--workload-" + name, type=Path)
         parser.add_argument("--workload-" + name + "-sha256")
+    parser.add_argument("--workload-origin", help="exact HTTPS origin only, without path or trailing slash")
+    parser.add_argument("--workload-endpoint-address", help="independently selected literal IP; no DNS dialing")
+    parser.add_argument("--workload-endpoint-port", type=int)
+    parser.add_argument("--workload-server-name", help="exact TLS certificate name and HTTP origin host")
+    parser.add_argument("--workload-server-spki-sha256", help="independent sha256: pin for the TLS leaf SPKI")
     parser.add_argument("--workload-output-directory", type=Path,
         help="existing current-user-owned mode-0700 directory; fixed outputs are never overwritten")
     parser.add_argument("--workload-timeout-ms", type=int, default=30_000)
@@ -783,7 +889,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if _workload_identity_mode(parser, args):
+    if _workload_issuance_mode(parser, args) or _workload_identity_mode(parser, args):
         return
 
     if args.verify_packet is not None and args.verified_packet is not None:

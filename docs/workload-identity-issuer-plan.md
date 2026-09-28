@@ -4,9 +4,9 @@ The dedicated worker, cold bootstrap, independent grant, durable journal,
 fixed-resource launcher and raw-original service are now authored in source.
 They have not been built, executed, provisioned or accepted in a deployment.
 The [control-plane caller and authenticated public action](control-plane-workload-identity-issuance.md)
-are now connected in source. Explicit CLI submission and portal orchestration
-remain open; the existing local CLI stays network-free. N04 and all production
-gates remain open. No keys, certificates,
+and [explicit CLI submission and portal orchestration](workload-identity-submission.md)
+are now connected in source; existing local CLI modes stay network-free.
+N04 and all production gates remain open. No keys, certificates,
 services, trust stores or cloud resources were provisioned. See the
 [authored worker contract](workload-identity-issuer.md) and
 [local client contract](workload-identity-provisioning.md).
@@ -185,30 +185,29 @@ action source does not establish a provisioned callable deployment:
    the issuer.
 
 The protected worker and HTTP action now call the real independently configured
-control-plane owner in source. Explicit CLI submission and portal orchestration
-remain missing. Existing local CLI modes stay network-free until a separate
-submission mode is implemented; an HTTP certificate response is still subject
+control-plane owner in source. Separate explicit CLI submission and portal
+orchestration now connect to it. Existing local CLI modes stay network-free;
+an HTTP certificate response is still subject
 to local original issuer/request/private-key admission before use.
 
-### Next client submission integration
+### Explicit client submission integration
 
-Keep a distinct submission mode rather than adding network effects to local
-preparation/admission. Reuse the SDK's protected `PinnedFile` originals for
-operator cookie, CSRF and fresh assertion inputs as well as packet/request and
-local key pins. Bind the independently obtained options action/resource/payload
-and optional approval ID to those exact originals. A 428 approval continuation
-requires an explicit fresh ceremony, not an automatic resubmission.
+The [submission client](workload-identity-submission.md) has distinct network
+modes; local preparation/admission gains no network effects. Protected `PinnedFile`
+originals bind operator cookie, CSRF and fresh assertion inputs alongside
+packet/request and local key pins. Exact retained options action/resource/payload
+bindings are required. A retained typed 428 can supply an approval ID only for
+an explicit continuation with fresh options/assertion and a new attempt directory.
 
-The current generic `http.request_bytes` disables redirects and proxies, but
-does not provide the required absolute per-chunk deadline or exact-origin-only
-profile. Build the dedicated one-exchange path on the existing bounded TLS/HTTP
-primitives instead of treating a urllib timeout as the original deadline. Do
-not send control-plane operator credentials through `WorkloadProxyClient`, which
-is for provider/proxy traffic. Use exclusive owner-only submission claims and
-raw response retention; admit the returned leaf through a private same-budget
-seam in the existing local certificate publisher. Its current public API opens
-a new budget and must not silently renew the submission window. No cookie,
-CSRF token, assertion or private key belongs in output logs or chat.
+The dedicated exact-origin path uses existing bounded TLS/HTTP primitives with
+one literal endpoint, independent CA/server-SPKI pins and the original per-chunk
+deadline. It does not use generic urllib timeouts or send operator credentials
+through provider-oriented `WorkloadProxyClient`. Exclusive owner-only submission
+claims precede contact. Retained public responses and a private same-budget
+certificate-admission seam preserve the original invocation window. A timeout or
+lost response remains unknown; no automatic retry or global client deduplication
+is implied. No cookie, CSRF token, assertion or private key belongs in output
+logs or chat.
 
 ## Operator and deployment boundary
 

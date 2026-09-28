@@ -1239,6 +1239,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_workload_identity_client.py \
 	serverware/control_plane_workload_identity_approval.py \
 	serverware/control_plane_workload_identity_routes.py \
+	serverware/portal_workload_issuance.py \
+	serverware_agent_trust/workload_identity_submission.py \
+	serverware_agent_trust/_workload_operator_http.py \
 	serverware_agent_trust/workload_identity_originals.py \
 	serverware_agent_trust/_workload_signed_packet.py \
 	serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
@@ -3107,6 +3110,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				requirements.proxy-test.lock \
 				serverware_agent_trust/requirements.lock \
 				serverware_agent_trust/workload_identity_provisioning.py \
+				serverware_agent_trust/workload_identity_submission.py \
+				serverware_agent_trust/_workload_operator_http.py \
 				serverware/authority_counted_root_transition.py \
 				serverware/authority_store/counted_installation.py \
 				serverware/authority_complete_query_batch.py \
@@ -3478,6 +3483,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_workload_identity_client.py \
 				serverware/control_plane_workload_identity_approval.py \
 				serverware/control_plane_workload_identity_routes.py \
+				serverware/portal_workload_issuance.py \
 				serverware_agent_trust/workload_identity_originals.py \
 				serverware_agent_trust/_workload_signed_packet.py \
 				serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \

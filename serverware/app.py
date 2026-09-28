@@ -63,6 +63,7 @@ from serverware.portal_workload_enrollment import (
     WORKLOAD_ENROLLMENT_HTML,
     WORKLOAD_ENROLLMENT_SCRIPT,
 )
+from serverware.portal_workload_issuance import WORKLOAD_ISSUANCE_HTML, WORKLOAD_ISSUANCE_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
     REGISTRATION_HANDOFF_HTML,
@@ -21394,6 +21395,7 @@ UI_HTML = r"""
             <button id="enrollment-copy-agent-instructions" class="secondary" type="button" onclick="runUiAction('Copy workload instructions', copyAgentInstructions)">Copy workload instructions</button>
           </div>
         </section>
+        __SERVERWARE_WORKLOAD_ISSUANCE_HTML__
         <section id="policy-workspace" class="policy-authoring-section">
           <h2>Workload identity and route assignment</h2>
           <p class="section-kicker">Production signed policy candidate</p>
@@ -21854,6 +21856,7 @@ UI_HTML = r"""
 
     function markOIDCSessionStatusUnknown() {
       sessionActivationInvalidate('Browser session state became unknown. Fresh authorization is required.');
+      workloadIssuanceInvalidate('Browser session state became unknown.');
       oidcSessionStatusUnknown = true;
       state.authStatus = null;
       renderAuthStatus();
@@ -21878,6 +21881,7 @@ UI_HTML = r"""
           state.authStatus?.sessionState, state.authStatus?.authenticated, state.authStatus?.roles])
           !== JSON.stringify([status.userId, status.authMethod, status.sessionState, status.authenticated, status.roles])) {
         sessionActivationInvalidate('Browser authentication changed. Discarded activation authorization.');
+        workloadIssuanceInvalidate('Browser authentication changed.');
       }
       state.authStatus = status;
       oidcSessionStatusUnknown = false;
@@ -21922,10 +21926,12 @@ UI_HTML = r"""
       $('admin-token').hidden = authenticated;
       syncCustodyAuth();
       renderSessionActivation();
+      renderWorkloadIssuance();
     }
 
     async function signInWithOIDC() {
       sessionActivationInvalidate('Sign-in started. Discarded activation authorization.');
+      workloadIssuanceInvalidate('Sign-in started.');
       clearCustodyView('Sign-in is changing. Custody metadata cleared.');
       const returnTo = `${window.location.pathname}${window.location.search}`;
       const query = new URLSearchParams({return_to: returnTo});
@@ -22132,6 +22138,7 @@ UI_HTML = r"""
 
     async function signOutOperator() {
       sessionActivationInvalidate('Sign-out started. Discarded activation authorization.');
+      workloadIssuanceInvalidate('Sign-out started.');
       clearCustodyView('Signing out. Custody metadata cleared.');
       await sessionApi('/api/auth/logout');
       csrfToken = null;
@@ -22182,6 +22189,7 @@ UI_HTML = r"""
       document.querySelectorAll('input, select, textarea').forEach((control) => {
         if (control.id === 'admin-token' || control.id === 'webauthn-bootstrap-token'
             || control.id.startsWith('registration-handoff-')
+            || control.id.startsWith('workload-issuance-')
             || control.id.startsWith('session-activation-') || control.readOnly) return;
         const key = controlStateKey(control);
         if (!key) return;
@@ -22195,6 +22203,7 @@ UI_HTML = r"""
         const control = key.startsWith('id:') ? $(key.slice(3)) : null;
         if (!control) return;
         if (control.id === 'webauthn-bootstrap-token' || control.id.startsWith('registration-handoff-')
+            || control.id.startsWith('workload-issuance-')
             || control.id.startsWith('session-activation-')) return;
         if (control.id.startsWith('setup-')) return;
         if (control.tagName === 'SELECT' && !Array.from(control.options).some((option) => option.value === saved.value)) return;
@@ -23216,6 +23225,7 @@ UI_HTML = r"""
       restoreControlState(controlState);
       renderWorkloadIdentityEditor();
       renderWorkloadEnrollmentRequirements();
+      renderWorkloadIssuance();
       syncCredentialKindFields();
       renderOAuthDefaults(!hasRendered);
       renderPendingMutation();
@@ -23234,7 +23244,8 @@ UI_HTML = r"""
       $('oauth-status').textContent = provider.configured ? `Redirect URI: ${provider.redirectUri}` : `Set OAuth client env vars for ${provider.displayName}.`;
     }
 
-    function safeControlPlaneRequest(request) {
+    function safeControlPlaneRequest(request, action = null) {
+      if (action === workloadIssuanceAction) return workloadIssuanceReview(request);
       const allowed = [
         'credential_type', 'provider', 'provider_subject', 'provider_account', 'credential_name', 'scopes',
         'metadata_keys', 'expires_at_epoch_ms', 'x_app_id', 'name', 'kind',
@@ -23257,7 +23268,7 @@ UI_HTML = r"""
         const decisionId = `control-plane-note-${item.id}`;
         const rowId = `control-plane-approval-${item.id}`;
         const resource = item.resource_id ? `<br><code>${esc(item.resource_id)}</code>` : '';
-        const summary = safeControlPlaneRequest(item.request);
+        const summary = safeControlPlaneRequest(item.request, item.action);
         const requiredRoles = (item.required_approver_roles || []).join(' or ');
         const approveBlocked = item.can_approve !== true;
         const denyBlocked = item.can_deny !== true;
@@ -23386,6 +23397,11 @@ UI_HTML = r"""
 
     async function decideControlPlaneApproval(id, decision) {
       const note = $(`control-plane-note-${id}`)?.value.trim() || null;
+      const item = (state.controlPlaneApprovals || []).find(value => value.id === id);
+      if (decision === 'approve' && item?.action === workloadIssuanceAction) {
+        // Fresh cookie-only ceremony, never the generic 412 resend loop.
+        return workloadIssuanceApprove(id, note);
+      }
       if (decision === 'approve') {
         await runControlPlaneMutation({
           kind: 'control-plane-approval',
@@ -24970,13 +24986,16 @@ UI_HTML = r"""
     __SERVERWARE_SESSION_ACTIVATION_AUTHORIZATION_SCRIPT__
     __SERVERWARE_SESSION_ACTIVATION_CONFIRMATION_SCRIPT__
     __SERVERWARE_SESSION_ACTIVATION_SCRIPT__
+    __SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
     initRegistrationHandoff();
     initSessionActivation();
+    initWorkloadIssuance();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
       sessionActivationInvalidate('Operator authentication changed. Discarded activation authorization.');
+      workloadIssuanceInvalidate('Entered operator credentials changed.');
       clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
       syncCustodyAuth();
     });
@@ -25028,6 +25047,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_WORKLOAD_IDENTITY_SCRIPT__", WORKLOAD_IDENTITY_SCRIPT),
     ("__SERVERWARE_WORKLOAD_ENROLLMENT_HTML__", WORKLOAD_ENROLLMENT_HTML),
     ("__SERVERWARE_WORKLOAD_ENROLLMENT_SCRIPT__", WORKLOAD_ENROLLMENT_SCRIPT),
+    ("__SERVERWARE_WORKLOAD_ISSUANCE_HTML__", WORKLOAD_ISSUANCE_HTML),
+    ("__SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__", WORKLOAD_ISSUANCE_SCRIPT),
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),
     ("__SERVERWARE_REGISTRATION_HANDOFF_HTML__", REGISTRATION_HANDOFF_HTML),
     ("__SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__", REGISTRATION_HANDOFF_SCRIPT),

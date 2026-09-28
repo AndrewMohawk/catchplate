@@ -91,8 +91,8 @@ checks while retaining the worker's original work and deadline; it does not
 turn request possession or a CA-install capability into issuance authority.
 
 The [control-plane caller and authenticated issuance action](control-plane-workload-identity-issuance.md)
-are connected in source. Explicit CLI submission and portal orchestration are
-still missing; these local modes remain network-free. Client-CA
+are connected in source, as are separate [explicit CLI submission and portal controls](workload-identity-submission.md).
+These local preparation/admission modes remain network-free. Client-CA
 distribution, rotation/revocation, SPIFFE lifecycle/service, sidecar integration
 and verified runtime workload channels also remain open. N04 earns no landed
 parent credit: project status is 35/46 landed, two active (H05/N04), nine todo;

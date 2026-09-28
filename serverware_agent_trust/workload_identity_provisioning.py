@@ -36,6 +36,7 @@ from .workload_identity_originals import (
 )
 
 _PRIVATE_KEY_BYTES = 1024
+_ADMISSION_CONSTRUCTION = object()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -114,7 +115,8 @@ class _Directory:
         """No overwrite; a late failure leaves the published original intact."""
         self.check(budget)
         if name not in {"preparation.claim", "private-key.pem", "request.pem",
-                "request.json", "client-certificate.pem"}:
+                "request.json", "client-certificate.pem", "options-response.json",
+                "submission.claim", "submission-response.json", "issued-certificate.pem"}:
             _fail("identity publication name is not source-fixed")
         temporary = ".identity-" + secrets.token_hex(16)
         descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL
@@ -166,11 +168,13 @@ class _Directory:
 
 
 def _common(packet, packet_signing_key, issuer, expected_principal, expected_nonce,
-        budget: Budget, owners: ExitStack):
+        budget: Budget, owners: ExitStack, *, _maximum_packet_bytes=8 * 1024 * 1024):
     tls._require_linux()
+    if type(_maximum_packet_bytes) is not int or not 1 <= _maximum_packet_bytes <= 8 * 1024 * 1024:
+        _fail("workload packet capture bound is invalid")
     for pin in (packet, packet_signing_key, issuer):
         tls._validate_pin(pin)
-    packet_original = tls._load_original(packet, 8 * 1024 * 1024, False, budget, owners)
+    packet_original = tls._load_original(packet, _maximum_packet_bytes, False, budget, owners)
     signing_original = tls._load_original(packet_signing_key, MAX_KEY_BYTES, False, budget, owners)
     issuer_original = tls._load_original(issuer, MAX_CERTIFICATE_BYTES, False, budget, owners)
     authenticated = packets.verify_signed_workload_packet(packet_original.raw, signing_original.raw,
@@ -298,48 +302,100 @@ def prepare_identity(*, packet: tls.PinnedFile, packet_signing_key: tls.PinnedFi
 
 
 
+class _CertificateAdmission:
+    """One local original scope, never server issuance or externally supplied authority."""
+
+    def __init__(self, construction, *, binding, selectors, issuer_certificate,
+            originals, selected, public, private_key, directory, budget, owners):
+        if construction is not _ADMISSION_CONSTRUCTION:
+            _fail("workload certificate admission requires its original source scope")
+        self.binding, self.selectors = binding, selectors
+        self.issuer_certificate, self.originals = issuer_certificate, originals
+        self.selected, self.public, self.private_key = selected, public, private_key
+        self.directory, self.budget, self.owners = directory, budget, owners
+        self._spent = False
+
+    def current(self):
+        _recheck(self.originals, self.issuer_certificate, self.directory, self.budget)
+
+    def publish(self, certificate: tls.PinnedFile, *, _expected_leaf=None) -> ProvisionedIdentity:
+        self.current()
+        if self._spent or self.private_key is None:
+            _fail("workload certificate admission is spent or options-only")
+        self._spent = True
+        budget, owners = self.budget, self.owners
+        returned = tls._load_original(certificate, MAX_CERTIFICATE_BYTES, False, budget, owners)
+        admitted_leaf = _leaf(returned.raw, self.issuer_certificate, self.selected, self.public,
+            self.binding, self.selectors, budget)
+        if _expected_leaf is not None:
+            if (type(_expected_leaf) is not tuple or len(_expected_leaf) != 3
+                    or any(type(value) is not int for value in _expected_leaf)
+                    or (admitted_leaf.certificate.serial_number,
+                        int(admitted_leaf.certificate.not_valid_before_utc.timestamp()),
+                        int(admitted_leaf.certificate.not_valid_after_utc.timestamp())) != _expected_leaf):
+                _fail("workload certificate differs from the exact submitted grant")
+        # All public originals and direct trust checks still precede key bytes.
+        retained = _retained_key(self.private_key, budget, owners)
+        tls._canonical_private_key(retained.raw, budget)
+        budget.check()
+        private = serialization.load_pem_private_key(retained.raw, password=None)
+        budget.check()
+        if (not isinstance(private, ec.EllipticCurvePrivateKey)
+                or not isinstance(private.curve, ec.SECP256R1)
+                or _spki(private.public_key()) != _spki(self.public)):
+            _fail("workload certificate does not match the exact retained request key")
+        originals = (*self.originals, returned, retained)
+        _recheck(originals, self.issuer_certificate, self.directory, budget)
+        _valid_now(admitted_leaf.certificate, budget)
+        # The existing client expects leaf then issuer; neither becomes system trust.
+        chain = (admitted_leaf.certificate.public_bytes(serialization.Encoding.PEM)
+            + self.issuer_certificate.certificate.public_bytes(serialization.Encoding.PEM))
+        if len(chain) > tls._MAX_IDENTITY_BYTES:
+            _fail("workload admitted chain exceeds the existing client bound")
+        published = self.directory.publish("client-certificate.pem", chain, budget)
+        _recheck(originals, self.issuer_certificate, self.directory, budget)
+        _valid_now(admitted_leaf.certificate, budget)
+        tls._load_original(published, tls._MAX_IDENTITY_BYTES, False, budget, owners).recheck(budget)
+        return ProvisionedIdentity(published, self.private_key)
+
+
+def _certificate_admission_on_budget(*, packet, packet_signing_key, issuer,
+        expected_principal, expected_nonce, request, private_key, output_directory,
+        budget, owners, _maximum_packet_bytes=8 * 1024 * 1024):
+    """Authenticate local originals once on the caller's existing, unrenewed budget."""
+    if type(budget) is not Budget or type(owners) is not ExitStack:
+        _fail("workload admission requires the original budget and descriptor owner")
+    binding, selectors, issuer_certificate, common = _common(packet, packet_signing_key,
+        issuer, expected_principal, expected_nonce, budget, owners,
+        _maximum_packet_bytes=_maximum_packet_bytes)
+    tls._validate_pin(request)
+    if private_key is not None:
+        tls._validate_pin(private_key)
+    requested = tls._load_original(request, MAX_REQUEST_BYTES, False, budget, owners)
+    selected, public = _request(requested.raw, binding, selectors, budget)
+    directory = _Directory(output_directory, budget, owners)
+    result = _CertificateAdmission(_ADMISSION_CONSTRUCTION, binding=binding, selectors=selectors,
+        issuer_certificate=issuer_certificate, originals=(*common, requested),
+        selected=selected, public=public, private_key=private_key, directory=directory,
+        budget=budget, owners=owners)
+    result.current()
+    return result
+
+
 def admit_certificate(*, packet: tls.PinnedFile, packet_signing_key: tls.PinnedFile,
         issuer: tls.PinnedFile, expected_principal: str, expected_nonce: str,
         request: tls.PinnedFile, private_key: tls.PinnedFile, certificate: tls.PinnedFile,
         output_directory: Path | str, timeout_ms: int = 30_000) -> ProvisionedIdentity:
-    """Admit one direct-issued leaf and publish the existing client's PEM chain."""
+    """Admit one direct-issued leaf locally; this public API remains network-free."""
     try:
         budget = Budget(timeout_ms)
         with ExitStack() as owners:
-            binding, selectors, issuer_certificate, common = _common(packet, packet_signing_key,
-                issuer, expected_principal, expected_nonce, budget, owners)
-            for pin in (request, private_key, certificate):
-                tls._validate_pin(pin)
-            requested = tls._load_original(request, MAX_REQUEST_BYTES, False, budget, owners)
-            returned = tls._load_original(certificate, MAX_CERTIFICATE_BYTES, False, budget, owners)
-            selected, public = _request(requested.raw, binding, selectors, budget)
-            admitted_leaf = _leaf(returned.raw, issuer_certificate, selected, public,
-                binding, selectors, budget)
-            # All public originals and direct trust checks precede key bytes.
-            retained = _retained_key(private_key, budget, owners)
-            tls._canonical_private_key(retained.raw, budget)
-            budget.check()
-            private = serialization.load_pem_private_key(retained.raw, password=None)
-            budget.check()
-            if (not isinstance(private, ec.EllipticCurvePrivateKey)
-                    or not isinstance(private.curve, ec.SECP256R1)
-                    or _spki(private.public_key()) != _spki(public)):
-                _fail("workload certificate does not match the exact retained request key")
-            originals = (*common, requested, returned, retained)
-            directory = _Directory(output_directory, budget, owners)
-            _recheck(originals, issuer_certificate, directory, budget)
-            _valid_now(admitted_leaf.certificate, budget)
-            # The existing client expects leaf then issuing certificate when
-            # checking an issuer-SPKI selector. Neither becomes system trust.
-            chain = (admitted_leaf.certificate.public_bytes(serialization.Encoding.PEM)
-                + issuer_certificate.certificate.public_bytes(serialization.Encoding.PEM))
-            if len(chain) > tls._MAX_IDENTITY_BYTES:
-                _fail("workload admitted chain exceeds the existing client bound")
-            published = directory.publish("client-certificate.pem", chain, budget)
-            _recheck(originals, issuer_certificate, directory, budget)
-            _valid_now(admitted_leaf.certificate, budget)
-            tls._load_original(published, tls._MAX_IDENTITY_BYTES, False, budget, owners).recheck(budget)
-            result = ProvisionedIdentity(published, private_key)
+            admission = _certificate_admission_on_budget(packet=packet,
+                packet_signing_key=packet_signing_key, issuer=issuer,
+                expected_principal=expected_principal, expected_nonce=expected_nonce,
+                request=request, private_key=private_key, output_directory=output_directory,
+                budget=budget, owners=owners)
+            result = admission.publish(certificate)
         budget.check()
         return result
     except WorkloadClientError:

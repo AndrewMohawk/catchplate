@@ -4,8 +4,8 @@ This source path connects the dedicated [issuer worker](workload-identity-issuer
 to an explicitly authenticated operator action. It is unbuilt, unexecuted and
 unprovisioned. It does not establish a tested pilot, deploy a CA, install proxy
 trust or authenticate a workload channel. Existing local enrollment CLI modes
-remain network-free; explicit CLI submission and portal controls are separate
-remaining work.
+remain network-free; separate [explicit CLI submission and portal controls](workload-identity-submission.md)
+now connect to these actions in source.
 
 ## Authority stays separate
 
@@ -137,9 +137,8 @@ turn an uncertain result into successful delivery.
 
 ## Still required
 
-Explicit client submission and portal orchestration, issuer trust distribution,
-rotation/revocation/retirement, authenticated service channels and local sidecar
-integration remain open. Real acceptance must exercise the complete workload
-flow, negative identity cases, interruption/recovery, mandatory proxy mTLS and
+Issuer trust distribution, rotation/revocation/retirement, authenticated service
+channels and local sidecar integration remain open. Real acceptance must exercise
+the complete workload flow, negative identity cases, interruption/recovery, mandatory proxy mTLS and
 unchanged upstream TLS/egress controls. Software-key custody and a local journal
 prefix do not satisfy measured custody or independent rollback witnessing.

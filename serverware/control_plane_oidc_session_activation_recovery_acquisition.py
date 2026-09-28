@@ -3,6 +3,8 @@
 One independently authorized policy slot is durably claimed before issuer
 contact. Only genuinely admitted client/server/outcome bytes are retained and
 exposed inside this context. No token, assertion or request is journaled.
+The exact retained server original is staged once before yielding; its ACK
+establishes neither recovery-worker readiness nor protected token delivery.
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import threading
 import time
 
 from serverware import authority_oidc_session_activation_release_hints as hints
+from serverware import authority_oidc_session_activation_release_recovery_delivery_transport as staging
 from serverware import control_plane_enrollment_bootstrap as parent_bootstrap
 from serverware import control_plane_oidc_session_activation_consume_records as consume
 from serverware import control_plane_oidc_session_activation_recovery_actor as actor
@@ -48,7 +51,8 @@ class _RecoveryAcquisition:
 
     __slots__ = ("_scope", "_owner", "_parent", "_binding", "_custody", "_config",
         "_config_pin", "_root", "_work", "_pid", "_thread", "_lifetime",
-        "_closed", "_originals", "_result", "_selected", "_selected_pin")
+        "_closed", "_originals", "_result", "_selected", "_selected_pin",
+        "_stage_spent", "_capacity", "_capacity_seal")
 
     def __init__(self, construction, scope):
         if construction is not _CONSTRUCTION or type(scope) is not actor._ActorScope:
@@ -66,6 +70,7 @@ class _RecoveryAcquisition:
         self._pid, self._thread = os.getpid(), threading.get_ident()
         self._closed, self._originals, self._result = False, None, None
         self._selected, self._selected_pin = None, None
+        self._stage_spent, self._capacity, self._capacity_seal = False, None, None
         self._lifetime = production._Lifetime(scope._window, scope._bound,
             self._work, self._ancestor)
 
@@ -79,7 +84,7 @@ class _RecoveryAcquisition:
                 or owner._binding is not self._binding or owner._custody is not self._custody
                 or self._parent.release_recovery_grant_acquisition is not config
                 or self._binding.runtime_root_public_key is not self._root
-                or scope._work is not self._work):
+                or scope._work is not self._work or self._capacity is not self._capacity_seal):
             _fail("recovery acquisition original actor or cold owner changed")
         actual = (config.endpoint, config.issuer_policy_bytes, config.release_custody_bytes,
             config.proof_enrollment_bytes, config.intent_enrollment_bytes)
@@ -119,6 +124,45 @@ class _RecoveryAcquisition:
         self.current()
         return self._originals
 
+    def stage_release_worker(self):
+        """Stage only this context's durable server bytes once; return no proof."""
+        self.current()
+        originals = self.originals
+        if self._stage_spent is not False:
+            _fail("recovery worker staging cannot be repeated or resumed")
+        self._stage_spent = True
+        capacity = self._capacity
+        if (type(capacity) is not tuple or len(capacity) != 2
+                or type(capacity[0]) is not int or capacity[1] is not originals
+                or not 0 <= capacity[0] < MAX_ORIGINAL_BYTES):
+            _fail("recovery staging lost its original retained-capacity reservation")
+        work, lifetime, result = self._work, self._lifetime, self._result
+        # Reserve the already-held graphs/triple plus staging hash/chunk copies,
+        # exact framing and every ACK buffer before hashing or socket contact.
+        staging_bytes = (2 * len(originals[1]) + 4096 + len(staging.PURPOSE)
+            + 4 * staging.REQUEST_HEADER_BYTES + 3 * staging.RESPONSE_HEADER_BYTES
+            + 3 * staging.MAX_RESPONSE_BYTES + 2 * 71)
+        if capacity[0] + staging_bytes > MAX_ORIGINAL_BYTES:
+            _fail("recovery staging exceeds the same held-original aggregate")
+        if result.client_material.server_material.profile != staging.server.RECOVERY_PROFILE:
+            _fail("recovery staging requires the actual admitted recovery server")
+        timeout = result.issuer_policy_material.release_launch["requestTimeoutSeconds"]
+        endpoint = staging._endpoint((staging.LISTENER_PATH, timeout,
+            staging.EXPECTED_PEER_UID, staging.EXPECTED_PEER_GID))
+        self.current()
+        identity = staging._bootstrap_identity_on_work(originals[1],
+            deadline_ns=lifetime.bound, work=work, current=self.current)
+        response = staging._socket_request_on_work(endpoint,
+            originals=(staging.PURPOSE, originals[1]), deadline_ns=lifetime.bound,
+            work=work, current=self.current)
+        acknowledgment = staging._originals(response, response=True)
+        work.charge(input_bytes=2 * len(identity))
+        if acknowledgment[1] != identity:
+            _fail("recovery staging ACK differs from this context's exact retained original")
+        self.current()
+        # Deliberately no readiness flag, permission carrier or ACK result.
+        return None
+
     def _close(self):
         global _ACTIVE
 
@@ -126,6 +170,7 @@ class _RecoveryAcquisition:
         self._originals, self._result, self._selected, self._selected_pin = None, None, None, None
         self._lifetime.guards.clear()
         self._scope = None
+        self._capacity, self._capacity_seal = None, None
         if _ACTIVE is self:
             _ACTIVE = None
 
@@ -207,6 +252,14 @@ def _acquire(active):
             active._custody, **identifiers))
     custody.journal._digest(slot)
     active.current()
+    # Preserve the finite client's actual input/capture reservation for later
+    # same-context staging. This is the same fixed .204 reservation, not a new
+    # allowance after the response arrives or an incoming capacity quote.
+    client_held = (held + 16 * len(config.release_custody_bytes)
+        + 8 * client.receiving._unique_bytes((*request, config.issuer_policy_bytes,
+            config.proof_enrollment_bytes, config.intent_enrollment_bytes))
+        + 4096 + 4 * client.transport.REQUEST_HEADER_BYTES
+        + 4 * client.transport.RESPONSE_HEADER_BYTES + len(client.transport.PURPOSE))
     admitted = client._acquire_on_work(request_originals=request,
         issuer_policy_bytes=config.issuer_policy_bytes, release_custody_bytes=config.release_custody_bytes,
         proof_enrollment_bytes=config.proof_enrollment_bytes, intent_enrollment_bytes=config.intent_enrollment_bytes,
@@ -234,12 +287,16 @@ def _acquire(active):
     custody.journal._digest(digest)
     active.current()
     active._result, active._originals = admitted, response
+    capacity = (client_held + 8 * sum(map(len, response)), response)
+    if capacity[0] >= MAX_ORIGINAL_BYTES:
+        _fail("recovery admitted originals leave no bounded staging capacity")
+    active._capacity, active._capacity_seal = capacity, capacity
 
 
 @contextmanager
 def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
         transport_deadline_ns, work, current):
-    """Authorize one fresh actor; expose only same-context retained originals."""
+    """Authorize, durably acquire and stage once; expose no ready permission."""
     global _ACTIVE
 
     if type(owner) is not startup._EnrollmentOwner or _ACTIVE is not None:
@@ -255,6 +312,7 @@ def _acquire_on_owner(owner, *, request, recovery_bytes, live_window,
         _ACTIVE = active
         try:
             _acquire(active)
+            active.stage_release_worker()
             active.current()
             yield active
             active.current()

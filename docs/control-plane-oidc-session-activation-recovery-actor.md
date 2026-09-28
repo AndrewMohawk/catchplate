@@ -1,10 +1,10 @@
 # Fresh recovery actor for the original session
 
 Source only, unbuilt and unexecuted. Genuine recovery options and the private
-live actor context now connect to same-context recovery grant acquisition.
-This does **not** stage a recovery worker, retry activation SQL, perform the
-private recovery exchange, release a token or confirm a session. Step 23
-remains incomplete.
+live actor context now connect to same-context recovery grant acquisition and
+one-shot recovery-worker staging. This does **not** prove worker readiness,
+retry activation SQL, perform the private recovery exchange, release a token or
+confirm a session. Step 23 remains incomplete.
 
 ## Actor and target are separate
 
@@ -80,6 +80,9 @@ it creates no work or time allowance and does not close the global owner.
 Within the same active context, acquisition re-admits the independent recovery
 policy, durably claims its exact policy-keyed attempt, calls the finite private
 client, and retains exact returned raw3 originals with genuine current guards.
+Before yielding, it stages only its retained server original through the fixed
+root receiver. The local staging latch is spent before contact; a matched ACK
+is not readiness, private-store evidence or permission to repeat the operation.
 Leaving the context invalidates access; retained bytes do not become a reusable
 permission carrier or retry authority.
 
@@ -100,6 +103,7 @@ post-load aggregate check. These are source-defined representation bounds, not
 a full-call 64 MiB process-heap guarantee or runtime evidence.
 
 The [options route](control-plane-oidc-session-activation-recovery-routes.md)
-remains the only public route. Genuine recovery-worker staging, actual retained
-outcome-store reads, private token exchange, current-auth/cookie completion,
+remains the only public route. The [source-connected worker handoff](oidc-session-activation-release-recovery-dynamic-delivery.md)
+does not demonstrate actual retained outcome-store behavior. Private token
+exchange, current-auth/cookie completion,
 portal wiring and runtime/provisioning evidence remain open.

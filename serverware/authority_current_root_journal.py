@@ -77,7 +77,11 @@ class CurrentRootJournal:
         "_directory_fd", "_directory_stamp", "_io", "_records", "_identities")
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
-            expected_uid, expected_gid, maximum_records):
+            expected_uid, expected_gid, maximum_records, _current=None):
+        if _current is not None and not callable(_current):
+            raise CurrentRootJournalError("current-root original guard is not callable")
+        check = (lambda: None) if _current is None else _current
+        check()
         for value, minimum, maximum, label in (
             (directory_fd, 0, 2**31 - 1, "directory descriptor"),
             (expected_device, 0, 2**64 - 1, "directory device"),
@@ -96,17 +100,22 @@ class CurrentRootJournal:
         if (os.geteuid(), os.getegid()) != self._binding[2:]:
             raise CurrentRootJournalError("current-root journal process differs from its provisioned owner")
         self._directory_metadata(directory_fd)
+        check()
         try:
             # dup() shares flock state. Reopening '.' owns an independent open
             # description anchored to the actual borrowed, validated directory.
             self._directory_fd = os.open(".",
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=directory_fd)
+            check()
             self._directory_metadata(self._directory_fd)
+            check()
             fcntl.flock(self._directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            check()
             self._io = WitnessJournalIO(self._directory_fd,
                 maximum_record_bytes=MAX_RECORD_BYTES)
             self._directory_stamp = self._stamp()
+            check()
         except BaseException:
             self._closed, self._state = True, "poisoned"
             if self._io is not None:
@@ -170,51 +179,75 @@ class CurrentRootJournal:
             self.poison()
             raise
 
-    def _read_record(self, name, sequence, digest, *, synchronize=False, work=None):
+    def _read_record(self, name, sequence, digest, *, synchronize=False, work=None,
+            _current=None, _maximum_record_bytes=MAX_RECORD_BYTES):
+        if _current is not None and not callable(_current):
+            raise CurrentRootJournalError("current-root read requires its original guard")
+        _integer(_maximum_record_bytes, 1, MAX_RECORD_BYTES, "current-root tightened record cap")
+        check = (lambda: None) if _current is None else _current
+        check()
         descriptor = os.open(name,
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
             dir_fd=self._directory_fd)
         try:
+            check()
             before = os.fstat(descriptor)
+            check()
             if (not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o400
                     or before.st_nlink != 1 or before.st_dev != self._binding[0]
                     or (before.st_uid, before.st_gid) != self._binding[2:]
-                    or not 1 <= before.st_size <= MAX_RECORD_BYTES):
+                    or not 1 <= before.st_size <= _maximum_record_bytes):
                 raise CurrentRootJournalError("current-root record is not bounded immutable private material")
             def read_original():
-                encoded = bytearray()
-                while len(encoded) < before.st_size:
-                    chunk = os.read(descriptor, min(_READ_CHUNK, before.st_size - len(encoded)))
+                check()
+                encoded = bytearray(before.st_size)
+                offset = 0
+                while offset < before.st_size:
+                    check()
+                    chunk = os.read(descriptor, min(_READ_CHUNK, before.st_size - offset))
+                    check()
                     if not chunk:
                         raise CurrentRootJournalError("current-root record was truncated")
-                    encoded.extend(chunk)
+                    encoded[offset:offset + len(chunk)] = chunk
+                    offset += len(chunk)
+                    del chunk
+                check()
                 if os.read(descriptor, 1):
                     raise CurrentRootJournalError("current-root record grew while reading")
+                check()
                 original = bytes(encoded)
+                check()
                 if "sha256:" + hashlib.sha256(original).hexdigest() != digest:
                     raise CurrentRootJournalError("current-root record differs from its named raw digest")
+                check()
                 if synchronize:
                     os.fsync(descriptor)
+                    check()
                 identity = _identity(before)
                 if (identity != _identity(os.fstat(descriptor))
                         or identity != _identity(os.stat(name, dir_fd=self._directory_fd,
                             follow_symlinks=False))):
                     raise CurrentRootJournalError("current-root record changed during its stable read")
+                check()
                 return original, CurrentRootRecord(sequence, digest, len(original)), identity
 
             if work is None:
-                return read_original()
-            from serverware import authority_revocation_capability_production as production
+                result = read_original()
+            else:
+                from serverware import authority_revocation_capability_production as production
 
-            # The pinned size bounds reading, copying and raw hashing before
-            # allocation. Only native I/O lives inside the stable callback;
-            # the protocol reducer below legitimately charges the same work.
-            work.charge(hashes=1, input_bytes=3 * before.st_size + 1)
-            return production._callback(work, read_original)
+                # Charge before allocation. A supplied ancestor may itself
+                # meter work, so only the old guard-free read uses _callback.
+                work.charge(hashes=1, input_bytes=3 * before.st_size + 1)
+                result = (production._callback(work, read_original) if _current is None
+                    else read_original())
         finally:
             os.close(descriptor)
+        check()
+        return result
 
-    def recover(self, validate_record, *, work=None):
+    def recover(self, validate_record, *, work=None, _current=None,
+            _maximum_record_bytes=MAX_RECORD_BYTES):
         """Replay once via the owning service's fixed validator, then fsync.
 
         The callback receives (sequence, original_bytes) in contiguous order.
@@ -222,6 +255,11 @@ class CurrentRootJournal:
         raising on failure. It is cold service code, never a request callback.
         Even complete recovery does not admit the latest semantic checkpoint.
         """
+        if _current is not None and not callable(_current):
+            raise CurrentRootJournalError("current-root recovery requires its original guard")
+        _integer(_maximum_record_bytes, 1, MAX_RECORD_BYTES, "current-root tightened recovery cap")
+        check = (lambda: None) if _current is None else _current
+        check()
         self._require_process()
         if work is not None:
             from serverware.authority_query_read_work import _ValidationWork
@@ -238,23 +276,29 @@ class CurrentRootJournal:
             recovered, identities = [], []
 
             def scan():
+                check()
                 before = self._stamp()
+                check()
                 if before != self._directory_stamp:
                     raise CurrentRootJournalError("current-root directory changed before recovery")
                 names = []
                 with os.scandir(self._directory_fd) as entries:
                     for entry in entries:
+                        check()
                         if len(names) >= self._maximum_records:
                             raise CurrentRootJournalError("current-root journal exceeds its record limit")
                         sequence, digest = _parse_name(entry.name)
                         names.append((sequence, digest, entry.name))
                 names.sort()
                 for position, (sequence, digest, name) in enumerate(names, start=1):
+                    check()
                     if sequence != position:
                         raise CurrentRootJournalError("current-root journal has a missing or repeated sequence")
                     original, record, identity = self._read_record(name, sequence, digest,
-                        synchronize=True, work=work)
+                        synchronize=True, work=work, _current=_current,
+                        _maximum_record_bytes=_maximum_record_bytes)
                     validate_record(sequence, original)
+                    check()
                     self._require_process()
                     if (self._state != "recovering" or self._stamp() != before
                             or _identity(os.stat(name, dir_fd=self._directory_fd,
@@ -264,6 +308,7 @@ class CurrentRootJournal:
                     identities.append(identity)
                 if self._stamp() != before:
                     raise CurrentRootJournalError("current-root directory changed during recovery")
+                check()
                 return before
 
             try:
@@ -271,6 +316,7 @@ class CurrentRootJournal:
                 self._records, self._identities = tuple(recovered), tuple(identities)
                 self._directory_stamp, self._state = stamp, "ready"
                 self._require_ready()
+                check()
                 return self._records
             except BaseException:
                 self.poison()

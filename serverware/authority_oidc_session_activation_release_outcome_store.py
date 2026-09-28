@@ -51,6 +51,7 @@ class _Configuration:
     binding_bytes: bytes
     authorization_digest: str
     directory_binding: tuple
+    ancestor: object = None
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -104,7 +105,7 @@ class ReleaseOutcomeStore:
     _last_monotonic: int
 
     def __init__(self, *, directory_fd, authorization_bytes, root_public_key,
-            expected_scope, live_window, transport_deadline_ns, work):
+            expected_scope, live_window, transport_deadline_ns, work, _continuity=None):
         capture._SharedLedger(work)
         original = authorization._original(authorization_bytes, grants.MAX_BYTES, "release outcome storage authorization")
         root, descriptor = root_public_key, directory_fd
@@ -116,7 +117,8 @@ class ReleaseOutcomeStore:
         scope = grants._scope(expected_scope, work)
         _process()
         admitted = grants._verify_on_work(authorization_bytes=original, root_public_key=root,
-            expected_scope=scope, live_window=window, transport_deadline_ns=bound, work=work)
+            expected_scope=scope, live_window=window, transport_deadline_ns=bound, work=work,
+            _continuity=_continuity)
         admitted.live()
         scope_bytes = grants._wire(scope, work)
         binding = _binding({name: scope[name] for name in BINDING_FIELDS}, work)
@@ -126,7 +128,7 @@ class ReleaseOutcomeStore:
         directory = scope["directory"]
         configured = _Configuration(grants.authority.SOURCE_REVISION, original, root,
             root_digest, scope_bytes, binding_bytes, admitted.authorization_digest,
-            tuple(directory[name] for name in ("device", "inode", "uid", "gid")))
+            tuple(directory[name] for name in ("device", "inode", "uid", "gid")), _continuity)
         empty = _State(None, None, None)
         lifetime = (work, window, bound)
         for name, value in (("_configured", configured), ("_seal", configured),
@@ -145,13 +147,19 @@ class ReleaseOutcomeStore:
                 acquired = storage.CurrentRootJournal(directory_fd=descriptor,
                     expected_device=directory["device"], expected_inode=directory["inode"],
                     expected_uid=directory["uid"], expected_gid=directory["gid"],
-                    maximum_records=_PHYSICAL_RECORD_LIMIT)
+                    maximum_records=_PHYSICAL_RECORD_LIMIT,
+                    _current=current if configured.ancestor is not None else None)
                 # Own the resource before the stable callback's suffix can fail.
                 object.__setattr__(self, "_journal", acquired)
                 object.__setattr__(self, "_journal_seal", acquired)
                 return acquired
 
-            production._callback(work, open_journal)
+            if configured.ancestor is None:
+                production._callback(work, open_journal)
+            else:
+                # Nested ancestor guards meter this same work. A stable native
+                # callback would reject those legitimate charges.
+                open_journal()
             current()
             self._preflight(work, current)
             recovered_raw = recovered_digest = None
@@ -171,7 +179,9 @@ class ReleaseOutcomeStore:
             # Recovery legitimately charges the same work in its native reader
             # and semantic reducer. Never wrap the whole call in _callback.
             work.charge(input_bytes=_INVENTORY_BYTES)
-            metadata = storage.CurrentRootJournal.recover(acquired, recover_record, work=work)
+            metadata = storage.CurrentRootJournal.recover(acquired, recover_record, work=work,
+                _current=current if configured.ancestor is not None else None,
+                _maximum_record_bytes=MAX_BYTES)
             current()
             checkpoint = scope["checkpoint"]
             plan._same(len(metadata), checkpoint["recordCount"], work, "release outcome exact cold record count")
@@ -273,7 +283,9 @@ class ReleaseOutcomeStore:
         # Actual stat size is charged by the native reader before allocation;
         # it closes normally before returning, including its fsync/readback.
         observed, returned, _identity = storage.CurrentRootJournal._read_record(self._journal,
-            storage._name(metadata), metadata.sequence, metadata.digest, synchronize=True, work=work)
+            storage._name(metadata), metadata.sequence, metadata.digest, synchronize=True, work=work,
+            _current=current if self._configured.ancestor is not None else None,
+            _maximum_record_bytes=MAX_BYTES)
         current()
         if returned != metadata:
             _fail("release outcome durable metadata changed")
@@ -304,7 +316,7 @@ class ReleaseOutcomeStore:
                 maximum_bytes=grants.MAX_BYTES, maximum_nodes=grants.MAX_NODES, maximum_depth=grants.MAX_DEPTH)
             admitted = grants._verify_on_work(authorization_bytes=configured.authorization_bytes,
                 root_public_key=root, expected_scope=scope, live_window=window,
-                transport_deadline_ns=bound, work=work)
+                transport_deadline_ns=bound, work=work, _continuity=configured.ancestor)
             current = self._guard(configured, admitted.live, window, bound, work)
             current()
             plan._same(admitted.authorization_digest, configured.authorization_digest, work,

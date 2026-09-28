@@ -4,10 +4,11 @@ Recovery is a separate user action, not another activation attempt. The source
 contains bounded recovery options, a private live actor context, and separate
 original-only recovery-grant production and admission. A dedicated cold private
 issuer and finite verified client now connect to independently signed parent
-configuration, the live private actor and durable acquisition records.
-Recovery-worker staging, protected exchange and the public recovery route remain
-open. This does **not** recover a token or close activation step 23. Source
-remains unbuilt, unexecuted and unprovisioned.
+configuration, the live private actor and durable acquisition records. The same
+context stages its retained server original through a separate recovery-only
+root receiver and same-process worker continuation. Protected exchange and the
+public recovery route remain open. This does **not** recover a token or close
+activation step 23. Source remains unbuilt, unexecuted and unprovisioned.
 
 ## Why the activation permission cannot be reused
 
@@ -41,7 +42,8 @@ flowchart LR
   P --> I[Independent policy and retained originals]
   I --> D[Durable acquisition claim before issuer contact]
   D --> G[Verified and retained recovery grants]
-  G -. unfinished staging and exchange .-> C[Verified token and guarded cookie delivery]
+  G --> S[Independent recovery worker staging]
+  S -. unfinished exchange and public completion .-> C[Verified token and guarded cookie delivery]
 ```
 
 ## Public options; no permission-success endpoint
@@ -121,12 +123,16 @@ contain public/ciphertext originals and association metadata, never the old
 cookie, assertion, request frames or plaintext token. Retained bytes do not
 restore actor permission or prove that a private outcome exists.
 
+Before yielding, the acquisition context spends its one-shot staging latch and
+relays only its retained server original to the fixed root receiver. The matched
+ACK and normal connection close do not establish readiness or token delivery.
 The continuation remains context-bound and invalidates on exit. It provides
-guarded originals for later staging/exchange, not a transferable permission,
-public success endpoint or recovered session. The optional
+guarded originals for later exchange, not a transferable permission, public
+success endpoint or recovered session. The optional
 [public socket mount](../docker-compose.oidc-session-activation-release-recovery-grants.yml)
-exposes only a preprovisioned issuer socket, refuses host-path creation and
-does not install services or deliver signing keys to the application.
+exposes only preprovisioned issuer and recovery staging sockets, refuses
+host-path creation and does not install services or deliver signing keys to the
+application.
 
 ## Recovery integration and remaining work
 
@@ -173,8 +179,9 @@ flowchart LR
   G --> O[Exact canonical outcome]
   C --> V[Independent grant admission]
   O --> V
-  V -. unfinished worker staging and exchange .-> S[Read actual retained outcome]
-  S -.-> R[Private recovery and guarded cookie delivery]
+  V --> D[Independent root admission and resource staging]
+  D --> S[Same-process recovery worker and checkpoint-one reads]
+  S -. unfinished protected exchange .-> R[Verified token and guarded cookie delivery]
 ```
 
 ### Service, storage and public completion
@@ -207,13 +214,25 @@ templates; it does not provision them or turn this trusted-host-local process
 into a measured enclave/HSM boundary. No production credentials or account
 resources are created by this source integration.
 
+The separate [recovery-only receiver](oidc-session-activation-release-recovery-dynamic-delivery.md)
+admits provisioned policy/custody/enrollment originals before accepting the
+candidate. It binds the exact existing slot, delivery key and signed listener
+identities, stages FDs 198–202, closes staging normally, and continues through
+the permanent UID/GID 65502 drop into the existing runner. Its optional units
+exclude the static and LIVE listener owners and mount outcomes read-only.
+The [continuity chain](oidc-session-activation-release-recovery-continuity.md)
+retains original work and ancestor guards through resources, startup, recovery
+and native checkpoint-one reads. Outcome body allocation is capped at 64 KiB.
+No outcome is created or appended by staging; ACK precedes actual store recovery
+and cannot prove that the retained record exists or that serving succeeded.
+
 This slice requires a retained release intent. Failures before that stage still
 need a distinct original-bound completion/recovery path; they are not treated
-as safe activation retries. Full recovery still needs recovery-specific
-release-worker staging, exact retained outcome/storage admission, the private
-recovery exchange, genuine token response verification and a final public
-current-auth/cookie boundary. The private actor-to-grant connection does not
-complete those remaining steps. The existing LIVE staging path is not reused
+as safe activation retries. Full recovery still needs the private recovery
+exchange with genuine outcome observation, token response verification and a
+final public current-auth/cookie boundary. The source-connected worker handoff
+does not complete those remaining steps or demonstrate runtime storage behavior.
+The existing LIVE staging path is not reused
 as recovery admission. A once-checked actor, retained triple or intent result
 cannot replace any of these checks.
 

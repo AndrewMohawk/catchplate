@@ -6,7 +6,9 @@ immutable `recovery_bytes`, and the existing `live_window`,
 `transport_deadline_ns`, `work` and `current` guard. The startup owner's private
 `_acquire_oidc_session_activation_recovery_grants` facade returns this context;
 it does not open a new clock, take a successful permission DTO, reuse a LIVE
-activation permission or expose a recovery HTTP dispatch route.
+activation permission or expose a recovery HTTP dispatch route. Before yielding,
+it stages its exact retained server original once through the private root
+receiver connection; a staged ACK is not recovery-worker readiness.
 
 The context enters the actual [fresh recovery actor](control-plane-oidc-session-activation-recovery-actor.md)
 once, including historical target replay, old-cookie possession, current target
@@ -52,9 +54,19 @@ enrollment. No root signing key is present in this public configuration.
    The opaque codec does not authenticate signatures. Malformed, missing or
    rejected responses can leave a spent claim without a retained triple; this
    path does not claim to retain every pre-admission response.
+7. `_acquire_on_owner` itself invokes `active.stage_release_worker()` after
+   durable retention and before yielding. This source-owned method accepts no
+   caller bytes or endpoint, selects only its own raw3 element 1, requires the
+   genuine RECOVERY server profile, and spends its local latch before contact.
+   The fixed root staging endpoint uses the independently admitted policy's
+   launch timeout. One [raw2/ACK2 exchange](oidc-session-activation-release-recovery-delivery-transport.md)
+   compares the actual outgoing server-original identity and requires owned
+   normal close. The method returns `None`, never a readiness or permission
+   result. No repeated call, recovered-context resume or automatic retry exists.
 
 The yielded private `_RecoveryAcquisition` exposes only guarded `originals`
-and `current()`, not the admitted material or a reusable permission. Genuine
+and `current()`, not the admitted material or a reusable permission. Staging is
+already spent when the context is yielded; attempting it again fails. Genuine
 policy and response guards remain attached under the same original work,
 PID/thread, owner resources and narrowing clocks. The ancestor callback invokes
 only the actual actor guard; it never cycles through a child guard or recursively
@@ -82,6 +94,16 @@ no new allowance is granted between those phases. Capacity reservation and actua
 cumulative work charges remain distinct. These are original/capture bounds,
 not Python allocator-overhead or process-memory guarantees.
 
+Staging retains that same input/capture reservation and eight exact returned
+triple footprints, then reserves additional bootstrap hashing/chunk copies,
+fixed headers and all ACK buffers before hashing or socket contact. This may
+reject otherwise valid large originals; it cannot borrow another 64 MiB budget
+or replace the actor ledger after acquisition. Small bounded originals retain
+positive capacity under the existing fixed ceiling. A stage failure can leave
+the durably admitted triple, but the same policy attempt remains spent and the
+context yields nothing. The ACK itself is not an authority record or token and
+is not persisted as a success marker.
+
 The earlier pre-actor replay now uses the
 [combined historical reader](control-plane-registration-finalization-completion-history.md).
 It checks the complete selected metadata inventory before the first body read
@@ -92,8 +114,9 @@ This closes the earlier post-load aggregate-check gap in source. Both phases
 still use one cumulative work allowance, and neither claims a 64 MiB process
 heap bound or runtime verification.
 
-Recovery-worker staging, genuine checkpoint-one private outcome observation,
-protected recovery exchange, current-auth/cookie completion and a public
+The source-connected staging handoff does not establish worker readiness or
+genuine checkpoint-one private outcome observation. Protected recovery exchange,
+current-auth/cookie completion and a public
 recovery dispatch route remain open. A reconstructed canonical outcome and its
 fresh signed expectations are not proof that the private store contains it.
 Prior-stage completion recovery remains separate; neither activation nor SQL

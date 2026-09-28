@@ -1,0 +1,22 @@
+# Uninstalled opt-in source; exact active-actor staging is not token delivery.
+[Unit]
+Description=Serverware recovery-only root bootstrap staging ingress
+Before=serverware-oidc-session-activation-release-recovery-dynamic.service
+After=systemd-tmpfiles-setup.service
+Conflicts=serverware-oidc-session-activation-token-release.socket serverware-oidc-session-activation-token-release.service serverware-oidc-session-activation-token-release-dynamic.socket serverware-oidc-session-activation-token-release-dynamic.service serverware-oidc-session-activation-token-release-bootstrap.socket
+
+[Socket]
+ListenStream=/run/serverware/oidc-session-activation-token-release/recovery-bootstrap.sock
+FileDescriptorName=serverware-oidc-session-activation-release-recovery-bootstrap
+SocketUser=0
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=serverware-oidc-session-activation-release-recovery-dynamic.service
+
+[Install]
+WantedBy=sockets.target

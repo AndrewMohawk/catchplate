@@ -457,28 +457,39 @@ def _construct(resource_owner):
         last_epoch, last_monotonic = window[0], window[2]
         role_live = None
 
-        def current():
+        def base_current():
             nonlocal last_epoch, last_monotonic
             if resources._Resources._snapshot_configuration(resource_owner) is not acquired:
                 _fail("release startup resource configuration changed during construction")
-            for guard in ((lambda: resources._Resources._check_on_work(resource_owner, work=work)), role_live):
-                if guard is not None:
-                    epoch = guard()
-                    shape._integer(epoch, minimum=1)
-                    if epoch < last_epoch:
-                        _fail("release startup construction clock reversed across admission")
-                    last_epoch = epoch
+            epoch = resources._Resources._check_on_work(resource_owner, work=work)
+            shape._integer(epoch, minimum=1)
+            if epoch < last_epoch:
+                _fail("release startup construction clock reversed across admission")
+            last_epoch = epoch
             now = clock._check_on_work(window, work=work)
             monotonic = production._callback(work, time.monotonic_ns)
             shape._integer(monotonic, minimum=1)
             if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
                 _fail("release startup original construction allowance expired or reversed")
             last_epoch, last_monotonic = now, monotonic
+            return now
+
+        def current():
+            nonlocal last_epoch
+            base_current()
+            if role_live is not None:
+                epoch = role_live()
+                shape._integer(epoch, minimum=1)
+                if epoch < last_epoch:
+                    _fail("release startup role admission reversed the original clock")
+                last_epoch = epoch
+            return base_current()
 
         current()
         material = bootstrap._verify_on_work(bootstrap_bytes=acquired.bootstrap_bytes,
             root_public_key=acquired.root_public_key, live_window=window,
-            transport_deadline_ns=bound, work=work)
+            transport_deadline_ns=bound, work=work,
+            _continuity=custody.bootstrap._continuity(base_current, work))
         if type(material) is not bootstrap._ReleaseMaterial:
             _fail("release startup requires actual original bootstrap admission")
         narrowed = clock._validate(material.live_window)
@@ -496,7 +507,9 @@ def _construct(resource_owner):
             _fail("release startup original resource inventory differs")
         store = stores.ReleaseOutcomeStore(directory_fd=acquired.directory_fd,
             authorization_bytes=material.storage_authorization_bytes, root_public_key=acquired.root_public_key,
-            expected_scope=material.storage_scope, live_window=window, transport_deadline_ns=bound, work=work)
+            expected_scope=material.storage_scope, live_window=window, transport_deadline_ns=bound, work=work,
+            _continuity=custody.bootstrap._continuity(current, work)
+                if material.profile == bootstrap.RECOVERY_PROFILE else None)
         if store._last_epoch < last_epoch or store._last_monotonic < last_monotonic:
             _fail("release startup clock reversed across actual store construction")
         last_epoch, last_monotonic = store._last_epoch, store._last_monotonic
@@ -511,7 +524,8 @@ def _construct(resource_owner):
                 recovery_authorization_bytes=material.recovery_authorization_bytes,
                 custody_bytes=material.custody_bytes, root_public_key=acquired.root_public_key,
                 expected_scope=material.recovery_scope, delivery_custody_key=acquired.delivery_key,
-                outcome_store=store, live_window=window, transport_deadline_ns=bound, work=work)
+                outcome_store=store, live_window=window, transport_deadline_ns=bound, work=work,
+                _continuity=custody.bootstrap._continuity(current, work))
         else:
             _fail("release startup has an unknown root-selected profile")
         if owner._last_epoch < last_epoch or owner._last_monotonic < last_monotonic:

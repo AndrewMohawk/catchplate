@@ -48,6 +48,7 @@ class _Configuration:
     scope_bytes: bytes
     store: stores.ReleaseOutcomeStore
     store_configuration: object
+    ancestor: object = None
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -65,7 +66,7 @@ class OidcSessionActivationReleaseRecovery:
 
     def __init__(self, *, recovery_authorization_bytes, custody_bytes, root_public_key,
             expected_scope, delivery_custody_key, outcome_store, live_window,
-            transport_deadline_ns, work):
+            transport_deadline_ns, work, _continuity=None):
         capture._SharedLedger(work)
         recovery = authorization._original(recovery_authorization_bytes, grants.MAX_BYTES,
             "release recovery authorization original")
@@ -84,7 +85,7 @@ class OidcSessionActivationReleaseRecovery:
         release_custody._process()
         configured = _Configuration(grants.authority.SOURCE_REVISION, recovery, custody,
             root, key, grants._wire(scope, work), store,
-            stores.ReleaseOutcomeStore._snapshot_configuration(store))
+            stores.ReleaseOutcomeStore._snapshot_configuration(store), _continuity)
         lifetime = (work, window, bound)
         for name, value in (("_configured", configured), ("_seal", configured),
                 ("_lifetime", lifetime), ("_lifetime_seal", lifetime), ("_pid", os.getpid()),
@@ -153,12 +154,14 @@ class OidcSessionActivationReleaseRecovery:
             maximum_bytes=grants.MAX_BYTES, maximum_nodes=grants.MAX_NODES, maximum_depth=grants.MAX_DEPTH)
         admitted = grants._verify_on_work(authorization_bytes=configured.recovery_bytes,
             root_public_key=configured.root_public_key, expected_scope=scope,
-            live_window=window, transport_deadline_ns=bound, work=work)
+            live_window=window, transport_deadline_ns=bound, work=work,
+            _continuity=configured.ancestor)
         original_current = self._guard(configured, admitted.live, window, bound, work)
         original_current()
         material = bootstrap._verify_historical_on_work(custody_bytes=configured.custody_bytes,
             root_public_key=configured.root_public_key, live_window=window,
-            transport_deadline_ns=bound, work=work)
+            transport_deadline_ns=bound, work=work,
+            _current=original_current if configured.ancestor is not None else None)
         original_current()
         custody_digest = plan._frame(proofs.CUSTODY_IDENTITY_DOMAIN, (configured.custody_bytes,), work)
         for observed, expected in ((custody_digest, scope["releaseCustodyDigest"]),
@@ -237,6 +240,9 @@ class OidcSessionActivationReleaseRecovery:
         try:
             window, bound = self._narrow(work, window, bound)
             material, scope, forbidden, window, bound, current = self._context(configured, window, bound, work)
+            # Only this already-admitted parent guard enters child evidence
+            # admission; joined_current below must never become its own ancestor.
+            evidence_continuity = bootstrap._continuity(current, work) if configured.ancestor is not None else None
             record = outcomes._decode_on_work(record_raw, work)
             record_digest = outcomes._digest_on_work(record_raw, work)
             plan._same(record_digest, scope["outcomeDigest"], work, "fresh recovery exact retained outcome")
@@ -258,7 +264,8 @@ class OidcSessionActivationReleaseRecovery:
                 enrollment_bytes=intent_enrolled, root_public_key=configured.root_public_key,
                 forbidden_public_keys=forbidden, expected_scope=intent_scope,
                 expected_release=expected_release, old_token_bytes=old_token,
-                live_window=window, transport_deadline_ns=bound, work=work)
+                live_window=window, transport_deadline_ns=bound, work=work,
+                _continuity=evidence_continuity)
             plan._same(intent.intent_digest, material.release_intent_digest, work, "recovery old custody exact intent")
             plan._same(intent.intent_digest, evidence["releaseIntentDigest"], work, "recovery retained exact intent")
             enrolled = intent_keys._admit_on_work(enrollment_bytes=intent_enrolled,
@@ -273,7 +280,8 @@ class OidcSessionActivationReleaseRecovery:
                 expected_scope=record["scope"], expected_release=expected_release,
                 expected_evidence={name: evidence[name] for name in proof_admission.EVIDENCE_FIELDS},
                 expected_intent_interval=(intent.payload["issuedAtEpochNs"], intent.payload["expiresAtEpochNs"]),
-                live_window=window, transport_deadline_ns=bound, work=work)
+                live_window=window, transport_deadline_ns=bound, work=work,
+                _continuity=evidence_continuity)
             if (type(intent) is not intent_admission._HistoricalIntentEvidence
                     or type(proof) is not proof_admission._HistoricalProofEvidence):
                 _fail("recovery requires genuine historical original admission")

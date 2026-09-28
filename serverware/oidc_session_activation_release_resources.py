@@ -39,6 +39,9 @@ ENVIRONMENT = {"PATH": "/runtime/python/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "
 _ENVIRONMENT_SEAL = tuple(sorted(ENVIRONMENT.items()))
 _LOCK_TYPE = type(threading.Lock())
 _METADATA_BYTES = 4096
+_RECOVERY_OPERATION_BYTES = (custody.release_proof.MAX_BYTES + custody.proof_enrollment.MAX_BYTES
+    + custody.release_intent.MAX_BYTES + custody.intent_enrollment.MAX_BYTES + custody.outcomes.MAX_BYTES
+    + bootstrap.delivery.ENVELOPE_BYTES + bootstrap.delivery.TOKEN_BYTES + MAX_KEY_BYTES)
 
 
 class ReleaseResourceError(RuntimeError):
@@ -149,14 +152,39 @@ def _require_inventory_on_work(work):
     bootstrap.production._callback(work, lambda: inventory._require_inventory(INHERITED_DESCRIPTORS))
 
 
-def _read_on_work(descriptor, maximum, work, *, expected, private=False):
+def _read_on_work(descriptor, maximum, work, *, expected, private=False, _current=None):
     before = _metadata(work, lambda: _descriptor_identity(descriptor))
     if before != expected:
         _fail("release original differs from its initially owned descriptor")
     identity = before[0]
-    work.charge(input_bytes=identity[0][6])
-    raw, observed = bootstrap.production._callback(work,
-        lambda: sealed._read_original(descriptor, maximum, private=private))
+    size = identity[0][6]
+    if _current is None:
+        work.charge(input_bytes=size)
+        raw, observed = bootstrap.production._callback(work,
+            lambda: sealed._read_original(descriptor, maximum, private=private))
+    else:
+        if not callable(_current):
+            _fail("release original read requires its actual ancestor guard")
+        _current()
+        work.charge(input_bytes=3 * size + 1)
+        encoded = bytearray(size)
+        offset = 0
+        while offset < size:
+            _current()
+            chunk = os.pread(descriptor, min(64 * 1024, size - offset), offset)
+            _current()
+            if not chunk:
+                _fail("release sealed original was truncated")
+            encoded[offset:offset + len(chunk)] = chunk
+            offset += len(chunk)
+            del chunk
+        _current()
+        if os.pread(descriptor, 1, size):
+            _fail("release sealed original has trailing bytes")
+        _current()
+        raw = bytes(encoded)
+        observed = sealed._sealed_identity(descriptor, maximum, private=private)
+        _current()
     if observed != identity or _metadata(work, lambda: _descriptor_identity(descriptor)) != expected:
         _fail("release sealed original changed across its metered read")
     return raw
@@ -186,6 +214,7 @@ class _Configuration:
     live_window: tuple
     deadline_ns: int
     work: object
+    original_capacity_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -315,20 +344,24 @@ def _intake_on_work(*, work, live_window, transport_deadline_ns):
 
 
 def _intake_from_delivery_on_work(*, work, live_window, transport_deadline_ns,
-        delivery_current):
+        delivery_current, _additional_original_bytes=0):
     """Retain the actual root delivery guard; it can only further restrict use."""
     if not callable(delivery_current):
         _fail("release delivery continuation requires its original current guard")
     return _intake_originals_on_work(work=work, live_window=live_window,
-        transport_deadline_ns=transport_deadline_ns, delivery_current=delivery_current)
+        transport_deadline_ns=transport_deadline_ns, delivery_current=delivery_current,
+        _additional_original_bytes=_additional_original_bytes)
 
 
 def _intake_originals_on_work(*, work, live_window, transport_deadline_ns,
-        delivery_current):
+        delivery_current, _additional_original_bytes=0):
     bootstrap.capture._SharedLedger(work)
     window = bootstrap.clock._validate(live_window)
     bootstrap.shape._integer(transport_deadline_ns, minimum=1)
     bound = min(window[4], transport_deadline_ns)
+    if (type(_additional_original_bytes) is not int
+            or not 0 <= _additional_original_bytes < bootstrap.MAX_ORIGINAL_BYTES):
+        _fail("release delivery held capacity can only tighten the original bound")
     _process(root=True)
     _window, intake_current = bootstrap.delivery._window(window, bound, work)
     last_epoch = window[0]
@@ -355,17 +388,30 @@ def _intake_originals_on_work(*, work, live_window, transport_deadline_ns,
 
             _metadata(work, claim)
             original_current()
-        root_raw = _read_on_work(ROOT_FD, MAX_ROOT_BYTES, work, expected=owned[ROOT_FD])
+        capacity = 0
+        if _additional_original_bytes:
+            # Actual sealed sizes precede body allocation. Sixteen server
+            # footprints cover held receiver/resource/startup originals and
+            # nested captures; the fixed operation reserve covers the bounded
+            # recovery request, outcome readback and private token/key bytes.
+            capacity = (_additional_original_bytes + 16 * owned[BOOTSTRAP_FD][0][0][6]
+                + 8 * owned[ROOT_FD][0][0][6] + 8 * _RECOVERY_OPERATION_BYTES)
+            if capacity > bootstrap.MAX_ORIGINAL_BYTES:
+                _fail("release recovery resource inventory exceeds inherited capacity")
+        read_current = original_current if delivery_current is not None else None
+        root_raw = _read_on_work(ROOT_FD, MAX_ROOT_BYTES, work, expected=owned[ROOT_FD],
+            _current=read_current)
         original_current()
         bootstrap_raw = _read_on_work(BOOTSTRAP_FD, MAX_BOOTSTRAP_BYTES, work,
-            expected=owned[BOOTSTRAP_FD])
+            expected=owned[BOOTSTRAP_FD], _current=read_current)
         original_current()
         work.charge(input_bytes=len(root_raw))
         root = bootstrap.production._callback(work, lambda: serialization.load_pem_public_key(root_raw))
         if not isinstance(root, Ed25519PublicKey):
             _fail("release inherited root must be Ed25519")
         material = bootstrap._verify_on_work(bootstrap_bytes=bootstrap_raw, root_public_key=root,
-            live_window=window, transport_deadline_ns=bound, work=work)
+            live_window=window, transport_deadline_ns=bound, work=work,
+            _continuity=custody.bootstrap._continuity(read_current, work))
         material.live()
         narrowed = bootstrap.clock._validate(material.live_window)
         if (narrowed[:3] != window[:3] or material.deadline_ns > bound
@@ -396,7 +442,7 @@ def _intake_originals_on_work(*, work, live_window, transport_deadline_ns,
         # No private key bytes are read until actual fresh root admission and
         # directory/listener joins have succeeded under the original allowance.
         key = _read_on_work(DELIVERY_KEY_FD, MAX_KEY_BYTES, work,
-            expected=owned[DELIVERY_KEY_FD], private=True)
+            expected=owned[DELIVERY_KEY_FD], private=True, _current=read_current)
         if len(key) != MAX_KEY_BYTES:
             _fail("release private delivery key must be raw32")
         custody._key_binding(material.custody_material, key, work)
@@ -421,7 +467,7 @@ def _intake_originals_on_work(*, work, live_window, transport_deadline_ns,
         material.live()
         _require_inventory_on_work(work)
         configured = _Configuration(root, bootstrap_raw, key, OUTCOME_DIR_FD, LISTENER_FD,
-            window, bound, work)
+            window, bound, work, capacity)
         descriptors = tuple(owned.items())
         _window, narrowed_processing = bootstrap.delivery._window(window, bound, work)
 

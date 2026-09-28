@@ -1,0 +1,65 @@
+# Uninstalled source. Existing checkpoint-one storage/resources are independently
+# provisioned. ACK means exact staging, not readiness, store existence or token.
+[Unit]
+Description=Serverware original-bound RECOVERY worker delivery (trusted-host-local)
+BindsTo=serverware-oidc-session-activation-release-recovery-bootstrap.socket serverware-oidc-session-activation-release-recovery-dynamic.socket
+After=local-fs.target serverware-oidc-session-activation-release-recovery-bootstrap.socket serverware-oidc-session-activation-release-recovery-dynamic.socket
+Conflicts=serverware-oidc-session-activation-token-release.socket serverware-oidc-session-activation-token-release.service serverware-oidc-session-activation-token-release-dynamic.socket serverware-oidc-session-activation-token-release-dynamic.service serverware-oidc-session-activation-token-release-bootstrap.socket
+RequiresMountsFor=@RELEASE_WORKER_ROOT@ @RELEASE_RECOVERY_DYNAMIC_TRUST_DIR@ @RELEASE_DELIVERY_KEY@ @RELEASE_OUTCOME_BASE_DIR@
+AssertPathIsDirectory=@RELEASE_WORKER_ROOT@
+AssertPathIsDirectory=@RELEASE_RECOVERY_DYNAMIC_TRUST_DIR@
+AssertPathIsDirectory=@RELEASE_OUTCOME_BASE_DIR@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Names, not unit order, identify the two initial descriptors 3/4. Exact five
+# CLOEXEC descriptors 198..202 survive the normal staging close and sole drop.
+# The original work/window and independent guards continue without exec.
+User=root
+Group=root
+RootDirectory=@RELEASE_WORKER_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@RELEASE_RECOVERY_DYNAMIC_TRUST_DIR@:/run/serverware/oidc-session-activation-release-recovery-dynamic-trust
+BindReadOnlyPaths=@RELEASE_DELIVERY_KEY@:/run/secrets/serverware-oidc-session-activation-token-release-delivery-key
+BindReadOnlyPaths=/run/serverware/oidc-session-activation-token-release:/run/serverware/oidc-session-activation-token-release
+BindReadOnlyPaths=@RELEASE_OUTCOME_BASE_DIR@:/var/lib/serverware/oidc-session-activation-release-outcomes
+Sockets=serverware-oidc-session-activation-release-recovery-bootstrap.socket serverware-oidc-session-activation-release-recovery-dynamic.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/oidc_session_activation_release_recovery_dynamic_launcher.py --root-delivery
+Restart=no
+RuntimeMaxSec=300s
+TimeoutStartSec=35s
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native

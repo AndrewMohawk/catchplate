@@ -47,7 +47,8 @@ two-person authority remain separate from this evidence inspection.
 
 The [actor-owned acquisition context](control-plane-oidc-session-activation-recovery-acquisition.md)
 now composes this evidence with fresh actor authority, independent parent
-originals, a policy-keyed durable attempt and admitted grant retention. This
+originals, a policy-keyed durable attempt, admitted grant retention and one-shot
+server-original staging. A staged ACK is not worker readiness or store proof. This
 inspector itself still grants no issuance or exchange permission. Its finalization
 replay now uses the [combined historical reader](control-plane-registration-finalization-completion-history.md),
 which preflights the selected metadata before the first body read. Already-held
@@ -57,5 +58,5 @@ uses its separate phase reservation on the same work. This is representation
 accounting, not a process-heap guarantee.
 
 This is source-only, not completion of public recovery. Prior-stage recovery,
-recovery-worker staging and protected exchange, independent resource
+protected exchange and public cookie completion, independent resource
 provisioning and runtime verification remain separate work.

@@ -217,12 +217,16 @@ complete those remaining steps. The existing LIVE staging path is not reused
 as recovery admission. A once-checked actor, retained triple or intent result
 cannot replace any of these checks.
 
-Before source freeze, the earlier historical target loader also needs aggregate
-capacity enforcement before its preparation/reservation/outcome reads. Its
-existing finalization inspector totals originals after loading them. The new
-acquisition-phase reservation bounds the held actor result and subsequent
-selection, policy, client and retention work; it does not retroactively bound
-those earlier reads or establish a whole-call preallocation guarantee.
+The earlier historical target now uses a
+[combined preallocation-checked reader](control-plane-registration-finalization-completion-history.md).
+Fixed association indexes select at most fifteen files; actual identity/size
+metadata and the caller's remaining representation allowance are checked before
+the first body read. Each body is read once, preserving original linkage and
+corruption checks. The caller reserves held request/token/configuration inputs,
+cold-parent/enrollment representations and replay headroom first. Later
+acquisition separately reserves its held actor result and new inputs on the same
+cumulative work. The earlier post-load accounting gap is source-connected;
+this is not a whole-process 64 MiB heap guarantee or execution evidence.
 
 No protected activation or consume SQL is repeated here. WebAuthn challenge
 issuance and assertion-counter updates remain their normal authentication

@@ -8,6 +8,7 @@ executes activation SQL, retries dispatch, opens a token or delivers a session.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import math
 import os
 import threading
 import time
@@ -77,6 +78,54 @@ def _request(request, original):
             or not 2 <= len(original) <= contract.MAX_REQUEST_BYTES
             or getattr(request.state, ORIGINAL_STATE_NAME, None) is not original):
         _deny("recovery requires the actual bounded HTTP request", 400)
+
+
+def _owned_capture_bytes(graphs, work):
+    """Measure a fixed source-selected graph table without copying or serialization."""
+    total, nodes = 0, 0
+
+    def visit(value, depth=0):
+        nonlocal total, nodes
+        nodes += 1
+        if depth > 12 or nodes > 8192:
+            execution._fail("recovery held graphs exceed their source bound")
+        work.charge(json_nodes=1)
+        if value is None or type(value) is bool:
+            size = 5
+        elif type(value) is int:
+            if not -(1 << 63) <= value < (1 << 64):
+                execution._fail("recovery held integer exceeds its source bound")
+            size = 32
+        elif type(value) is float and math.isfinite(value):
+            size = 32
+        elif type(value) is str:
+            size = 4 * len(value)
+        elif type(value) is bytes:
+            size = len(value)
+        elif type(value) in (tuple, list, frozenset, dict):
+            if len(value) > 8192:
+                execution._fail("recovery held collection exceeds its source bound")
+            size = 2 + 16 * len(value)
+        else:
+            execution._fail("recovery held graph has an unexpected source type")
+        total += size
+        if total > history.MAX_ORIGINAL_BYTES // 4:
+            execution._fail("recovery held graphs exhaust original capacity")
+        work.charge(input_bytes=size)
+        if type(value) is dict:
+            for key, item in value.items():
+                if type(key) is not str:
+                    execution._fail("recovery held graph keys differ")
+                visit(key, depth + 1)
+                visit(item, depth + 1)
+        elif type(value) in (tuple, list, frozenset):
+            for item in value:
+                visit(item, depth + 1)
+
+    # This is deliberately not an arbitrary owner, Request or key traversal.
+    for graph in graphs:
+        visit(graph)
+    return total
 
 
 class _ActorScope:
@@ -283,9 +332,19 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, options, live_window,
         tuple(request.headers.getlist(application.CSRF_HEADER_NAME)),
         request.cookies.get(application.CSRF_COOKIE_NAME), token,
         request.method, request.scope.get("path"), request.scope.get("query_string", b""))
+    # The historical loader must see already-held request and configuration
+    # representations before its first body read, not only in a later sum.
+    scope_originals = tuple(owner_scope.common[name] for name in (
+        "authorization_enrollment_bytes", "current_root_enrollment_bytes",
+        "grant_enrollment_bytes", "configuration_digest"))
+    held_request_bytes = 4 * _owned_capture_bytes((recovery_bytes, payload,
+        policy, policy_pin, request_pin, old_token, scope_originals), work)
+    # Reserve the fixed key representations without inspecting key objects.
+    held_request_bytes += 8 * (3 * 32 + startup.MAX_PRIVATE_KEY_BYTES)
     target = history._inspect_on_owner(owner, local_digest=payload["localDigest"],
         old_token_bytes=old_token, live_window=owner_scope.window,
-        transport_deadline_ns=owner_scope.deadline_ns, work=work, current=base_current)
+        transport_deadline_ns=owner_scope.deadline_ns, work=work, current=base_current,
+        _additional_original_bytes=held_request_bytes)
     if type(target) is not history._RecoveryTarget:
         _deny("recovery historical target is unavailable", 503)
     execution.clock._validate(target.live_window)

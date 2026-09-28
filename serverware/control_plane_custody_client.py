@@ -557,6 +557,79 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while loading finalization preparation")
         return result
 
+    def load_registration_finalization_completion_history(self, finalization_digest, *,
+            maximum_original_bytes, work, current):
+        """Direct metered combined history read; never wrap in a stable callback."""
+        from serverware import control_plane_registration_finalization_records as finalization
+        from serverware import control_plane_registration_execution_records as evidence
+        from serverware import control_plane_registration_signer_records as signer
+        from serverware import control_plane_registration_finalization_reservation_records as reservations
+        from serverware import control_plane_registration_finalization_outcome_records as final_outcomes
+        from serverware import control_plane_registration_outcome_records as prior_outcomes
+
+        local = journal._digest(finalization_digest)
+        journal._integer(maximum_original_bytes, minimum=1, maximum=64 * 1024 * 1024,
+            label="combined finalization history byte allowance")
+        if not callable(current):
+            raise CustodyClientError("combined finalization history requires its original guard")
+        current()
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.load_registration_finalization_completion_history(
+            binding.journal, local, maximum_original_bytes=maximum_original_bytes,
+            work=work, current=current)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while reading combined finalization history")
+        if type(result) is not tuple or len(result) != 4:
+            raise CustodyClientError("combined finalization history requires its exact four-part inventory")
+        preparation, reservation, observed, prior = result
+        if (type(preparation) is not tuple or len(preparation) != 3
+                or type(preparation[0]) is not records.PreparedRecord
+                or type(preparation[2]) is not tuple or len(preparation[2]) != 2
+                or any(type(value) is not records.PreparedRecord for value in preparation[2])):
+            raise CustodyClientError("combined history lacks its original preparation tuple")
+        final_record, evidence_digest, pair = preparation
+        journal._digest(evidence_digest)
+        evidence_record, signer_record = pair
+        journal._digest(signer_record.digest)
+        if (final_record.digest != local or evidence_record.digest != evidence_digest
+                or (final_record.family, final_record.selector) != (finalization.FAMILY, finalization.OPERATION)
+                or (evidence_record.family, evidence_record.selector) != (evidence.FAMILY, evidence.OPERATION)
+                or (signer_record.family, signer_record.selector) != (signer.FAMILY, signer.OPERATION)
+                or evidence_record.source_revision != final_record.source_revision
+                or signer_record.source_revision != final_record.source_revision
+                or len({local, evidence_digest, signer_record.digest}) != 3):
+            raise CustodyClientError("combined preparation source, families or association differ")
+        if reservation is not None:
+            if (type(reservation) is not reservations.FinalizationReservationRecord
+                    or reservation.finalization_digest != local
+                    or reservation.source_revision != final_record.source_revision):
+                raise CustodyClientError("combined finalization reservation differs from its preparation")
+            journal._digest(reservation.digest)
+        if (type(observed) is not final_outcomes.FinalizationOutcomes
+                or observed.finalization_digest != local or observed.source_revision != final_record.source_revision
+                or type(prior) is not prior_outcomes.RegistrationOutcomes
+                or prior.local_digest != evidence_digest or prior.source_revision != final_record.source_revision):
+            raise CustodyClientError("combined outcome families or source differ from their preparation")
+        for kind, record in zip(final_outcomes.KINDS, (observed.sql_attempt, observed.sql_outcome,
+                observed.completion_outcome, observed.completion_reconciled)):
+            if record is not None:
+                if (type(record) is not final_outcomes.FinalizationOutcomeRecord
+                        or record.finalization_digest != local or record.kind != kind
+                        or record.source_revision != final_record.source_revision):
+                    raise CustodyClientError("combined finalization outcome original differs")
+                journal._digest(record.digest)
+        for kind, record in zip(prior_outcomes.KINDS, (prior.reservation, prior.sql_attempt,
+                prior.sql_outcome, prior.completion_outcome, prior.completion_reconciled)):
+            if record is not None:
+                if (type(record) is not prior_outcomes.RegistrationOutcomeRecord
+                        or record.local_digest != evidence_digest or record.kind != kind
+                        or record.source_revision != final_record.source_revision):
+                    raise CustodyClientError("combined evidence outcome original differs")
+                journal._digest(record.digest)
+        current()
+        return result
+
     def append_registration_finalization_reservation(self, finalization_digest, originals):
         """Retain raw3 under the complete finalization chain, never authenticate it."""
         local = journal._digest(finalization_digest)

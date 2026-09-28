@@ -82,6 +82,8 @@ _CONSUME_RECORD_FILES = {
 _RECOVERY_RECORD_FILES = dict(zip(recovery_records.FILE_KINDS, recovery_records.KINDS))
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
     finalization_records.FAMILY})
+_COMPLETION_HISTORY_MAX_BYTES = 64 * 1024**2
+_COMPLETION_HISTORY_FIXED_BYTES = 16 * 1024
 
 
 class CustodyJournalError(RuntimeError):
@@ -984,6 +986,239 @@ class CustodyJournal:
                 signer, _ = self._load(association.signer_digest)
                 self._require_ready()
                 return finalization, association.evidence_digest, (evidence, signer)
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def _completion_history_inventory(self, digest):
+        """Resolve only the fixed original chain, without opening any body."""
+        association = self._finalization_associations[digest]
+        _finalization_association_scope(association, self._entries, self._associations)
+        evidence = self._associations[association.evidence_digest]
+        if (association.finalization_digest != digest
+                or evidence.execution_digest != association.evidence_digest
+                or evidence.signer_digest != association.signer_digest
+                or len({digest, association.evidence_digest, association.signer_digest}) != 3):
+            raise CustodyJournalError("completion history association locators differ")
+        # Decoders and filenames are source-selected, never supplied by callers.
+        selected = [
+            (_name("finalization-associated", digest),
+                finalization_associations.MAX_ASSOCIATION_BYTES, finalization_associations.decode),
+            (_name("associated", association.evidence_digest),
+                associations.MAX_ASSOCIATION_BYTES, associations.decode),
+        ]
+        for locator, family, selector, maximum, decoder in (
+                (digest, finalization_records.FAMILY, finalization_records.OPERATION,
+                    finalization_records.MAX_RECORD_BYTES, finalization_records.decode_prepared),
+                (association.evidence_digest, execution_records.FAMILY, execution_records.OPERATION,
+                    execution_records.MAX_RECORD_BYTES, execution_records.decode_prepared),
+                (association.signer_digest, signer_records.FAMILY, signer_records.OPERATION,
+                    signer_records.MAX_RECORD_BYTES, signer_records.decode_prepared)):
+            entry = self._entries[locator]
+            if ((entry.family, entry.selector, entry.source_revision)
+                    != (family, selector, association.source_revision)
+                    or entry.attempted or entry.observed
+                    or _name("attempted", locator) in self._file_identities
+                    or _name("observed", locator) in self._file_identities
+                    or type(entry.prepared_bytes) is not int
+                    or not 1 <= entry.prepared_bytes <= maximum):
+                raise CustodyJournalError("completion history prepared metadata differs")
+            selected.append((_name("prepared", locator), entry.prepared_bytes, decoder))
+        reservation = self._finalization_reservations.get(digest)
+        if reservation is not None:
+            self._finalization_reservation_scope(digest, reservation)
+            selected.append((_name("finalization-reserved", digest),
+                finalization_reservations.MAX_RECORD_BYTES, finalization_reservations.decode))
+        final_by_kind = self._finalization_outcomes.get(digest, {})
+        evidence_by_kind = self._registration_outcomes.get(association.evidence_digest, {})
+        self._finalization_outcome_scope(digest, final_by_kind)
+        self._registration_outcome_scope(association.evidence_digest, evidence_by_kind)
+        for kind in finalization_outcomes.KINDS:
+            if kind in final_by_kind:
+                selected.append((_name("finalization-" + kind, digest),
+                    finalization_outcomes._maximum(kind), finalization_outcomes.decode))
+        for kind in outcome_records.KINDS:
+            if kind in evidence_by_kind:
+                maximum = (outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed"
+                    else outcome_records.MAX_RECORD_BYTES)
+                selected.append((_name(kind, association.evidence_digest), maximum, outcome_records.decode))
+        if not 5 <= len(selected) <= 15 or len({item[0] for item in selected}) != len(selected):
+            raise CustodyJournalError("completion history fixed inventory differs")
+        return association, evidence, tuple(selected)
+
+    def _completion_history_metadata(self, name, maximum, identity, current):
+        """Rejoin the exact retained name and inode without reading its body."""
+        if (type(identity) is not tuple or len(identity) != 9
+                or type(identity[6]) is not int or not 1 <= identity[6] <= maximum):
+            raise CustodyJournalError("completion history retained size metadata differs")
+        current()
+        metadata = os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)
+        current()
+        if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o400
+                or metadata.st_nlink != 1 or metadata.st_dev != self._binding[0]
+                or (metadata.st_uid, metadata.st_gid) != self._binding[2:]
+                or _identity(metadata) != identity
+                or self._file_identities.get(name) != identity):
+            raise CustodyJournalError("completion history retained file identity changed")
+
+    def _read_completion_history_file(self, name, identity, current):
+        """One precharged bounded read; never leave cleanup to an expired guard."""
+        current()
+        descriptor = os.open(name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=self._directory_fd)
+        try:
+            current()
+            before = os.fstat(descriptor)
+            current()
+            if _identity(before) != identity:
+                raise CustodyJournalError("completion history opened inode differs")
+            size = identity[6]
+            # Fixed-size allocation avoids bytearray growth beyond the admitted
+            # representation. One chunk, this buffer and immutable conversion
+            # fit within the three encoded-byte footprints preflighted below.
+            encoded = bytearray(size)
+            offset = 0
+            while offset < size:
+                current()
+                chunk = os.read(descriptor, min(_READ_CHUNK, size - offset))
+                current()
+                if not chunk:
+                    raise CustodyJournalError("completion history record was truncated")
+                encoded[offset:offset + len(chunk)] = chunk
+                offset += len(chunk)
+                del chunk
+            current()
+            trailing = os.read(descriptor, 1)
+            current()
+            if trailing:
+                raise CustodyJournalError("completion history record grew while reading")
+            after = os.fstat(descriptor)
+            current()
+            if _identity(after) != identity:
+                raise CustodyJournalError("completion history inode changed while reading")
+            original = bytes(encoded)
+            current()
+        finally:
+            os.close(descriptor)
+        current()
+        self._completion_history_metadata(name, identity[6], identity, current)
+        return original
+
+    def _completion_history_result(self, digest, association, evidence, loaded):
+        """Repeat the old loaders' exact linkage checks using each body once."""
+        if (loaded[_name("finalization-associated", digest)] != association
+                or loaded[_name("associated", association.evidence_digest)] != evidence):
+            raise CustodyJournalError("completion history associations changed after recovery")
+        _finalization_association_scope(association, self._entries, self._associations)
+        _association_scope(evidence, self._entries)
+        prepared = []
+        for locator in (digest, association.evidence_digest, association.signer_digest):
+            record = loaded[_name("prepared", locator)]
+            info = self._entries[locator]
+            if (record.digest != locator
+                    or (record.family, record.selector, record.source_revision)
+                        != (info.family, info.selector, info.source_revision)
+                    or info.attempted or info.observed):
+                raise CustodyJournalError("completion history prepared originals changed")
+            prepared.append(record)
+        reservation = loaded.get(_name("finalization-reserved", digest))
+        reservation_metadata = self._finalization_reservations.get(digest)
+        if reservation_metadata is not None:
+            self._finalization_reservation_scope(digest, reservation_metadata)
+            if (reservation is None or reservation.finalization_digest != digest
+                    or (reservation.source_revision, reservation.digest) != reservation_metadata):
+                raise CustodyJournalError("completion history reservation originals changed")
+        final_by_kind = self._finalization_outcomes.get(digest, {})
+        evidence_by_kind = self._registration_outcomes.get(association.evidence_digest, {})
+        self._finalization_outcome_scope(digest, final_by_kind)
+        self._registration_outcome_scope(association.evidence_digest, evidence_by_kind)
+        final = {}
+        historical = {}
+        for kind in finalization_outcomes.KINDS:
+            if kind in final_by_kind:
+                record = loaded[_name("finalization-" + kind, digest)]
+                if ((record.source_revision, record.digest) != final_by_kind[kind]
+                        or record.kind != kind or record.finalization_digest != digest):
+                    raise CustodyJournalError("completion history finalization outcome changed")
+                final[kind] = record
+        for kind in outcome_records.KINDS:
+            if kind in evidence_by_kind:
+                record = loaded[_name(kind, association.evidence_digest)]
+                if ((record.source_revision, record.digest) != evidence_by_kind[kind]
+                        or record.kind != kind or record.local_digest != association.evidence_digest):
+                    raise CustodyJournalError("completion history evidence outcome changed")
+                historical[kind] = record
+        for outcomes in (final, historical):
+            if ("completion-reconciled" in outcomes
+                    and outcomes["completion-outcome"].originals[0] != b"uncertain"):
+                raise CustodyJournalError("completion history reconciliation lacks original uncertainty")
+        return ((prepared[0], association.evidence_digest, (prepared[1], prepared[2])),
+            reservation,
+            finalization_outcomes.FinalizationOutcomes(association.source_revision, digest,
+                final.get("sql-claimed"), final.get("sql-outcome"),
+                final.get("completion-outcome"), final.get("completion-reconciled")),
+            outcome_records.RegistrationOutcomes(evidence.source_revision, association.evidence_digest,
+                historical.get("reservation"), historical.get("sql-claimed"),
+                historical.get("sql-outcome"), historical.get("completion-outcome"),
+                historical.get("completion-reconciled")))
+
+    def load_registration_finalization_completion_history(self, finalization_digest, *,
+            maximum_original_bytes, work, current):
+        """Read one preflighted fixed chain; return originals, never authority.
+
+        The remaining byte cap includes three encoded-byte footprints plus
+        fixed bounded header/locator bookkeeping. The caller separately reserves
+        already-held originals and later replay. This is not a Python heap bound.
+        Invoke directly: this method charges the original work, and current must
+        not reenter a loader or publish to the journal.
+        """
+        from serverware.authority_query_read_work import _ValidationWork
+
+        digest = _digest(finalization_digest)
+        _integer(maximum_original_bytes, minimum=1, maximum=_COMPLETION_HISTORY_MAX_BYTES,
+            label="completion history remaining byte capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("completion history requires original work and current guard")
+        work.charge(json_nodes=256)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._finalization_associations:
+                raise CustodyJournalError("completion history requires its complete local preparation")
+            try:
+                association, evidence, selected = self._completion_history_inventory(digest)
+                identities = tuple(self._file_identities.get(item[0]) for item in selected)
+                for (name, maximum, _decoder), identity in zip(selected, identities):
+                    self._completion_history_metadata(name, maximum, identity, current)
+                    if name.startswith("prepared-") and identity[6] != maximum:
+                        raise CustodyJournalError("completion history prepared size changed")
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            total = sum(identity[6] for identity in identities)
+            footprint = 3 * total + _COMPLETION_HISTORY_FIXED_BYTES
+            # A valid but oversized selection or exhausted work allowance is
+            # refused before body1, without poisoning unchanged retained data.
+            if footprint > maximum_original_bytes:
+                raise CustodyJournalError("completion history exceeds remaining preallocation capacity")
+            work.charge(input_bytes=3 * total + len(selected), hashes=len(selected) - 2)
+            try:
+                loaded = {}
+                for (name, _maximum, decoder), identity in zip(selected, identities):
+                    original = self._read_completion_history_file(name, identity, current)
+                    current()
+                    loaded[name] = decoder(original)
+                    current()
+                    del original
+                result = self._completion_history_result(digest, association, evidence, loaded)
+                for (name, maximum, _decoder), identity in zip(selected, identities):
+                    self._completion_history_metadata(name, maximum, identity, current)
+                self._require_ready()
+                current()
+                return result
             except BaseException:
                 self._io.poison()
                 raise

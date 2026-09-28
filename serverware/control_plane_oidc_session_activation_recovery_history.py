@@ -55,11 +55,14 @@ class _RecoveryTarget:
 
 
 def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
-        transport_deadline_ns, work, current):
+        transport_deadline_ns, work, current, _additional_original_bytes=0):
     """Freshly join originals before recovery options or assertion admission."""
     capture._SharedLedger(work)
     if type(owner) is not startup._EnrollmentOwner or not callable(current):
         _fail("recovery history requires the actual owner and current guard")
+    if (type(_additional_original_bytes) is not int
+            or not 0 <= _additional_original_bytes < MAX_ORIGINAL_BYTES):
+        _fail("recovery history held capacity can only tighten the original bound")
     material, binding, custody = owner._material, owner._binding, owner._custody
     if material is None or binding is None or custody is None:
         _fail("recovery history has no actual cold configuration")
@@ -76,6 +79,11 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     # Hold the request-local token before callbacks. It is never part of the
     # returned subject, selected journal originals or lifetime closure.
     old_token = intent.delivery._token(old_token_bytes, work)
+    held_history_bytes = (_additional_original_bytes
+        + 4 * (len(enrollment) + len(scope_original))
+        + 8 * (len(old_token) + 32 * (2 + len(forbidden))))
+    if held_history_bytes >= MAX_ORIGINAL_BYTES:
+        _fail("recovery history held originals exhaust finalization capacity")
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
@@ -137,7 +145,8 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     # inventory is discarded before the separately selected intent is read;
     # no activation prepared ciphertext is loaded or opened.
     inspected = finalization._inspect_on_owner(owner, digest, live_window=window,
-        transport_deadline_ns=bound, work=work)
+        transport_deadline_ns=bound, work=work,
+        _additional_original_bytes=held_history_bytes)
     (subject, held, reserved, observed, common, _endpoint, selected_window,
         selected_bound, selected_current, original_bytes) = inspected
     candidate = clock._validate(selected_window)
@@ -145,7 +154,7 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     if (candidate[:3] != window[:3] or selected_bound > bound
             or any(actual > prior for actual, prior in zip(candidate[3:], window[3:]))):
         _fail("recovery finalization replay widened the original lifetime")
-    if original_bytes + len(old_token) > MAX_ORIGINAL_BYTES:
+    if original_bytes + held_history_bytes > MAX_ORIGINAL_BYTES:
         _fail("recovery finalization originals exceed the shared aggregate bound")
     window, bound, history_current = candidate, min(selected_bound, candidate[4]), selected_current
     base_current()

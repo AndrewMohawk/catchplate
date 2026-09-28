@@ -37,6 +37,44 @@ can remain verifiable after their action interval expires; they cannot revive
 that interval. Only the independently configured source/configuration/key cohort
 is supported. Cross-generation historical authority remains separate H05 work.
 
+## Combined historical preallocation
+
+The subject inspector now obtains preparation, reservation, finalization
+outcomes and associated registration outcomes through one direct metered
+`load_registration_finalization_completion_history` call. It does not wrap that
+charging reader in a stable native callback or independently load four large
+record families before checking their combined size. The journal's
+[selected-history reader](control-plane-registration-finalization-completion-history.md)
+preflights the admitted metadata for all selected encoded bodies before body one,
+then reads and decodes each body once under the original work and guard.
+
+Before calling it, the subject subtracts these source-defined reservations from
+the existing 64 MiB byte-accounting allowance:
+
+- Eight 4 MiB cold-parent representation footprints, covering already-held
+  original/configuration representations without traversing private key objects.
+- Four times the actual lengths of the six independently configured enrollment
+  originals, each checked against its existing format cap.
+- Two 4 MiB regenerated typed-request representations and two 8 KiB runtime
+  capture allowances for the genuine replay path.
+- The exact nonnegative additive held-byte count supplied by the earlier caller.
+  The recovery path carries its actual bounded request/body/payload/policy/pins,
+  old-token and independently configured history representations into this count.
+
+The remaining allowance is tightened to `3 * (remaining // 8)` for the reader.
+Its own preflight requires three times the actual selected encoded sizes plus
+16 KiB of bounded header/locator bookkeeping. This leaves five additional
+selected-byte footprints for replay, capture and canonical representations.
+An insufficient allowance refuses before historical body allocation; neither
+reader nor replay receives a fresh work budget or clock window.
+
+The final exact original-byte sum remains and includes the additive retained
+bytes. All preparation/source/type checks and genuine historical signature,
+full-vector, signer-regeneration, pending/grant and current-owner checks remain.
+These are conservative source-defined byte representations, not a claimed bound
+on the entire Python heap. Cumulative computation is still metered on the same
+actual validation work. This source change is not execution evidence.
+
 ## Private initial request and explicit recovery
 
 The [completion facade](../serverware/control_plane_registration_finalization_completion.py) provides two distinct calls:

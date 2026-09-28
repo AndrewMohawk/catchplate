@@ -82,12 +82,15 @@ no new allowance is granted between those phases. Capacity reservation and actua
 cumulative work charges remain distinct. These are original/capture bounds,
 not Python allocator-overhead or process-memory guarantees.
 
-**Required follow-up before freeze:** the earlier, unchanged pre-actor
-finalization subject replay loads preparation/reservation/finalization and
-completion-evidence originals before its existing aggregate sum check. Its
-combined preallocation integration with already held parent/actor input remains
-open. This new acquisition-phase reservation does not repair or waive that
-earlier loader boundary.
+The earlier pre-actor replay now uses the
+[combined historical reader](control-plane-registration-finalization-completion-history.md).
+It checks the complete selected metadata inventory before the first body read
+and reads each file once. The actor and historical inspector pass their held
+request/token/configuration representation counts into the subject's tightening
+allowance; the subject also reserves cold-parent, enrollment and replay space.
+This closes the earlier post-load aggregate-check gap in source. Both phases
+still use one cumulative work allowance, and neither claims a 64 MiB process
+heap bound or runtime verification.
 
 Recovery-worker staging, genuine checkpoint-one private outcome observation,
 protected recovery exchange, current-auth/cookie completion and a public

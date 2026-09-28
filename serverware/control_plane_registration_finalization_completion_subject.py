@@ -31,6 +31,12 @@ from serverware import control_plane_registration_handoff as handoff
 startup, evidence, clock = caller.startup, caller.evidence, caller.clock
 custody_client, custody_startup = caller.custody_client, caller.custody_startup
 journal, wire = custody_client.journal, completion.transport
+# Source-defined byte representations, not an interpreter heap-size assertion.
+# The cold parent is capped at one authority request. Retain its original and
+# known captures separately from two regenerated typed-request representations.
+_PARENT_REPRESENTATION_BYTES = 8 * evidence.authority.MAX_REQUEST_BYTES
+_REPLAY_HEADROOM_BYTES = 2 * evidence.authority.MAX_REQUEST_BYTES + 2 * 8192
+_HISTORY_REPRESENTATIONS = 8
 
 
 class FinalizationCompletionSubjectError(ValueError):
@@ -91,11 +97,8 @@ def _scope_on_owner(owner, *, live_window, transport_deadline_ns, work):
     return common, endpoint, window, bound, current
 
 
-def _association_on_work(owner, digest, work):
-    callback = evidence.production._callback
-    association = callback(work,
-        lambda: custody_client.ControlPlaneCustodyClient.load_registration_finalization_preparation(
-            owner._custody, digest))
+def _association_on_work(association, digest, work):
+    """Check ordinary records returned only by the actual combined loader."""
     if (type(association) is not tuple or len(association) != 3
             or type(association[0]) is not subjects.records.PreparedRecord
             or type(association[2]) is not tuple or len(association[2]) != 2
@@ -119,24 +122,51 @@ def _association_on_work(owner, digest, work):
     return final_record, evidence_digest, evidence_record, signer_record
 
 
-def _inspect_on_owner(owner, local_digest, *, live_window, transport_deadline_ns, work):
+def _inspect_on_owner(owner, local_digest, *, live_window, transport_deadline_ns, work,
+        _additional_original_bytes=0):
     """Return same-call subject and raw originals; no API accepts them as proof."""
     digest = journal._digest(local_digest)
     common, endpoint, window, bound, current = _scope_on_owner(owner,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
-    callback = evidence.production._callback
     material, custody = owner._material, owner._custody
     configured = material.finalization
-    final_record, evidence_digest, evidence_record, signer_record = _association_on_work(owner, digest, work)
+    if (type(_additional_original_bytes) is not int
+            or not 0 <= _additional_original_bytes < completion.MAX_ORIGINAL_BYTES
+            or completion.MAX_ORIGINAL_BYTES != 64 * 1024 * 1024):
+        raise FinalizationCompletionSubjectError("additional retained history bytes exceed the fixed allowance")
+    # All six enrollment originals come from the already admitted cold owner,
+    # before any journal body. They cannot be replaced by historical records.
+    evidence_common = dict(common,
+        authorization_enrollment_bytes=material.execution.authorization_enrollment_bytes,
+        grant_enrollment_bytes=material.execution.grant_enrollment_bytes,
+        current_root_enrollment_bytes=material.execution.current_root_enrollment_bytes)
+    enrollments = tuple(scope[name] for scope in (common, evidence_common) for name in (
+        "authorization_enrollment_bytes", "grant_enrollment_bytes", "current_root_enrollment_bytes"))
+    enrollment_limits = (history.caller.MAX_ENROLLMENT_BYTES, history.grants.MAX_ENROLLMENT_BYTES,
+        history.authorization.MAX_ENROLLMENT_BYTES, evidence_history.authorization.MAX_ENROLLMENT_BYTES,
+        evidence_history.grants.MAX_ENROLLMENT_BYTES, evidence_history.current_root.MAX_ENROLLMENT_BYTES)
+    if any(type(raw) is not bytes or not 2 <= len(raw) <= maximum
+            for raw, maximum in zip(enrollments, enrollment_limits)):
+        raise FinalizationCompletionSubjectError("historical enrollment originals exceed their independent bounds")
+    remaining = (completion.MAX_ORIGINAL_BYTES - _additional_original_bytes
+        - _PARENT_REPRESENTATION_BYTES - _REPLAY_HEADROOM_BYTES - 4 * sum(map(len, enrollments)))
+    # The combined reader charges/reserves three encoded-body footprints plus
+    # 16 KiB before body1. Tightening its allowance to 3/8 leaves five additional
+    # selected-byte footprints for original replay, capture and canonical work.
+    maximum_history = 3 * (remaining // _HISTORY_REPRESENTATIONS)
+    if maximum_history <= 16 * 1024:
+        raise FinalizationCompletionSubjectError("held originals leave no bounded historical replay capacity")
+    current()
+    combined = custody_client.ControlPlaneCustodyClient.load_registration_finalization_completion_history(
+        custody, digest, maximum_original_bytes=maximum_history, work=work, current=current)
+    current()
+    if type(combined) is not tuple or len(combined) != 4:
+        raise FinalizationCompletionSubjectError("combined finalization history inventory differs")
+    association, reserved_record, observed, prior = combined
+    final_record, evidence_digest, evidence_record, signer_record = _association_on_work(association, digest, work)
     held = reservation_wire._originals(final_record.originals, response=False)
     evidence_originals = subjects.reservation_wire._originals(evidence_record.originals, response=False)
     signer = subjects.signer_wire._request_originals(signer_record.originals)
-    reserved_record = callback(work,
-        lambda: custody_client.ControlPlaneCustodyClient.load_registration_finalization_reservation(custody, digest))
-    observed = callback(work,
-        lambda: custody_client.ControlPlaneCustodyClient.load_registration_finalization_outcomes(custody, digest))
-    prior = callback(work,
-        lambda: custody_client.ControlPlaneCustodyClient.load_registration_outcomes(custody, evidence_digest))
     if (type(reserved_record) is not reservation_records.FinalizationReservationRecord
             or reserved_record.finalization_digest != digest
             or reserved_record.source_revision != final_record.source_revision
@@ -156,19 +186,13 @@ def _inspect_on_owner(owner, local_digest, *, live_window, transport_deadline_ns
         raise FinalizationCompletionSubjectError("uncertain evidence completion cannot establish finalization ownership")
     # Independent evidence pins belong to the actual cold owner, not the
     # finalization response, stored marker, or original's own asserted identity.
-    evidence_common = dict(common,
-        authorization_enrollment_bytes=material.execution.authorization_enrollment_bytes,
-        grant_enrollment_bytes=material.execution.grant_enrollment_bytes,
-        current_root_enrollment_bytes=material.execution.current_root_enrollment_bytes)
-    enrollments = tuple(scope[name] for scope in (common, evidence_common) for name in (
-        "authorization_enrollment_bytes", "grant_enrollment_bytes", "current_root_enrollment_bytes"))
     retained_outcomes = (prior.sql_outcome, prior.completion_outcome, prior.completion_reconciled,
         observed.sql_outcome, observed.completion_outcome, observed.completion_reconciled)
     original_bytes = sum(len(raw) for raw in (*held, *evidence_originals, *signer,
         *reserved, *evidence_reserved, *enrollments))
     original_bytes += sum(len(raw) for record in retained_outcomes if record is not None
         for raw in record.originals)
-    if original_bytes > completion.MAX_ORIGINAL_BYTES:
+    if original_bytes + _additional_original_bytes > completion.MAX_ORIGINAL_BYTES:
         raise FinalizationCompletionSubjectError("finalization completion retained inventory exceeds its aggregate bound")
     current()
     exchanged = history._verify_on_configuration(**common, originals=held,

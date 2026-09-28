@@ -48,9 +48,13 @@ two-person authority remain separate from this evidence inspection.
 The [actor-owned acquisition context](control-plane-oidc-session-activation-recovery-acquisition.md)
 now composes this evidence with fresh actor authority, independent parent
 originals, a policy-keyed durable attempt and admitted grant retention. This
-inspector itself still grants no issuance or exchange permission. Its earlier
-finalization loader's combined preallocation boundary remains required work
-before freeze; later acquisition capacity reservations do not cover that load.
+inspector itself still grants no issuance or exchange permission. Its finalization
+replay now uses the [combined historical reader](control-plane-registration-finalization-completion-history.md),
+which preflights the selected metadata before the first body read. Already-held
+request/token/intent inputs tighten the subject's parent/enrollment/replay
+reservation. The exact original sum remains a second check; later acquisition
+uses its separate phase reservation on the same work. This is representation
+accounting, not a process-heap guarantee.
 
 This is source-only, not completion of public recovery. Prior-stage recovery,
 recovery-worker staging and protected exchange, independent resource

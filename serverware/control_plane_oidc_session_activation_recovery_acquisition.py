@@ -7,7 +7,6 @@ exposed inside this context. No token, assertion or request is journaled.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import math
 import os
 import threading
 import time
@@ -37,53 +36,11 @@ def _fail(message):
 
 def _actor_bytes(scope, work):
     """Measure only the fixed owned actor graph table, without serializing it."""
-    total, nodes = 0, 0
-
-    def visit(value, depth=0):
-        nonlocal total, nodes
-        nodes += 1
-        if depth > 12 or nodes > 8192:
-            _fail("recovery actor held graphs exceed their acquisition bound")
-        work.charge(json_nodes=1)
-        if value is None or type(value) is bool:
-            size = 5
-        elif type(value) is int:
-            if not -(1 << 63) <= value < (1 << 64):
-                _fail("recovery actor held integer exceeds its source bound")
-            size = 32
-        elif type(value) is float and math.isfinite(value):
-            size = 32
-        elif type(value) is str:
-            size = 4 * len(value)
-        elif type(value) is bytes:
-            size = len(value)
-        elif type(value) in (tuple, list, frozenset, dict):
-            if len(value) > 8192:
-                _fail("recovery actor held collection exceeds its source bound")
-            size = 2 + 16 * len(value)
-        else:
-            _fail("recovery actor held graph has an unexpected source type")
-        total += size
-        if total > MAX_ORIGINAL_BYTES // 4:
-            _fail("recovery actor held graphs exhaust acquisition capacity")
-        work.charge(input_bytes=size)
-        if type(value) is dict:
-            for key, item in value.items():
-                if type(key) is not str:
-                    _fail("recovery actor held graph keys differ")
-                visit(key, depth + 1)
-                visit(item, depth + 1)
-        elif type(value) in (tuple, list, frozenset):
-            for item in value:
-                visit(item, depth + 1)
-
     # No arbitrary object traversal, incoming metadata carrier or private key.
-    for graph in (scope._original, scope._payload, scope._policy, scope._policy_pin,
+    return actor._owned_capture_bytes((scope._original, scope._payload, scope._policy, scope._policy_pin,
             scope._request_pin, scope._target.subject, scope._target.delivery_scope,
             scope._target_pin, scope._binding, scope._binding_pin, scope._credential,
-            scope._roles, scope._rbac_pin, scope._session_pin, scope._trust_pin):
-        visit(graph)
-    return total
+            scope._roles, scope._rbac_pin, scope._session_pin, scope._trust_pin), work)
 
 
 class _RecoveryAcquisition:
@@ -176,8 +133,8 @@ class _RecoveryAcquisition:
 def _acquire(active):
     scope, work, config, lifetime = active._scope, active._work, active._config, active._lifetime
     active.current()
-    # This begins AFTER the existing actor/history admission. It does not fix
-    # the earlier finalization loader's separate preallocation gap.
+    # Historical admission preflights its own selected inventory before body
+    # reads. This later phase reserves the actor result and its new originals.
     held = 8 * parent_bootstrap.MAX_BYTES + 4 * _actor_bytes(scope, work)
     held += 8 * len(scope._target.intent_bytes) + 8 * startup.MAX_PRIVATE_KEY_BYTES
     if (MAX_ORIGINAL_BYTES != 64 * 1024 * 1024

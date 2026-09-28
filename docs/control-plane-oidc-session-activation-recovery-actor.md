@@ -90,11 +90,14 @@ provider expiry can only shorten the same allowance. Guard callbacks do not
 reload the journal or reopen historical admission. The old token stays in
 request/live-scope memory only, never journal, logs or JSON.
 
-The earlier historical-target finalization loader still totals its combined
-original inventory only after loading it. The new acquisition phases have
-preallocation bounds, but this is not a full-call 64 MiB peak guarantee. A
-source-fixed metadata preflight and combined bounded loader before the first
-historical body read remain required before the verification freeze.
+Before historical target replay, a fixed source-selected graph measurement
+reserves the held request, payload, policy, pins and original scope bytes.
+Key representations use fixed byte reservations without key-object traversal.
+The history inspector adds its token and independent intent inputs before
+calling the [combined historical reader](control-plane-registration-finalization-completion-history.md).
+It preflights all selected metadata before any body read, replacing the earlier
+post-load aggregate check. These are source-defined representation bounds, not
+a full-call 64 MiB process-heap guarantee or runtime evidence.
 
 The [options route](control-plane-oidc-session-activation-recovery-routes.md)
 remains the only public route. Genuine recovery-worker staging, actual retained

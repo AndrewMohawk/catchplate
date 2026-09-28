@@ -3,8 +3,10 @@
 [`control_plane_oidc_session_activation_execution.py`](../serverware/control_plane_oidc_session_activation_execution.py)
 uses the actual control-plane owner and its distinct root-enrolled activation
 caller key. Its fixed [post-permission planning continuation](control-plane-oidc-session-activation-planning.md)
-now obtains genuine planner originals before signing. It supplies no arbitrary
-planner callback, grant request, reservation, SQL, activation/recovery route or
+obtains genuine planner originals before signing. Its separate fixed
+[private dispatch continuation](control-plane-oidc-session-activation-dispatch.md)
+now connects original grant/reservation checks to one isolated SQL exchange.
+It supplies no arbitrary planner callback, public activation/recovery route or
 token release. Source remains unbuilt, unexecuted and unprovisioned.
 
 ## Fixed owner and key custody
@@ -91,22 +93,30 @@ not a successful verification carrier followed by weaker checks. Connected
 preparation retains stricter planner/scope/plan bounds inside the same context;
 the actual final clock check uses that narrowed skew as well as epoch and
 monotonic deadlines. Its newer observations survive into the next owner check
-and context exit. Pending-session and credential checks remain mandatory.
+and context exit. Pending-session and credential checks remain mandatory for
+preparation and until the fixed dispatch continuation's durable SQL claim and
+last pre-send target check.
 
 ## Finite lifecycle and remaining boundary
 
 The active context is exact-parent-, PID- and thread-bound. Reentry, overlapping
-contexts, transfer, a second preparation/sign or use after exit fails. Failure or exit
+contexts, transfer, a second preparation/sign/dispatch or use after exit fails. Failure or exit
 revokes the parent slot and releases acquired locks; borrowed keys and custody
 descriptors are never closed. No external API accepts this context or a prior
 permission result as authority. Assertion/approval consumption is not rolled
 back on a later failure, and no retry or replacement authorization is implied.
 The durable claim also prevents this retained finalization slot from silently
 starting another planner exchange after restart; it contains metadata only.
+The fixed dispatch method separately retains exact public/ciphertext originals
+and publishes a nonrepeatable SQL attempt before sealing its raw8. Only then
+may its guard stop requiring the pending rows that SQL intentionally changes.
+Actual owner/key/receipt continuity, original signed authority and narrowed
+clock/work limits remain live through the terminal response and context exit.
+No external phase flag or unsigned outcome can authorize this transition.
 
 An authorization is not an execution grant, current-root reservation, committed
 activation, token delivery or current authenticated session. Step 22 remains
-partial: public routing and the actual grant/reservation/SQL/completion/release
-continuation are not connected here. Step 23 must separately authorize public
-recovery. Portal work and the six independent production acceptance gates
-remain open.
+partial: public routing and the completion/consume/release continuation are
+not connected here. The private SQL response is only an unsigned observation.
+Step 23 must separately authorize public recovery. Portal work and the six
+independent production acceptance gates remain open.

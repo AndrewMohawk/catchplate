@@ -99,6 +99,24 @@ grant/reservation/SQL/completion/consume/release composition are still open.
 No new public response or session cookie is emitted by this private method.
 Current source is unbuilt and unexecuted; production acceptance remains 0/6.
 
+## Private downstream dispatch extension
+
+Source `.183` adds the private `_dispatch_oidc_session_activation` composition
+under explicit nested activation-execution v2. It retains the same actual
+request, bounded distinct assertion/challenge inputs, owner, cumulative work
+and original processing window. Permission, planning, grant and reservation
+remain inside the actual context before the one irreversible SQL-dispatch
+boundary. Dedicated durable original records precede each downstream stage;
+an existing claim cannot become permission to repeat it after restart.
+
+The SQL boundary must stop checking the deliberately changed pending row
+without dropping actual owner/key/receipt, exact original authority, deadline
+or clock-skew continuity. The returned original raw4 is only an unsigned SQL
+observation, not authenticated completion, released credentials or an active
+session. No public route or cookie transition is added by this private method.
+Completion/consume/release receiving and public dispatch remain in step 22;
+independently authorized recovery and portal work retain their separate scope.
+
 ## Decision and trust boundary
 
 The runtime root has one additional, explicitly domain-separated bootstrap

@@ -638,6 +638,59 @@ class ControlPlaneCustodyClient:
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed after activation dispatch claim")
 
+    def _append_activation_stage(self, finalization_digest, kind, originals):
+        """Fixed retention-only stages; caller precharges and guards this I/O."""
+        from serverware import control_plane_oidc_session_activation_records as activation
+
+        local = journal._digest(finalization_digest)
+        held = activation._originals(activation._profile(kind), originals)
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal._append_activation_record(
+            binding.journal, local, kind, held)
+        journal._digest(digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed after activation stage retention")
+        return digest
+
+    def append_oidc_session_activation_preparation(self, finalization_digest, originals):
+        """Retain exact auth/plan/cipher/expectations/before-vector, not a DTO."""
+        return ControlPlaneCustodyClient._append_activation_stage(
+            self, finalization_digest, "prepared", originals)
+
+    def append_oidc_session_activation_grant(self, finalization_digest, originals):
+        """Retain the actual signed grant original before reservation."""
+        return ControlPlaneCustodyClient._append_activation_stage(
+            self, finalization_digest, "grant", originals)
+
+    def append_oidc_session_activation_reservation(self, finalization_digest, originals):
+        """Retain exact reserve request/snapshot/ACK before claiming SQL."""
+        return ControlPlaneCustodyClient._append_activation_stage(
+            self, finalization_digest, "reserved", originals)
+
+    def claim_oidc_session_activation_sql_attempt(self, finalization_digest):
+        """Burn SQL once; an identical or recovered claim never permits resend."""
+        ControlPlaneCustodyClient._append_activation_stage(
+            self, finalization_digest, "sql-claimed", ())
+
+    def append_oidc_session_activation_sql_outcome(self, finalization_digest, originals):
+        """Retain unsigned raw4 before interpretation without authenticating it."""
+        return ControlPlaneCustodyClient._append_activation_stage(
+            self, finalization_digest, "sql-outcome", originals)
+
+    def load_oidc_session_activation_records(self, finalization_digest):
+        """Ordinary read-only history, never a resume/retry authority carrier."""
+        from serverware import control_plane_oidc_session_activation_records as activation
+
+        local = journal._digest(finalization_digest)
+        binding = _snapshot(self)
+        retained = journal.CustodyJournal.load_oidc_session_activation_records(binding.journal, local)
+        if (type(retained) is not activation.ActivationRecords
+                or retained.finalization_digest != local):
+            raise CustodyClientError("activation retained original scope differs")
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while reading activation originals")
+        return retained
+
     def append_registration_finalization_sql_outcome(self, finalization_digest, originals):
         """Retain first unsigned raw4 without a renewed clock or success assertion."""
         local = journal._digest(finalization_digest)

@@ -22,6 +22,8 @@ Dedicated token-free release claims burn one exact root client authorization;
 they are not prepared records or members of any generic forwarding family.
 Separate token-free activation claims burn the retained finalization locator
 before the planner request; even exact recovered claims prohibit dispatch.
+Five fixed activation stage records retain only opaque public/cipher originals
+beneath that claim. Recovery permits reads, never resumed stage publication.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -48,6 +50,7 @@ from serverware import control_plane_registration_finalization_outcome_records a
 from serverware import control_plane_registration_outcome_records as outcome_records
 from serverware import control_plane_oidc_session_activation_release_attempt as release_attempts
 from serverware import control_plane_oidc_session_activation_dispatch_attempt as activation_attempts
+from serverware import control_plane_oidc_session_activation_records as activation_records
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -61,9 +64,11 @@ _READ_CHUNK = 1024 * 1024
 _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_BYTES,
     signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES,
     finalization_reservations.MAX_RECORD_BYTES, finalization_outcomes.MAX_RECORD_BYTES,
-    activation_attempts.MAX_RECORD_BYTES)
+    activation_attempts.MAX_RECORD_BYTES, activation_records.MAX_RECORD_BYTES)
 _FINALIZATION_OUTCOME_FILES = {
     "finalization-" + kind: kind for kind in finalization_outcomes.KINDS}
+_ACTIVATION_RECORD_FILES = {
+    "activation-" + kind: kind for kind in activation_records.KINDS}
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
     finalization_records.FAMILY})
 
@@ -170,6 +175,8 @@ class CustodyJournal:
     reservations remain intact.
     Public-only release and activation claims share prepared-record logical capacity and
     the unchanged physical/quota ceilings, without reserving legacy markers.
+    An activation claim has exactly five possible stage siblings: six total
+    files, below its seven-file logical allowance. No stage adds another slot.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -196,6 +203,10 @@ class CustodyJournal:
         self._registration_outcomes = {}
         self._release_attempts = {}
         self._activation_dispatch_attempts = {}
+        self._activation_records = {}
+        # Only successful claims made by this owner may continue publication.
+        # Recovery intentionally never populates this in-memory set.
+        self._activation_live_claims = set()
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -295,6 +306,7 @@ class CustodyJournal:
         registration_outcomes = {}
         release_claims = {}
         activation_claims = {}
+        activation_stages = {}
         uncertain_completions = set()
         uncertain_finalization_completions = set()
         count = 0
@@ -328,6 +340,9 @@ class CustodyJournal:
                     kind = release_attempts.KIND
                 elif name.startswith(activation_attempts.KIND + "-"):
                     kind = activation_attempts.KIND
+                elif any(name.startswith(prefix + "-") for prefix in _ACTIVATION_RECORD_FILES):
+                    kind = next(prefix for prefix in _ACTIVATION_RECORD_FILES
+                        if name.startswith(prefix + "-"))
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -349,6 +364,8 @@ class CustodyJournal:
                         if kind in _FINALIZATION_OUTCOME_FILES else
                     release_attempts.MAX_RECORD_BYTES if kind == release_attempts.KIND else
                     activation_attempts.MAX_RECORD_BYTES if kind == activation_attempts.KIND else
+                    activation_records._maximum(_ACTIVATION_RECORD_FILES[kind])
+                        if kind in _ACTIVATION_RECORD_FILES else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -377,6 +394,14 @@ class CustodyJournal:
                     activation_claims[digest] = claim
                     if len(prepared) + len(release_claims) + len(activation_claims) > self._maximum_records:
                         raise CustodyJournalError("journal activation claim record limit exceeded")
+                elif kind in _ACTIVATION_RECORD_FILES:
+                    stage = activation_records.decode(encoded)
+                    stage_kind = _ACTIVATION_RECORD_FILES[kind]
+                    by_kind = activation_stages.setdefault(digest, {})
+                    if (stage.finalization_digest != digest or stage.kind != stage_kind
+                            or stage_kind in by_kind):
+                        raise CustodyJournalError("activation stage differs from its fixed filename")
+                    by_kind[stage_kind] = (stage.source_revision, stage.digest, len(encoded))
                 elif kind == "attempted":
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
@@ -437,6 +462,9 @@ class CustodyJournal:
             for digest, entry in prepared.items()}
         self._release_attempts = release_claims
         self._activation_dispatch_attempts = activation_claims
+        for digest, by_kind in activation_stages.items():
+            self._activation_scope(digest, by_kind)
+        self._activation_records = activation_stages
         for association in associated.values():
             _association_scope(association, self._entries)
         self._associations = associated
@@ -1192,6 +1220,132 @@ class CustodyJournal:
                 self._io.poison()
                 raise
 
+    def _activation_scope(self, digest, by_kind):
+        claim = self._activation_dispatch_attempts.get(digest)
+        if claim is None:
+            raise CustodyJournalError("activation stage lacks its irreversible target claim")
+        if (len(by_kind) > len(activation_records.KINDS)
+                or set(by_kind) != set(activation_records.KINDS[:len(by_kind)])
+                or any(value[0] != claim.source_revision for value in by_kind.values())):
+            raise CustodyJournalError("activation stages differ from their fixed prefix or claim source")
+        return claim
+
+    def _read_activation_claim(self, digest):
+        held = self._activation_dispatch_attempts.get(digest)
+        if held is None:
+            raise CustodyJournalError("activation target has no original dispatch claim")
+        name = _name(activation_attempts.KIND, digest)
+        original, identity = self._read_file(name,
+            maximum_bytes=activation_attempts.MAX_RECORD_BYTES)
+        if (identity != self._file_identities.get(name)
+                or activation_attempts.decode(original) != held):
+            raise CustodyJournalError("activation target claim changed after admission")
+        return held
+
+    def _activation_metadata_current(self, digest, by_kind):
+        """Check immutable predecessor identities without rereading large bodies."""
+        self._activation_scope(digest, by_kind)
+        for kind in activation_records.KINDS:
+            if kind not in by_kind:
+                continue
+            name = _name("activation-" + kind, digest)
+            metadata = os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)
+            if _identity(metadata) != self._file_identities.get(name):
+                raise CustodyJournalError("activation stage immutable identity changed")
+
+    def _read_activation_record(self, digest, kind, *, maximum_bytes):
+        metadata = self._activation_records[digest][kind]
+        name = _name("activation-" + kind, digest)
+        original, identity = self._read_file(name, maximum_bytes=maximum_bytes)
+        record = activation_records.decode(original)
+        if (identity != self._file_identities.get(name)
+                or record.finalization_digest != digest or record.kind != kind
+                or (record.source_revision, record.digest, len(original)) != metadata):
+            raise CustodyJournalError("activation stage changed after admitted recovery")
+        return record
+
+    def _append_activation_record(self, finalization_digest, kind, originals):
+        digest = _digest(finalization_digest)
+        profile = activation_records._profile(kind)
+        held = activation_records._originals(profile, originals)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._activation_live_claims:
+                raise CustodyJournalError("recovered activation claims are read-only; continuation is forbidden")
+            by_kind = self._activation_records.get(digest, {})
+            if kind == "sql-claimed" and kind in by_kind:
+                raise CustodyJournalError("activation SQL dispatch was already claimed; repeat is forbidden")
+            try:
+                claim = self._read_activation_claim(digest)
+                self._activation_metadata_current(digest, by_kind)
+                record, encoded = activation_records.encode(kind, digest, held,
+                    source_revision=claim.source_revision)
+                if kind in by_kind:
+                    # A shorter/different new carrier cannot cause an uncharged
+                    # read of a larger retained original.
+                    existing = self._read_activation_record(digest, kind,
+                        maximum_bytes=len(encoded))
+                    if existing.originals != record.originals or existing.digest != record.digest:
+                        raise CustodyJournalError("activation cannot replace its first exact stage originals")
+                    self._require_ready()
+                    return existing.digest
+                if profile != len(by_kind):
+                    raise CustodyJournalError("activation stage publication skipped its fixed predecessor")
+                if (len(self._file_identities) >= 7 * self._maximum_records
+                        or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                    raise CustodyJournalError("journal activation stage capacity is exhausted")
+                self._require_ready()
+                self._publish("activation-" + kind, digest, encoded)
+                self._used_bytes += len(encoded)
+                self._activation_records.setdefault(digest, {})[kind] = (
+                    record.source_revision, record.digest, len(encoded))
+                self._activation_scope(digest, self._activation_records[digest])
+                self._require_ready()
+                return record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def append_oidc_session_activation_preparation(self, finalization_digest, originals):
+        """Retain raw5 before the grant socket; this supplies no permission."""
+        return self._append_activation_record(finalization_digest, "prepared", originals)
+
+    def append_oidc_session_activation_grant(self, finalization_digest, originals):
+        """Retain raw1 before reservation; genuine grant admission is external."""
+        return self._append_activation_record(finalization_digest, "grant", originals)
+
+    def append_oidc_session_activation_reservation(self, finalization_digest, originals):
+        """Retain exact raw3 before the one-use SQL dispatch claim."""
+        return self._append_activation_record(finalization_digest, "reserved", originals)
+
+    def claim_oidc_session_activation_sql_attempt(self, finalization_digest):
+        """Irreversibly burn SQL dispatch, even for an identical same-owner call."""
+        self._append_activation_record(finalization_digest, "sql-claimed", ())
+
+    def append_oidc_session_activation_sql_outcome(self, finalization_digest, originals):
+        """Retain unsigned raw4 before interpreting it; never a commit proof."""
+        return self._append_activation_record(finalization_digest, "sql-outcome", originals)
+
+    def load_oidc_session_activation_records(self, finalization_digest):
+        """Read bounded historical originals without permitting any new effect."""
+        digest = _digest(finalization_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            try:
+                claim = self._read_activation_claim(digest)
+                by_kind = self._activation_records.get(digest, {})
+                self._activation_metadata_current(digest, by_kind)
+                retained = tuple(self._read_activation_record(digest, kind,
+                    maximum_bytes=activation_records._maximum(kind)) if kind in by_kind else None
+                    for kind in activation_records.KINDS)
+                self._require_ready()
+                return activation_records.ActivationRecords(claim.source_revision, digest, *retained)
+            except BaseException:
+                self._io.poison()
+                raise
+
     def claim_oidc_session_activation_dispatch(self, *, finalization_digest,
             request_binding_digest, authorization_enrollment_digest, source_revision):
         """Burn the retained target before planning, never admit its authority.
@@ -1235,6 +1389,7 @@ class CustodyJournal:
                 self._used_bytes += len(encoded)
                 self._activation_dispatch_attempts[digest] = record
                 self._require_ready()
+                self._activation_live_claims.add(digest)
             except BaseException:
                 self._io.poison()
                 raise

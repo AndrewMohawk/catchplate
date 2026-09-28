@@ -247,6 +247,25 @@ class _EnrollmentOwner:
             return permission.prepare_authorization(assertion_bytes=assertion,
                 expected_challenge_id=challenge)
 
+    def _dispatch_oidc_session_activation(self, *, request, permission_bytes,
+            assertion_bytes, expected_challenge_id, live_window, transport_deadline_ns, work):
+        """One original-bound private dispatch, returning only SQL observation.
+
+        All genuine permission, planning and downstream operations remain in
+        one live parent-owned call. The exact unsigned response is not an
+        authenticated commit, token delivery or active-session confirmation.
+        """
+        from serverware import control_plane_oidc_session_activation_planning as planning
+
+        _require_pid()
+        assertion, challenge = planning._planning_inputs(assertion_bytes, expected_challenge_id)
+        with _EnrollmentOwner._oidc_session_activation_permission(self,
+                request=request, permission_bytes=permission_bytes,
+                live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+                work=work) as permission:
+            return permission.dispatch(assertion_bytes=assertion,
+                expected_challenge_id=challenge)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

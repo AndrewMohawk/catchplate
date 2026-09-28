@@ -2,7 +2,8 @@
 
 The dedicated root-enrolled key stays in the real control-plane owner. A
 configuration or scope result is never accepted by a public action as user
-permission. Its fixed planning continuation opens no grant or protected SQL path.
+permission. Fixed private continuations retain the original allowance through
+planning, signed control admission and one isolated protected SQL exchange.
 """
 from __future__ import annotations
 
@@ -161,7 +162,8 @@ class _ActivationPermission:
     __slots__ = ("_owner", "_request", "_original", "_window", "_deadline", "_work",
         "_pid", "_thread", "_state", "_locked", "_trust", "_scope", "_target", "_spent",
         "_permission_epoch", "_session_expiry", "_inputs", "_seal",
-        "_planning_spent", "_planning_bounds", "_planning_observed")
+        "_planning_spent", "_planning_bounds", "_planning_observed",
+        "_dispatch_phase", "_sql_originals", "_sql_seal")
 
     def __init__(self, owner, request, permission_bytes, live_window, transport_deadline_ns, work):
         from serverware import control_plane_oidc_session_activation_permission as permission
@@ -180,6 +182,7 @@ class _ActivationPermission:
         self._session_expiry = None
         self._planning_spent, self._planning_bounds = False, None
         self._planning_observed = None
+        self._dispatch_phase, self._sql_originals, self._sql_seal = "new", None, None
         self._inputs = _PermissionInputs(owner, request, self._original, self._window,
             self._deadline, work, self._pid, self._thread)
         self._seal = self._inputs
@@ -200,6 +203,14 @@ class _ActivationPermission:
                 or type(self._owner) is not startup._EnrollmentOwner
                 or self._owner._activation_permission is not self or not self._locked):
             _fail("activation permission context is no longer the active parent-owned call")
+        if self._dispatch_phase not in ("new", "preparing", "sql", "closed"):
+            _fail("activation permission dispatch phase is not source fixed")
+        if self._dispatch_phase == "sql" and (
+                self._spent is not True or self._planning_spent is not True
+                or type(self._sql_originals) is not tuple or len(self._sql_originals) != 8
+                or self._sql_originals is not self._sql_seal
+                or any(type(raw) is not bytes for raw in self._sql_originals)):
+            _fail("activation SQL continuation replaced its exact admitted originals")
 
     def _current(self, epoch_floor=None, monotonic_floor=None):
         self._identity()
@@ -213,7 +224,7 @@ class _ActivationPermission:
             epoch_floor = max(self._planning_observed[0], epoch_floor or 0)
             monotonic_floor = max(self._planning_observed[1], monotonic_floor or 0)
         scope.current(epoch_floor, monotonic_floor)
-        if self._target is not None:
+        if self._target is not None and self._dispatch_phase != "sql":
             from serverware import control_plane_registration_finalization_completion_pending as pending
 
             application, session_scope, binding, credential, count = self._target
@@ -274,6 +285,7 @@ class _ActivationPermission:
         self._target, self._scope = None, None
         self._planning_bounds = None
         self._planning_observed = None
+        self._dispatch_phase, self._sql_originals, self._sql_seal = "closed", None, None
         try:
             if trust is not None:
                 trust.__exit__(None, None, None)
@@ -407,6 +419,25 @@ class _ActivationPermission:
             original, challenge = planning._planning_inputs(assertion_bytes, expected_challenge_id)
             self._planning_spent = True
             return planning._prepare_on_permission(self,
+                assertion_bytes=original, expected_challenge_id=challenge)
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+    def dispatch(self, *, assertion_bytes, expected_challenge_id):
+        """One original-bound planner/grant/reserve/SQL continuation, no retry."""
+        from serverware import control_plane_oidc_session_activation_dispatch as dispatch
+        from serverware import control_plane_oidc_session_activation_planning as planning
+
+        try:
+            self._identity()
+            if (self._state != "active" or self._spent is not False
+                    or self._planning_spent is not False or self._dispatch_phase != "new"):
+                _fail("activation permission dispatch has already been spent")
+            original, challenge = planning._planning_inputs(assertion_bytes, expected_challenge_id)
+            self._dispatch_phase = "preparing"
+            return dispatch._dispatch_on_permission(self,
                 assertion_bytes=original, expected_challenge_id=challenge)
         except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:

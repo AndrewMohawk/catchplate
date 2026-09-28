@@ -15,10 +15,14 @@ from serverware import oidc_session_activation_planner_bootstrap as planner_boot
 
 
 SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v1"
+V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v2"
 CALLER_KEY_FD = 205
 AUTHORIZER_SOCKET_PATH = "/run/serverware/oidc-session-activation-execution/authorizer.sock"
+RESERVER_SOCKET_PATH = "/run/serverware/oidc-session-activation-execution/reserver.sock"
+SQL_SOCKET_PATH = "/run/serverware/oidc-session-activation-execution/sql.sock"
 _FIELDS = frozenset({"schema", "activationCallerPrivateKeyFd", "plannerKey",
     "currentRootEnrollment", "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"})
+_V2_FIELDS = _FIELDS | frozenset({"reserverEndpoint", "sqlEndpoint", "statePredecessor"})
 _PLANNER_FIELDS = frozenset({"publicKeyBase64Url", "spkiDigest"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ORIGINAL_LIMITS = (("currentRootEnrollment", caller.authorization.MAX_ENROLLMENT_BYTES),
@@ -47,25 +51,34 @@ class _ActivationExecutionMaterial:
     maximum_age_ns: int
     maximum_clock_skew_ns: int
     authorizer_endpoint: tuple
+    reservation_endpoint: tuple | None = None
+    reservation_predecessor: tuple | None = None
+    sql_endpoint: tuple | None = None
 
 
-def _endpoint(value):
-    shape._object(value, _ENDPOINT_FIELDS, "activation caller authorizer endpoint")
-    shape._literal(value["socketPath"], AUTHORIZER_SOCKET_PATH)
+def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
+    if type(_path) is not str or _path not in (
+            AUTHORIZER_SOCKET_PATH, RESERVER_SOCKET_PATH, SQL_SOCKET_PATH):
+        raise OidcSessionActivationExecutionBootstrapError("activation endpoint profile is not source fixed")
+    shape._object(value, _ENDPOINT_FIELDS, "activation caller endpoint")
+    shape._literal(value["socketPath"], _path)
     shape._integer(value["requestTimeoutSeconds"], 30, minimum=1)
     for name in ("listenerUid", "listenerGid"):
         shape._integer(value[name], 2**32 - 2)
         if value[name] != 0:
             raise OidcSessionActivationExecutionBootstrapError(
-                "activation authorizer listener differs from its fixed root peer")
+                "activation listener differs from its fixed root peer")
     return value["socketPath"], value["requestTimeoutSeconds"], 0, 0
 
 
 def _shape(value):
     if value is None:
         return
-    shape._object(value, _FIELDS, "control-plane activation execution purpose")
-    shape._literal(value["schema"], SCHEMA)
+    if (type(value) is not dict or type(value.get("schema")) is not str
+            or value["schema"] not in (SCHEMA, V2_SCHEMA)):
+        raise OidcSessionActivationExecutionBootstrapError("activation execution purpose version differs")
+    shape._object(value, _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS,
+        "control-plane activation execution purpose")
     shape._integer(value["activationCallerPrivateKeyFd"], 1023, minimum=32)
     if value["activationCallerPrivateKeyFd"] != CALLER_KEY_FD:
         raise OidcSessionActivationExecutionBootstrapError("activation caller FD is not source fixed")
@@ -79,6 +92,17 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
+    if value["schema"] == V2_SCHEMA:
+        _endpoint(value["reserverEndpoint"], _path=RESERVER_SOCKET_PATH)
+        _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
+        predecessor = value["statePredecessor"]
+        shape._object(predecessor, frozenset({"sequence", "headDigest", "nextFence"}),
+            "independent activation reservation predecessor")
+        shape._integer(predecessor["sequence"], caller.authorization.MAX_RECORDS)
+        shape._digest(predecessor["headDigest"])
+        shape._integer(predecessor["nextFence"], minimum=1)
+        if predecessor["sequence"] == 0 and predecessor["nextFence"] != 1:
+            raise OidcSessionActivationExecutionBootstrapError("activation genesis requires fence one")
 
 
 def _purpose_pins(configured, root, other_keys, work):
@@ -163,10 +187,32 @@ def _admit_on_work(*, activation_execution, configuration_payload, configuration
                 if pin == other:
                     raise OidcSessionActivationExecutionBootstrapError(
                         "activation caller or planner key reuses another configured purpose")
+        reservation_endpoint = reservation_predecessor = sql_endpoint = None
+        if value["schema"] == V2_SCHEMA:
+            current = caller.authorization._admit_enrollment_on_work(
+                enrollment_bytes=current_raw, root_public_key=root, work=work)
+            for actual, expected in (
+                    (current.enrollment_digest, policy["currentRootEnrollmentDigest"]),
+                    (current.payload["generationDigest"], launch["digest"]),
+                    (current.payload["databaseId"], policy["databaseId"])):
+                plan._same(actual, expected, work,
+                    "activation predecessor differs from its actual original enrollment")
+            predecessor = value["statePredecessor"]
+            if predecessor["sequence"] + 2 > current.payload["maxRecords"]:
+                raise OidcSessionActivationExecutionBootstrapError(
+                    "activation predecessor lacks enrolled reserve and completion capacity")
+            if predecessor["sequence"] == 0:
+                plan._same(predecessor["headDigest"], current.enrollment_digest, work,
+                    "activation independent genesis head differs")
+            reservation_endpoint = _endpoint(value["reserverEndpoint"], _path=RESERVER_SOCKET_PATH)
+            reservation_predecessor = (predecessor["sequence"], predecessor["headDigest"],
+                predecessor["nextFence"])
+            sql_endpoint = _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
         return _ActivationExecutionMaterial(CALLER_KEY_FD, admitted.caller_public_key, planner, root,
             current_raw, grant_raw, caller_raw, admitted.enrollment_digest, policy["callerId"],
             policy["callerKey"]["measurementDigest"], policy["maximumAgeNs"],
-            policy["maximumClockSkewNs"], _endpoint(value["authorizerEndpoint"]))
+            policy["maximumClockSkewNs"], _endpoint(value["authorizerEndpoint"]),
+            reservation_endpoint, reservation_predecessor, sql_endpoint)
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, OidcSessionActivationExecutionBootstrapError):
             raise

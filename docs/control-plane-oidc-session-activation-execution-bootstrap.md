@@ -37,6 +37,34 @@ ordinary private cold data, not an accepted permission or execution result.
 Pinned caller measurement text is an explicit trusted-host-local root claim;
 it does not create a measured control-plane role or hardware assurance.
 
+## Explicit downstream profile
+
+Source `.183` adds nested `serverware.controlPlaneOidcSessionActivationExecution/v2`
+under the existing parent v6/v7 envelopes. The original nested v1 remains strict.
+V2 adds exactly `reserverEndpoint`, `sqlEndpoint`, and `statePredecessor`; it
+adds no key, descriptor or top-level bootstrap version. The endpoints retain
+the same closed timeout/peer fields and fixed directory, ending respectively
+in `reserver.sock` and `sql.sock`. The existing execution socket-directory
+overlay covers these independently provisioned listeners.
+
+The predecessor contains `sequence`, `headDigest`, and `nextFence`. Actual
+root-enrollment admission joins database/generation and the caller's enrollment
+digest, reserves capacity for both reservation and completion, and requires
+the enrolled genesis head/fence when sequence is zero. The material appends
+`reservation_endpoint`, `reservation_predecessor`, and `sql_endpoint`; all
+remain null under v1. The stdlib selector checks the exact public data shape;
+only child admission verifies signatures and those independent pins.
+
+No future pending head is guessed or copied into this configuration. A caller
+can derive an exact successor observation from the original enrolled reserve
+request and signed acknowledgment, after checking the independent predecessor.
+That observation is not independently current state. The actual SQL service
+still enforces its separately root-admitted pending scope and full private
+replay. No history/replay key moves into the public control-plane process.
+
+Configuration is not permission to dispatch, proof of a SQL commit, token
+delivery or a completed public session. Source remains unbuilt and unexecuted.
+
 The stdlib-only cold selector explicitly recognizes v6 without importing
 repository crypto. Its actual entrypoint calls the fixed activation-key
 delivery helper, which reads only the already-provisioned root-owned mode0400

@@ -32,9 +32,12 @@ CONTROL_PLANE_ENROLLMENT_V7_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentB
 CONTROL_PLANE_ACTIVATION_PLANNING_SCHEMA = "serverware.controlPlaneOidcSessionActivationPlanning/v1"
 CONTROL_PLANE_ACTIVATION_PLANNER_SOCKET = "/run/serverware/oidc-session-activation/planner.sock"
 CONTROL_PLANE_ACTIVATION_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v1"
+CONTROL_PLANE_ACTIVATION_V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v2"
 CONTROL_PLANE_ACTIVATION_KEY_FD = 205
 CONTROL_PLANE_ACTIVATION_KEY_NAME = "serverware-oidc-session-activation-execution-caller-key"
 CONTROL_PLANE_ACTIVATION_SOCKET = "/run/serverware/oidc-session-activation-execution/authorizer.sock"
+CONTROL_PLANE_ACTIVATION_RESERVER_SOCKET = "/run/serverware/oidc-session-activation-execution/reserver.sock"
+CONTROL_PLANE_ACTIVATION_SQL_SOCKET = "/run/serverware/oidc-session-activation-execution/sql.sock"
 CONTROL_PLANE_RELEASE_SCHEMA = "serverware.controlPlaneOidcSessionActivationRelease/v1"
 CONTROL_PLANE_RELEASE_SOCKET = "/run/serverware/oidc-session-activation-token-release/release.sock"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
@@ -741,10 +744,14 @@ def _control_plane_activation_key_slot(value, *, issuer_descriptor, bootstrap_de
         raise RuntimeError("v6 reserves the activation key slot independently of enablement")
     if value is None:
         return None
-    if (type(value) is not dict or set(value) != {"schema", "activationCallerPrivateKeyFd", "plannerKey",
-            "currentRootEnrollment", "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
-            or value["schema"] != CONTROL_PLANE_ACTIVATION_SCHEMA
-            or type(value["activationCallerPrivateKeyFd"]) is not int
+    if (type(value) is not dict or type(value.get("schema")) is not str
+            or value["schema"] not in (CONTROL_PLANE_ACTIVATION_SCHEMA, CONTROL_PLANE_ACTIVATION_V2_SCHEMA)):
+        raise RuntimeError("activation caller delivery schema differs")
+    fields = {"schema", "activationCallerPrivateKeyFd", "plannerKey", "currentRootEnrollment",
+        "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
+    if value["schema"] == CONTROL_PLANE_ACTIVATION_V2_SCHEMA:
+        fields |= {"reserverEndpoint", "sqlEndpoint", "statePredecessor"}
+    if (set(value) != fields or type(value["activationCallerPrivateKeyFd"]) is not int
             or value["activationCallerPrivateKeyFd"] != CONTROL_PLANE_ACTIVATION_KEY_FD
             or bootstrap_descriptor == CONTROL_PLANE_ACTIVATION_KEY_FD):
         raise RuntimeError("activation caller key delivery scope is invalid")
@@ -772,12 +779,30 @@ def _control_plane_activation_key_slot(value, *, issuer_descriptor, bootstrap_de
         unused = 4 if size % 3 == 1 else 2 if size % 3 == 2 else 0
         if unused and alphabet.index(encoded[-1]) & ((1 << unused) - 1):
             raise RuntimeError("activation caller enrollment encoding is not canonical")
-    endpoint = value["authorizerEndpoint"]
-    if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"}
-            or endpoint["socketPath"] != CONTROL_PLANE_ACTIVATION_SOCKET
-            or type(endpoint["requestTimeoutSeconds"]) is not int or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
-            or any(type(endpoint[name]) is not int or endpoint[name] != 0 for name in ("listenerUid", "listenerGid"))):
-        raise RuntimeError("activation authorizer endpoint differs from its fixed delivery contract")
+    endpoints = (("authorizerEndpoint", CONTROL_PLANE_ACTIVATION_SOCKET),)
+    if value["schema"] == CONTROL_PLANE_ACTIVATION_V2_SCHEMA:
+        endpoints += (("reserverEndpoint", CONTROL_PLANE_ACTIVATION_RESERVER_SOCKET),
+            ("sqlEndpoint", CONTROL_PLANE_ACTIVATION_SQL_SOCKET))
+        predecessor = value["statePredecessor"]
+        if (type(predecessor) is not dict or set(predecessor) != {"sequence", "headDigest", "nextFence"}
+                or type(predecessor["sequence"]) is not int or not 0 <= predecessor["sequence"] <= 1024
+                or type(predecessor["nextFence"]) is not int or not 1 <= predecessor["nextFence"] <= 2**63 - 1
+                or predecessor["sequence"] == 0 and predecessor["nextFence"] != 1):
+            raise RuntimeError("activation independent predecessor delivery shape differs")
+        pin = predecessor["headDigest"]
+        if (type(pin) is not str or len(pin) != 71 or not pin.startswith("sha256:")
+                or any(character not in "0123456789abcdef" for character in pin[7:])):
+            raise RuntimeError("activation predecessor head is not canonical SHA256")
+    for field, path in endpoints:
+        endpoint = value[field]
+        if (type(endpoint) is not dict
+                or set(endpoint) != {"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"}
+                or endpoint["socketPath"] != path
+                or type(endpoint["requestTimeoutSeconds"]) is not int
+                or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
+                or any(type(endpoint[name]) is not int or endpoint[name] != 0
+                    for name in ("listenerUid", "listenerGid"))):
+            raise RuntimeError("activation endpoint differs from its fixed delivery contract")
     return CONTROL_PLANE_ACTIVATION_KEY_FD
 
 

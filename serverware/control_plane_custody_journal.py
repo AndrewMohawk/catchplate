@@ -86,6 +86,8 @@ _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.F
     finalization_records.FAMILY})
 _COMPLETION_HISTORY_MAX_BYTES = 64 * 1024**2
 _COMPLETION_HISTORY_FIXED_BYTES = 16 * 1024
+REGISTRATION_PREPARATION_MAX_BYTES = _COMPLETION_HISTORY_MAX_BYTES
+REGISTRATION_PREPARATION_METADATA_BYTES = _COMPLETION_HISTORY_FIXED_BYTES
 _COMPLETION_RECOVERY_TARGET_MAX_BYTES = 64 * 1024**2
 _COMPLETION_RECOVERY_TARGET_FIXED_BYTES = 4096
 _COMPLETION_CONSUME_KINDS = ("claimed", "inputs", "prepared", "exported", "authorized",
@@ -1027,12 +1029,18 @@ class CustodyJournal:
                 self._io.poison()
                 raise
 
-    def load_registration_preparation(self, execution_digest):
+    def load_registration_preparation(self, execution_digest, *,
+            maximum_original_bytes=None, work=None, current=None):
         """Load the exact locally associated pair; absence is never guessed.
 
         Unassociated historical records remain individually loadable, but are
         not complete preparations. Returned originals are not replay results.
+        Supplying all three optional bounds selects the direct metered reader;
+        supplying none preserves the existing caller behavior.
         """
+        if any(value is not None for value in (maximum_original_bytes, work, current)):
+            return self._load_registration_preparation_on_work(execution_digest,
+                maximum_original_bytes=maximum_original_bytes, work=work, current=current)
         digest = _digest(execution_digest)
         self._require_process()
         with self._io.ready():
@@ -1045,6 +1053,123 @@ class CustodyJournal:
                 signer, _ = self._load(association.signer_digest)
                 self._require_ready()
                 return execution, signer
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_registration_recovery_history(self, execution_digest, *,
+            maximum_original_bytes, work, current):
+        """Preflight the exact pair and all retained outcomes together."""
+        return self._load_registration_preparation_on_work(execution_digest,
+            maximum_original_bytes=maximum_original_bytes, work=work, current=current,
+            _include_outcomes=True)
+
+    def _load_registration_preparation_on_work(self, execution_digest, *,
+            maximum_original_bytes, work, current, _include_outcomes=False):
+        """Read exactly one association and its pair within remaining capacity.
+
+        Three aggregate encoded-byte footprints plus fixed metadata are reserved
+        before body one. Current is an ancestor-only guard, never a recursive
+        loader/publication callback. The fixed recovery branch includes every
+        retained outcome in that same preflight, never a second allowance.
+        Stored source tokens remain ordinary DATA.
+        """
+        from serverware.authority_query_read_work import _ValidationWork
+
+        digest = _digest(execution_digest)
+        _integer(maximum_original_bytes, minimum=1, maximum=REGISTRATION_PREPARATION_MAX_BYTES,
+            label="registration preparation remaining byte capacity")
+        if (type(work) is not _ValidationWork or not callable(current)
+                or type(_include_outcomes) is not bool):
+            raise CustodyJournalError("registration preparation requires original work and current guard")
+        work.charge(json_nodes=256 if _include_outcomes else 128)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._associations:
+                raise CustodyJournalError("local preparation association is absent")
+            try:
+                association = self._associations[digest]
+                _association_scope(association, self._entries)
+                if association.execution_digest != digest or association.signer_digest == digest:
+                    raise CustodyJournalError("registration preparation association locators differ")
+                selected = [(_name("associated", digest), associations.MAX_ASSOCIATION_BYTES,
+                    associations.decode)]
+                locators = (digest, association.signer_digest)
+                for locator, maximum, decoder in (
+                        (digest, execution_records.MAX_RECORD_BYTES, execution_records.decode_prepared),
+                        (association.signer_digest, signer_records.MAX_RECORD_BYTES, signer_records.decode_prepared)):
+                    info = self._entries[locator]
+                    if (type(info.prepared_bytes) is not int or not 1 <= info.prepared_bytes <= maximum
+                            or _name("attempted", locator) in self._file_identities
+                            or _name("observed", locator) in self._file_identities):
+                        raise CustodyJournalError("registration preparation retained metadata differs")
+                    selected.append((_name("prepared", locator), info.prepared_bytes, decoder))
+                by_kind = {}
+                kinds = ()
+                if _include_outcomes:
+                    by_kind = self._registration_outcomes.get(digest, {})
+                    self._registration_outcome_scope(digest, by_kind)
+                    kinds = tuple(kind for kind in outcome_records.KINDS if kind in by_kind)
+                    for kind in kinds:
+                        maximum = (outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed"
+                            else outcome_records.MAX_RECORD_BYTES)
+                        selected.append((_name(kind, digest), maximum, outcome_records.decode))
+                selected = tuple(selected)
+                identities = tuple(self._file_identities.get(item[0]) for item in selected)
+                for index, ((name, maximum, _decoder), identity) in enumerate(zip(selected, identities)):
+                    self._completion_history_metadata(name, maximum, identity, current)
+                    if 1 <= index <= 2 and identity[6] != maximum:
+                        raise CustodyJournalError("registration preparation prepared size changed")
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            total = sum(identity[6] for identity in identities)
+            if 3 * total + REGISTRATION_PREPARATION_METADATA_BYTES > maximum_original_bytes:
+                # Insufficient remaining capacity does not corrupt unchanged
+                # files, and must refuse before reading even the marker body.
+                raise CustodyJournalError("registration preparation exceeds remaining preallocation capacity")
+            work.charge(input_bytes=3 * total + len(selected), hashes=len(selected) - 1)
+            try:
+                loaded = []
+                for (name, _maximum, decoder), identity in zip(selected, identities):
+                    original = self._read_completion_history_file(name, identity, current)
+                    current()
+                    loaded.append(decoder(original))
+                    current()
+                    del original
+                if loaded[0] != association:
+                    raise CustodyJournalError("registration preparation association changed after recovery")
+                _association_scope(association, self._entries)
+                for locator, record in zip(locators, loaded[1:3]):
+                    info = self._entries[locator]
+                    if (record.digest != locator
+                            or (record.family, record.selector, record.source_revision)
+                                != (info.family, info.selector, info.source_revision)):
+                        raise CustodyJournalError("registration preparation original scope changed")
+                pair = loaded[1], loaded[2]
+                result = pair
+                if _include_outcomes:
+                    self._registration_outcome_scope(digest, by_kind)
+                    outcomes = dict(zip(kinds, loaded[3:]))
+                    for kind, outcome in outcomes.items():
+                        if ((outcome.source_revision, outcome.digest) != by_kind[kind]
+                                or outcome.kind != kind or outcome.local_digest != digest):
+                            raise CustodyJournalError("registration recovery outcome changed after recovery")
+                    if ("completion-reconciled" in outcomes
+                            and outcomes["completion-outcome"].originals[0] != b"uncertain"):
+                        raise CustodyJournalError("registration reconciliation lacks original uncertainty")
+                    result = pair, outcome_records.RegistrationOutcomes(association.source_revision, digest,
+                        outcomes.get("reservation"), outcomes.get("sql-claimed"), outcomes.get("sql-outcome"),
+                        outcomes.get("completion-outcome"), outcomes.get("completion-reconciled"))
+                for (name, maximum, _decoder), identity in zip(selected, identities):
+                    self._completion_history_metadata(name, maximum, identity, current)
+                self._require_ready()
+                current()
+                return result
             except BaseException:
                 self._io.poison()
                 raise

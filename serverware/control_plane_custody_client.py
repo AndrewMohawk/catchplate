@@ -483,20 +483,39 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while retaining registration preparation")
         return journal._digest(digest)
 
-    def load_registration_preparation(self, execution_digest):
+    def load_registration_preparation(self, execution_digest, *,
+            maximum_original_bytes=None, work=None, current=None):
         """Read associated (grant, signer) PreparedRecords, never action authority.
 
         The actual journal rereads the final marker and both original records;
         absent association is not repaired or inferred from matching metadata.
         These historical originals still need genuine replay under independently
-        admitted scope. Their lifetimes are not renewed by this read.
+        admitted scope. Their lifetimes are not renewed by this read. All three
+        optional keywords select the direct same-work preallocated read; never
+        wrap that branch in a stable production callback. No keywords preserves
+        the previous unmetered API behavior.
         """
         from serverware import control_plane_registration_execution_records as grants
         from serverware import control_plane_registration_signer_records as signer
 
         digest = journal._digest(execution_digest)
+        metered = any(value is not None for value in (maximum_original_bytes, work, current))
+        if metered:
+            from serverware.authority_query_read_work import _ValidationWork
+
+            journal._integer(maximum_original_bytes, minimum=1,
+                maximum=journal.REGISTRATION_PREPARATION_MAX_BYTES,
+                label="registration preparation remaining byte capacity")
+            if type(work) is not _ValidationWork or not callable(current):
+                raise CustodyClientError("registration preparation requires all original work/guard/cap inputs")
+            current()
         binding = _snapshot(self)
-        pair = journal.CustodyJournal.load_registration_preparation(binding.journal, digest)
+        if metered:
+            pair = journal.CustodyJournal.load_registration_preparation(binding.journal, digest,
+                maximum_original_bytes=maximum_original_bytes, work=work, current=current)
+            current()
+        else:
+            pair = journal.CustodyJournal.load_registration_preparation(binding.journal, digest)
         if (type(pair) is not tuple or len(pair) != 2
                 or any(type(item) is not records.PreparedRecord for item in pair)):
             raise CustodyClientError("registration preparation lacks its exact original record pair")
@@ -509,7 +528,58 @@ class ControlPlaneCustodyClient:
         journal._digest(signer_record.digest)
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed while loading registration preparation")
+        if metered:
+            current()
         return pair
+
+    def load_registration_recovery_history(self, execution_digest, *,
+            maximum_original_bytes, work, current):
+        """Direct same-work pair/outcomes read with one aggregate preflight.
+
+        Returned source labels and response originals are data, not authority;
+        missing history never grants retry or a different historical cohort.
+        """
+        from serverware.authority_query_read_work import _ValidationWork
+        from serverware import control_plane_registration_execution_records as grants
+        from serverware import control_plane_registration_signer_records as signer
+        from serverware import control_plane_registration_outcome_records as outcomes
+
+        digest = journal._digest(execution_digest)
+        journal._integer(maximum_original_bytes, minimum=1,
+            maximum=journal.REGISTRATION_PREPARATION_MAX_BYTES,
+            label="registration recovery history remaining byte capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyClientError("registration recovery history requires original work and current guard")
+        current()
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.load_registration_recovery_history(binding.journal, digest,
+            maximum_original_bytes=maximum_original_bytes, work=work, current=current)
+        current()
+        if (type(result) is not tuple or len(result) != 2
+                or type(result[0]) is not tuple or len(result[0]) != 2
+                or any(type(record) is not records.PreparedRecord for record in result[0])
+                or type(result[1]) is not outcomes.RegistrationOutcomes):
+            raise CustodyClientError("registration recovery history requires its exact pair and outcome inventory")
+        (execution_record, signer_record), observed = result
+        if (execution_record.digest != digest or observed.local_digest != digest
+                or (execution_record.family, execution_record.selector) != (grants.FAMILY, grants.OPERATION)
+                or (signer_record.family, signer_record.selector) != (signer.FAMILY, signer.OPERATION)
+                or execution_record.source_revision != signer_record.source_revision
+                or observed.source_revision != execution_record.source_revision):
+            raise CustodyClientError("registration recovery preparation/outcome scope differs")
+        journal._digest(signer_record.digest)
+        for kind, record in zip(outcomes.KINDS, (observed.reservation, observed.sql_attempt,
+                observed.sql_outcome, observed.completion_outcome, observed.completion_reconciled)):
+            if record is not None:
+                if (type(record) is not outcomes.RegistrationOutcomeRecord
+                        or record.local_digest != digest or record.kind != kind
+                        or record.source_revision != observed.source_revision):
+                    raise CustodyClientError("registration recovery outcome record scope differs")
+                journal._digest(record.digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while reading registration recovery history")
+        current()
+        return result
 
     def append_registration_finalization_preparation(self, originals, *, evidence_local_digest):
         """Commit exact finalization originals and their existing evidence/signer link.

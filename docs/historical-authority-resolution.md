@@ -1,11 +1,14 @@
 # Historical authority resolution (H05)
 
-Implementation decision after `.218`: reuse the existing independently
+Implementation decision after `.218`, connected for registration in `.219`:
+reuse the existing independently
 root-admitted historical archive and genuine original replay. Do not create a
 second trust catalog, infer retired keys from stored records, or weaken a
 current-source equality check to an unverified list of source labels.
-H05 remains open; this document records the integration boundary, not a landed
-historical recovery implementation.
+H05 remains open. The [registration recovery connection](control-plane-registration-historical-recovery.md)
+now supplies independent historical configuration/key authority through the
+actual completion action under the supported source contract. Finalization,
+activation and explicit older-source replay implementations remain unfinished.
 
 ## Existing components and the actual gap
 
@@ -17,25 +20,25 @@ existing [historical plan lookup](authority-historical-replay.md) supports
 configuration and key changes under the supported source contract; it does not
 provide arbitrary old-binary compatibility.
 
-The archive currently uses each historical configuration root during admission
-but does not retain it in the frozen snapshot. The operation-specific resolver
-must retain that independently authenticated root and the enrollment originals;
-it cannot recover authority by accepting a root from a later journal record.
-`control_plane_enrollment_bootstrap._EnrollmentMaterial` likewise contains only
-the current operation material, so adding a resolver without its cold-startup
-inventory would leave the public recovery path disconnected.
+The generic archive uses each historical configuration root during admission
+but does not retain it in its frozen snapshot. The new operation-specific cold
+material retains that independently authenticated root and the enrollment
+originals; it never recovers authority from a later journal record.
+Parent bootstrap v17 connects this inventory to `_EnrollmentMaterial`; older
+schemas explicitly leave historical registration resolution disabled.
 The existing sealed parent bootstrap is also capped at 4 MiB: archived originals
 must fit that aggregate, not acquire a second allowance. Its generation summary
 does not carry the complete historical archive admission interval, so that
 provenance must be supplied through genuine cold admission rather than invented
 from a record timestamp or the current clock.
 
-Registration recovery still obtains `payload`, `configuration_digest`,
+Historically, registration recovery obtained `payload`, `configuration_digest`,
 `generation`, `runtime_role_identities`, `root_public_key` and caller/grant/state
-enrollment originals from the **current** cold owner. Its retained pair must
-also carry the current source revision. Finalization and activation have related
-current-cohort restrictions. A record codec preserving an old source label does
-not close any of these authority joins.
+enrollment originals only from the **current** cold owner. The enabled resolver
+now selects independently archived values for original verification and keeps
+current permission/transport separate. The retained pair still requires the
+supported source revision. Finalization and activation retain their current-cohort
+restrictions; preserving an old source label alone does not close those joins.
 
 The existing genuine replay entry points are reusable:
 
@@ -47,7 +50,11 @@ The existing genuine replay entry points are reusable:
 - `control_plane_registration_recovery_subject._replay_on_owner` is the first
   public-workflow consumer to connect to independent historical resolution.
 
-## Required implementation sequence
+## Implementation and remaining sequence
+
+Steps 1–3 are connected for registration evidence/completion in `.219`, including
+the real producer, startup, bounded loader and public recovery continuation.
+They are not runtime-verified. Steps 4–5 remain open.
 
 1. Cold-admit the operation-specific historical enrollment originals alongside
    their exact configuration/root/cohort inventory. Bind the inventory to the

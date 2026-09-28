@@ -35,16 +35,37 @@ def _recover_on_owner(owner, *, local_digest, expected_user_id, expected_session
     user_id, session_id = handoff._expected_subject(expected_user_id, expected_session_id)
     common, endpoint, window, bound, live = subjects._scope_on_owner(owner,
         live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
-    configured = owner._material.execution
-    pending, packet = configured.current_pending, configured.completion_packet_digest
-    custody, held, reserved, observed, current = handoff._retained(owner, digest, work, live)
-    if observed.sql_attempt is None:
+    # One bounded read holds the pair and every retained outcome together.
+    # Historical authority is resolved and genuinely replayed on this same work;
+    # the current owner still supplies transport and present-purpose authority.
+    replayed = subjects._replay_material_on_owner(owner, digest,
+        live_window=window, work=work, transport_deadline_ns=bound,
+        _include_outcomes=True)
+    custody, binding = owner._custody, owner._binding
+    common, window = replayed.common, replayed.window
+    bound = min(bound, replayed.deadline_ns)
+    pending, packet = replayed.current_pending, replayed.completion_packet_digest
+    observed = replayed.observed
+    if observed is None or observed.sql_attempt is None or observed.reservation is None:
         raise RegistrationRecoveryOutcomeError(digest)
-    subject, original_bytes = subjects._replay_on_owner(owner, digest,
-        live_window=window, work=work, transport_deadline_ns=bound)
-    original_bytes += sum(len(raw) for raw in reserved)
+    held = handoff.reserve_wire._originals(replayed.originals, response=False)
+    reserved = handoff.reserve_wire._originals(observed.reservation.originals, response=True)
+    subject, original_bytes = replayed.subject, replayed.original_bytes
     if original_bytes > completion.MAX_ORIGINAL_BYTES:
         raise RegistrationRecoveryOutcomeError(digest)
+
+    def current():
+        live()
+        replayed.current()
+        if (owner._custody is not custody or owner._binding is not binding
+                or evidence.production._callback(work,
+                    lambda: custody_client._snapshot(custody)) is not binding):
+            raise RegistrationRecoveryOutcomeError(digest)
+        evidence.production._callback(work, lambda: wire._check_deadline(bound))
+        replayed.current()
+        live()
+
+    current()
     evidence.plan._same(subject["userId"], user_id, work,
         "registration recovery differs from the independently authenticated user")
     evidence.plan._same(subject["sessionId"], session_id, work,
@@ -117,7 +138,11 @@ def recover_retained_registration_completion(local_digest, *, expected_user_id, 
                 or owner._binding is not binding
                 or callback(work, subjects.custody_startup.require_started) is not owner._custody):
             raise RegistrationRecoveryOutcomeError(digest)
-        clock._check_on_work(window, work=work)
+        now = clock._check_on_work(window, work=work)
+        archived = material.registration_history
+        if (archived is not None
+                and not archived.valid_from_epoch_ns <= now < archived.valid_until_epoch_ns):
+            raise RegistrationRecoveryOutcomeError(digest)
     except Exception as exc:
         raise RegistrationRecoveryOutcomeError(digest) from exc
     return digest, returned

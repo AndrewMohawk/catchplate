@@ -1204,6 +1204,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/portal_session_activation_authorization.py \
 	serverware/portal_session_activation_confirmation.py \
 	serverware/portal_session_activation_confirmation_routes.py \
+	serverware/control_plane_registration_history_bootstrap.py \
+	serverware/control_plane_registration_history.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 	serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
@@ -3416,6 +3418,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/portal_session_activation_authorization.py \
 				serverware/portal_session_activation_confirmation.py \
 				serverware/portal_session_activation_confirmation_routes.py \
+				serverware/control_plane_registration_history_bootstrap.py \
+				serverware/control_plane_registration_history.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 				serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \

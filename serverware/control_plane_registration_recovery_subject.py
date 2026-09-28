@@ -15,8 +15,7 @@ from __future__ import annotations
 import time
 
 from serverware import control_plane_registration_handoff_subject as live_subject
-from serverware import authority_webauthn_registration_signer_history as signer_history
-from serverware import authority_registration_history_exchange as history
+from serverware import control_plane_registration_history as history
 
 
 execution, custody_client, custody_startup = (
@@ -93,58 +92,20 @@ def _scope_on_owner(owner, *, live_window, work, transport_deadline_ns=None):
     return common, endpoint, window, bound, current
 
 
+def _replay_material_on_owner(owner, local_digest, *, live_window, work,
+        transport_deadline_ns=None, _additional_original_bytes=0, _include_outcomes=False):
+    """Resolve and replay originals; the real recovery caller keeps this scope."""
+    return history._replay_on_owner(owner, local_digest, live_window=live_window, work=work,
+        transport_deadline_ns=transport_deadline_ns,
+        _additional_original_bytes=_additional_original_bytes, _include_outcomes=_include_outcomes)
+
+
 def _replay_on_owner(owner, local_digest, *, live_window, work, transport_deadline_ns=None):
-    """Return subject scalars and original inventory size from this actual replay."""
-    digest = live_subject.journal._digest(local_digest)
-    common, _endpoint, window, bound, current = _scope_on_owner(owner,
-        live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns)
-    custody = owner._custody
-    pair = evidence.production._callback(work,
-        lambda: custody_client.ControlPlaneCustodyClient.load_registration_preparation(custody, digest))
-    if (type(pair) is not tuple or len(pair) != 2
-            or any(type(record) is not live_subject.records.PreparedRecord for record in pair)):
-        raise RegistrationRecoverySubjectError("registration recovery association is not an exact retained pair")
-    execution_record, signer_record = pair
-    if (execution_record.digest != digest
-            or execution_record.family != live_subject.execution_records.FAMILY
-            or execution_record.selector != live_subject.execution_records.OPERATION
-            or signer_record.family != live_subject.signer_records.FAMILY
-            or signer_record.selector != live_subject.signer_records.OPERATION
-            or execution_record.source_revision != live_subject.signer_response.authority.SOURCE_REVISION
-            or signer_record.source_revision != execution_record.source_revision):
-        raise RegistrationRecoverySubjectError("registration recovery association has another source or family")
-    held = live_subject.reservation_wire._originals(execution_record.originals, response=False)
-    signer = live_subject.signer_wire._request_originals(signer_record.originals)
-    enrollments = (common["authorization_enrollment_bytes"], common["grant_enrollment_bytes"],
-        common["current_root_enrollment_bytes"])
-    maxima = (execution.authorization.MAX_ENROLLMENT_BYTES,
-        execution.receiving.grants.MAX_ENROLLMENT_BYTES,
-        execution.receiving.grants.authorization.MAX_ENROLLMENT_BYTES)
-    if any(type(raw) is not bytes or not 2 <= len(raw) <= maximum
-            for raw, maximum in zip(enrollments, maxima)):
-        raise RegistrationRecoverySubjectError("registration recovery enrollments are not bounded originals")
-    original_bytes = sum(len(raw) for raw in (*held, *signer, *enrollments))
-    if original_bytes > live_subject.signer_response.authority.MAX_RESULT_BYTES:
-        raise RegistrationRecoverySubjectError("registration recovery subject originals exceed their aggregate bound")
-    current()
-    subject = signer_history._verify_subject_on_configuration(payload=common["payload"],
-        configuration_digest=common["configuration_digest"], generation=common["generation"],
-        runtime_role_identities=common["runtime_role_identities"],
-        request_originals=signer[:8], response_originals=signer[8:],
-        live_window=window, work=work, transport_deadline_ns=bound)
-    result = {"localDigest": digest, "userId": subject["userId"],
-        "challengeId": subject["challengeId"], "sessionId": subject["sessionId"],
-        "mode": subject["mode"], "requestDigest": subject["requestDigest"],
-        "operationId": subject["operationId"]}
-    current()
-    exchanged = history._verify_on_configuration(**common, originals=held,
-        live_window=window, work=work, transport_deadline_ns=bound)
-    evidence.plan._same(exchanged.request_digest, result["requestDigest"], work,
-        "historical execution exchange differs from the replayed signer request")
-    evidence.plan._same(exchanged.operation_id, result["operationId"], work,
-        "historical execution exchange differs from the replayed signer operation")
-    current()
-    return result, original_bytes
+    """Preserve the existing scalar-only inspection interface."""
+    material = _replay_material_on_owner(owner, local_digest, live_window=live_window,
+        work=work, transport_deadline_ns=transport_deadline_ns)
+    material.current()
+    return material.subject, material.original_bytes
 
 
 def _inspect_on_owner(owner, local_digest, *, live_window, work, transport_deadline_ns=None):
@@ -167,5 +128,9 @@ def inspect_retained_registration_recovery_subject(local_digest):
             raise RegistrationRecoverySubjectError("registration recovery startup changed before inspection")
         result = _inspect_on_owner(owner, digest, live_window=window,
             work=work, transport_deadline_ns=window[4])
-        clock._check_on_work(window, work=work)
+        now = clock._check_on_work(window, work=work)
+        archived = material.registration_history
+        if (archived is not None
+                and not archived.valid_from_epoch_ns <= now < archived.valid_until_epoch_ns):
+            raise RegistrationRecoverySubjectError("registration history expired before subject return")
         return result

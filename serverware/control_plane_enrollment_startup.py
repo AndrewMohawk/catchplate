@@ -1089,7 +1089,20 @@ def initialize_from_environment():
             original, original_identity = _read_original(descriptor, private=False)
             work = _ValidationWork(QueryReadValidationLimits())
             material = bootstrap._admit_on_work(bootstrap_bytes=original,
-                runtime_root_public_key=root_key, expected_configuration_digest=digest, work=work)
+                runtime_root_public_key=root_key, expected_configuration_digest=digest, work=work,
+                _history_current_interval=binding.attestation_interval,
+                _history_now_epoch_ns=client._receipt_now(binding))
+            # Cold public history admission may do substantial original replay.
+            # Recheck the same live owner and archive before touching private keys;
+            # the control-plane receipt is not an authority cohort replacement.
+            if (custody.require_started() is not custody_owner
+                    or client._snapshot(custody_owner) is not binding):
+                raise EnrollmentStartupError("enrollment custody changed during cold admission")
+            history_now = client._receipt_now(binding)
+            if (material.registration_history is not None
+                    and not material.registration_history.valid_from_epoch_ns
+                        <= history_now < material.registration_history.valid_until_epoch_ns):
+                raise EnrollmentStartupError("registration history expired during cold admission")
             key_fd, policy, public_key = (material.issuer_private_key_fd,
                 material.issuer_policy, material.issuer_public_key)
             key, key_identity, response_path, response_pin = None, None, None, None

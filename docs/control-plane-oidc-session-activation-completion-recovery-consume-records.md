@@ -86,6 +86,36 @@ each append: their admitted immutable metadata, source, fixed prefix and actual
 file identities remain checked, along with the exact consume claim. No posted
 request, old token, assertion, cookie or returned token is journaled.
 
+## Existing downstream historical readers
+
+The .216 append methods publish the existing `ConsumeRecord` kinds and
+`activation-consume-*` files under the same global target/slot. Their metadata
+matches the normal family, including prepared/exported/SQL-outcome status fields.
+The .217 source join therefore needs no adapter or second loader: the existing
+`load_oidc_session_activation_completion_recovery_controls` reads the fixed
+tuple10 from that index without requiring either live append latch. Its required
+consume originals are prepared, exported, authorized, grant, reservation and
+SQL claim; prior completion and hints are optional. Selection still reserves
+three actual encoded footprints plus metadata before body one and directly
+charges the same work under immutable-file guards.
+
+The actual historical controls owner re-admits those originals, exact
+prepare/export correspondence and target association. Its independent consume
+cold policy must pin the newly signed consume caller authorization, packet and
+pending scope; activation pins or stored success are not substitutes. Records
+must belong to the admitted current source cohort. No historical revision
+exception, closed-permission revival or SQL retry follows from this join.
+
+For later intent/proof or delivery, `_completion_release_inventory` selects the
+same original completion raw4 plus hints raw2, or the exact separately retained
+consume reconciliation raw6. `_completion_release_operation` then binds the
+selected bytes and the existing global intent/proof/grant slots, with the same
+pre-body bound and fresh genuine admission at its caller. A normal-profile
+completion without hints is unavailable for direct raw6 release; missing hints,
+intent or outcome do not select another profile, prove private-store state or
+authorize fallback. A separately configured reconciliation remains a distinct
+fresh-authority action, never resumed SQL or a restored publication latch.
+
 ## One allowance and native publication
 
 `maximum_original_bytes` is an exact tightening integer from zero through 64 MiB;

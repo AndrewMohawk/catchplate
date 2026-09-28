@@ -1,10 +1,11 @@
 # Private fresh consume after acknowledged activation
 
-The .216 source extends genuine acknowledged activation history through the
+The .217 source exposes a distinct [public consume action](control-plane-oidc-session-activation-completion-recovery-consume-http.md)
+over the .216 continuation, which extends genuine acknowledged activation history through the
 .215 private input/prepare/export foundation to dedicated consume authorization,
-grant/reservation, one claimed SQL exchange and protected completion. It stops
-before a public continuation or token delivery.
-There is no new public options/action route, success HTTP or cookie effect.
+grant/reservation, one claimed SQL exchange and protected completion. Fresh
+purpose-bound options and execution report only historical completion after
+normal cleanup. There is no token delivery, current-session success or cookie effect.
 Source only: unbuilt, unexecuted and unprovisioned.
 
 ## Fresh authority and original inputs
@@ -57,9 +58,15 @@ normalization is needed; old-token bytes never enter durable records or HTTP.
    remain DATA until their genuine admission. An uncertain result is not success
    or retry permission. Parent and child guards remain separate: descendants use
    only original ancestors, while the parent never calls its own plan child.
-   Final deepest-child checks and normal actor cleanup precede closure. Closing clears
+   The public action may stage one data-only historical response from the actual
+   genuine completion. Its terminal guard retains the deepest receiver through
+   actor/trust cleanup without calling a child from its own ancestor. Final
+   deepest-child checks and normal actor cleanup precede closure. Closing clears
    the ephemeral raw16, input material, plan and execution references; a closed owner is
-   not a reusable continuation.
+   not a reusable continuation. The owner records normal exit only after its
+   own close succeeds; the exact staged response can then finish once without
+   reviving the closed guards. Failure or an uncertain completion returns
+   unknown, never a current-session claim or retry permission.
 
 All original operation, subject, packet, enrollment and state joins remain
 required. Historical activation authentication does not renew expired activation
@@ -74,7 +81,9 @@ The future capacity is reserved before the first historical target body. The
 stay inside the original 64 MiB
 representation allowance alongside held actor/control history, completion
 receiving and reconciliation inventory. The extractor's fixed 16 KiB is carried
-once. Actual input captures remain held during planning; measured nested
+once; a separate 16 KiB public-response reservation is also charged before the
+first historical body. It covers bounded public data, not copies of private
+controls. Actual input captures remain held during planning; measured nested
 originals, signatures, frame copies and durable publication copies reduce the
 remaining prepare/export response caps before body allocation. Execution captures
 use actual original lengths; sequential journal I/O is reclaimed, not counted as
@@ -88,9 +97,14 @@ read-only receiving. This separation creates no new allowance and removes no
 actual held capture. Oversized valid originals can be refused. These are
 source-defined representation bounds, not process-heap or throughput evidence.
 
-The next connection must expose a truthful, freshly authorized public continuation
-without returning or accepting this private result as reusable authority. No SQL
+The public response does not return or accept this private result as reusable
+authority. The separately fresh release-intent/proof and release actions must
+still satisfy their independent consume configuration and genuine original
+admission; the public consume fact is not release authority. No SQL
 retry, automatic fallback, old-permission reuse or original-expiry renewal is
-permitted. Public continuation, current-auth/cookie,
-portal, deployment resources and independent production acceptance remain open;
-private consume completion is not their completion evidence.
+permitted. Existing fresh intent/proof and distinct LIVE/RECOVERY delivery paths
+read these same durable originals and retain their genuine current-auth and
+guarded cookie boundaries. Independent exact consume configuration remains
+required for those actions; this response supplies none. Portal implementation,
+deployment resources and independent production acceptance remain open. Source
+integration is not observed recovery, token delivery or session confirmation.

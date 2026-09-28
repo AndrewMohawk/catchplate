@@ -10,12 +10,13 @@ from serverware import oidc_session_activation_recovery_http_contract as contrac
 from serverware import control_plane_oidc_session_activation_completion_recovery_http as completion
 from serverware import control_plane_oidc_session_activation_completion_recovery_release_http as release
 from serverware import control_plane_oidc_session_activation_completion_recovery_delivery_http as delivery
+from serverware import control_plane_oidc_session_activation_completion_recovery_consume_http as consume
 
 
 router = APIRouter()
 OPTIONS_PATH = "/api/auth/session/activation/recovery/options"
 POST_PATH = "/api/auth/session/activation/recovery"
-PATHS = frozenset({OPTIONS_PATH, POST_PATH}) | completion.PATHS | release.PATHS | delivery.PATHS
+PATHS = frozenset({OPTIONS_PATH, POST_PATH}) | completion.PATHS | release.PATHS | delivery.PATHS | consume.PATHS
 ORIGINAL_STATE_NAME = "oidc_session_activation_recovery_bytes"
 MAX_REQUEST_BYTES = contract.MAX_REQUEST_BYTES
 HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache",
@@ -24,6 +25,8 @@ _STATUSES = frozenset({400, 401, 403, 405, 409, 413, 415, 422, 429, 503})
 
 
 def error(status_code=503, *, path=None):
+    if path in consume.PATHS:
+        return consume.error(status_code, path=path)
     if path in delivery.PATHS:
         return delivery.error(status_code, path=path)
     if path in release.PATHS:
@@ -172,4 +175,18 @@ async def completion_retained_delivery_options(request: Request):
 @router.post(delivery.RETAINED_POST_PATH)
 async def complete_retained_release(request: Request):
     return delivery._run(request, options=False,
+        recovery_bytes=getattr(request.state, ORIGINAL_STATE_NAME, None))
+
+
+@router.post(consume.OPTIONS_PATH)
+async def completion_consume_options(request: Request):
+    return consume._run(request, options=True,
+        recovery_bytes=getattr(request.state, ORIGINAL_STATE_NAME, None))
+
+
+@router.post(consume.POST_PATH)
+async def consume_after_recovered_activation(request: Request):
+    # Direct bounded work preserves the original actor's ASGI thread. Return
+    # terminal data unchanged; this route never serializes a token or cookie.
+    return consume._run(request, options=False,
         recovery_bytes=getattr(request.state, ORIGINAL_STATE_NAME, None))

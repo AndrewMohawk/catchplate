@@ -1,9 +1,10 @@
 """Private fresh consume continuation after acknowledged activation completion.
 
-The fresh consume purpose authorizes the eventual same-call continuation, not
+The fresh consume purpose authorizes the same-call continuation, not
 reuse of the expired activation permission. The private continuation connects
 prepare/export, dedicated signing, grant/reservation, one claimed SQL exchange
-and completion. No public route or cookie is enabled. Opaque responses are
+and completion. Its public terminal reports historical completion only after
+normal cleanup, never a token, cookie or current session. Opaque responses are
 durably retained before genuine original admission.
 """
 from __future__ import annotations
@@ -55,7 +56,8 @@ class _ConsumeAttempt:
         "_planning_spent", "_originals", "_originals_seal", "_input_grants", "_input_grants_seal",
         "_input_material", "_input_material_seal", "_consume_slot", "_consume_slot_seal", "_plan",
         "_authorization", "_authorization_seal", "_dispatch", "_dispatch_seal",
-        "_completion", "_completion_seal", "_authorization_spent", "_dispatch_spent", "_completion_spent")
+        "_completion", "_completion_seal", "_authorization_spent", "_dispatch_spent", "_completion_spent",
+        "_public_response", "_public_response_seal", "_response_spent")
 
     def __init__(self, construction, actor, selected, response, receiving_current, reconciliation):
         if construction is not _CONSTRUCTION:
@@ -79,6 +81,8 @@ class _ConsumeAttempt:
         self._authorization = self._authorization_seal = self._dispatch = self._dispatch_seal = None
         self._completion = self._completion_seal = None
         self._authorization_spent = self._dispatch_spent = self._completion_spent = False
+        self._public_response = self._public_response_seal = None
+        self._response_spent = False
         self._window_pin, self._bound_pin = selected.window, selected.deadline_ns
         self._lifetime = self._lifetime_seal = bookkeeping._Lifetime(
             selected.window, selected.deadline_ns, self._work, self._ancestor)
@@ -112,6 +116,8 @@ class _ConsumeAttempt:
                 or self._authorization is not self._authorization_seal
                 or self._dispatch is not self._dispatch_seal
                 or self._completion is not self._completion_seal
+                or self._public_response is not self._public_response_seal
+                or type(self._response_spent) is not bool
                 or self._phase not in ("inputs", "planning", "prepared", "authorizing", "authorized",
                     "dispatching", "dispatched", "completing", "completion-observed")):
             execution._fail("fresh consume lost its exact owner, originals or purpose")
@@ -162,10 +168,30 @@ class _ConsumeAttempt:
     def _terminal_current(self):
         """Final descendant guard, deliberately absent from all ancestors."""
         self._current()
+        if self._public_response is not None:
+            from serverware import control_plane_oidc_session_activation_completion_recovery_consume_response as terminal
+
+            if (type(self._public_response) is not terminal._StagedConsumeResponse
+                    or self._response_spent is not True):
+                execution._fail("fresh consume changed its actual public response")
+            return terminal._StagedConsumeResponse._current_on_active(self._public_response, self)
+        if self._response_spent is not False:
+            execution._fail("fresh consume response staging did not complete")
         selected = self._completion or self._dispatch or self._authorization or self._plan
         if selected is None:
             execution._fail("fresh consume has no terminal source continuation")
         return selected.current()
+
+
+def _require_response_call(active):
+    """Select one data-only terminal while the genuine completion is live."""
+    if (type(active) is not _ConsumeAttempt or _ACTIVE is not active
+            or active._phase != "completion-observed" or active._completion_spent is not True
+            or active._completion is None or active._response_spent is not False
+            or active._public_response is not None or active._public_response_seal is not None):
+        execution._fail("fresh consume response is not its sole completed source call")
+    active._terminal_current()
+    active._response_spent = True
 
 
 def _require_inputs_call(active):
@@ -310,6 +336,7 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, live_window,
         transport_deadline_ns, work, current):
     """Private preparation only; no public result or old permission revival."""
     global _ACTIVE
+    from serverware import control_plane_oidc_session_activation_completion_recovery_consume_response as terminal
 
     if _ACTIVE is not None or completion._ACTIVE is not None:
         execution._fail("fresh consume cannot overlap another source call")
@@ -325,10 +352,11 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, live_window,
         execution._fail("fresh consume cold originals leave no bounded acquisition lane")
     future = (planning.PLANNING_RESERVATION_BYTES + EXECUTION_RESERVATION_BYTES + inputs.INPUT_RESERVATION_BYTES
         + exchange._exchange_reservation("activation") + _RECONCILIATION_IO_BYTES
-        + completion._CONFIGURATION_RESERVATION)
+        + completion._CONFIGURATION_RESERVATION + terminal.RESPONSE_RESERVATION_BYTES)
     if not 0 < future < MAX_ORIGINAL_BYTES:
         execution._fail("fresh consume future inventory exceeds the original allowance")
     active = scope = None
+    normal = False
     try:
         with actors._authorize_on_owner(owner, profile="activation", request=request,
                 recovery_bytes=recovery_bytes, live_window=live_window,
@@ -368,11 +396,14 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, live_window,
             scope._completion_receiving_current = active._terminal_current
         if scope._normal_exit is not True:
             execution._fail("fresh consume lacks normal fresh-actor cleanup")
-        active._normal_exit = True
+        normal = True
     finally:
-        if active is not None:
-            active._close()
-        _ACTIVE = None
+        try:
+            if active is not None:
+                active._close()
+                active._normal_exit = normal
+        finally:
+            _ACTIVE = None
 
 
 @contextmanager

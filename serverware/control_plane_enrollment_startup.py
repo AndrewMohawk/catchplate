@@ -574,6 +574,27 @@ class _EnrollmentOwner:
             recovery_bytes=recovery_bytes, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work, current=current)
 
+    def _oidc_session_activation_completion_consume_options(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Fresh consume challenge; no activation retry or release authority."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actor
+
+        _require_pid()
+        return actor._options_on_owner(self, profile="activation", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current,
+            _purpose="consume")
+
+    def _consume_oidc_session_activation_completion(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Return the actual same-call consume context, never a token/session."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_consume as consume
+
+        _require_pid()
+        return consume._consume_on_owner(self, request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

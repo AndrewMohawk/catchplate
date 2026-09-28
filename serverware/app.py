@@ -68,6 +68,13 @@ from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_HTML,
     REGISTRATION_HANDOFF_SCRIPT,
 )
+from serverware.portal_session_activation import (
+    SESSION_ACTIVATION_CSS,
+    SESSION_ACTIVATION_HTML,
+    SESSION_ACTIVATION_SCRIPT,
+)
+from serverware.portal_session_activation_authorization import SESSION_ACTIVATION_AUTHORIZATION_SCRIPT
+from serverware.portal_session_activation_confirmation import SESSION_ACTIVATION_CONFIRMATION_SCRIPT
 from serverware.attestation import (
     AttestationContractError,
     TRUSTED_TLS_SCOPE_EXTENSION,
@@ -400,6 +407,14 @@ async def _run_bounded_blocking(
 @app.middleware("http")
 async def csrf_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
+    from serverware import portal_session_activation_confirmation_routes as confirmation_routes
+
+    if request.scope.get("path") == confirmation_routes.POST_PATH:
+        try:
+            _require_registration_execution_session_csrf(request)
+        except HTTPException as exc:
+            return confirmation_routes.error(exc.status_code)
+        return await call_next(request)
 
     if request.scope.get("path") in recovery_routes.PATHS:
         # The old cookie is possession evidence only on this route. Do not
@@ -439,6 +454,13 @@ async def csrf_middleware(request: Request, call_next):
 async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
+    from serverware import portal_session_activation_confirmation_routes as confirmation_routes
+
+    if request.scope.get("path") == confirmation_routes.POST_PATH:
+        refusal = await confirmation_routes._frame_request(request)
+        if refusal is not None:
+            return refusal
+        return await call_next(request)
 
     if request.scope.get("path") in recovery_routes.PATHS:
         refusal = await recovery_routes._frame_request(request)
@@ -4670,6 +4692,8 @@ def _require_control_plane_two_person(
     request: dict[str, Any],
     connection: Any | None = None,
 ) -> dict[str, Any] | None:
+    from serverware.control_plane_oidc_session_activation_approval import _ApprovalRequired
+
     if not _control_plane_two_person_required(action):
         return None
     approval_id = _control_plane_approval_id(mfa)
@@ -4711,7 +4735,7 @@ def _require_control_plane_two_person(
         ttl_seconds=CONTROL_PLANE_TWO_PERSON_TTL_SECONDS,
         require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
     )
-    raise HTTPException(
+    raise _ApprovalRequired(
         status_code=428,
         detail={
             "error": "control_plane_approval_required",
@@ -20798,6 +20822,7 @@ UI_HTML = r"""
     .workspace-nav a:hover,
     .workspace-nav a:focus-visible { color: var(--text); background: #eef3ef; }
     __SERVERWARE_REGISTRATION_HANDOFF_CSS__
+    __SERVERWARE_SESSION_ACTIVATION_CSS__
     .custody-digest { overflow-wrap: anywhere; word-break: break-word; }
     #custody-record-detail { margin-top: 14px; }
     #custody-record-detail dt { margin-top: 8px; color: var(--muted); }
@@ -21120,6 +21145,7 @@ UI_HTML = r"""
     <a href="#policy-workspace">Policies</a>
     <a href="#approval-workspace">Approvals</a>
     <a href="#registration-handoff-workspace">Registration actions</a>
+    <a href="#session-activation-workspace">Session activation</a>
     <a href="#audit-workspace">Audit</a>
     <a id="custody-nav" href="#custody-workspace" hidden>Custody recovery</a>
     <a href="#attestation-workspace">Attestation</a>
@@ -21151,6 +21177,7 @@ UI_HTML = r"""
       </table>
     </section>
       __SERVERWARE_REGISTRATION_HANDOFF_HTML__
+      __SERVERWARE_SESSION_ACTIVATION_HTML__
       <section id="setup-workspace" class="setup-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Setup and Verify</h2>
@@ -21771,6 +21798,7 @@ UI_HTML = r"""
     }
 
     function markOIDCSessionStatusUnknown() {
+      sessionActivationInvalidate('Browser session state became unknown. Fresh authorization is required.');
       oidcSessionStatusUnknown = true;
       state.authStatus = null;
       renderAuthStatus();
@@ -21790,6 +21818,11 @@ UI_HTML = r"""
           || typeof status.oidcBrowserLoginConfigured !== 'boolean'
           || (status.authenticated && (!oidcSessionActivationIsActive(status) || status.userId === null))) {
         throw new Error('Authentication status response is invalid');
+      }
+      if (JSON.stringify([state.authStatus?.userId, state.authStatus?.authMethod,
+          state.authStatus?.sessionState, state.authStatus?.authenticated, state.authStatus?.roles])
+          !== JSON.stringify([status.userId, status.authMethod, status.sessionState, status.authenticated, status.roles])) {
+        sessionActivationInvalidate('Browser authentication changed. Discarded activation authorization.');
       }
       state.authStatus = status;
       oidcSessionStatusUnknown = false;
@@ -21833,9 +21866,11 @@ UI_HTML = r"""
       $('operator-sign-out').hidden = !hasBrowserSession;
       $('admin-token').hidden = authenticated;
       syncCustodyAuth();
+      renderSessionActivation();
     }
 
     async function signInWithOIDC() {
+      sessionActivationInvalidate('Sign-in started. Discarded activation authorization.');
       clearCustodyView('Sign-in is changing. Custody metadata cleared.');
       const returnTo = `${window.location.pathname}${window.location.search}`;
       const query = new URLSearchParams({return_to: returnTo});
@@ -21888,6 +21923,7 @@ UI_HTML = r"""
     }
 
     async function verifyOIDCSessionPasskey() {
+      sessionActivationInvalidate('Another passkey action started. Discarded activation authorization.');
       if (oidcSessionActivationBusy) throw new Error('A session action is already in progress. No additional request was sent.');
       if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');
       oidcSessionActivationBusy = true;
@@ -21959,6 +21995,7 @@ UI_HTML = r"""
     }
 
     async function enrollFirstOIDCSessionPasskey(bootstrapRequired) {
+      sessionActivationInvalidate('Enrollment started. Discarded activation authorization.');
       const bootstrapToken = bootstrapRequired ? await requestWebAuthnBootstrapToken() : null;
       if (bootstrapRequired && !bootstrapToken) throw new Error('First passkey enrollment cancelled');
       const options = await sessionApi('/api/auth/session/webauthn/register/options', {
@@ -21971,6 +22008,7 @@ UI_HTML = r"""
     }
 
     async function recoverOIDCSessionPasskey() {
+      sessionActivationInvalidate('Passkey recovery started. Discarded activation authorization.');
       const label = window.prompt('Replacement security key label', 'Recovery YubiKey');
       if (!label) throw new Error('WebAuthn recovery cancelled');
       const reason = window.prompt('Reason for offline recovery approval', 'Last registered key was revoked');
@@ -21999,6 +22037,7 @@ UI_HTML = r"""
     }
 
     async function decommissionLostOIDCSessionPasskey() {
+      sessionActivationInvalidate('Passkey revocation started. Discarded activation authorization.');
       const reason = window.prompt(
         'Reason for explicitly revoking the lost active security key',
         'Last active security key is lost'
@@ -22037,6 +22076,7 @@ UI_HTML = r"""
     }
 
     async function signOutOperator() {
+      sessionActivationInvalidate('Sign-out started. Discarded activation authorization.');
       clearCustodyView('Signing out. Custody metadata cleared.');
       await sessionApi('/api/auth/logout');
       csrfToken = null;
@@ -22086,7 +22126,8 @@ UI_HTML = r"""
       const values = {};
       document.querySelectorAll('input, select, textarea').forEach((control) => {
         if (control.id === 'admin-token' || control.id === 'webauthn-bootstrap-token'
-            || control.id.startsWith('registration-handoff-') || control.readOnly) return;
+            || control.id.startsWith('registration-handoff-')
+            || control.id.startsWith('session-activation-') || control.readOnly) return;
         const key = controlStateKey(control);
         if (!key) return;
         values[key] = {value: control.value, checked: Boolean(control.checked)};
@@ -22098,7 +22139,8 @@ UI_HTML = r"""
       Object.entries(values || {}).forEach(([key, saved]) => {
         const control = key.startsWith('id:') ? $(key.slice(3)) : null;
         if (!control) return;
-        if (control.id === 'webauthn-bootstrap-token' || control.id.startsWith('registration-handoff-')) return;
+        if (control.id === 'webauthn-bootstrap-token' || control.id.startsWith('registration-handoff-')
+            || control.id.startsWith('session-activation-')) return;
         if (control.id.startsWith('setup-')) return;
         if (control.tagName === 'SELECT' && !Array.from(control.options).some((option) => option.value === saved.value)) return;
         control.value = saved.value;
@@ -24754,6 +24796,7 @@ UI_HTML = r"""
       await refresh();
     }
     async function registerPasskey() {
+      sessionActivationInvalidate('Passkey registration started. Discarded activation authorization.');
       if (!window.PublicKeyCredential) throw new Error('WebAuthn is not available in this browser');
       const body = {label: 'YubiKey'};
       if (state.webauthnBootstrapRequired) {
@@ -24776,6 +24819,7 @@ UI_HTML = r"""
       return authorized;
     }
     async function revokePasskey(recordId) {
+      sessionActivationInvalidate('Passkey revocation started. Discarded activation authorization.');
       const item = (state.webauthnCredentials || []).find((candidate) => candidate.id === recordId);
       if (!item || item.revoked_at) throw new Error('Passkey is no longer active');
       const activeCount = (state.webauthnCredentials || []).filter((candidate) => !candidate.revoked_at).length;
@@ -24868,11 +24912,16 @@ UI_HTML = r"""
     __SERVERWARE_WORKLOAD_IDENTITY_SCRIPT__
     __SERVERWARE_WORKLOAD_ENROLLMENT_SCRIPT__
     __SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__
+    __SERVERWARE_SESSION_ACTIVATION_AUTHORIZATION_SCRIPT__
+    __SERVERWARE_SESSION_ACTIVATION_CONFIRMATION_SCRIPT__
+    __SERVERWARE_SESSION_ACTIVATION_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
     initRegistrationHandoff();
+    initSessionActivation();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
+      sessionActivationInvalidate('Operator authentication changed. Discarded activation authorization.');
       clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
       syncCustodyAuth();
     });
@@ -24927,6 +24976,11 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),
     ("__SERVERWARE_REGISTRATION_HANDOFF_HTML__", REGISTRATION_HANDOFF_HTML),
     ("__SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__", REGISTRATION_HANDOFF_SCRIPT),
+    ("__SERVERWARE_SESSION_ACTIVATION_CSS__", SESSION_ACTIVATION_CSS),
+    ("__SERVERWARE_SESSION_ACTIVATION_HTML__", SESSION_ACTIVATION_HTML),
+    ("__SERVERWARE_SESSION_ACTIVATION_AUTHORIZATION_SCRIPT__", SESSION_ACTIVATION_AUTHORIZATION_SCRIPT),
+    ("__SERVERWARE_SESSION_ACTIVATION_CONFIRMATION_SCRIPT__", SESSION_ACTIVATION_CONFIRMATION_SCRIPT),
+    ("__SERVERWARE_SESSION_ACTIVATION_SCRIPT__", SESSION_ACTIVATION_SCRIPT),
 ):
     if UI_HTML.count(_portal_placeholder) != 1:
         raise RuntimeError("portal workload fragment placeholder is missing or duplicated")
@@ -24943,6 +24997,7 @@ from serverware import control_plane_registration_finalization_completion_routes
 from serverware import control_plane_oidc_session_activation_permission_routes as _activation_permission_routes
 from serverware import control_plane_oidc_session_activation_routes as _activation_routes
 from serverware import control_plane_oidc_session_activation_recovery_routes as _activation_recovery_routes
+from serverware import portal_session_activation_confirmation_routes as _activation_confirmation_routes
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -24954,4 +25009,5 @@ _fastapi_app.include_router(_registration_finalization_completion_routes.router)
 _fastapi_app.include_router(_activation_permission_routes.router)
 _fastapi_app.include_router(_activation_routes.router)
 _fastapi_app.include_router(_activation_recovery_routes.router)
+_fastapi_app.include_router(_activation_confirmation_routes.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

@@ -88,6 +88,11 @@ def _run(request, *, recovery_bytes, options):
         return staged.finish()
     except HTTPException as exc:
         terminal._discard_scope(request.scope)
+        from serverware import control_plane_oidc_session_activation_approval as approval
+
+        negotiation = None if options else approval._response_for(exc, action=approval.RECOVERY_ACTION)
+        if negotiation is not None:
+            return negotiation
         return unknown() if uncertain else rejected(exc.status_code)
     except Exception:
         terminal._discard_scope(request.scope)

@@ -85,6 +85,11 @@ def _recover(request, *, recovery_bytes):
         # Its actual send hook remains responsible for the signed boundary.
         return staged.finish()
     except HTTPException as exc:
+        from serverware import control_plane_oidc_session_activation_approval as approval
+
+        negotiation = approval._response_for(exc, action=approval.RECOVERY_ACTION)
+        if negotiation is not None:
+            return negotiation
         if not uncertain:
             return _rejected_response(status_code=exc.status_code, local_digest=local_digest)
         return _unknown_response(local_digest)

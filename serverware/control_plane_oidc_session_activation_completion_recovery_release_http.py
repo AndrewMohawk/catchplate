@@ -75,6 +75,11 @@ def _run(request, *, recovery_bytes, options):
         return JSONResponse(status_code=200, headers=completion.HEADERS,
             content=_data("release-intent-proof-retained", local_digest))
     except HTTPException as exc:
+        from serverware import control_plane_oidc_session_activation_approval as approval
+
+        negotiation = None if options else approval._response_for(exc, action=approval.RECOVERY_ACTION)
+        if negotiation is not None:
+            return negotiation
         return error(503 if uncertain else exc.status_code,
             local_digest=local_digest, uncertain=uncertain)
     except Exception:

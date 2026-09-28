@@ -72,6 +72,11 @@ def _run(request, *, recovery_bytes, options):
         # terminal itself requires normal actor and owner cleanup before data.
         return staged.finish()
     except HTTPException as exc:
+        from serverware import control_plane_oidc_session_activation_approval as approval
+
+        negotiation = None if options else approval._response_for(exc, action=approval.RECOVERY_ACTION)
+        if negotiation is not None:
+            return negotiation
         return terminal._unknown_response() if uncertain else error(exc.status_code)
     except Exception:
         return terminal._unknown_response() if uncertain else error(503)

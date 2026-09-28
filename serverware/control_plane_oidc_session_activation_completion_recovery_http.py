@@ -105,6 +105,11 @@ def _run(request, *, profile, recovery_bytes, options):
         return JSONResponse(status_code=200, headers=HEADERS, content=_data(
             status="completion-controls-reconciled", profile=profile, local_digest=local_digest))
     except HTTPException as exc:
+        from serverware import control_plane_oidc_session_activation_approval as approval
+
+        negotiation = None if options else approval._response_for(exc, action=approval.RECOVERY_ACTION)
+        if negotiation is not None:
+            return negotiation
         return error(503 if uncertain else exc.status_code, profile=profile,
             local_digest=local_digest, uncertain=uncertain)
     except Exception:

@@ -121,6 +121,11 @@ def _activate(request, *, activation_bytes):
         return staged.finish()
     except HTTPException as exc:
         if not dispatched:
+            from serverware import control_plane_oidc_session_activation_approval as approval
+
+            negotiation = approval._response_for(exc, action=approval.ACTIVATION_ACTION)
+            if negotiation is not None:
+                return negotiation
             return _rejected_response(status_code=exc.status_code, local_digest=local_digest)
         return _unknown_response(local_digest)
     except Exception:

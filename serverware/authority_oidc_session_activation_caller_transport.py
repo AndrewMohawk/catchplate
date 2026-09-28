@@ -1,4 +1,4 @@
-"""Guarded caller I/O for eleven source-fixed activation/consume wire profiles.
+"""Guarded caller I/O for twelve source-fixed activation/consume wire profiles.
 
 These private adapters preserve the actual caller's work and current guard;
 they do not admit requests, replies, socket peers or callback results as proof.
@@ -23,6 +23,7 @@ from serverware import authority_oidc_session_activation_delivery_sql_transport 
 from serverware import authority_oidc_session_activation_delivery_completion_dispatch_transport as consume_completion_dispatch
 from serverware import authority_oidc_session_activation_delivery_completion_release_transport as consume_completion_release
 from serverware import authority_oidc_session_activation_release_proof_transport as release_proof
+from serverware import authority_oidc_session_activation_release_grant_transport as release_grants
 
 
 AuthorityTransportError = authority_transport.AuthorityTransportError
@@ -30,20 +31,20 @@ capture = production.capability.capture
 
 
 def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, current):
-    # The eleven literal entry functions below choose this closed source set.
+    # The twelve literal entry functions below choose this closed source set.
     # No path, framing callback or caller-selected profile is accepted instead.
     if not (profile is authorizer or profile is reservation or profile is sql
             or profile is completion or profile is completion_dispatch
             or profile is consume_authorizer or profile is consume_reservation or profile is consume_sql
             or profile is consume_completion_dispatch or profile is consume_completion_release
-            or profile is release_proof):
+            or profile is release_proof or profile is release_grants):
         raise AuthorityTransportError("activation caller transport profile is not source fixed")
     # Completion's MAX_BYTES intentionally means only its fixed raw2 request;
     # its separate source exchange ceiling covers the bounded raw4/raw6 response.
     exchange_maximum = (profile.MAX_EXCHANGE_BYTES
         if profile is completion or profile is completion_dispatch
             or profile is consume_completion_dispatch or profile is consume_completion_release
-            or profile is release_proof
+            or profile is release_proof or profile is release_grants
         else profile.MAX_BYTES)
     capture._SharedLedger(work)
     if type(deadline_ns) is not int or deadline_ns <= 0 or not callable(current):
@@ -153,7 +154,7 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
             for offset in range(0, len(length_header), 8))
         if (profile is sql or profile is completion or profile is completion_dispatch
                 or profile is consume_sql or profile is consume_completion_dispatch or profile is consume_completion_release
-                or profile is release_proof):
+                or profile is release_proof or profile is release_grants):
             profile._response_lengths(lengths)
         else:
             profile._lengths(lengths, response=True)
@@ -239,4 +240,9 @@ def _consume_completion_release_on_work(endpoint, *, originals, deadline_ns, wor
 
 def _release_proof_on_work(endpoint, *, originals, deadline_ns, work, current):
     return _exchange_on_work(release_proof, endpoint, originals=originals,
+        deadline_ns=deadline_ns, work=work, current=current)
+
+
+def _release_grants_on_work(endpoint, *, originals, deadline_ns, work, current):
+    return _exchange_on_work(release_grants, endpoint, originals=originals,
         deadline_ns=deadline_ns, work=work, current=current)

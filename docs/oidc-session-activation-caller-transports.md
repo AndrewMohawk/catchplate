@@ -1,7 +1,7 @@
 # Guarded activation and consume caller transports
 
-The five fixed activation and five fixed consume transport profiles expose the same private
-caller API:
+The five fixed activation, five fixed consume, private proof and release-grant
+transport profiles expose the same private caller API:
 
 ```text
 _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current)
@@ -16,7 +16,7 @@ and older helpers are unchanged. SQL's existing uncertainty and empty-frame
 grammar is not widened.
 
 `authority_oidc_session_activation_caller_transport.py` shares only the bounded
-I/O implementation. Eleven literal entry functions select the exact eleven
+I/O implementation. Twelve literal entry functions select the exact twelve
 existing transport modules; its private engine rejects any other module. It
 does not accept request-selected profiles, framing callbacks or arbitrary
 endpoints. Shape-valid response bytes and a matching local socket peer are not
@@ -124,6 +124,16 @@ proof enrollment originals. Its caller durably claims before transport and
 retains the opaque response before semantic/signature admission. The worker
 uses completion-purpose UID65497 but admits only caller65532; the public caller
 checks listener0:0. No response field or socket peer alone is proof authority.
+
+The twelfth literal profile is the
+[fixed release-grant issuance transport](oidc-session-activation-release-grant-transport.md).
+It uses `SWOGIQ01` / `SWOGIR01` at the distinct root-created grants socket.
+Request raw8 is a fixed issuance purpose followed by the actual LIVE release
+raw7; it includes ephemeral old-token possession but no issuer policy, resource
+pins or paths. Response raw2 contains opaque bounded client authorization and
+server bootstrap originals, not a success status. The caller retains these
+originals before genuine admission. This profile introduces no service role,
+issuance authority, work allowance, recovery or request retry.
 
 This is a source-only downstream caller seam. It does not establish completed
 public activation dispatch, installed services, runtime success or production

@@ -1143,6 +1143,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_release_proof.py \
 	serverware/control_plane_oidc_session_activation_release_handoff_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_release_handoff.py \
+	serverware/oidc_session_activation_release_grant_issuer_policy.py \
+	serverware/authority_oidc_session_activation_release_grant_production.py \
+	serverware/authority_oidc_session_activation_release_grant_transport.py \
+	serverware/oidc_session_activation_http_contract.py \
 	serverware/control_plane_oidc_session_activation_consume_planning.py \
 	serverware/control_plane_oidc_session_activation_consume_records.py \
 	serverware/authority_oidc_session_activation_completion_dispatch_transport.py \
@@ -3246,6 +3250,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_release_proof.py \
 				serverware/control_plane_oidc_session_activation_release_handoff_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_release_handoff.py \
+				serverware/oidc_session_activation_release_grant_issuer_policy.py \
+				serverware/authority_oidc_session_activation_release_grant_production.py \
+				serverware/authority_oidc_session_activation_release_grant_transport.py \
+				serverware/oidc_session_activation_http_contract.py \
 				serverware/control_plane_oidc_session_activation_consume_planning.py \
 				serverware/control_plane_oidc_session_activation_consume_records.py \
 				serverware/authority_oidc_session_activation_completion_dispatch_transport.py \

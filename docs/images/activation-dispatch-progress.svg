@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380" role="img" aria-labelledby="activation-dispatch-title activation-dispatch-description">
+  <title id="activation-dispatch-title">Inside step 22: public activation dispatch remains in progress. Permission and planning are source-landed; durable records, guarded transports and grant/reserve/SQL are source-landed in .183 commit 8f1b9a1. Completion, consume/release and the public route remain todo.</title>
+  <desc id="activation-dispatch-description">Seven named display facets explain existing activation step 22 without adding milestones, a completion denominator or an effort percentage. PLAN, Permission + planning, is source-landed: permission d3f846916e121b18d57e9979c700aaa1000d4969, durable claim 4f9185c and private planning 4fc61c341420b96e785973f5c3cdd3c49748b97f. RECORDS, Durable stage records; IO, Guarded transports; and SQL, Grant / reserve / SQL, are source-landed in .183 commit 8f1b9a1c8b2cd6f31eac87ac169636ec3280b965. COMPLETE, Completion continuation; RELEASE, Consume / release continuation; and HTTP, Public route + cookie, remain todo. Each facet has a visible stable key, name and written status; color and hover are not required. Criteria are in the activation-dispatch-detail source ledger. Existing activation totals remain 21/26 source-landed, 1 active and 4 other open; project 34/46 and production 0/6 verified are unchanged. Private SQL observations do not close public dispatch or authorize completion, token release or cookie issuance. Source only: unbuilt, unexecuted and unprovisioned, with no deployed or current-session claim.</desc>
+  <rect x="1" y="1" width="758" height="378" rx="16" fill="#0f172a" stroke="#475569"/>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="24" y="33" fill="#f8fafc" font-size="24" font-weight="700">Inside step 22 · Public activation dispatch</text>
+    <text x="24" y="59" fill="#fbbf24" font-size="16" font-weight="600">IN PROGRESS · private foundations do not close the public flow</text>
+
+    <a href="../production-status.md#activation-dispatch-detail">
+      <g font-size="13" font-weight="700" text-anchor="middle">
+        <g aria-label="PLAN: Permission + planning, source-landed">
+          <rect x="24" y="76" width="94" height="46" rx="5" fill="#064e3b" stroke="#34d399"/>
+          <text x="71" y="95" fill="#f0fdf4">PLAN</text>
+          <text x="71" y="113" fill="#a7f3d0" font-size="11">✓ LANDED</text>
+        </g>
+        <g aria-label="RECORDS: Durable stage records, source-landed in 8f1b9a1">
+          <rect x="127" y="76" width="94" height="46" rx="5" fill="#064e3b" stroke="#34d399"/>
+          <text x="174" y="95" fill="#f0fdf4">RECORDS</text>
+          <text x="174" y="113" fill="#a7f3d0" font-size="11">✓ LANDED</text>
+        </g>
+        <g aria-label="IO: Guarded transports, source-landed in 8f1b9a1">
+          <rect x="230" y="76" width="94" height="46" rx="5" fill="#064e3b" stroke="#34d399"/>
+          <text x="277" y="95" fill="#f0fdf4">IO</text>
+          <text x="277" y="113" fill="#a7f3d0" font-size="11">✓ LANDED</text>
+        </g>
+        <g aria-label="SQL: Grant / reserve / SQL, source-landed in 8f1b9a1">
+          <rect x="333" y="76" width="94" height="46" rx="5" fill="#064e3b" stroke="#34d399"/>
+          <text x="380" y="95" fill="#f0fdf4">SQL</text>
+          <text x="380" y="113" fill="#a7f3d0" font-size="11">✓ LANDED</text>
+        </g>
+        <g aria-label="COMPLETE: Completion continuation, todo">
+          <rect x="436" y="76" width="94" height="46" rx="5" fill="#1e293b" stroke="#64748b"/>
+          <text x="483" y="95" fill="#f1f5f9">COMPLETE</text>
+          <text x="483" y="113" fill="#cbd5e1" font-size="11">○ TODO</text>
+        </g>
+        <g aria-label="RELEASE: Consume / release continuation, todo">
+          <rect x="539" y="76" width="94" height="46" rx="5" fill="#1e293b" stroke="#64748b"/>
+          <text x="586" y="95" fill="#f1f5f9">RELEASE</text>
+          <text x="586" y="113" fill="#cbd5e1" font-size="11">○ TODO</text>
+        </g>
+        <g aria-label="HTTP: Public route + cookie, todo">
+          <rect x="642" y="76" width="94" height="46" rx="5" fill="#1e293b" stroke="#64748b"/>
+          <text x="689" y="95" fill="#f1f5f9">HTTP</text>
+          <text x="689" y="113" fill="#cbd5e1" font-size="11">○ TODO</text>
+        </g>
+      </g>
+
+      <g font-size="14" font-weight="600" fill="#f1f5f9">
+        <text x="24" y="146">PLAN · Permission + planning</text>
+        <text x="24" y="170">RECORDS · Durable stage records</text>
+        <text x="24" y="194">IO · Guarded transports</text>
+        <text x="24" y="218">SQL · Grant / reserve / SQL</text>
+        <text x="24" y="242">COMPLETE · Completion continuation</text>
+        <text x="24" y="266">RELEASE · Consume / release continuation</text>
+        <text x="24" y="290">HTTP · Public route + cookie</text>
+      </g>
+      <g font-size="12" font-weight="600" text-anchor="end">
+        <text x="736" y="146" fill="#a7f3d0">LANDED · d3f8469 / 4f9185c / 4fc61c3</text>
+        <text x="736" y="170" fill="#a7f3d0">SOURCE LANDED · 8f1b9a1</text>
+        <text x="736" y="194" fill="#a7f3d0">SOURCE LANDED · 8f1b9a1</text>
+        <text x="736" y="218" fill="#a7f3d0">SOURCE LANDED · 8f1b9a1</text>
+        <text x="736" y="242" fill="#cbd5e1">TODO · not connected</text>
+        <text x="736" y="266" fill="#cbd5e1">TODO · not connected</text>
+        <text x="736" y="290" fill="#cbd5e1">TODO · not connected</text>
+      </g>
+    </a>
+
+    <path d="M24 304H736" stroke="#334155"/>
+    <text x="24" y="325" fill="#cbd5e1" font-size="13">Activation 21/26 + 1 active + 4 other open · project 34/46 · production 0/6 verified</text>
+    <text x="24" y="347" fill="#94a3b8" font-size="12">LANDED = committed source · TODO = remaining connections · no new denominator</text>
+    <text x="24" y="368" fill="#94a3b8" font-size="12">Source only · unbuilt / unexecuted / unprovisioned · no public delivery or current-session claim</text>
+  </g>
+</svg>

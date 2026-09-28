@@ -27,21 +27,28 @@ Checkpoint: **2026-09-27 — pre-production, source-only.**
 
 **21/26 source steps landed · 1 active · 4 todo.** Fresh target-bound permission
 is source-landed in [d3f8469](https://github.com/example/private-deployment).
-Active: step 22, public activation dispatch (partial).
-[4fc61c3](https://github.com/example/private-deployment)
-connects root configuration, live permission, the [durable claim](https://github.com/example/private-deployment),
-the real private planner and original authorization. Still open: the public route,
-grant/reserve/SQL and completion/consume/release original continuation, and the
-cookie boundary. This increment does not complete step 22.
+Active: **step 22, public activation dispatch — partial**.
+Permission and private planning are [landed](https://github.com/example/private-deployment).
+Durable stage records, guarded transports and grant/reserve/SQL integration are
+source-landed in [8f1b9a1](https://github.com/example/private-deployment).
+The SQL response is unsigned, not activation success. Completion, consume/release
+continuation and the public route/cookie boundary remain todo.
 
-[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch active with committed .182 private planning; 23–26 recovery and portal work todo. Twenty-one landed, one active and four todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Inside active step 22: PLAN Permission + planning landed; RECORDS Durable stage records, IO Guarded transports and SQL Grant / reserve / SQL source-landed in 8f1b9a1; COMPLETE Completion continuation, RELEASE Consume / release continuation and HTTP Public route + cookie todo. Unsigned SQL is not activation success. Named connection facets, not additional milestones or a completion percentage. Source only; production remains 0/6 verified.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+
+<details>
+<summary>All 26 activation steps: 21 landed, 1 active, 4 todo</summary>
+
+[![Session activation's 26 named source steps: 01–21 landed; 22 public activation dispatch active with committed private planning and .183 grant/reserve/SQL integration; 23–26 recovery and portal work todo. Twenty-one landed, one active and four todo. No runtime or production verification.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+
+</details>
 
 Public and portal checkpoints remain individually tracked:
 
 | Step / stable ID | Deliverable | Status |
 | --- | --- | --- |
 | 21 · F08.5.1 | Authorize the exact user/session/credential target, with fresh approval and dedicated caller-key custody | Landed · [d3f8469](https://github.com/example/private-deployment) |
-| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | In progress · [private planning landed](https://github.com/example/private-deployment) |
+| 22 · F08.5.2 | Connect explicit public activation with durable dispatch/outcome tracking and truthful responses | In progress · [named connection detail](docs/production-status.md#activation-dispatch-detail) |
 | 23 · F08.5.3 | Connect separately authorized recovery; a missing response never permits automatic activation retry | Todo |
 | 24 · F08.6.1 | Add explicit portal activate/recover controls bound to the exact retained target | Todo |
 | 25 · F08.6.2 | Require fresh action-bound portal approval; discard prompts when actor or target changes | Todo |
@@ -113,7 +120,7 @@ Full verification follows source freeze.
 [Full tracker and remaining-work criteria →](docs/production-status.md#remaining-work-breakdown)
 · [Six production acceptance gates →](docs/production-status.md#remaining-production-gates)
 
-<!-- Keep README, docs/production-status.md and affected progress SVGs synchronized. Use the existing 46 project / 26 activation / 16 token-release inventories; release-handoff-progress.svg expands units 15/16 into 15.1–15.6 and 16.1–16.5, not new milestones. Every segment needs a visible ID, name, status and linked criterion/evidence. Mark active uncommitted work amber, queued work blue, todo gray; green requires its actual implementation commit. Never add children to parents, infer an ETA from counts, or combine source progress with production acceptance. -->
+<!-- Keep README, docs/production-status.md and affected progress SVGs synchronized. Use the existing 46 project / 26 activation / 16 token-release inventories; release-handoff-progress.svg expands units 15/16 into 15.1–15.6 and 16.1–16.5, not new milestones. activation-dispatch-progress.svg names connections inside step 22 without adding a denominator. Every segment needs a visible ID, name, status and linked criterion/evidence. Mark active uncommitted work amber, queued work blue, todo gray; green requires its actual implementation commit. Never add children to parents, infer an ETA from counts, or combine source progress with production acceptance. -->
 
 ## Why Serverware?
 

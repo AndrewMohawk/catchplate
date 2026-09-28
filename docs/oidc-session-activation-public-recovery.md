@@ -1,9 +1,11 @@
-# Public activation recovery: actor and evidence boundary
+# Public activation recovery: actor and authority boundaries
 
-Recovery is a separate user action, not another activation attempt. This source
-slice adds bounded recovery options and a private, live authorization context.
-It does **not** add a public recovery-dispatch endpoint, recover a token or close
-activation step 23. Source remains unbuilt, unexecuted and unprovisioned.
+Recovery is a separate user action, not another activation attempt. The source
+contains bounded recovery options, a private live actor context, and separate
+original-only recovery-grant production and admission. These libraries are not
+yet connected through a recovery issuer service and public dispatch. They do
+**not** recover a token or close activation step 23. Source remains unbuilt,
+unexecuted and unprovisioned.
 
 ## Why the activation permission cannot be reused
 
@@ -86,13 +88,63 @@ interval is renewed.
 
 ## Remaining recovery work
 
+### Fresh recovery grants, distinct from execution authority
+
+The existing LIVE grant issuer authorizes checkpoint-zero release. It cannot be
+reused for uncertain-outcome recovery. The separate
+[recovery issuer policy](oidc-session-activation-release-recovery-issuer-policy.md)
+binds the independently selected historical release, outcome digest, enrolled
+signing keys, current client and fixed release resources. Its current interval
+does not renew the historical custody, intent, proof or execution intervals;
+the original delivery expiry still limits recovery.
+
+The [recovery grant producer](oidc-session-activation-release-recovery-grant-production.md)
+accepts the seven original recovery inputs without a candidate outcome. It
+authenticates the historical evidence and old-token possession, reconstructs the
+outcome, and checks its independently pinned digest before forming the complete
+eight-part private recovery request. It emits only a recovery-profile client
+authorization, matching server bootstrap and canonical outcome original.
+Storage authorization requires checkpoint one and
+the independently pinned outcome. Recovery authorization is a separate signed
+purpose. Neither a caller-supplied successful object nor an unverified local
+association can supply those expectations.
+
+The [independent admission path](oidc-session-activation-release-recovery-grant-admission.md)
+re-admits those originals against the separate policy and exact evidence. It
+does not trust the producer's return type as proof. Restrictive continuity
+callbacks preserve the original work allowance and observed clock floors
+through nested verification and signing; they cannot add authority or create
+a new processing window. These callbacks are ancestor-only bookkeeping, not
+recursive calls into guards that depend on the admission in progress.
+
+Reconstructing an outcome proves its exact contents, **not that the outcome was
+durably stored**. The actual private recovery worker must independently read
+the unchanged checkpoint-one record before and after guarded token opening.
+An absent or changed record must fail; no append, SQL replay, new token or
+automatic retry repairs it.
+
+```mermaid
+flowchart LR
+  P[Independent fresh recovery policy] --> G[Historical-original admission]
+  H[Intent, proof, custody and old-token possession] --> G
+  G --> C[Recovery client and server originals]
+  G --> O[Exact canonical outcome]
+  C --> V[Independent grant admission]
+  O --> V
+  V -. unfinished service and actor integration .-> S[Read actual retained outcome]
+  S -.-> R[Private recovery and guarded cookie delivery]
+```
+
+### Service, storage and public completion
+
 This slice requires a retained release intent. Failures before that stage still
 need a distinct original-bound completion/recovery path; they are not treated
-as safe activation retries. Full recovery also needs fresh independently issued
-recovery-profile authority, exact retained outcome/storage admission, the finite
-private recovery exchange, genuine response verification and a final current-
-auth/cookie boundary. A once-checked actor or intent result cannot replace any
-of those checks.
+as safe activation retries. Full recovery still needs actual fresh-grant
+acquisition through independently provisioned services, exact retained
+outcome/storage admission, the finite private recovery exchange, genuine token
+response verification and a final current-auth/cookie boundary. The pure grant
+libraries do not complete those connections. A once-checked actor or intent
+result cannot replace any of these checks.
 
 No protected activation or consume SQL is repeated here. WebAuthn challenge
 issuance and assertion-counter updates remain their normal authentication

@@ -14,6 +14,7 @@ import time
 from cryptography.exceptions import InvalidSignature
 
 from serverware import oidc_session_activation_release_custody_bootstrap as bootstrap
+from serverware import oidc_session_activation_release_outcome_authorization as outcome_authorization
 from serverware import authority_successor_execution_window as processing
 from serverware.authority_query_read_work import QueryReadWorkError
 
@@ -142,7 +143,11 @@ def _digest_on_work(original, work):
     return plan._frame(IDENTITY_DOMAIN, (raw,), work)
 
 
-def _processing(live_window, transport_deadline_ns, work):
+def _processing(live_window, transport_deadline_ns, work, _continuity=None):
+    if _continuity is not None:
+        # Only clock/ledger bookkeeping is shared, never storage authority.
+        return outcome_authorization._processing(live_window, transport_deadline_ns,
+            work, _continuity)
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
@@ -179,7 +184,7 @@ def _processing(live_window, transport_deadline_ns, work):
 
 
 def _verify_on_work(*, authorization_bytes, root_public_key, expected_scope,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Admit this root original against independent scope and current bounds."""
     capture._SharedLedger(work)
     raw = authorization._original(authorization_bytes, MAX_BYTES, "release recovery authorization")
@@ -188,7 +193,7 @@ def _verify_on_work(*, authorization_bytes, root_public_key, expected_scope,
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     expected = _scope(expected_scope, work)
-    current, bind_interval = _processing(window, transport_deadline_ns, work)
+    current, bind_interval = _processing(window, transport_deadline_ns, work, _continuity)
     current()
     envelope = _read(raw, work)
     current()
@@ -217,7 +222,7 @@ def _verify_on_work(*, authorization_bytes, root_public_key, expected_scope,
 
 
 def _produce_on_work(*, payload, root_private_key, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Sign only this purpose and genuinely admit the exact current output."""
     capture._SharedLedger(work)
     private, root = root_private_key, root_public_key
@@ -228,7 +233,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     owned = _capture(payload, work)
     _payload_shape(owned, work)
     expected = _scope({name: owned[name] for name in SCOPE_FIELDS}, work)
-    current, bind_interval = _processing(window, transport_deadline_ns, work)
+    current, bind_interval = _processing(window, transport_deadline_ns, work, _continuity)
     current()
     live = bind_interval(owned["issuedAtEpochNs"], owned["expiresAtEpochNs"])
     live()
@@ -264,7 +269,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     live()
     verified = _verify_on_work(authorization_bytes=original, root_public_key=root,
         expected_scope=expected, live_window=window,
-        transport_deadline_ns=transport_deadline_ns, work=work)
+        transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity)
     verified.live()
     plan._same(verified.payload, owned, work, "release recovery authorization signed payload differs")
     live()

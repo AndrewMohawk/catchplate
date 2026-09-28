@@ -260,11 +260,12 @@ def _contains(outer, inner):
         _fail("release launch interval exceeds an independently authenticated fresh original")
 
 
-def _material(payload, original, root, window, bound, opening, current, work):
+def _material(payload, original, root, window, bound, opening, current, work, _continuity=None):
     (custody_bytes, storage_bytes, recovery_bytes), total = _originals(payload, original, current, work)
     verifier = custody._verify_on_work if payload["profile"] == LIVE_PROFILE else custody._verify_historical_on_work
     admitted = verifier(custody_bytes=custody_bytes, root_public_key=root,
-        live_window=window, transport_deadline_ns=bound, work=work)
+        live_window=window, transport_deadline_ns=bound, work=work,
+        _current=current if _continuity is not None else None)
     current()
     if total + len(admitted.planner.bootstrap_bytes) > MAX_ORIGINAL_BYTES:
         _fail("release cold nested original inventory exceeds its aggregate bound")
@@ -296,7 +297,8 @@ def _material(payload, original, root, window, bound, opening, current, work):
         for name in storage.DIRECTORY_FIELDS}
     plan._same(slot["directory"], directory, work, "release launch actual directory pins")
     stored = storage._verify_on_work(authorization_bytes=storage_bytes, root_public_key=root,
-        expected_scope=slot, live_window=window, transport_deadline_ns=bound, work=work)
+        expected_scope=slot, live_window=window, transport_deadline_ns=bound, work=work,
+        _continuity=_continuity)
     current()
     interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
     _contains(interval, (stored.payload["issuedAtEpochNs"], stored.payload["expiresAtEpochNs"]))
@@ -310,7 +312,8 @@ def _material(payload, original, root, window, bound, opening, current, work):
         plan._same(recovery_scope["directory"], directory, work, "release recovery directory pins")
         plan._same(recovery_scope["deliveryId"], slot["deliveryId"], work, "release recovery exact slot")
         recovered = recovery._verify_on_work(authorization_bytes=recovery_bytes, root_public_key=root,
-            expected_scope=recovery_scope, live_window=window, transport_deadline_ns=bound, work=work)
+            expected_scope=recovery_scope, live_window=window, transport_deadline_ns=bound, work=work,
+            _continuity=_continuity)
         current()
         _contains(interval, (recovered.payload["issuedAtEpochNs"], recovered.payload["expiresAtEpochNs"]))
     _created, delivery_expiry = custody._scope(admitted.delivery_scope, work)
@@ -319,7 +322,7 @@ def _material(payload, original, root, window, bound, opening, current, work):
             payload["launch"]["requestTimeoutSeconds"] * 1_000_000_000),
         maximum_clock_skew_ns=admitted.planner.maximum_clock_skew_ns)
     deadline = min(bound, narrowed[4])
-    checked, _bind = storage._processing(narrowed, deadline, work)
+    checked, _bind = storage._processing(narrowed, deadline, work, _continuity)
     last_epoch = current()
 
     def live():
@@ -345,7 +348,8 @@ def _material(payload, original, root, window, bound, opening, current, work):
         payload["runtimeClosureDigest"], payload["launch"], interval, opening, narrowed, deadline, live)
 
 
-def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_deadline_ns, work):
+def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_deadline_ns, work,
+        _continuity=None):
     """Admit root originals, never a prior material carrier or inferred slot."""
     capture._SharedLedger(work)
     original = authorization._original(bootstrap_bytes, MAX_BYTES, "release cold bootstrap")
@@ -354,7 +358,7 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(window[4], transport_deadline_ns)
-    current, bind_interval = storage._processing(window, bound, work)
+    current, bind_interval = storage._processing(window, bound, work, _continuity)
     current()
     envelope = _decode(original, work)
     shape._object(envelope, _ENVELOPE_FIELDS, "signed release cold bootstrap")
@@ -375,14 +379,14 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
     interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
     live = _launch_guard(interval, opening, bind_interval(*interval), work)
     live()
-    material = _material(payload, original, root, window, bound, opening, live, work)
+    material = _material(payload, original, root, window, bound, opening, live, work, _continuity)
     _canonical(original, envelope, work)
     material.live()
     return material
 
 
 def _produce_on_work(*, payload, root_private_key, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Sign a closed root-selected launch after genuine nested admission."""
     capture._SharedLedger(work)
     private, root = root_private_key, root_public_key
@@ -392,14 +396,14 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(window[4], transport_deadline_ns)
-    current, bind_interval = storage._processing(window, bound, work)
+    current, bind_interval = storage._processing(window, bound, work, _continuity)
     current()
     _payload_shape(owned, work)
     opening = window[1], window[0], window[2]
     interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
     live = _launch_guard(interval, opening, bind_interval(*interval), work)
     unsigned = _wire(owned, work)
-    admitted = _material(owned, unsigned, root, window, bound, opening, live, work)
+    admitted = _material(owned, unsigned, root, window, bound, opening, live, work, _continuity)
     keys._pair_on_work(private, root, work)
     admitted.live()
     envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}

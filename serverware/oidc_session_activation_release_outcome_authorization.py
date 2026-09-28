@@ -148,21 +148,54 @@ def _digest_on_work(original, work):
     return plan._frame(IDENTITY_DOMAIN, (raw,), work)
 
 
-def _processing(live_window, transport_deadline_ns, work):
+def _processing(live_window, transport_deadline_ns, work, _continuity=None):
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
     last_epoch, last_monotonic = window[0], window[2]
+    if _continuity is not None and not callable(_continuity):
+        _fail("release outcome continuity must be callable")
+    capture._SharedLedger(work)
+    limits, metrics = work.limits, work.metrics
+    ceilings = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+
+    def ledger():
+        nonlocal metrics
+        capture._SharedLedger(work)
+        observed = work.metrics
+        if (work.limits is not limits
+                or ceilings != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or observed.hash_work < metrics.hash_work
+                or observed.input_bytes < metrics.input_bytes
+                or observed.json_nodes < metrics.json_nodes):
+            _fail("release outcome continuity reset its original work allowance")
+        metrics = observed
+
+    def synchronize():
+        nonlocal last_epoch, last_monotonic
+        if _continuity is None:
+            return
+        ledger()
+        observed = _continuity(last_epoch, last_monotonic)
+        ledger()
+        if (type(observed) is not tuple or len(observed) != 2
+                or type(observed[0]) is not int or type(observed[1]) is not int
+                or observed[0] < last_epoch or observed[1] < last_monotonic
+                or observed[0] >= window[3] or observed[1] >= bound):
+            _fail("release outcome continuity reversed or exceeded its clock bounds")
+        last_epoch, last_monotonic = observed
 
     def current():
         nonlocal last_epoch, last_monotonic
+        synchronize()
         now = clock._check_on_work(window, work=work)
         monotonic = production._callback(work, time.monotonic_ns)
         shape._integer(monotonic, minimum=1)
         if now < last_epoch or monotonic < last_monotonic or monotonic >= bound:
             _fail("release outcome authorization processing clocks expired or reversed")
         last_epoch, last_monotonic = now, monotonic
-        return now
+        synchronize()
+        return last_epoch
 
     def bind_interval(issued, expires):
         nonlocal window, bound
@@ -185,7 +218,7 @@ def _processing(live_window, transport_deadline_ns, work):
 
 
 def _verify_on_work(*, authorization_bytes, root_public_key, expected_scope,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Admit actual root original, independently pinned scope and current use."""
     capture._SharedLedger(work)
     raw = authorization._original(authorization_bytes, MAX_BYTES, "release outcome authorization")
@@ -194,7 +227,7 @@ def _verify_on_work(*, authorization_bytes, root_public_key, expected_scope,
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     expected = _scope(expected_scope, work)
-    current, bind_interval = _processing(window, transport_deadline_ns, work)
+    current, bind_interval = _processing(window, transport_deadline_ns, work, _continuity)
     current()
     envelope = _read(raw, work)
     current()
@@ -224,7 +257,7 @@ def _verify_on_work(*, authorization_bytes, root_public_key, expected_scope,
 
 
 def _produce_on_work(*, payload, root_private_key, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Sign this fixed root purpose and genuinely admit the exact output."""
     capture._SharedLedger(work)
     private, root = root_private_key, root_public_key
@@ -235,7 +268,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     owned = _capture(payload, work)
     _payload_shape(owned, work)
     expected = _scope({name: owned[name] for name in SCOPE_FIELDS}, work)
-    current, bind_interval = _processing(window, transport_deadline_ns, work)
+    current, bind_interval = _processing(window, transport_deadline_ns, work, _continuity)
     current()
     live = bind_interval(owned["issuedAtEpochNs"], owned["expiresAtEpochNs"])
     live()
@@ -271,7 +304,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     live()
     verified = _verify_on_work(authorization_bytes=original, root_public_key=root,
         expected_scope=expected, live_window=window,
-        transport_deadline_ns=transport_deadline_ns, work=work)
+        transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity)
     verified.live()
     plan._same(verified.payload, owned, work, "release outcome authorization signed payload differs")
     live()

@@ -177,7 +177,8 @@ def _signature(envelope, root, work):
             "release client authorization root signature is invalid") from exc
 
 
-def _join_server(payload, server_original, root, expected, window, bound, current, bind_interval, work):
+def _join_server(payload, server_original, root, expected, window, bound, current, bind_interval, work,
+        _continuity=None):
     for name in SCOPE_FIELDS:
         current()
         plan._same(payload[name], expected[name], work, "release client independent " + name)
@@ -204,7 +205,8 @@ def _join_server(payload, server_original, root, expected, window, bound, curren
         maximum_clock_skew_ns=window[6])
     client_bound = min(bound, client_window[4])
     material = server._verify_on_work(bootstrap_bytes=server_original, root_public_key=root,
-        live_window=client_window, transport_deadline_ns=client_bound, work=work)
+        live_window=client_window, transport_deadline_ns=client_bound, work=work,
+        _continuity=_continuity)
     if type(material) is not server._ReleaseMaterial:
         _fail("release client did not obtain actual original server admission")
 
@@ -253,7 +255,7 @@ def _join_server(payload, server_original, root, expected, window, bound, curren
     if (narrowed[:3] != window[:3]
             or any(actual > prior for actual, prior in zip(narrowed[3:], window[3:]))):
         _fail("release client admission renewed the supplied processing allowance")
-    checked, _bind = server.storage._processing(narrowed, deadline, work)
+    checked, _bind = server.storage._processing(narrowed, deadline, work, _continuity)
 
     def live():
         nonlocal last_epoch
@@ -269,7 +271,7 @@ def _join_server(payload, server_original, root, expected, window, bound, curren
 
 
 def _verify_on_work(*, authorization_bytes, server_bootstrap_bytes, root_public_key,
-        expected_scope, live_window, transport_deadline_ns, work):
+        expected_scope, live_window, transport_deadline_ns, work, _continuity=None):
     """Authenticate actual root originals and separately held client scope17."""
     capture._SharedLedger(work)
     root = root_public_key
@@ -283,7 +285,7 @@ def _verify_on_work(*, authorization_bytes, server_bootstrap_bytes, root_public_
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
-    current, bind_interval = server.storage._processing(window, bound, work)
+    current, bind_interval = server.storage._processing(window, bound, work, _continuity)
     current()
     envelope = _read(raw, work)
     current()
@@ -291,7 +293,7 @@ def _verify_on_work(*, authorization_bytes, server_bootstrap_bytes, root_public_
     current()
     payload = envelope["payload"]
     material, narrowed, deadline, live = _join_server(payload, server_original, root,
-        expected, window, bound, current, bind_interval, work)
+        expected, window, bound, current, bind_interval, work, _continuity)
     live()
     _canonical(raw, envelope, work)
     live()
@@ -303,7 +305,7 @@ def _verify_on_work(*, authorization_bytes, server_bootstrap_bytes, root_public_
 
 
 def _produce_on_work(*, payload, server_bootstrap_bytes, root_private_key, root_public_key,
-        expected_scope, live_window, transport_deadline_ns, work):
+        expected_scope, live_window, transport_deadline_ns, work, _continuity=None):
     """Sign only after genuine server/original-scope admission under this window."""
     capture._SharedLedger(work)
     private, root = root_private_key, root_public_key
@@ -320,10 +322,10 @@ def _produce_on_work(*, payload, server_bootstrap_bytes, root_private_key, root_
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
-    current, bind_interval = server.storage._processing(window, bound, work)
+    current, bind_interval = server.storage._processing(window, bound, work, _continuity)
     current()
     _material, _narrowed, _deadline, live = _join_server(owned, server_original, root,
-        expected, window, bound, current, bind_interval, work)
+        expected, window, bound, current, bind_interval, work, _continuity)
     live()
     keys._pair_on_work(private, root, work)
     live()

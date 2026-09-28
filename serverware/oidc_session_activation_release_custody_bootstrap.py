@@ -263,7 +263,7 @@ def _verify_on_work(*, custody_bytes, root_public_key, live_window, transport_de
 
 
 def _verify_historical_on_work(*, custody_bytes, root_public_key, live_window,
-        transport_deadline_ns, work):
+        transport_deadline_ns, work, _current=None):
     """Authenticate old root custody as data, never as renewed release authority.
 
     The original outer interval remains unchanged and need not still be live.
@@ -280,6 +280,7 @@ def _verify_historical_on_work(*, custody_bytes, root_public_key, live_window,
         shape._integer(transport_deadline_ns, minimum=1)
         deadline = min(window[4], transport_deadline_ns)
         current = planner_bootstrap._processing(window, deadline, work)
+        current = delivery._join_current(current, _current, work)
         current()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed historical activation release custody")
@@ -304,7 +305,8 @@ def _verify_historical_on_work(*, custody_bytes, root_public_key, live_window,
         current()
         # The shared material path genuinely admits the original planner,
         # preserves key/configuration joins and still rejects expired delivery.
-        result = _material(payload, original, root, window, deadline, opening, work, current)
+        result = _material(payload, original, root, window, deadline, opening, work, current,
+            _current=_current)
         _canonical(original, envelope, work)
         current()
         return result

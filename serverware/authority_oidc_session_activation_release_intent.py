@@ -308,7 +308,7 @@ def _verify_on_work(*, intent_bytes, enrollment_bytes, root_public_key, forbidde
 
 def _verify_historical_on_work(*, intent_bytes, enrollment_bytes, root_public_key,
         forbidden_public_keys, expected_scope, expected_release, old_token_bytes,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Authenticate old intent evidence and current possession, not permission.
 
     A separate fresh root recovery purpose must admit the unchanged outcome.
@@ -321,7 +321,8 @@ def _verify_historical_on_work(*, intent_bytes, enrollment_bytes, root_public_ke
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
     if held.intent is None:
         _fail("historical release intent requires its actual signed original")
-    enrolled, current, _narrow, created, delivery_expiry, _window = _admit(held, work)
+    enrolled, current, _narrow, created, delivery_expiry, _window = _admit(
+        held, work, continuity=_continuity)
     payload, _age, original_skew, issued, _expires = _authenticate_original(
         held, held.intent, enrolled, current, created, delivery_expiry, work)
     processing_skew = min(original_skew, held.window[6])

@@ -296,7 +296,7 @@ def _verify_on_work(*, proof_bytes, enrollment_bytes, root_public_key, forbidden
 
 def _verify_historical_on_work(*, proof_bytes, enrollment_bytes, root_public_key,
         forbidden_public_keys, expected_scope, expected_release, expected_evidence,
-        expected_intent_interval, live_window, transport_deadline_ns, work):
+        expected_intent_interval, live_window, transport_deadline_ns, work, _continuity=None):
     """Authenticate original proof evidence, not a fresh intent or permission.
 
     The surrounding recovery composition genuinely admits the original intent,
@@ -308,7 +308,7 @@ def _verify_historical_on_work(*, proof_bytes, enrollment_bytes, root_public_key
         expected_scope=expected_scope, expected_release=expected_release, expected_evidence=expected_evidence,
         expected_intent_interval=expected_intent_interval, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, work=work)
-    current, narrow = _clock(held, work)
+    current, narrow = _clock(held, work, continuity=_continuity)
     current()
     enrolled = enrollments._admit_on_work(enrollment_bytes=held.enrollment,
         root_public_key=held.root, expected_scope=held.scope,

@@ -24,51 +24,30 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 3 active and 8 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04 and O04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: approvals, historical recovery and workload identity
+### Current work: workload trust, recovery and protected operations
 
-[`.234` source / 6a29d2b](https://github.com/example/private-deployment)
-repairs the [generic approval verification handoff](docs/control-plane-approval-verification.md)
-with a genuine one-use receipt into the locked transaction, without replaying a
-spent challenge or accepting WebAuthn metadata as authority. O04 is active and
-partial: remaining protected side effects and consolidated-fixture adjustments
-stay open; the separate workload approval path is preserved.
+[`.235` source / 8ff93af](https://github.com/example/private-deployment)
+connects [native workload trust verification](docs/native-workload-trust.md):
+clients authenticate the running enclave's actual credential-issuer inventory,
+check their certificate chain against an independently pinned issuer, and—on
+the proof-client path—finish those checks before CONNECT on the same TLS socket.
+Existing profiles stay unchanged; the new profiles require explicit opt-in.
 
-Earlier [`.233` / dece33a](https://github.com/example/private-deployment)
-connects [independently authorized public trust publication and standard Rust ingress admission](docs/workload-identity-trust-distribution.md).
-The immutable single-issuer startup profile binds the exact CA bundle, running
-binary, signed policy and complete mTLS selector inventory. Original expiry
-remains enforced; changing trust requires explicit authorization and restart.
+The three active checkpoints remain partial:
 
-Earlier [`.232` / 3718394](https://github.com/example/private-deployment)
-adds [explicit SDK/CLI options and one-shot submission](docs/workload-identity-submission.md),
-mandatory fresh WebAuthn and a different portal approver, plus an imported-options
-receipt → passkey → assertion-download handoff. Successful CLI submission admits
-the leaf and retained local key under the same original budget. Sticky claims
-and exact response retention never authorize automatic retry; approval continuation is explicit.
+- **N04 · Workload identity:** issuance, CLI/portal submission, standard trust
+  publication and native session/issuer verification are source-connected.
+  Production enrollment, native trust authorization, issuer lifecycle,
+  authenticated service/sidecar journeys and runtime verification remain open.
+- **H05 · Historical recovery:** [retained intent/proof readmission](docs/control-plane-retained-intent-history.md)
+  is source-connected; historical release delivery, migration and older-source replay remain open.
+- **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
+  is source-connected; protected provider/filesystem effects and durable
+  interruption outcomes remain open.
 
-Earlier [`.231` caller/public action](https://github.com/example/private-deployment)
-and [`.230` issuer worker](https://github.com/example/private-deployment)
-retain their separate credits and independent issuance-grant requirement.
-Production requires a signed enabled-or-disabled caller bootstrap.
-
-[`.229` source / fcbe181](https://github.com/example/private-deployment)
-is separately credited for:
-
-- **H05:** [Read-only retained intent/proof admission](docs/control-plane-retained-intent-history.md)
-  uses independently archived signing authority (RI), without retired private
-  keys or old-RI token delivery. Historical retained-release delivery, migration
-  and older-source replay remain open.
-- **N04:** The [local workload identity CLI](docs/workload-identity-provisioning.md)
-  adds `--prepare-workload-identity` for key/CSR/request creation and
-  `--admit-workload-certificate` for pinned-issuer certificate admission.
-  These local modes remain network-free; they do not submit to the new worker.
-
-H05, N04 and O04 remain partial: no tested pilot or new landed checkpoint.
-Source remains unbuilt, unexecuted and unprovisioned.
-Native/client attestation trust-pin integration, trust rotation and issuer lifecycle,
-authenticated channels, sidecar integration, H05 historical recovery and O04
-protected provider/filesystem side effects remain open.
-[Remaining boundaries](docs/historical-authority-resolution.md).
+No new parent checkpoint or tested pilot is claimed. Source remains unbuilt,
+unexecuted and unprovisioned. The [detailed ledger](docs/production-status.md)
+retains all eleven unfinished parents, earlier commits and exact closure criteria.
 
 ### Source-landed workflow: session activation
 

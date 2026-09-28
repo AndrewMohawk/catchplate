@@ -1,11 +1,19 @@
 # Consume completion historical key custody
 
+The legacy v1/v6 behavior below is preserved. The explicit
+[v2/v11 completion bridge](oidc-session-activation-delivery-completion-bridge.md)
+additionally authenticates expired planner-v3/history-v7 originals with an
+independently fresh-root-signed consume evidence root and original policy
+interval. Its actual owner retains that evidence root separately from the fresh
+completion root; it cannot substitute a planning role or revive old authority.
+
 This source-only layer admits a distinct private completion purpose for
 `oidc.session.activation-delivery.consume`. It does not relabel the consume SQL
 receiver, reopen an expired consume plan, execute SQL, sign a completion, or
 release a token. Cold key/FD delivery, service construction, state-peer routing
-and response admission remain separate integration work. Nothing here is built,
-executed, installed or production-verified.
+and response admission are supplied by the separate bootstrap/service stack,
+not this custody library. Nothing here is built, executed, installed or
+production-verified.
 
 ## Fixed purpose and originals
 

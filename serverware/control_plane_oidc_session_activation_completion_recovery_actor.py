@@ -87,11 +87,12 @@ def _selected_configuration(target, profile, current):
 def _require_current_effect_authority(owner, parent, target):
     """Completion history cannot silently enable a later current-key producer.
 
-    The input/private-planner bridge alone cannot authorize consume execution:
-    grant, reservation, SQL and completion need their own signed bridge profiles.
-    Intent/proof/release joins also remain separate. Until each effect path is
-    complete, accept only genuine current-mode selection, not equivalent-looking
-    archived fields or coincident keys.
+    Role-specific bridges connect same-call consume workers, but interrupted
+    completion still selects consume pins from the activation target's scope.
+    A bridged consume may instead have a separately enrolled evidence root.
+    Do not enable that effect until recovery independently selects its original
+    consume authority. Intent/proof/release joins also remain separate. Accept
+    only genuine current-mode selection, not coincident keys or matching fields.
     """
     selected = target.authority
     if (type(selected) is not history.historical._SelectedActivationHistory

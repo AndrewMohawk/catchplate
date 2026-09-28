@@ -47,6 +47,15 @@ planning-history original intervals are historical metadata. Fresh completion
 custody and v6 activation-history authority, not expired launches, constrain
 current processing. The outer launch must fit the fresh custody interval.
 
+Explicit [completion custody v2 and history v11](oidc-session-activation-delivery-completion-bridge.md)
+also admit an original bridged planner-v3/history-v7 pair. The fresh outer root
+independently signs the original consume evidence root and bridge-policy
+interval; both nested fresh controls must agree. `_CompletionMaterial` retains
+that evidence root separately. Old caller/grant/state enrollment admission,
+actual private replay and completion-journal/state delivery use the evidence
+root, while startup and fresh custody reauthentication keep the current outer
+root. No descriptor, launch profile, request argument or old expiry is changed.
+
 The root independently pins the consume request/scope/journal expectations,
 packet and caller-authorization identities, current pending sequence/head/fence,
 local completion-journal checkpoint, configuration/generation/runtime cohort,

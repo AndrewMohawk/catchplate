@@ -372,6 +372,7 @@ def _verify_on_work(*, bootstrap_bytes, custody_bytes, planner_bootstrap_bytes,
         original = authorization._original(bootstrap_bytes, MAX_BYTES, "consume SQL bootstrap")
         originals = _detached(custody_bytes, planner_bootstrap_bytes,
             planner_history_custody_bytes, receiving_history_custody_bytes)
+        receiving._intake_reservation((16 * 1024, len(original), *map(len, originals)))
         root = root_public_key
         authorization._public(root)
         window, bound, inherited = _processing(live_window, transport_deadline_ns, work)

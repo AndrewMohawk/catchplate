@@ -79,6 +79,11 @@ class _IssuerPolicyMaterial:
     bridge: object = None
 
 
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
+class _HistoricalIssuerPolicyMaterial(_IssuerPolicyMaterial):
+    """Original signed bridge evidence, never current issuer permission."""
+
+
 class _Capture(capture._JSONCapture):
     def visit(self, value, depth=0, ancestors=frozenset()):
         if depth > MAX_DEPTH or self.nodes >= MAX_NODES:
@@ -376,12 +381,53 @@ def _join_planner(payload, original, root, lifetime, work):
 def _verify_on_work(*, policy_bytes, activation_planner_bootstrap_bytes, root_public_key,
         live_window, transport_deadline_ns, work, _continuity=None):
     """Authenticate independent originals, not caller evidence or a template."""
+    return _verify_original_on_work(policy_bytes=policy_bytes,
+        activation_planner_bootstrap_bytes=activation_planner_bootstrap_bytes,
+        root_public_key=root_public_key, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity)
+
+
+def _expected_policy_interval(value):
+    if type(value) is not tuple or len(value) != 2:
+        _fail("historical consume bridge needs its independently pinned original interval")
+    for endpoint in value:
+        shape._integer(endpoint, minimum=1)
+    if not 0 < value[1] - value[0] <= MAX_RECEIPT_AGE_NS:
+        _fail("historical consume bridge original interval exceeds its source bound")
+    return value
+
+
+def _verify_historical_on_work(*, policy_bytes, activation_planner_bootstrap_bytes,
+        root_public_key, expected_policy_interval, live_window, transport_deadline_ns,
+        work, _continuity=None):
+    """Authenticate original v2 under explicit R1; current processing stays current.
+
+    The composing fresh completion authority must independently supply R1 and
+    the exact original interval. Neither is inferred from received evidence.
+    """
+    return _verify_original_on_work(policy_bytes=policy_bytes,
+        activation_planner_bootstrap_bytes=activation_planner_bootstrap_bytes,
+        root_public_key=root_public_key, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity,
+        expected_policy_interval=_expected_policy_interval(expected_policy_interval))
+
+
+def _verify_original_on_work(*, policy_bytes, activation_planner_bootstrap_bytes,
+        root_public_key, live_window, transport_deadline_ns, work, _continuity,
+        expected_policy_interval=None):
     capture._SharedLedger(work)
     root = root_public_key
     raw = authorization._original(policy_bytes, MAX_BYTES, "consume input issuer policy")
     original = authorization._original(activation_planner_bootstrap_bytes,
         MAX_ACTIVATION_PLANNER_BOOTSTRAP_BYTES, "independent activation planner bootstrap")
     _inventory(len(raw), original, work)
+    if expected_policy_interval is not None:
+        # Bound original/canonical graphs and the wrapped current planner before
+        # decoding any policy body. Embedded raw bytes cannot exceed its envelope.
+        reserved = (24 * len(raw) + 16 * len(original)
+            + 8 * authorization.MAX_ENROLLMENT_BYTES + 8 * authorization.vector.MAX_BYTES + 64 * 1024)
+        if reserved > MAX_ORIGINAL_BYTES:
+            _fail("historical consume bridge captures exceed the original aggregate ceiling")
     authorization._public(root)
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
@@ -392,7 +438,14 @@ def _verify_on_work(*, policy_bytes, activation_planner_bootstrap_bytes, root_pu
     _signature(envelope, root, work)
     lifetime.current()
     payload = envelope["payload"]
-    if envelope["schema"] == V2_SCHEMA:
+    historical = expected_policy_interval is not None
+    if historical:
+        if envelope["schema"] != V2_SCHEMA:
+            _fail("historical consume policy admission requires the explicit v2 bridge")
+        from serverware import oidc_session_activation_consume_input_bridge_policy as bridge
+        planner, public, historical_root, current_planner, bridge_material = bridge._join_historical_on_work(
+            payload, original, root, lifetime, work, expected_policy_interval=expected_policy_interval)
+    elif envelope["schema"] == V2_SCHEMA:
         from serverware import oidc_session_activation_consume_input_bridge_policy as bridge
         planner, public, historical_root, current_planner, bridge_material = bridge._join_on_work(
             payload, original, root, lifetime, work)
@@ -409,7 +462,8 @@ def _verify_on_work(*, policy_bytes, activation_planner_bootstrap_bytes, root_pu
     predecessor = owned["activationPredecessor"]
     predecessor = reservation._predecessor_scope(predecessor["sequence"], predecessor["headDigest"], predecessor["fence"])
     lifetime.current()
-    return _IssuerPolicyMaterial(raw, original, identity, owned, planner, selected_history,
+    material_type = _HistoricalIssuerPolicyMaterial if historical else _IssuerPolicyMaterial
+    return material_type(raw, original, identity, owned, planner, selected_history,
         selected, predecessor, public, lifetime.window, lifetime.bound, lifetime.current,
         historical_root, current_planner, bridge_material)
 

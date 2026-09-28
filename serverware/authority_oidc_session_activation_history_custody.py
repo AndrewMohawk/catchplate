@@ -53,6 +53,8 @@ class _Configuration:
     consume_request_bytes: bytes | None
     consumer_role: str
     historical_root_public_key: object
+    bridge_evidence_root_public_key: object
+    bridge_policy_interval: tuple | None
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -120,12 +122,20 @@ def _verifier(purpose):
         return bootstrap._verify_bridge_consume_on_work
     if purpose == bootstrap.CONSUME_GRANT_CONSUMER_ROLE:
         return bootstrap._verify_consume_grant_on_work
+    if purpose == bootstrap.BRIDGE_CONSUME_GRANT_CONSUMER_ROLE:
+        return bootstrap._verify_bridge_consume_grant_on_work
     if purpose == bootstrap.CONSUME_RESERVE_CONSUMER_ROLE:
         return bootstrap._verify_consume_reserve_on_work
+    if purpose == bootstrap.BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE:
+        return bootstrap._verify_bridge_consume_reserve_on_work
     if purpose == bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE:
         return bootstrap._verify_consume_sql_issuer_on_work
+    if purpose == bootstrap.BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE:
+        return bootstrap._verify_bridge_consume_sql_issuer_on_work
     if purpose == bootstrap.CONSUME_COMPLETION_CONSUMER_ROLE:
         return bootstrap._verify_consume_completion_on_work
+    if purpose == bootstrap.BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE:
+        return bootstrap._verify_bridge_consume_completion_on_work
     _fail("historical activation custody has no verifier for this purpose")
 
 
@@ -187,7 +197,7 @@ class OidcSessionActivationHistoryCustody:
     def for_consume_grant(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
             expected_consume_request, bundle_key, delivery_custody_key, live_window,
             transport_deadline_ns, work):
-        """Fixed v3 receiving purpose; never relabel a v1/v2 owner or material."""
+        """Fixed grant originals, legacy v3 or independently signed bridge v8."""
         if cls is not OidcSessionActivationHistoryCustody:
             _fail("consume-grant history requires the exact configured owner class")
         owner = object.__new__(cls)
@@ -196,14 +206,15 @@ class OidcSessionActivationHistoryCustody:
             expected_consume_request=expected_consume_request, bundle_key=bundle_key,
             delivery_custody_key=delivery_custody_key, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work,
-            purpose=bootstrap.CONSUME_GRANT_CONSUMER_ROLE)
+            purpose=bootstrap._purpose_on_work(custody_bytes, work, roles=(
+                bootstrap.CONSUME_GRANT_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_GRANT_CONSUMER_ROLE)))
         return owner
 
     @classmethod
     def for_consume_reserve(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
             expected_consume_request, bundle_key, delivery_custody_key, live_window,
             transport_deadline_ns, work):
-        """Fixed v4 reserve history; no grant/planning owner can be relabeled."""
+        """Fixed reserve originals, legacy v4 or independently signed bridge v9."""
         if cls is not OidcSessionActivationHistoryCustody:
             _fail("consume reserve history requires its exact owner class")
         owner = object.__new__(cls)
@@ -212,14 +223,15 @@ class OidcSessionActivationHistoryCustody:
             expected_consume_request=expected_consume_request, bundle_key=bundle_key,
             delivery_custody_key=delivery_custody_key, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work,
-            purpose=bootstrap.CONSUME_RESERVE_CONSUMER_ROLE)
+            purpose=bootstrap._purpose_on_work(custody_bytes, work, roles=(
+                bootstrap.CONSUME_RESERVE_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE)))
         return owner
 
     @classmethod
     def for_consume_sql_issuer(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
             expected_consume_request, bundle_key, delivery_custody_key, live_window,
             transport_deadline_ns, work):
-        """Fixed v5 pending receiver history; this factory does not issue SQL."""
+        """Fixed v5/v10 pending receiver history; this factory issues no SQL."""
         if cls is not OidcSessionActivationHistoryCustody:
             _fail("consume SQL-issuer history requires its exact owner class")
         owner = object.__new__(cls)
@@ -228,14 +240,15 @@ class OidcSessionActivationHistoryCustody:
             expected_consume_request=expected_consume_request, bundle_key=bundle_key,
             delivery_custody_key=delivery_custody_key, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work,
-            purpose=bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE)
+            purpose=bootstrap._purpose_on_work(custody_bytes, work, roles=(
+                bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE)))
         return owner
 
     @classmethod
     def for_consume_completion(cls, *, custody_bytes, root_public_key, expected_receiver_identity,
             expected_consume_request, bundle_key, delivery_custody_key, live_window,
             transport_deadline_ns, work):
-        """Fixed v6 historical consume-completion purpose, never live execution."""
+        """Fixed v6/v11 historical completion purpose, never live execution."""
         if cls is not OidcSessionActivationHistoryCustody:
             _fail("consume completion history requires its exact owner class")
         owner = object.__new__(cls)
@@ -244,7 +257,8 @@ class OidcSessionActivationHistoryCustody:
             expected_consume_request=expected_consume_request, bundle_key=bundle_key,
             delivery_custody_key=delivery_custody_key, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work,
-            purpose=bootstrap.CONSUME_COMPLETION_CONSUMER_ROLE)
+            purpose=bootstrap._purpose_on_work(custody_bytes, work, roles=(
+                bootstrap.CONSUME_COMPLETION_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE)))
         return owner
 
     def _initialize(self, *, custody_bytes, root_public_key, expected_receiver_identity,
@@ -290,7 +304,8 @@ class OidcSessionActivationHistoryCustody:
             material.planner.attestation_interval,
             material.attestation_interval, material.opening_sample, receiver,
             purpose in (bootstrap.CONSUME_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE),
-            expected_request, purpose, material.historical_root_public_key)
+            expected_request, purpose, material.historical_root_public_key,
+            material.bridge_evidence_root_public_key, material.bridge_policy_interval)
         object.__setattr__(self, "_configured", configured)
         object.__setattr__(self, "_seal", configured)
         object.__setattr__(self, "_pid", os.getpid())
@@ -365,6 +380,11 @@ class OidcSessionActivationHistoryCustody:
         registration._same(evidence.keys._spki_on_work(material.historical_root_public_key, work),
             evidence.keys._spki_on_work(configured.historical_root_public_key, work), work,
             "original independently authorized historical root")
+        registration._same(evidence.keys._spki_on_work(material.bridge_evidence_root_public_key, work),
+            evidence.keys._spki_on_work(configured.bridge_evidence_root_public_key, work), work,
+            "original independently authorized consume evidence root")
+        registration._same(material.bridge_policy_interval, configured.bridge_policy_interval, work,
+            "original independently authorized consume policy interval")
         registration._same((material.planner.maximum_plan_age_ns, material.planner.maximum_clock_skew_ns),
             (configured.maximum_age_ns, configured.maximum_clock_skew_ns), work,
             "original historical processing policy")
@@ -425,6 +445,24 @@ class OidcSessionActivationHistoryCustody:
     def _consume_context_on_work(self, *, root_public_key, current_root_enrollment_bytes,
             configuration_digest, live_window, transport_deadline_ns, work, _current=None,
             _additional_original_bytes=0):
+        return self._context_on_work(root_public_key=root_public_key,
+            current_root_enrollment_bytes=current_root_enrollment_bytes,
+            configuration_digest=configuration_digest, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, _current=_current,
+            _additional_original_bytes=_additional_original_bytes, completion=False)
+
+    def _completion_context_on_work(self, *, root_public_key, current_root_enrollment_bytes,
+            configuration_digest, live_window, transport_deadline_ns, work, _current=None,
+            _additional_original_bytes=0):
+        return self._context_on_work(root_public_key=root_public_key,
+            current_root_enrollment_bytes=current_root_enrollment_bytes,
+            configuration_digest=configuration_digest, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, _current=_current,
+            _additional_original_bytes=_additional_original_bytes, completion=True)
+
+    def _context_on_work(self, *, root_public_key, current_root_enrollment_bytes,
+            configuration_digest, live_window, transport_deadline_ns, work, _current,
+            _additional_original_bytes, completion):
         """Bind current output to own signed history and derive old evidence authority.
 
         No caller supplies an old root or admitted policy. The returned guard
@@ -440,11 +478,16 @@ class OidcSessionActivationHistoryCustody:
         registration._integer(transport_deadline_ns, "consume context inherited deadline", 1)
         bound = min(window[4], transport_deadline_ns)
         configured = self._snapshot_configuration()
-        if configured.consumer_role not in (
+        if type(completion) is not bool:
+            _fail("consume context requires a fixed original purpose")
+        roles = ((bootstrap.BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE,) if completion else (
                 bootstrap.CONSUME_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE,
                 bootstrap.CONSUME_GRANT_CONSUMER_ROLE, bootstrap.CONSUME_RESERVE_CONSUMER_ROLE,
-                bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE):
-            _fail("consume context requires a fixed live consume history purpose")
+                bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE,
+                bootstrap.BRIDGE_CONSUME_GRANT_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE,
+                bootstrap.BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE))
+        if configured.consumer_role not in roles:
+            _fail("consume context differs from its fixed signed history purpose")
         capture_bytes = 8 * len(configured.custody_bytes) + 4 * len(enrolled) + 64 * 1024
         if (type(_additional_original_bytes) is not int
                 or not 0 <= _additional_original_bytes < history.MAX_ORIGINAL_BYTES
@@ -455,9 +498,11 @@ class OidcSessionActivationHistoryCustody:
             _fail("historical activation custody is already in use")
         try:
             material, current = self._reauthenticate_locked(configured, window, bound, work, _current)
+            expected_root = (configured.bridge_evidence_root_public_key
+                if completion else configured.root_public_key)
             registration._same(evidence.keys._spki_on_work(root, work),
-                evidence.keys._spki_on_work(configured.root_public_key, work), work,
-                "consume independently configured current outer root")
+                evidence.keys._spki_on_work(expected_root, work), work,
+                "consume independently configured evidence root")
             policy = material.bridge_policy
             output = material.planner if policy is None else policy.current_planner
             registration._same(configuration_digest, output.configuration_digest, work,
@@ -496,17 +541,20 @@ class OidcSessionActivationHistoryCustody:
             _fail("consume planning requires its separate root-signed history purpose")
 
     def require_consume_grant_on_work(self, *, work):
-        """Static v3-only receiving gate; original reauthentication is separate."""
+        """Static grant-only receiving gate; original reauthentication is separate."""
         evidence.capture._SharedLedger(work)
-        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_GRANT_CONSUMER_ROLE:
-            _fail("consume-grant receiving requires its separate v3 history purpose")
+        if self._snapshot_configuration().consumer_role not in (
+                bootstrap.CONSUME_GRANT_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_GRANT_CONSUMER_ROLE):
+            _fail("consume-grant receiving requires its separate signed history purpose")
 
     def _require_consume_receiving_on_work(self, *, work):
         """Semantic replay only; the outer receiver enforces its exact role."""
         evidence.capture._SharedLedger(work)
         if self._snapshot_configuration().consumer_role not in (
                 bootstrap.CONSUME_GRANT_CONSUMER_ROLE, bootstrap.CONSUME_RESERVE_CONSUMER_ROLE,
-                bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE):
+                bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE,
+                bootstrap.BRIDGE_CONSUME_GRANT_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE,
+                bootstrap.BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE):
             _fail("consume execution replay requires a separately root-signed receiving purpose")
 
     def _require_consume_history_on_work(self, *, work):
@@ -521,24 +569,28 @@ class OidcSessionActivationHistoryCustody:
         if self._snapshot_configuration().consumer_role not in (
                 bootstrap.CONSUME_CONSUMER_ROLE, bootstrap.CONSUME_GRANT_CONSUMER_ROLE,
                 bootstrap.CONSUME_RESERVE_CONSUMER_ROLE, bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE,
-                bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE):
+                bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_GRANT_CONSUMER_ROLE,
+                bootstrap.BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE):
             _fail("historical completion custody cannot authorize live consume planning")
 
     def require_consume_reserve_on_work(self, *, work):
         evidence.capture._SharedLedger(work)
-        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_RESERVE_CONSUMER_ROLE:
-            _fail("consume reserve requires its separate v4 history purpose")
+        if self._snapshot_configuration().consumer_role not in (
+                bootstrap.CONSUME_RESERVE_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE):
+            _fail("consume reserve requires its separate signed history purpose")
 
     def require_consume_sql_issuer_on_work(self, *, work):
         evidence.capture._SharedLedger(work)
-        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE:
-            _fail("consume pending receiver requires its separate v5 history purpose")
+        if self._snapshot_configuration().consumer_role not in (
+                bootstrap.CONSUME_SQL_ISSUER_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE):
+            _fail("consume pending receiver requires its separate signed history purpose")
 
     def require_consume_completion_on_work(self, *, work):
         """Historical consume replay only; v1/v2/v3/v4/v5 are never substitutes."""
         evidence.capture._SharedLedger(work)
-        if self._snapshot_configuration().consumer_role != bootstrap.CONSUME_COMPLETION_CONSUMER_ROLE:
-            _fail("consume completion requires its separate v6 history purpose")
+        if self._snapshot_configuration().consumer_role not in (
+                bootstrap.CONSUME_COMPLETION_CONSUMER_ROLE, bootstrap.BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE):
+            _fail("consume completion requires its separate signed history purpose")
 
     def bind_consume_request_on_work(self, *, expected_consume_request, work):
         """Join independent ordinary request data; return no authority carrier."""

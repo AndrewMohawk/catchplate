@@ -6,9 +6,9 @@ also pins separate execution-export custody; it has no v1 fallback. This module
 neither delivers descriptors nor opens a listener. No received material is
 accepted as authority.
 
-The separately named historical verifier authenticates the same original v2
-scope as data for fresh completion custody. It returns a distinct result and
-does not call the live launch guard or renew either original interval.
+Separately named historical verifiers authenticate original v2 or explicit v3
+bridge scope as data for fresh completion custody. They return a distinct result
+and do not call the live launch guard or renew either original interval.
 """
 from __future__ import annotations
 
@@ -266,7 +266,7 @@ def _planner_key(payload, configured, nested, root, work):
 
 
 def _material(payload, original, custody, root, window, bound, opening, current, work,
-        *, historical=False, _continuity=None):
+        *, historical=False, _continuity=None, _expected_policy_interval=None):
     if type(historical) is not bool:
         _fail("consume bootstrap internal history selector is not exact")
     configured, generation = configuration._capture_configuration_on_work(payload=payload["configurationPayload"],
@@ -286,18 +286,29 @@ def _material(payload, original, custody, root, window, bound, opening, current,
         _fail("consume history original length differs")
     plan._same(_sha(custody, work), pin["bytesDigest"], work, "consume history original digest differs")
     bridged = payload["schema"] == BRIDGE_PAYLOAD_SCHEMA
-    if bridged and historical:
-        _fail("bridged consume planner has no implicit historical execution profile")
-    verifier = (history._verify_bridge_consume_on_work if bridged else
-        history._verify_historical_consume_on_work if historical else history._verify_consume_on_work)
+    if _expected_policy_interval is not None and not (bridged and historical):
+        _fail("historical bridge interval cannot select a live or legacy planner profile")
     continuity_arguments = {}
     if _continuity is not None:
         continuity_arguments["_continuity"] = _continuity
+    if bridged and historical:
+        if _expected_policy_interval is None:
+            _fail("historical bridge planner lacks its independently pinned original interval")
+        verifier = history._verify_historical_bridge_consume_on_work
+        continuity_arguments["expected_policy_interval"] = _expected_policy_interval
+    else:
+        verifier = (history._verify_bridge_consume_on_work if bridged else
+            history._verify_historical_consume_on_work if historical else history._verify_consume_on_work)
     nested = verifier(custody_bytes=custody, root_public_key=root,
         work=work, live_window=window, transport_deadline_ns=bound, **continuity_arguments)
     current()
     if bridged and nested.bridge_policy is None:
         _fail("bridged consume planner lacks the genuine current-root policy original")
+    if bridged and historical:
+        from serverware import oidc_session_activation_consume_input_issuer_policy as issuer
+        if (type(nested) is not history._HistoricalPlanningMaterial
+                or type(nested.bridge_policy) is not issuer._HistoricalIssuerPolicyMaterial):
+            _fail("historical bridge planner requires actual original-only nested admission")
     output = nested.bridge_policy.current_planner if bridged else nested.planner
     plan._same((payload["configurationDigest"], generation["digest"], payload["runtimeClosureDigest"],
         payload["historyReceiverIdentity"]), (output.configuration_digest, output.generation["digest"],
@@ -465,6 +476,66 @@ def _verify_historical_on_work(*, bootstrap_bytes, history_custody_bytes, root_p
         if isinstance(exc, OidcSessionActivationDeliveryPlannerBootstrapError):
             raise
         raise OidcSessionActivationDeliveryPlannerBootstrapError("historical consume planner admission failed") from exc
+
+
+def _verify_bridge_historical_on_work(*, bootstrap_bytes, history_custody_bytes,
+        root_public_key, expected_policy_interval, live_window, transport_deadline_ns,
+        work, _continuity=None):
+    """Authenticate original v3/v7 under explicit R1, never fresh outer R2.
+
+    R1 and the exact policy interval must come from independent fresh completion
+    authority. Old launch expiry is evidence, not a current processing deadline.
+    """
+    from serverware import oidc_session_activation_consume_input_issuer_policy as issuer
+    try:
+        original, custody, root = bootstrap_bytes, history_custody_bytes, root_public_key
+        if (type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES
+                or type(custody) is not bytes or not 2 <= len(custody) <= history.MAX_BYTES):
+            _fail("historical bridge planner requires bounded immutable originals")
+        _intake_reservation((16 * 1024, len(original), len(custody)))
+        interval = issuer._expected_policy_interval(expected_policy_interval)
+        authorization._public(root)
+        window = clock._validate(live_window)
+        shape._integer(transport_deadline_ns, minimum=1)
+        bound = min(window[4], transport_deadline_ns)
+        current = shared._processing(window, bound, work, _continuity=_continuity)
+        current()
+        envelope = shared.codec._decode(original, work)
+        shape._object(envelope, shared._ENVELOPE_FIELDS, "historical signed bridge consume bootstrap")
+        shape._literal(envelope["schema"], BRIDGE_SCHEMA)
+        shape._base64url(envelope["signatureBase64Url"], signature=True)
+        if type(envelope["payload"]) is not dict:
+            _fail("historical bridge consume payload is not an exact object")
+        shared.codec._canonical(original, envelope, work)
+        unsigned = configuration._configuration_wire(envelope["payload"], capture._SharedLedger(work))
+        current()
+        capability._signature(root, envelope["signatureBase64Url"], BRIDGE_SCHEMA,
+            unsigned, capture._SharedLedger(work))
+        current()
+        payload = envelope["payload"]
+        _payload(payload, work)
+        shape._literal(payload["schema"], BRIDGE_PAYLOAD_SCHEMA)
+        if (payload["issuedAtEpochNs"] != interval[0]
+                or not interval[0] < payload["expiresAtEpochNs"] <= interval[1]):
+            _fail("historical bridge planner escapes its independent original policy interval")
+        if interval[0] > current() + window[6]:
+            _fail("historical bridge consume planner is future-issued")
+        opening = clock._sample_on_work(work)
+        if _continuity is not None:
+            current((opening[1], opening[2]))
+        else:
+            current()
+        result = _material(payload, original, custody, root, window, bound, opening, current, work,
+            historical=True, _continuity=_continuity, _expected_policy_interval=interval)
+        shared.codec._canonical(original, envelope, work)
+        result.history_material.bridge_policy.live()
+        current()
+        return result
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
+        if isinstance(exc, OidcSessionActivationDeliveryPlannerBootstrapError):
+            raise
+        raise OidcSessionActivationDeliveryPlannerBootstrapError(
+            "historical bridge consume planner admission failed") from exc
 
 
 def _produce_on_work(*, payload, history_custody_bytes, root_private_key, root_public_key,

@@ -3,9 +3,11 @@
 The original planner bootstrap is genuine historical evidence, not present
 receiving authority. A distinct root-signed outer purpose authorizes one fixed
 completion or fixed consume process for a fresh bounded interval. Each consume
-purpose binds the exact original request. The distinct v6 consume-completion
-purpose cannot enter live planning, grant, reserve or SQL admission. No live consumer is widened,
-no expired launch is renewed, and no incoming successful material is accepted.
+purpose binds the exact original request. Legacy v1-v6 remain strict; bridge
+v7-v11 separately authorize planning, grant, reserve, SQL and completion. The
+completion-only profiles cannot enter live execution admission. Fresh v11 pins
+the original consume root and policy interval separately from its own root.
+No expired launch is renewed or incoming successful material accepted.
 This module performs no key delivery, filesystem, transport, signing of
 completion, SQL, token release or historical-cohort resolution.
 """
@@ -60,6 +62,33 @@ CONSUME_COMPLETION_SERVICE_UID = CONSUME_COMPLETION_SERVICE_GID = 65497
 BRIDGE_CONSUME_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v7"
 BRIDGE_CONSUME_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v7"
 BRIDGE_CONSUME_CONSUMER_ROLE = "bridged-consume-planning-history"
+BRIDGE_CONSUME_GRANT_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v8"
+BRIDGE_CONSUME_GRANT_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v8"
+BRIDGE_CONSUME_GRANT_CONSUMER_ROLE = "bridged-consume-grant-history"
+BRIDGE_CONSUME_RESERVE_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v9"
+BRIDGE_CONSUME_RESERVE_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v9"
+BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE = "bridged-consume-reserve-history"
+BRIDGE_CONSUME_SQL_ISSUER_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v10"
+BRIDGE_CONSUME_SQL_ISSUER_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v10"
+BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE = "bridged-consume-sql-issuer-history"
+BRIDGE_CONSUME_COMPLETION_SCHEMA = "serverware.signedOidcSessionActivationHistoryCustody/v11"
+BRIDGE_CONSUME_COMPLETION_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationHistoryCustody/v11"
+BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE = "bridged-consume-completion-history"
+_BRIDGE_PROFILES = (
+    (BRIDGE_CONSUME_GRANT_SCHEMA, BRIDGE_CONSUME_GRANT_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+        BRIDGE_CONSUME_GRANT_CONSUMER_ROLE, CONSUME_GRANT_PROCESS_MODE,
+        CONSUME_GRANT_SERVICE_UID, CONSUME_GRANT_SERVICE_GID),
+    (BRIDGE_CONSUME_RESERVE_SCHEMA, BRIDGE_CONSUME_RESERVE_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+        BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE, CONSUME_RESERVE_PROCESS_MODE,
+        CONSUME_RESERVE_SERVICE_UID, CONSUME_RESERVE_SERVICE_GID),
+    (BRIDGE_CONSUME_SQL_ISSUER_SCHEMA, BRIDGE_CONSUME_SQL_ISSUER_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+        BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE, CONSUME_SQL_ISSUER_PROCESS_MODE,
+        CONSUME_SQL_ISSUER_SERVICE_UID, CONSUME_SQL_ISSUER_SERVICE_GID),
+    (BRIDGE_CONSUME_COMPLETION_SCHEMA, BRIDGE_CONSUME_COMPLETION_PAYLOAD_SCHEMA, CONSUME_OPERATION,
+        BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE, CONSUME_COMPLETION_PROCESS_MODE,
+        CONSUME_COMPLETION_SERVICE_UID, CONSUME_COMPLETION_SERVICE_GID),
+)
+_BRIDGE_ROLES = frozenset((BRIDGE_CONSUME_CONSUMER_ROLE, *(profile[3] for profile in _BRIDGE_PROFILES)))
 MAX_CONSUME_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_BYTES = 8 * 1024 * 1024
 MAX_NODES, MAX_DEPTH = 256, 4
@@ -94,6 +123,8 @@ class _HistoryCustodyMaterial:
     consume_request_bytes: bytes | None
     historical_root_public_key: object = None
     bridge_policy: object = None
+    bridge_evidence_root_public_key: object = None
+    bridge_policy_interval: tuple | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -144,6 +175,9 @@ def _purpose_from_consume(consume):
 def _purpose_profile(purpose):
     if type(purpose) is not str:
         _fail("historical custody requires an exact fixed purpose")
+    for profile in _BRIDGE_PROFILES:
+        if purpose == profile[3]:
+            return profile
     if purpose == CONSUMER_ROLE:
         return (SCHEMA, PAYLOAD_SCHEMA, OPERATION, CONSUMER_ROLE,
             PROCESS_MODE, SERVICE_UID, SERVICE_GID)
@@ -181,7 +215,23 @@ def _requires_consume_request(purpose):
     _purpose_profile(purpose)
     return purpose in (CONSUME_CONSUMER_ROLE, CONSUME_GRANT_CONSUMER_ROLE,
         CONSUME_RESERVE_CONSUMER_ROLE, CONSUME_SQL_ISSUER_CONSUMER_ROLE,
-        CONSUME_COMPLETION_CONSUMER_ROLE, BRIDGE_CONSUME_CONSUMER_ROLE)
+        CONSUME_COMPLETION_CONSUMER_ROLE) or purpose in _BRIDGE_ROLES
+
+
+def _purpose_on_work(custody_bytes, work, *, roles):
+    """Select within a source-fixed role family; signature admission follows."""
+    if type(roles) is not tuple or not 1 <= len(roles) <= 2:
+        _fail("history version selection requires one fixed legacy/bridge role pair")
+    profiles = tuple(_purpose_profile(role) for role in roles)
+    if len(profiles) == 2 and profiles[0][4:] != profiles[1][4:]:
+        _fail("history version selection cannot cross process roles")
+    original = authorization._original(custody_bytes, MAX_BYTES, "role-bound history")
+    envelope = _decode(original, work)
+    schema = envelope.get("schema") if type(envelope) is dict else None
+    for profile in profiles:
+        if schema == profile[0]:
+            return profile[3]
+    _fail("history original has no supported version for this fixed role")
 
 
 def _planning_purpose_on_work(custody_bytes, work):
@@ -204,8 +254,10 @@ def _payload_for_purpose(payload, *, purpose):
     _schema, payload_schema, operation, role, mode, uid, gid = _purpose_profile(purpose)
     consume = _requires_consume_request(purpose)
     fields = _PAYLOAD_FIELDS | {"consumeRequest"} if consume else _PAYLOAD_FIELDS
-    if purpose == BRIDGE_CONSUME_CONSUMER_ROLE:
+    if purpose in _BRIDGE_ROLES:
         fields = fields | {"issuerPolicy"}
+    if purpose == BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE:
+        fields = fields | {"bridgeEvidenceRoot", "bridgePolicyInterval"}
     shape._object(payload, fields, "activation history custody payload")
     for field, expected in (("schema", payload_schema), ("sourceRevision", authority.SOURCE_REVISION),
             ("operation", operation), ("consumerRole", role), ("processMode", mode),
@@ -234,7 +286,7 @@ def _payload_for_purpose(payload, *, purpose):
             MAX_CONSUME_REQUEST_BYTES)
         shape._integer(record["byteCount"], MAX_CONSUME_REQUEST_BYTES, minimum=2)
         shape._digest(record["bytesDigest"])
-    if purpose == BRIDGE_CONSUME_CONSUMER_ROLE:
+    if purpose in _BRIDGE_ROLES:
         from serverware import oidc_session_activation_consume_input_issuer_policy as issuer
 
         record = payload["issuerPolicy"]
@@ -242,12 +294,29 @@ def _payload_for_purpose(payload, *, purpose):
         authorization.transport._transport_shape(record["base64Url"], record["byteCount"], issuer.MAX_BYTES)
         shape._integer(record["byteCount"], issuer.MAX_BYTES, minimum=2)
         shape._digest(record["bytesDigest"])
+    if purpose == BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE:
+        _bridge_completion_pins(payload)
     for field in ("issuedAtEpochNs", "expiresAtEpochNs"):
         shape._integer(payload[field], minimum=1)
     if not 0 < payload["expiresAtEpochNs"] - payload["issuedAtEpochNs"] <= planner_bootstrap.MAX_RECEIPT_AGE_NS:
         _fail("activation history custody outer lifetime exceeds its fixed bound")
     if any(payload[field] is not False for field in _FALSE_FIELDS):
         _fail("activation history custody claims unsupported hardware or witness assurance")
+
+
+def _bridge_completion_pins(payload):
+    """Closed independently signed original-root and original-policy pins."""
+    root, interval = payload["bridgeEvidenceRoot"], payload["bridgePolicyInterval"]
+    shape._object(root, {"publicKeyBase64Url", "spkiDigest"}, "consume evidence root")
+    authorization.transport._transport_shape(root["publicKeyBase64Url"], 32, 32)
+    shape._digest(root["spkiDigest"])
+    shape._object(interval, {"issuedAtEpochNs", "expiresAtEpochNs"}, "original bridge policy interval")
+    for name in ("issuedAtEpochNs", "expiresAtEpochNs"):
+        shape._integer(interval[name], minimum=1)
+    result = interval["issuedAtEpochNs"], interval["expiresAtEpochNs"]
+    if result[0] >= result[1]:
+        _fail("original bridge policy interval is empty")
+    return result
 
 
 def _consume_request_on_work(value, work):
@@ -315,10 +384,15 @@ def _admit_planner(payload, root, window, deadline, work, current, *, _continuit
     return admitted
 
 
-def _admit_bridge_planner(payload, root, window, deadline, work, current, *, _continuity=None):
+def _admit_bridge_planner(payload, root, window, deadline, work, current, *, _continuity=None,
+        purpose=BRIDGE_CONSUME_CONSUMER_ROLE, _historical_policy_interval=None):
     """Genuine current-root bridge, with an independently selected old root."""
     from serverware import oidc_session_activation_consume_input_issuer_policy as issuer
 
+    reservation = 8 * sum(payload[name]["byteCount"] for name in ("plannerBootstrap", "issuerPolicy")) + 64 * 1024
+    if reservation > authority.MAX_RESULT_BYTES:
+        _fail("consume history bridge originals exceed their predecode capacity")
+    work.charge(input_bytes=reservation)
     originals = []
     for name, maximum in (("plannerBootstrap", planner_bootstrap.MAX_BYTES),
             ("issuerPolicy", issuer.MAX_BYTES)):
@@ -330,27 +404,61 @@ def _admit_bridge_planner(payload, root, window, deadline, work, current, *, _co
         current()
         plan._same(digest, record["bytesDigest"], work, "consume bridge exact " + name)
         originals.append(original)
-    policy = issuer._verify_on_work(policy_bytes=originals[1],
-        activation_planner_bootstrap_bytes=originals[0], root_public_key=root,
-        live_window=window, transport_deadline_ns=deadline, work=work, _continuity=_continuity)
-    if type(policy) is not issuer._IssuerPolicyMaterial or policy.bridge is None:
+    if _historical_policy_interval is None:
+        policy = issuer._verify_on_work(policy_bytes=originals[1],
+            activation_planner_bootstrap_bytes=originals[0], root_public_key=root,
+            live_window=window, transport_deadline_ns=deadline, work=work, _continuity=_continuity)
+        material_type = issuer._IssuerPolicyMaterial
+    else:
+        policy = issuer._verify_historical_on_work(policy_bytes=originals[1],
+            activation_planner_bootstrap_bytes=originals[0], root_public_key=root,
+            expected_policy_interval=_historical_policy_interval, live_window=window,
+            transport_deadline_ns=deadline, work=work, _continuity=_continuity)
+        material_type = issuer._HistoricalIssuerPolicyMaterial
+    if type(policy) is not material_type or policy.bridge is None:
         _fail("bridged history requires the genuine distinct current-root bridge policy")
     policy.live()
     admitted, output = policy.activation_planner, policy.current_planner
     for field, expected in (("configurationDigest", admitted.configuration_digest),
             ("generationDigest", admitted.generation["digest"]),
             ("runtimeClosureDigest", admitted.runtime_closure_digest),
-            ("bundleKeyDigest", admitted.bundle_key_digest), ("deliveryKeyDigest", admitted.delivery_key_digest),
-            ("receiverIdentity", policy.history["receiverIdentity"])):
+            ("bundleKeyDigest", admitted.bundle_key_digest), ("deliveryKeyDigest", admitted.delivery_key_digest)):
         plan._same(payload[field], expected, work, "bridged history independent " + field)
     issued = policy.payload["issuedAtEpochNs"]
     expires = min(policy.payload["expiresAtEpochNs"],
         issued + min(output.maximum_plan_age_ns, planner_bootstrap.MAX_RECEIPT_AGE_NS))
-    plan._same((payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), (issued, expires), work,
-        "bridged history exact fresh current policy interval")
+    if purpose == BRIDGE_CONSUME_CONSUMER_ROLE:
+        plan._same(payload["receiverIdentity"], policy.history["receiverIdentity"], work,
+            "bridged planning exact receiver identity")
+        plan._same((payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), (issued, expires), work,
+            "bridged planning exact original policy interval")
+    elif purpose == BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE:
+        if _historical_policy_interval is None:
+            _fail("bridged completion requires explicit original policy authority")
+    elif purpose in _BRIDGE_ROLES:
+        # The root separately authorizes each process/receiver. Its fresh live
+        # outer cannot outlive the original consume-issuance policy.
+        if not issued <= payload["issuedAtEpochNs"] < payload["expiresAtEpochNs"] <= policy.payload["expiresAtEpochNs"]:
+            _fail("bridged live custody escapes its original policy interval")
+    else:
+        _fail("consume bridge is not an independently fixed custody purpose")
     policy.live()
     current()
     return admitted, policy
+
+
+def _bridge_context_on_work(payload, root, window, deadline, work, current, *, purpose, _continuity=None):
+    evidence_root, interval = root, None
+    if purpose == BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE:
+        interval = _bridge_completion_pins(payload)
+        pin = payload["bridgeEvidenceRoot"]
+        current()
+        evidence_root = planner_bootstrap.configuration._key(pin["publicKeyBase64Url"], work,
+            expected_spki=pin["spkiDigest"])
+        current()
+    admitted, policy = _admit_bridge_planner(payload, evidence_root, window, deadline,
+        work, current, purpose=purpose, _historical_policy_interval=interval, _continuity=_continuity)
+    return admitted, policy, evidence_root, interval
 
 
 def _verify_fixed_purpose(*, custody_bytes, root_public_key, work, live_window,
@@ -386,17 +494,18 @@ def _verify_fixed_purpose(*, custody_bytes, root_public_key, work, live_window,
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = planner_bootstrap._launch_guard(interval, opening, inherited, work, _continuity=_continuity)
-        bridge_policy = None
-        if purpose == BRIDGE_CONSUME_CONSUMER_ROLE:
-            admitted, bridge_policy = _admit_bridge_planner(payload, root, window, deadline,
-                work, current, _continuity=_continuity)
+        bridge_policy, evidence_root, policy_interval = None, root, None
+        if purpose in _BRIDGE_ROLES:
+            admitted, bridge_policy, evidence_root, policy_interval = _bridge_context_on_work(
+                payload, root, window, deadline, work, current, purpose=purpose, _continuity=_continuity)
         else:
             admitted = _admit_planner(payload, root, window, deadline, work, current, _continuity=_continuity)
         request = _admit_consume_request(payload, work, current) if consume else None
         material = _HistoryCustodyMaterial(original, admitted, role, mode,
             uid, gid, payload["receiverIdentity"], payload["bundleKeyDigest"],
             payload["deliveryKeyDigest"], interval, opening, request,
-            root if bridge_policy is None else bridge_policy.historical_root_public_key, bridge_policy)
+            root if bridge_policy is None else bridge_policy.historical_root_public_key, bridge_policy,
+            evidence_root, policy_interval)
         _canonical(original, envelope, work)
         current()
         return material
@@ -425,8 +534,9 @@ def _produce_fixed_purpose(*, payload, root_private_key, root_public_key, work,
         interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = planner_bootstrap._launch_guard(interval, opening, inherited, work, _continuity=_continuity)
-        if purpose == BRIDGE_CONSUME_CONSUMER_ROLE:
-            _admit_bridge_planner(owned, root, window, deadline, work, current, _continuity=_continuity)
+        if purpose in _BRIDGE_ROLES:
+            _bridge_context_on_work(owned, root, window, deadline, work, current,
+                purpose=purpose, _continuity=_continuity)
         else:
             _admit_planner(owned, root, window, deadline, work, current, _continuity=_continuity)
         if consume:
@@ -553,7 +663,8 @@ def _verify_historical_consume_on_work(*, custody_bytes, root_public_key, work,
         result = _HistoricalPlanningMaterial(original, planner, CONSUME_CONSUMER_ROLE,
             CONSUME_PROCESS_MODE, CONSUME_SERVICE_UID, CONSUME_SERVICE_GID,
             payload["receiverIdentity"], payload["bundleKeyDigest"], payload["deliveryKeyDigest"],
-            (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening, request)
+            (payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]), opening, request,
+            root, None, root, None)
         _canonical(original, envelope, work)
         current()
         return result
@@ -561,6 +672,15 @@ def _verify_historical_consume_on_work(*, custody_bytes, root_public_key, work,
         if isinstance(exc, OidcSessionActivationHistoryCustodyBootstrapError):
             raise
         raise OidcSessionActivationHistoryCustodyBootstrapError("historical planning custody admission failed") from exc
+
+
+def _verify_historical_bridge_consume_on_work(*, custody_bytes, root_public_key, expected_policy_interval,
+        work, live_window, transport_deadline_ns, _continuity=None):
+    from serverware import oidc_session_activation_history_bridge_replay as replay
+
+    return replay._verify_on_work(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        expected_policy_interval=expected_policy_interval, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, _continuity=_continuity)
 
 
 def _verify_consume_completion_on_work(*, custody_bytes, root_public_key, work,
@@ -626,3 +746,63 @@ def _produce_consume_sql_issuer_on_work(*, payload, root_private_key, root_publi
     return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
         root_public_key=root_public_key, work=work, live_window=live_window,
         transport_deadline_ns=transport_deadline_ns, purpose=CONSUME_SQL_ISSUER_CONSUMER_ROLE)
+
+
+def _verify_bridge_consume_grant_on_work(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns, _continuity=None):
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=BRIDGE_CONSUME_GRANT_CONSUMER_ROLE, _continuity=_continuity)
+
+
+def _produce_bridge_consume_grant_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns, _continuity=None):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=BRIDGE_CONSUME_GRANT_CONSUMER_ROLE,
+        _continuity=_continuity)
+
+
+def _verify_bridge_consume_reserve_on_work(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns, _continuity=None):
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE, _continuity=_continuity)
+
+
+def _produce_bridge_consume_reserve_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns, _continuity=None):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE,
+        _continuity=_continuity)
+
+
+def _verify_bridge_consume_sql_issuer_on_work(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns, _continuity=None):
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE, _continuity=_continuity)
+
+
+def _produce_bridge_consume_sql_issuer_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns, _continuity=None):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE,
+        _continuity=_continuity)
+
+
+def _verify_bridge_consume_completion_on_work(*, custody_bytes, root_public_key, work, live_window,
+        transport_deadline_ns, _continuity=None):
+    return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
+        work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        purpose=BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE, _continuity=_continuity)
+
+
+def _produce_bridge_consume_completion_on_work(*, payload, root_private_key, root_public_key, work,
+        live_window, transport_deadline_ns, _continuity=None):
+    return _produce_fixed_purpose(payload=payload, root_private_key=root_private_key,
+        root_public_key=root_public_key, work=work, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, purpose=BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE,
+        _continuity=_continuity)

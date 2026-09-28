@@ -39,6 +39,7 @@ SQL_ISSUER_PROCESS_MODE = "oidc-session-activation-delivery-execution-sql"
 SQL_ISSUER_SERVICE_UID = SQL_ISSUER_SERVICE_GID = 65498
 MAX_BYTES = 16 * 1024
 MAX_ORIGINALS_BYTES = 64 * 1024 * 1024
+INTAKE_METADATA_BYTES = 128 * 1024
 MAX_NODES, MAX_DEPTH = 256, 4
 _FALSE_FIELDS = shared._FALSE_FIELDS
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
@@ -109,9 +110,24 @@ def _originals(planner, planning_history, receiving_history, *, outer_bytes):
     maxima = (planner_bootstrap.MAX_BYTES, history_bootstrap.MAX_BYTES, history_bootstrap.MAX_BYTES)
     if (any(type(raw) is not bytes or not 2 <= len(raw) <= maximum
             for raw, maximum in zip(originals, maxima))
-            or outer_bytes + sum(len(raw) for raw in originals) > MAX_ORIGINALS_BYTES):
+            or 16 * (outer_bytes + sum(len(raw) for raw in originals))
+                + INTAKE_METADATA_BYTES > MAX_ORIGINALS_BYTES):
         _fail("consume receiving custody requires bounded immutable original bytes")
     return originals
+
+
+def _intake_reservation(original_lengths):
+    """Root, role and four custody originals, before any cold body read."""
+    limits = (16 * 1024, 4 * 1024 * 1024, MAX_BYTES,
+        planner_bootstrap.MAX_BYTES, history_bootstrap.MAX_BYTES, history_bootstrap.MAX_BYTES)
+    if (type(original_lengths) is not tuple or len(original_lengths) != len(limits)
+            or any(type(size) is not int or not 2 <= size <= maximum
+                for size, maximum in zip(original_lengths, limits))):
+        _fail("consume execution intake requires its fixed bounded original lengths")
+    reserved = 16 * sum(original_lengths) + INTAKE_METADATA_BYTES
+    if reserved >= MAX_ORIGINALS_BYTES:
+        _fail("consume execution cold captures exhaust the existing original ceiling")
+    return reserved
 
 
 def _profile(consumer_role):
@@ -129,8 +145,28 @@ def _profile(consumer_role):
     _fail("consume receiving purpose is not one of the three fixed profiles")
 
 
-def _history_verifier(consumer_role):
+def _history_role(consumer_role, *, bridged=False):
+    original = _profile(consumer_role)[5]
+    if type(bridged) is not bool:
+        _fail("consume receiving history must use a fixed signed profile")
+    if not bridged:
+        return original
+    if consumer_role == CONSUMER_ROLE:
+        return history_bootstrap.BRIDGE_CONSUME_GRANT_CONSUMER_ROLE
+    if consumer_role == RESERVE_CONSUMER_ROLE:
+        return history_bootstrap.BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE
+    return history_bootstrap.BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE
+
+
+def _history_verifier(consumer_role, *, bridged=False):
     _profile(consumer_role)
+    _history_role(consumer_role, bridged=bridged)
+    if bridged:
+        if consumer_role == CONSUMER_ROLE:
+            return history_bootstrap._verify_bridge_consume_grant_on_work
+        if consumer_role == RESERVE_CONSUMER_ROLE:
+            return history_bootstrap._verify_bridge_consume_reserve_on_work
+        return history_bootstrap._verify_bridge_consume_sql_issuer_on_work
     if consumer_role == CONSUMER_ROLE:
         return history_bootstrap._verify_consume_grant_on_work
     if consumer_role == RESERVE_CONSUMER_ROLE:
@@ -203,10 +239,12 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
             if roles[name][field] == expected:
                 _fail("consume receiving identity collides with an independently configured generic role")
     planning = planner.history_material
+    bridged = planning.bridge_policy is not None
+    history_role = _history_role(consumer_role, bridged=bridged)
     planner_live = shared._launch_guard(planner.attestation_interval, planner.opening_sample, current, work)
     planning_live = shared._launch_guard(planning.attestation_interval, planning.opening_sample, planner_live, work)
     planning_live()
-    verify_history = _history_verifier(consumer_role)
+    verify_history = _history_verifier(consumer_role, bridged=bridged)
     receiving = verify_history(custody_bytes=receiving_original,
         root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work)
     planning_live()
@@ -221,6 +259,16 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
         "consume receiving history is bound to a different typed request")
     _same_bytes(planning.planner.bootstrap_bytes, receiving.planner.bootstrap_bytes, work,
         "consume receiving and planning history use different original activation bootstraps")
+    if bridged:
+        if receiving.bridge_policy is None:
+            _fail("consume receiving requires its own genuinely admitted bridge policy")
+        _same_bytes(planning.bridge_policy.policy_bytes, receiving.bridge_policy.policy_bytes, work,
+            "consume receiving and planning bind different bridge policy originals")
+        plan._same(shared.keys._spki_on_work(planning.historical_root_public_key, work),
+            shared.keys._spki_on_work(receiving.historical_root_public_key, work), work,
+            "consume receiving and planning historical roots differ")
+    elif receiving.bridge_policy is not None:
+        _fail("legacy consume planning cannot acquire a bridged receiving purpose")
     _bind_original(payload["consumeRequest"], planner.consume_request_bytes, live, work)
     for name, expected in (("configurationDigest", planner.payload["configurationDigest"]),
             ("generationDigest", planner.payload["generation"]["digest"]),
@@ -230,11 +278,14 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
             ("deliveryKeyDigest", receiving.delivery_key_digest),
             ("receiverIdentity", receiving.receiver_identity)):
         plan._same(payload[name], expected, work, "consume receiving original cohort differs: " + name)
+    output = receiving.bridge_policy.current_planner if bridged else receiving.planner
     plan._same((planner.payload["configurationDigest"], planner.payload["generation"]["digest"],
         planner.payload["runtimeClosureDigest"], planner.payload["runtimeRoleIdentities"]),
-        (receiving.planner.configuration_digest, receiving.planner.generation["digest"],
-        receiving.planner.runtime_closure_digest, receiving.planner.runtime_role_identities), work,
-        "consume receiving configuration/runtime differs from the genuine historical cohort")
+        (output.configuration_digest, output.generation["digest"],
+        output.runtime_closure_digest, output.runtime_role_identities), work,
+        "consume receiving configuration/runtime differs from independently authorized output")
+    _same_bytes(planner.state_enrollment_bytes, output.state_enrollment_bytes, work,
+        "consume receiving current state differs from independently authorized output")
     pins = (payload["executionBundleKeyDigest"], payload["historicalBundleKeyDigest"],
         payload["deliveryKeyDigest"], planner.payload["journalKeyDigest"], receiving.planner.journal_key_digest)
     for position, left in enumerate(pins):

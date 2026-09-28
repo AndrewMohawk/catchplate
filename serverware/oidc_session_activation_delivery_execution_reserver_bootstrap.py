@@ -301,6 +301,7 @@ def _admit_payload(payload, originals, root, window, bound, work, current):
     # Genuine current-root admission separates computation, completion and
     # state keys. Also exclude root, both planners, caller, grant and config keys.
     forbidden = (keys._spki_on_work(root, work), keys._spki_on_work(admitted.planner_public_key, work),
+        keys._spki_on_work(custody.history.historical_root_public_key, work),
         custody.history.planner.planner_spki_digest, caller_policy["callerKey"]["spkiDigest"],
         grant.payload["authorizer"]["spkiDigest"])
     _key_scope(configured["configurationPayload"], forbidden, computation["spkiDigest"], work)
@@ -322,6 +323,7 @@ def _verify_on_work(*, bootstrap_bytes, custody_bytes, planner_bootstrap_bytes,
         original = authorization._original(bootstrap_bytes, MAX_BYTES, "consume reserver bootstrap")
         originals = _detached(custody_bytes, planner_bootstrap_bytes,
             planner_history_custody_bytes, receiving_history_custody_bytes)
+        receiving._intake_reservation((16 * 1024, len(original), *map(len, originals)))
         root = root_public_key
         authorization._public(root)
         window, bound, inherited = _processing(live_window, transport_deadline_ns, work)

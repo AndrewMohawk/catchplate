@@ -2,9 +2,11 @@
 
 The protected delivery planner can now use independently authenticated old
 activation evidence while evaluating a fresh consume action against current
-state. This is a preparation/export source connection, not consume execution,
-SQL completion, token release or permission to retry an uncertain operation.
-The public historical consume execution gate remains closed.
+state. The original .224 connection covered preparation/export only. The .225
+source adds separately signed grant/reservation/SQL receiving roles and
+[historical completion replay](oidc-session-activation-delivery-completion-bridge.md).
+None of these permits token release or retry of an uncertain operation; public
+enablement requires a separate full caller/worker integration decision.
 
 ## Actual authority split
 
@@ -14,7 +16,8 @@ head query/observation, consume scope and write replay stay under the independen
 configured current root. The supplied activation planner and operation keys keep
 their old-evidence meaning; neither is a new current-state authority parameter.
 
-Only the actual request-bound v7 history custody owner selects the bridge path.
+Only an actual request-bound, purpose-specific history custody owner selects the
+bridge path: v7 planning, v8 grant, v9 reservation or v10 SQL receiving.
 Its class-selected `_consume_context_on_work` re-admits its own immutable custody
 and signed issuer policy under the current outer root, joins the exact current
 configuration and state enrollment, and returns same-call old root, state,
@@ -40,7 +43,7 @@ exact current-root-signed bridge policy as digest/byte-count pairs. Every input
 field uses the selected version's framing domain.
 
 The purpose-specific custody envelope is held and re-admitted but is not part of
-this cross-role commitment. A future independently authorized receiving role
+this cross-role commitment. Each independently authorized receiving role
 must authenticate its own custody and the same policy/state originals; it cannot
 substitute the planning role. The outer plan envelope and other body domains stay
 unchanged because the signed input digest commits the exact versioned body.
@@ -60,18 +63,23 @@ about total Python heap usage or a new work allowance.
 The actual context retains a base-only, lock-free custody guard. Descendant
 provenance and write checks receive only this ancestry plus the original clock
 guard, never a child guard fed back into its ancestor. Original window origin,
-deadline, age and skew can only narrow. Legacy roles and `historical=True`
-completion retain their strict existing root/state binding and v1 commitment.
+deadline, age and skew can only narrow. Legacy roles and v6 historical completion
+retain their existing root/state binding and v1 commitment. Only genuine v11
+selects the historical bridge: its independently fresh authority pins the old
+consume root and policy interval, and `_completion_context_on_work` re-admits
+the actual originals before deriving predecessor activation authority. Expired
+original intervals are algebraic evidence, not current launch deadlines.
 
 ## Remaining execution boundary
 
-The grant, reserve, SQL and completion custody profiles do not yet carry and
-authenticate this bridge. Their separate purposes cannot be replaced by v7
-planning custody. They need explicit role-specific original admission and matching
-receivers before the public historical consume action can be enabled. Historical
-planner-v3 completion additionally needs original bridge/plan interval replay
-under fresh completion-purpose processing authority, rather than reusing a live
-issuer-policy admission to renew or reject the original interval.
+The public historical consume action remains closed. Although the same-call
+worker chain now has separate role-specific bridges, interrupted public recovery
+still selects consume execution/completion pins from activation authority R0
+instead of independently admitted consume evidence R1. A genuine selector and
+matching pins are required; records cannot supply their own root authority.
+Planning v7 cannot impersonate a receiving purpose. Later historical
+intent/proof/release and explicit older-source adapters remain open, and no
+production readiness follows from these sources.
 
 This slice was authored and source-read only: no build, test, interpreter, runtime,
 browser, AWS or provisioning validation was performed.

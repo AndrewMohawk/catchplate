@@ -108,9 +108,37 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
     custody.OidcSessionActivationHistoryCustody.require_consume_completion_on_work(owner, work=work)
     custody.OidcSessionActivationHistoryCustody.bind_consume_request_on_work(owner,
         expected_consume_request=request, work=work)
-    custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
-        root_public_key=root, current_root_enrollment_bytes=enrollment, work=work)
     configured = custody.OidcSessionActivationHistoryCustody._snapshot_configuration(owner)
+    bridge_live = None
+    if configured.consumer_role == custody.bootstrap.BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE:
+        # The caller/grant operation root is consume evidence R1. Only actual
+        # fresh v11 custody may derive predecessor activation provenance R0.
+        # Reserve held inputs before re-decoding that owner's original bridge;
+        # drop the decoded context before opening and replaying the ciphertext.
+        held_bytes = 4 * (total + work.measure(owned)[0] + work.measure(expected)[0]) + 64 * 1024
+        selected_context = custody.OidcSessionActivationHistoryCustody._completion_context_on_work(owner,
+            root_public_key=root, current_root_enrollment_bytes=enrollment,
+            configuration_digest=scope["configurationDigest"], live_window=window,
+            transport_deadline_ns=bound, work=work, _additional_original_bytes=held_bytes)
+        if (type(selected_context) is not custody._ConsumeContext
+                or selected_context.custody_bytes is not configured.custody_bytes
+                or type(selected_context.bridge_policy_bytes) is not bytes):
+            _fail("historical consume requires its genuine completion bridge context")
+        registration._same(evidence.keys._spki_on_work(operation_key, work),
+            evidence.keys._spki_on_work(root, work), work,
+            "historical consume original operation root")
+        registration._same(evidence.keys._spki_on_work(old_public, work),
+            evidence.keys._spki_on_work(selected_context.planner_public_key, work), work,
+            "historical consume predecessor planner")
+        live_replay._narrowed(window, selected_context.window, bound, selected_context.deadline_ns)
+        operation_key = selected_context.operation_public_key
+        window, bound, bridge_live = (selected_context.window, selected_context.deadline_ns,
+            selected_context.live)
+        bridge_live()
+        del selected_context
+    else:
+        custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
+            root_public_key=root, current_root_enrollment_bytes=enrollment, work=work)
     work.charge(input_bytes=3 * bundle.KEY_BYTES)
     if key in (configured.bundle_key, configured.delivery_key):
         _fail("historical consume execution key reuses a predecessor private-key purpose")
@@ -124,9 +152,10 @@ def _replay_on_work(*, envelope_bytes, encrypted_originals_bytes, expected_reque
 
     def current():
         first = processing()
+        bridged = first if bridge_live is None else bridge_live()
         admitted = owner_live()
         now = processing()
-        if (not first <= admitted <= now
+        if (not first <= bridged <= admitted <= now
                 or custody.OidcSessionActivationHistoryCustody._snapshot_configuration(owner) is not configured):
             _fail("historical consume custody changed or processing clocks reversed")
         return now

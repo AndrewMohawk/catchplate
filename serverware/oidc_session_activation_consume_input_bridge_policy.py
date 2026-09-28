@@ -65,11 +65,26 @@ def _payload_shape(payload, work):
 
 def _join_on_work(payload, original, root, lifetime, work):
     """Called after actual root admission, or before signing by the root pair."""
+    return _join_originals_on_work(payload, original, root, lifetime, work)
+
+
+def _join_historical_on_work(payload, original, root, lifetime, work, *, expected_policy_interval):
+    """Original evidence only; never install its expiry as the current clock."""
+    return _join_originals_on_work(payload, original, root, lifetime, work,
+        expected_policy_interval=issuer._expected_policy_interval(expected_policy_interval))
+
+
+def _join_originals_on_work(payload, original, root, lifetime, work, *, expected_policy_interval=None):
     _payload_shape(payload, work)
     current = lifetime.current
     interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
-    lifetime.interval = interval
-    lifetime.narrow(interval[1], lifetime.window[5], lifetime.window[6])
+    if expected_policy_interval is None:
+        lifetime.interval = interval
+        lifetime.narrow(interval[1], lifetime.window[5], lifetime.window[6])
+    else:
+        plan._same(interval, expected_policy_interval, work, "independent original consume policy interval")
+        if interval[0] > current() + lifetime.window[6]:
+            issuer._fail("historical consume policy is future-issued")
     evidence, wrapped = payload["activationEvidence"], payload["currentActivationPlanner"]
     # Charge the fixed decoded-original/canonical/nested-admission inventory
     # before decoding the embedded planner. This is not a Python heap bound.
@@ -159,14 +174,17 @@ def _join_on_work(payload, original, root, lifetime, work):
     work.prepare_scan((*occupied, journal, export))
     if journal in occupied or export in (*occupied, journal):
         issuer._fail("consume bridge directories reuse old or current original custody")
-    lifetime.narrow(interval[1], min(old.maximum_plan_age_ns, chosen.maximum_plan_age_ns,
+    deadline = interval[1] if expected_policy_interval is None else lifetime.window[3]
+    lifetime.narrow(deadline, min(old.maximum_plan_age_ns, chosen.maximum_plan_age_ns,
         launch["requestTimeoutSeconds"] * 1_000_000_000),
         min(old.maximum_clock_skew_ns, chosen.maximum_clock_skew_ns))
     retained = sum(len(value) for material in (old, chosen) for value in
         (material.bootstrap_bytes, material.state_enrollment_bytes, material.complete_root_vector_bytes))
     if retained > footprint:
         issuer._fail("consume bridge decoded originals escaped their prior reservation")
-    current()
+    now = current()
+    if expected_policy_interval is not None and interval[0] > now + lifetime.window[6]:
+        issuer._fail("historical consume policy exceeds the narrowed current clock skew")
     bridge = _BridgeMaterial(old_interval, evidence["authorizationEnrollmentDigest"],
         evidence["grantEnrollmentDigest"], old_state.enrollment_digest, new_state.enrollment_digest)
     return old, public, historical_root, chosen, bridge
@@ -181,6 +199,21 @@ def _verify_on_work(*, policy_bytes, activation_planner_bootstrap_bytes, root_pu
         transport_deadline_ns=transport_deadline_ns, work=work, _continuity=_continuity)
     if type(material.bridge) is not _BridgeMaterial:
         issuer._fail("consume bridge verifier requires the distinct v2 policy")
+    return material
+
+
+def _verify_historical_on_work(*, policy_bytes, activation_planner_bootstrap_bytes,
+        root_public_key, expected_policy_interval, live_window, transport_deadline_ns,
+        work, _continuity=None):
+    """Genuine original v2 under separately pinned R1 and original interval."""
+    material = issuer._verify_historical_on_work(policy_bytes=policy_bytes,
+        activation_planner_bootstrap_bytes=activation_planner_bootstrap_bytes,
+        root_public_key=root_public_key, expected_policy_interval=expected_policy_interval,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        work=work, _continuity=_continuity)
+    if (type(material) is not issuer._HistoricalIssuerPolicyMaterial
+            or type(material.bridge) is not _BridgeMaterial):
+        issuer._fail("historical consume bridge requires its distinct original evidence material")
     return material
 
 

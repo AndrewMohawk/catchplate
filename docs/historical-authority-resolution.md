@@ -3,7 +3,8 @@
 Implementation decision after `.218`, connected for registration in `.219`,
 finalization history in `.220`, activation recovery targets in `.221`, and
 activation/consume completion recovery in `.222`, consume-input bridging
-in `.223`, and protected consume planning/caller preparation in `.224`:
+in `.223`, protected consume planning/caller preparation in `.224`, and
+purpose-specific consume worker bridges in `.225`:
 reuse the existing independently
 root-admitted historical archive and genuine original replay. Do not create a
 second trust catalog, infer retired keys from stored records, or weaken a
@@ -23,8 +24,12 @@ genuine receiving. The [signed consume-input bridge](oidc-session-activation-con
 now authenticates old activation evidence separately from current input issuance
 and worker intake. [Protected planning and caller preparation](historical-consume-execution.md)
 now preserve that split through genuine private replay and current state/write
-checks. Grant, reservation, SQL and completion custody still require their own
-bridge profiles, so public historical consume effects remain disabled.
+checks. [Purpose-specific worker bridges](oidc-session-activation-history-role-bridges.md)
+connect grant v8, reservation v9, SQL v10 and completion v11 custody. Completion
+separates its fresh root from both the consume-evidence and activation roots,
+including actual historical ciphertext replay. Public historical consume effects
+remain disabled: interrupted recovery still chooses consume authority from the
+old activation scope, not the separately authorized original consume scope.
 Fresh consume effects, proof, grant and release authorities
 still need their remaining historical joins. Explicit older-source replay
 implementations also remain open.
@@ -98,6 +103,10 @@ the real producer, startup, bounded loader and public recovery continuation.
 same-database/generation complete state-payload equality under independent roots.
 `.224` connects the private protected planner and caller preparation without
 widening the still-unconnected downstream custody purposes.
+`.225` connects those distinct role profiles and historical planner v3/v7
+completion, preserving the original signed consume-policy interval separately
+from fresh processing. These private worker connections do not by themselves
+change the public effect gate.
 Downstream effect/release history and step 5 remain open. None is runtime-verified.
 
 1. Cold-admit the operation-specific historical enrollment originals alongside
@@ -129,10 +138,16 @@ Downstream effect/release history and step 5 remain open. None is runtime-verifi
    The protected delivery-plan old-provenance/current-state split and caller
    preparation now use the separate v21 lane. A distinct private-input commitment
    authenticates the bridge and old state without binding the plan to one
-   purpose-specific custody envelope. The next joins are separately versioned
-   consume-grant, reserve, SQL and completion bridge profiles, including planner
-   v3 historical completion. Keep the public actor gate closed until these
-   actual issuers and receivers connect. Fresh consume effects, proof, grant and
+   purpose-specific custody envelope. Distinct consume-grant v8, reserve v9,
+   SQL v10 and completion v11 now join actual worker custody. The completion
+   worker admits original planner v3/history v7 under explicitly pinned consume
+   authority, deriving older activation provenance independently. Keep the public
+   actor gate closed until interrupted recovery independently selects the
+   consume-evidence root, original execution/completion pins and interval before
+   actor binding. The activation target's scope cannot supply those pins for a
+   later consume signed under another root, and retained records cannot enroll
+   replacement authority.
+   Fresh consume effects, proof, grant and
    release policies still require their remaining historical joins.
 5. Admit older source revisions only through explicit versioned replay code
    covering their original schemas and semantics. Unsupported revisions and
@@ -173,7 +188,7 @@ flowchart TD
     Q --> B[Current-root-signed bridge: old evidence and current consume inputs]
     B --> I[History v7 and planner v3 production, receiving and cold intake]
     I --> D[Protected planner and caller preparation: old evidence, current state]
-    D --> G[Grant, reserve, SQL and completion bridge profiles still required]
+    D --> G[Distinct grant v8, reserve v9, SQL v10 and completion v11 workers]
     G --> L[Public actor closed; separate proof, grant and protected-release work]
 ```
 

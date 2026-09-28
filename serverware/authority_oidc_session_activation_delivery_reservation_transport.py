@@ -101,22 +101,27 @@ def _originals(values, *, response):
     return values
 
 
-def _recv_bodies(connection, *, response, deadline_ns):
+def _recv_bodies(connection, *, response, deadline_ns, maximum_request_bytes=None):
     if type(response) is not bool:
         _fail("consume reserve frame direction is invalid")
     count = len(RESPONSE_LIMITS if response else REQUEST_LIMITS)
     header = io._recv_exact_until(connection, count * 8, deadline_ns=deadline_ns)
     lengths = tuple(int.from_bytes(header[index:index + 8], "big") for index in range(0, len(header), 8))
     _lengths(lengths, response=response)
+    if maximum_request_bytes is not None and (response
+            or type(maximum_request_bytes) is not int or not 1 <= maximum_request_bytes <= MAX_REQUEST_BYTES
+            or sum(lengths) > maximum_request_bytes):
+        _fail("consume execution request exceeds its retained-original allowance")
     originals = tuple(io._recv_exact_until(connection, size, deadline_ns=deadline_ns) for size in lengths)
     io._require_eof(connection, deadline_ns)
     return _originals(originals, response=response)
 
 
-def _recv_request(connection, *, deadline_ns):
+def _recv_request(connection, *, deadline_ns, maximum_request_bytes=None):
     if _recv_prefix(connection, deadline_ns=deadline_ns) != REQUEST_MAGIC:
         _fail("consume reserve request magic differs")
-    return _recv_bodies(connection, response=False, deadline_ns=deadline_ns)
+    return _recv_bodies(connection, response=False, deadline_ns=deadline_ns,
+        maximum_request_bytes=maximum_request_bytes)
 
 
 def _send(connection, originals, *, response, deadline_ns):

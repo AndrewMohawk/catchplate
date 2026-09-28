@@ -216,7 +216,13 @@ class _ReserverOwner:
             lambda: transport.authority_transport._peer_identity(connection))
         if (peer_uid, peer_gid) != (delivery.PEER_UID, delivery.PEER_GID):
             raise DeliveryExecutionReserverRequestError("consume reserver caller peer differs")
-        originals = transport._recv_request(connection, deadline_ns=bound)
+        cold_bytes = bootstrap.receiving._intake_reservation((16 * 1024, *map(len, self._originals)))
+        maximum_request = (transport.MAX_BYTES - cold_bytes - 4 * transport.MAX_RESPONSE_BYTES
+            - transport.REQUEST_HEADER_BYTES - transport.RESPONSE_HEADER_BYTES) // 8
+        if maximum_request <= 0:
+            raise DeliveryExecutionReserverRequestError("consume cold captures leave no bounded request capacity")
+        originals = transport._recv_request(connection, deadline_ns=bound,
+            maximum_request_bytes=min(transport.MAX_REQUEST_BYTES, maximum_request))
         current()
         expected = _expectations(originals[3], work)
         scope = expected["scope"]
@@ -409,11 +415,21 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns):
             descriptors = (delivery.BOOTSTRAP_FD, delivery.CUSTODY_FD, delivery.PLANNER_BOOTSTRAP_FD,
                 delivery.PLANNER_HISTORY_CUSTODY_FD, delivery.RECEIVING_HISTORY_CUSTODY_FD)
             public_originals, public_pins = [], []
-            for descriptor, maximum in ((delivery.ROOT_FD, delivery.MAX_ROOT_BYTES), *zip(descriptors, maxima)):
+            inventory = ((delivery.ROOT_FD, delivery.MAX_ROOT_BYTES), *zip(descriptors, maxima))
+            identities = []
+            for descriptor, maximum in inventory:
+                current()
+                identities.append(callback(work,
+                    lambda descriptor=descriptor, maximum=maximum: delivery._sealed_identity(descriptor, maximum)))
+                current()
+            bootstrap.receiving._intake_reservation(tuple(value[0][6] for value in identities))
+            for (descriptor, maximum), expected_identity in zip(inventory, identities):
                 current()
                 # The helper charges first, then wraps only its native read.
                 # Nesting it in a callback would reject legitimate metering.
                 raw, identity = delivery._read_on_work(descriptor, maximum, work)
+                if identity != expected_identity:
+                    raise DeliveryExecutionReserverStartupError("consume cold original changed after aggregate preflight")
                 public_originals.append(raw)
                 public_pins.append((descriptor, maximum, False, identity))
                 current()

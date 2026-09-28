@@ -87,7 +87,7 @@ def _originals(values, *, response):
     return values
 
 
-def _recv_bodies(connection, *, response, deadline_ns):
+def _recv_bodies(connection, *, response, deadline_ns, maximum_request_bytes=None):
     _source_bounds()
     if type(response) is not bool:
         raise AuthorityTransportError("consume SQL direction is not source selected")
@@ -98,18 +98,23 @@ def _recv_bodies(connection, *, response, deadline_ns):
         _response_lengths(lengths)
     else:
         _request_lengths(lengths)
+    if maximum_request_bytes is not None and (response
+            or type(maximum_request_bytes) is not int or not 1 <= maximum_request_bytes <= MAX_REQUEST_BYTES
+            or sum(lengths) > maximum_request_bytes):
+        raise AuthorityTransportError("consume execution request exceeds its retained-original allowance")
     received = tuple(io._recv_exact_until(connection, size, deadline_ns=deadline_ns)
         if size else b"" for size in lengths)
     io._require_eof(connection, deadline_ns)
     return _originals(received, response=response)
 
 
-def _recv_request(connection, *, deadline_ns):
+def _recv_request(connection, *, deadline_ns, maximum_request_bytes=None):
     if type(deadline_ns) is not int or deadline_ns <= 0:
         raise AuthorityTransportError("consume SQL requires an inherited absolute deadline")
     if _recv_prefix(connection, deadline_ns=deadline_ns) != REQUEST_MAGIC:
         raise AuthorityTransportError("consume SQL request magic differs")
-    return _recv_bodies(connection, response=False, deadline_ns=deadline_ns)
+    return _recv_bodies(connection, response=False, deadline_ns=deadline_ns,
+        maximum_request_bytes=maximum_request_bytes)
 
 
 def _send(connection, originals, *, response, deadline_ns):

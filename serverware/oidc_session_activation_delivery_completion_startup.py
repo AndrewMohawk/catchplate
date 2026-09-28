@@ -63,7 +63,8 @@ def _policy(material, root, work):
     from serverware import oidc_session_activation_delivery_completion_bootstrap as bootstrap
 
     enrollment = bootstrap.authorization._admit_enrollment_on_work(
-        enrollment_bytes=material.current_root_enrollment_bytes, root_public_key=root, work=work)
+        enrollment_bytes=material.current_root_enrollment_bytes,
+        root_public_key=material.evidence_root_public_key, work=work)
     planner = material.custody_material.planner.payload
     return (min(material.maximum_authorization_age_ns, planner["maximumPlanAgeNs"],
                 enrollment.payload["maxControlAgeNs"]),
@@ -266,7 +267,8 @@ class _CompletionOwner:
                 commit_reader=self._commit_reader, delivery=self._delivery, client=self._client,
                 historical_custody=self._historical, packet_digest=material.packet_digest,
                 expectations=material.expectations, planner_public_key=material.planner_public_key,
-                operation_public_key=material.operation_public_key, root_public_key=self._root,
+                operation_public_key=material.operation_public_key,
+                root_public_key=material.evidence_root_public_key,
                 completion_private_key=self._key, authorization_bytes=material.authorization_bytes,
                 authorization_enrollment_bytes=material.authorization_enrollment_bytes,
                 grant_enrollment_bytes=material.grant_enrollment_bytes,
@@ -462,7 +464,8 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns):
                 delivery_custody_key=delivery_key, live_window=window, transport_deadline_ns=bound, work=work)
             del execution_key, historical_key, delivery_key
             historical.OidcSessionActivationDeliveryCompletionCustody.bind_context_on_work(historical_owner,
-                root_public_key=root, current_root_enrollment_bytes=material.current_root_enrollment_bytes, work=work)
+                root_public_key=material.evidence_root_public_key,
+                current_root_enrollment_bytes=material.current_root_enrollment_bytes, work=work)
             window, bound = historical.OidcSessionActivationDeliveryCompletionCustody.processing_bounds_on_work(
                 historical_owner, live_window=window, transport_deadline_ns=bound, work=work)
             custody_live = historical.OidcSessionActivationDeliveryCompletionCustody.check_on_work(
@@ -485,7 +488,8 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns):
             # Native reads are metered before their stable callbacks; semantic
             # record reducers charge this same allowance outside callbacks.
             completion_delivery = retained.CurrentRootCompletionDelivery(journal=journal,
-                enrollment_bytes=material.current_root_enrollment_bytes, root_public_key=root,
+                enrollment_bytes=material.current_root_enrollment_bytes,
+                root_public_key=material.evidence_root_public_key,
                 expected_local_sequence=material.completion_checkpoint[0],
                 expected_local_head_digest=material.completion_checkpoint[1],
                 live_window=window, transport_deadline_ns=bound, work=work)

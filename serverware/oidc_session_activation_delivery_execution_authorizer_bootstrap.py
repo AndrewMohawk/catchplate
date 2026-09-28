@@ -289,6 +289,8 @@ def _admit_payload(payload, originals, root, window, bound, work, current):
         current_root_enrollment_bytes=current_raw, root_public_key=root, work=work)
     live()
     caller_payload, authorizer = enrolled.payload, grant.payload["authorizer"]
+    if authorizer["spkiDigest"] == keys._spki_on_work(custody.history.historical_root_public_key, work):
+        _fail("consume authorizer key reuses the independently admitted historical root")
     for actual, expected in ((payload["currentRootEnrollment"]["identityDigest"], admitted.state_enrollment_digest),
             (payload["currentRootEnrollment"]["identityDigest"], caller_payload["currentRootEnrollmentDigest"]),
             (payload["grantEnrollment"]["identityDigest"], grant.enrollment_digest),
@@ -314,6 +316,7 @@ def _verify_on_work(*, bootstrap_bytes, custody_bytes, planner_bootstrap_bytes,
         original = authorization._original(bootstrap_bytes, MAX_BYTES, "consume authorizer bootstrap")
         originals = _detached(custody_bytes, planner_bootstrap_bytes,
             planner_history_custody_bytes, receiving_history_custody_bytes)
+        receiving._intake_reservation((16 * 1024, len(original), *map(len, originals)))
         root = root_public_key
         authorization._public(root)
         window, bound, inherited = _processing(live_window, transport_deadline_ns, work)

@@ -102,7 +102,9 @@ def _verify_full_on_work(context, *, envelope_bytes, request, scope, old_token_b
     public = planner_public_key
     state.head.authorization._public(public)
     # This private fixed entry owns all external graphs before crypto/clock
-    # work, keeps the supplied window, and requires the genuine v6 owner.
+    # work, keeps the supplied window, and requires genuine v6 or separately
+    # signed v11 completion ownership. The latter re-admits its own bridge
+    # before deriving old activation provenance; no supplied root selects it.
     invocation = plan._capture_originals(context, request=request, scope=scope,
         old_token_bytes=old_token_bytes, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, before_proofs=before_proofs,

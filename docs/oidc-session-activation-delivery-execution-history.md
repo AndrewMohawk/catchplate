@@ -42,6 +42,15 @@ and `live`. Its `valid_until_epoch_ns` is **original historical metadata**,
 not a current expiry or renewed permission. No receiving API accepts this
 result instead of original frames and independently admitted pins.
 
+The separate [v11 completion bridge](oidc-session-activation-delivery-completion-bridge.md)
+keeps this signature unchanged. Its genuine owner binds the consume evidence
+root/state independently from the activation evidence root. Before private
+opening, the replay entry preflights its held inputs, re-admits the owner's
+original bridge and derives the old operation key; the decoded context is
+discarded while its base guard survives. The lower historical plan then repeats
+that admission and recomputes the original v2 private commitment. Legacy v6
+root/state binding is unchanged, and no live planning role can select v11.
+
 ## Genuine replay and two separate timelines
 
 The known original canonical signature, source cohort and independent request,

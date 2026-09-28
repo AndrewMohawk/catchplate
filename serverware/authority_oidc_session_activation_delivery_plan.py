@@ -207,7 +207,12 @@ def _capture_originals(context, *, request, scope, old_token_bytes, business_bef
         expected_consume_request=actual, work=work)
     configured = custody.OidcSessionActivationHistoryCustody._snapshot_configuration(owner)
     provenance_context = None
-    if not historical and configured.consumer_role == custody.bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE:
+    historical_bridge = historical and configured.consumer_role == custody.bootstrap.BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE
+    if historical_bridge or (not historical and configured.consumer_role in (
+            custody.bootstrap.BRIDGE_CONSUME_CONSUMER_ROLE,
+            custody.bootstrap.BRIDGE_CONSUME_GRANT_CONSUMER_ROLE,
+            custody.bootstrap.BRIDGE_CONSUME_RESERVE_CONSUMER_ROLE,
+            custody.bootstrap.BRIDGE_CONSUME_SQL_ISSUER_CONSUMER_ROLE)):
         # All mutable caller graphs are already detached. Reserve their actual
         # held representations before custody re-decodes its own bridge originals.
         query_bytes = sum(len(record.declared_query_json) + len(record.resolved_query_json)
@@ -218,7 +223,9 @@ def _capture_originals(context, *, request, scope, old_token_bytes, business_bef
         original_bytes = sum(map(len, (*original_activation, *original_state, old, write_original)))
         owned_bytes = work.measure(owned)[0] + work.measure(raw)[0] + work.measure(query_metadata)[0]
         held_bytes = 4 * (original_bytes + owned_bytes + query_bytes) + 64 * 1024
-        provenance_context = custody.OidcSessionActivationHistoryCustody._consume_context_on_work(owner,
+        select_context = (custody.OidcSessionActivationHistoryCustody._completion_context_on_work
+            if historical_bridge else custody.OidcSessionActivationHistoryCustody._consume_context_on_work)
+        provenance_context = select_context(owner,
             root_public_key=root, current_root_enrollment_bytes=original_state[0],
             configuration_digest=expected["configurationDigest"], live_window=window,
             transport_deadline_ns=bound, work=work, _current=_current,
@@ -241,8 +248,9 @@ def _capture_originals(context, *, request, scope, old_token_bytes, business_bef
         narrowed, narrowed_bound = provenance_context.window, provenance_context.deadline_ns
         provenance_context.live()
     else:
-        # Legacy live roles and historical completion retain their strict
-        # same-root/state binding; v7 planning cannot authorize those purposes.
+        # Legacy live roles and v6 historical completion retain their strict
+        # same-root/state binding. Only independently signed v11 selects the
+        # historical bridge above; a planning grant cannot select completion.
         custody.OidcSessionActivationHistoryCustody.bind_context_on_work(owner,
             root_public_key=root, current_root_enrollment_bytes=original_state[0], work=work)
         narrowed, narrowed_bound = custody.OidcSessionActivationHistoryCustody.processing_bounds_on_work(owner,

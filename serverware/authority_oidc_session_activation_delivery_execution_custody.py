@@ -112,7 +112,8 @@ def _join(configured, material, work):
     actual = history.OidcSessionActivationHistoryCustody._snapshot_configuration(configured.historical)
     if actual is not configured.historical_configuration:
         _fail("consume receiving historical owner configuration changed")
-    registration._same(actual.consumer_role, bootstrap._profile(configured.consumer_role)[5], work,
+    registration._same(actual.consumer_role, bootstrap._history_role(configured.consumer_role,
+        bridged=material.history.bridge_policy is not None), work,
         "consume receiving historical purpose differs from its independently admitted role")
     registration._same(material.payload["consumerRole"], configured.consumer_role, work,
         "consume receiving original purpose changed")
@@ -124,6 +125,9 @@ def _join(configured, material, work):
         replay._bytes_equal(left, right, work, label)
     registration._same(evidence.keys._spki_on_work(actual.root_public_key, work),
         evidence.keys._spki_on_work(configured.root_public_key, work), work, "consume receiving historical root")
+    registration._same(evidence.keys._spki_on_work(actual.historical_root_public_key, work),
+        evidence.keys._spki_on_work(material.history.historical_root_public_key, work), work,
+        "consume receiving independently admitted old evidence root")
     registration._same(material.attestation_interval, configured.attestation_interval, work,
         "consume receiving original launch interval")
     registration._same((material.planner.payload["maximumPlanAgeNs"],
@@ -366,7 +370,8 @@ class OidcSessionActivationDeliveryExecutionCustody:
                 activation_expectations=payload["activationExpectations"], activation_scope=payload["activationScope"],
                 planner_public_key=material.planner.planner_public_key,
                 activation_planner_public_key=material.history.planner.planner_public_key,
-                operation_public_key=configured.root_public_key, state_root_public_key=configured.root_public_key,
+                operation_public_key=material.history.historical_root_public_key,
+                state_root_public_key=configured.root_public_key,
                 historical_custody=configured.historical, bundle_key=configured.execution_bundle_key,
                 live_window=narrowed, transport_deadline_ns=bound, work=work)
             if type(actual) is not replay._ReplayedDelivery:

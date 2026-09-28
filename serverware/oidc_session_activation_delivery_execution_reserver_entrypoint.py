@@ -92,7 +92,7 @@ def _parent(path):
         raise
 
 
-def _open_material(path, maximum, *, work, private=False):
+def _open_material(path, maximum, *, work, private=False, maximum_capture_bytes=None):
     if path not in _MATERIAL or _MATERIAL[path] != (maximum, private) or type(private) is not bool:
         raise RuntimeError("consume reserver original inventory changed")
     parent, source = _parent(path), None
@@ -108,6 +108,10 @@ def _open_material(path, maximum, *, work, private=False):
                     and before.st_size != MAX_RAW_KEY_BYTES):
             raise RuntimeError("consume reserver original is not protected bounded material")
         identity = delivery._material_identity(before)
+        if maximum_capture_bytes is not None and (
+                type(maximum_capture_bytes) is not int or maximum_capture_bytes <= 0
+                or 16 * before.st_size > maximum_capture_bytes):
+            raise RuntimeError("consume execution original exceeds remaining cold capture capacity")
         named = os.stat(os.path.basename(path), dir_fd=parent, follow_symlinks=False)
         if delivery._material_identity(named) != identity:
             raise RuntimeError("consume reserver original pathname differs")
@@ -256,13 +260,15 @@ def main():
             if reserved != target:
                 raise RuntimeError("consume reserver fixed descriptor slot is occupied")
             reservations[target] = delivery._material_identity(os.fstat(reserved))
+        capture_remaining = bootstrap.receiving.MAX_ORIGINALS_BYTES - bootstrap.receiving.INTAKE_METADATA_BYTES
         for path, target, maximum in _TRUST_FILES:
             current()
-            source = _open_material(path, maximum, work=work)
+            source = _open_material(path, maximum, work=work, maximum_capture_bytes=capture_remaining)
             owned.add(source)
             current()
             _retain(source, target, reservations, owned)
             retained[target] = delivery._material_identity(os.fstat(target))
+            capture_remaining -= 16 * retained[target][6]
             os.close(source)
             owned.remove(source)
         originals = []
@@ -272,6 +278,7 @@ def main():
             originals.append(raw)
             current()
         root_raw, bootstrap_raw, custody_raw, planner_raw, planning_raw, receiving_raw = originals
+        bootstrap.receiving._intake_reservation(tuple(map(len, originals)))
         root = bootstrap.production._callback(work, lambda: serialization.load_pem_public_key(root_raw))
         if not isinstance(root, Ed25519PublicKey):
             raise RuntimeError("consume reserver root original must be Ed25519")

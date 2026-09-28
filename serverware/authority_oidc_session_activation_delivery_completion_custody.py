@@ -58,6 +58,8 @@ class _Configuration:
     opening_sample: tuple
     maximum_age_ns: int
     maximum_clock_skew_ns: int
+    evidence_root_public_key: object
+    bridge_policy_interval: tuple | None
 
 
 def _verify(configured, window, bound, work):
@@ -84,6 +86,11 @@ def _join(configured, material, work):
         replay._bytes_equal(left, right, work, label)
     registration._same(evidence.keys._spki_on_work(actual.root_public_key, work),
         evidence.keys._spki_on_work(configured.root_public_key, work), work, "consume completion root")
+    registration._same(evidence.keys._spki_on_work(material.evidence_root_public_key, work),
+        evidence.keys._spki_on_work(configured.evidence_root_public_key, work), work,
+        "consume completion independent evidence root")
+    registration._same(material.bridge_policy_interval, configured.bridge_policy_interval,
+        work, "consume completion original policy interval")
     registration._same((material.attestation_interval, material.planner.attestation_interval,
         material.planner.history_material.attestation_interval),
         (configured.attestation_interval, configured.planner_interval, configured.planning_history_interval),
@@ -152,7 +159,8 @@ class OidcSessionActivationDeliveryCompletionCustody:
                 material.planner.consume_request_bytes, material.planner.attestation_interval,
                 material.planner.history_material.attestation_interval, material.attestation_interval,
                 material.opening_sample, material.planner.payload["maximumPlanAgeNs"],
-                material.planner.payload["maximumClockSkewNs"])
+                material.planner.payload["maximumClockSkewNs"], material.evidence_root_public_key,
+                material.bridge_policy_interval)
             object.__setattr__(self, "_configured", configured)
             object.__setattr__(self, "_seal", configured)
             object.__setattr__(self, "_pid", os.getpid())
@@ -224,8 +232,8 @@ class OidcSessionActivationDeliveryCompletionCustody:
             live_window=window, transport_deadline_ns=bound, work=work)
 
         def checked():
-            first, middle, last = current(), nested(), current()
-            if not first <= middle <= last:
+            first, admitted, middle, last = current(), material.live(), nested(), current()
+            if not first <= admitted <= middle <= last:
                 _fail("consume completion nested clocks reversed")
             return last
 
@@ -259,7 +267,8 @@ class OidcSessionActivationDeliveryCompletionCustody:
             _fail("consume completion custody is already in use")
         try:
             registration._same(evidence.keys._spki_on_work(root, work),
-                evidence.keys._spki_on_work(configured.root_public_key, work), work, "consume completion root")
+                evidence.keys._spki_on_work(configured.evidence_root_public_key, work), work,
+                "consume completion evidence root")
             replay._bytes_equal(original, configured.state_enrollment_bytes, work, "consume completion enrollment")
             if self._snapshot_configuration() is not configured:
                 _fail("consume completion changed during static context binding")
@@ -338,9 +347,11 @@ class OidcSessionActivationDeliveryCompletionCustody:
             material, window, bound, current = self._reauthenticate_locked(
                 configured, window, min(window[4], transport_deadline_ns), work)
             registration._same(evidence.keys._spki_on_work(root, work),
-                evidence.keys._spki_on_work(configured.root_public_key, work), work, "consume completion root")
+                evidence.keys._spki_on_work(configured.evidence_root_public_key, work), work,
+                "consume completion evidence root")
             registration._same(evidence.keys._spki_on_work(operation_key, work),
-                evidence.keys._spki_on_work(configured.root_public_key, work), work, "consume completion operation key")
+                evidence.keys._spki_on_work(configured.evidence_root_public_key, work), work,
+                "consume completion original operation key")
             payload = material.planner.payload
             evidence.keys._public_binding(planner, payload["planner"]["spkiDigest"], work)
             registration._same(config, payload["configurationDigest"], work, "consume completion configuration")

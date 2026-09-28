@@ -133,6 +133,7 @@ class _CompletionMaterial:
     attestation_interval: tuple
     opening_sample: tuple
     launch: dict
+    evidence_root_public_key: object
 
 
 def _fail(message):
@@ -331,6 +332,7 @@ def _material(payload, original, root, window, bound, opening, work, current, *,
         planner_history_custody_bytes=raw4[2], receiving_history_custody_bytes=raw4[3],
         root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     admitted, configured = custody.planner, custody.planner.payload
+    evidence_root = custody.evidence_root_public_key
     for actual, expected in ((payload["receiverIdentity"], custody.receiver_identity),
             (payload["configurationDigest"], configured["configurationDigest"]),
             (payload["generationDigest"], configured["generation"]["digest"]),
@@ -346,10 +348,11 @@ def _material(payload, original, root, window, bound, opening, work, current, *,
 
     def live():
         first = current()
+        custody_now = custody.live()
         _fresh(custody.attestation_interval, work, opening=custody.opening_sample)
         _fresh(custody.history.attestation_interval, work, opening=custody.history.opening_sample)
         now = processing()
-        if not first <= now <= current():
+        if not first <= custody_now <= now <= current():
             _fail("consume completion current processing reversed")
         return now
 
@@ -361,13 +364,14 @@ def _material(payload, original, root, window, bound, opening, work, current, *,
     receiving._same_bytes(current_raw, admitted.state_enrollment_bytes, work,
         "consume completion state enrollment differs from original planner")
     enrolled = caller._admit_enrollment_on_work(authorization_enrollment_bytes=caller_raw,
-        current_root_enrollment_bytes=current_raw, grant_enrollment_bytes=grant_raw, root_public_key=root,
+        current_root_enrollment_bytes=current_raw, grant_enrollment_bytes=grant_raw, root_public_key=evidence_root,
         configuration_digest=payload["configurationDigest"], planner_public_key=admitted.planner_public_key,
-        operation_public_key=root, work=work)
+        operation_public_key=evidence_root, work=work)
     live()
-    state = authorization._admit_enrollment_on_work(enrollment_bytes=current_raw, root_public_key=root, work=work)
+    state = authorization._admit_enrollment_on_work(enrollment_bytes=current_raw,
+        root_public_key=evidence_root, work=work)
     grant = grants._admit_enrollment_on_work(grant_enrollment_bytes=grant_raw,
-        current_root_enrollment_bytes=current_raw, root_public_key=root, work=work)
+        current_root_enrollment_bytes=current_raw, root_public_key=evidence_root, work=work)
     live()
     policy, caller_policy = state.payload, enrolled.payload
     completion = policy["completion"]
@@ -384,7 +388,9 @@ def _material(payload, original, root, window, bound, opening, work, current, *,
         plan._same(actual, expected, work, "consume completion original enrollment binding")
     caller_pin = caller_policy["callerKey"]["spkiDigest"]
     _configured_keys(configured["configurationPayload"], caller_pin, completion["spkiDigest"], work)
-    for pin in (caller.keys._spki_on_work(root, work), configured["planner"]["spkiDigest"],
+    for pin in (caller.keys._spki_on_work(root, work), caller.keys._spki_on_work(evidence_root, work),
+            caller.keys._spki_on_work(custody.history.historical_root_public_key, work),
+            configured["planner"]["spkiDigest"],
             custody.history.planner.planner_spki_digest, caller_pin, grant.payload["authorizer"]["spkiDigest"],
             policy["computation"]["spkiDigest"], policy["state"]["spkiDigest"]):
         work.prepare_comparison(completion["spkiDigest"], pin)
@@ -438,7 +444,7 @@ def _material(payload, original, root, window, bound, opening, work, current, *,
         configuration_digest=payload["configurationDigest"], runtime_closure_digest=payload["runtimeClosureDigest"],
         authorization_bytes=intent_raw, current_root_enrollment_bytes=current_raw,
         grant_enrollment_bytes=grant_raw, authorization_enrollment_bytes=caller_raw,
-        planner_public_key=admitted.planner_public_key, operation_public_key=root,
+        planner_public_key=admitted.planner_public_key, operation_public_key=evidence_root,
         completion_public_key=state.completion_public_key, completion_spki_digest=completion["spkiDigest"],
         completion_measurement_digest=completion["measurementDigest"], database_id=payload["databaseId"],
         generation_digest=payload["generationDigest"], enrollment_digest=state.enrollment_digest,
@@ -449,7 +455,8 @@ def _material(payload, original, root, window, bound, opening, work, current, *,
         state_endpoint=_state_endpoint(payload["stateEndpoint"]), packet_digest=payload["packetDigest"],
         authorization_digest=payload["authorizationDigest"], expectations=expected,
         custody_configuration=custody_config, commit_configuration=commit_config, tls_files=payload["tlsFiles"],
-        attestation_interval=interval, opening_sample=opening, launch=payload["launch"])
+        attestation_interval=interval, opening_sample=opening, launch=payload["launch"],
+        evidence_root_public_key=evidence_root)
     live()
     return material, live
 

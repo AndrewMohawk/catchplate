@@ -1,9 +1,10 @@
 """Fresh completion-only root authority over genuine historical consume scope.
 
 Detached planner and planning-history originals are authenticated historical
-data, never current launches. Only this outer root grant and the separate v6
-activation-history grant authorize current processing. No key delivery, SQL,
-signing of completion, plaintext release or cross-cohort resolution occurs here.
+data, never current launches. Only this outer root grant and the separate fresh
+completion-history grant authorize current processing. Version 2 independently
+pins the original consume evidence root and bridge-policy interval; neither is
+selected from an untrusted historical original.
 """
 from __future__ import annotations
 
@@ -20,6 +21,8 @@ authority, authorization, capability = neutral.authority, neutral.authorization,
 capture, plan, shape, clock, production = neutral.capture, neutral.plan, neutral.shape, neutral.clock, neutral.production
 SCHEMA = "serverware.signedOidcSessionActivationDeliveryCompletionCustody/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionCustody/v1"
+BRIDGE_SCHEMA = "serverware.signedOidcSessionActivationDeliveryCompletionCustody/v2"
+BRIDGE_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionCustody/v2"
 OPERATION = planner_bootstrap.OPERATION
 CONSUMER_ROLE = history_bootstrap.CONSUME_COMPLETION_CONSUMER_ROLE
 PROCESS_MODE = history_bootstrap.CONSUME_COMPLETION_PROCESS_MODE
@@ -27,6 +30,7 @@ SERVICE_UID = SERVICE_GID = 65497
 MAX_BYTES, MAX_ORIGINALS_BYTES = neutral.MAX_BYTES, neutral.MAX_ORIGINALS_BYTES
 MAX_NODES, MAX_DEPTH = neutral.MAX_NODES, neutral.MAX_DEPTH
 _PAYLOAD_FIELDS, _ENVELOPE_FIELDS = neutral._PAYLOAD_FIELDS, neutral._ENVELOPE_FIELDS
+_BRIDGE_PAYLOAD_FIELDS = _PAYLOAD_FIELDS | {"bridgeEvidenceRoot", "bridgePolicyInterval"}
 _ORIGINAL_FIELDS, _FALSE_FIELDS = neutral._ORIGINAL_FIELDS, neutral._FALSE_FIELDS
 _capture, _wire, _canonical, _decode = neutral._capture, neutral._wire, neutral._canonical, neutral._decode
 _fresh, _originals, _bind_original, _same_bytes = neutral._fresh, neutral._originals, neutral._bind_original, neutral._same_bytes
@@ -52,11 +56,17 @@ class _CustodyMaterial:
     attestation_interval: tuple
     opening_sample: tuple
     payload: dict
+    evidence_root_public_key: object
+    bridge_policy_interval: tuple | None
+    live: object
 
 
 def _payload_shape(payload):
-    shape._object(payload, _PAYLOAD_FIELDS, "consume completion custody payload")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    bridged = type(payload) is dict and payload.get("schema") == BRIDGE_PAYLOAD_SCHEMA
+    shape._object(payload, _BRIDGE_PAYLOAD_FIELDS if bridged else _PAYLOAD_FIELDS,
+        "consume completion custody payload")
+    for name, expected in (("schema", BRIDGE_PAYLOAD_SCHEMA if bridged else PAYLOAD_SCHEMA),
+            ("sourceRevision", authority.SOURCE_REVISION),
             ("operation", OPERATION), ("consumerRole", CONSUMER_ROLE), ("processMode", PROCESS_MODE),
             ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
@@ -82,6 +92,21 @@ def _payload_shape(payload):
         _fail("consume completion outer lifetime exceeds its source bound")
     if any(payload[name] is not False for name in _FALSE_FIELDS):
         _fail("consume completion claims unsupported hardware or witness assurance")
+    if bridged:
+        selected = payload["bridgeEvidenceRoot"]
+        shape._object(selected, frozenset({"publicKeyBase64Url", "spkiDigest"}),
+            "consume completion independent evidence root")
+        shape._text(selected["publicKeyBase64Url"], 43, minimum=43)
+        shape._base64url(selected["publicKeyBase64Url"])
+        shape._digest(selected["spkiDigest"])
+        interval = payload["bridgePolicyInterval"]
+        shape._object(interval, frozenset({"issuedAtEpochNs", "expiresAtEpochNs"}),
+            "consume completion original bridge interval")
+        for name in ("issuedAtEpochNs", "expiresAtEpochNs"):
+            shape._integer(interval[name], minimum=1)
+        if interval["issuedAtEpochNs"] >= interval["expiresAtEpochNs"]:
+            _fail("consume completion original bridge interval is empty")
+    return bridged
 
 
 def _continuity(current, work):
@@ -107,10 +132,21 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
     for name, original in (("plannerBootstrap", planner_original),
             ("plannerHistoryCustody", planning_original), ("receivingHistoryCustody", receiving_original)):
         _bind_original(payload[name], original, current, work)
-    planner = planner_bootstrap._verify_historical_on_work(bootstrap_bytes=planner_original,
-        history_custody_bytes=planning_original, root_public_key=root,
+    bridged = payload["schema"] == BRIDGE_PAYLOAD_SCHEMA
+    evidence_root, policy_interval = root, None
+    if bridged:
+        selected = payload["bridgeEvidenceRoot"]
+        evidence_root = shared.configuration._key(selected["publicKeyBase64Url"], work,
+            expected_spki=selected["spkiDigest"])
+        policy_interval = tuple(payload["bridgePolicyInterval"][name]
+            for name in ("issuedAtEpochNs", "expiresAtEpochNs"))
+    verifier = (planner_bootstrap._verify_bridge_historical_on_work if bridged
+        else planner_bootstrap._verify_historical_on_work)
+    extra = {"expected_policy_interval": policy_interval} if bridged else {}
+    planner = verifier(bootstrap_bytes=planner_original,
+        history_custody_bytes=planning_original, root_public_key=evidence_root,
         live_window=window, transport_deadline_ns=bound, work=work,
-        _continuity=_continuity(_current, work))
+        _continuity=_continuity(_current, work), **extra)
     current()
     if (type(planner) is not planner_bootstrap._HistoricalPlannerMaterial
             or type(planner.history_material) is not history_bootstrap._HistoricalPlanningMaterial):
@@ -121,16 +157,40 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
             shape._integer(roles[name][field], 2**32 - 2, minimum=1)
             if roles[name][field] == SERVICE_UID:
                 _fail("consume completion identity collides with a configured generic role")
-    receiving = history_bootstrap._verify_consume_completion_on_work(custody_bytes=receiving_original,
+    receive = (history_bootstrap._verify_bridge_consume_completion_on_work if bridged
+        else history_bootstrap._verify_consume_completion_on_work)
+    receiving = receive(custody_bytes=receiving_original,
         root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work,
         _continuity=_continuity(_current, work))
     current()
-    live = shared._launch_guard(receiving.attestation_interval, receiving.opening_sample, current, work)
+    outer_live = shared._launch_guard(receiving.attestation_interval, receiving.opening_sample, current, work)
+    planning = planner.history_material
+    if bridged:
+        plan._same(authorization.keys._spki_on_work(receiving.bridge_evidence_root_public_key, work),
+            authorization.keys._spki_on_work(evidence_root, work), work,
+            "consume completion fresh history changed its independent evidence root")
+        plan._same(receiving.bridge_policy_interval, policy_interval, work,
+            "consume completion fresh history changed its original policy interval")
+        _same_bytes(planning.bridge_policy.policy_bytes, receiving.bridge_policy.policy_bytes, work,
+            "consume completion histories bind different original bridge policies")
+
+    def live():
+        first = outer_live()
+        if bridged:
+            planned = planning.bridge_policy.live()
+            received = receiving.bridge_policy.live()
+        else:
+            planned = received = first
+        now = outer_live()
+        if not first <= planned <= received <= now:
+            _fail("consume completion bridge processing clocks reversed")
+        return now
+
     live()
-    for name, expected in (("consumer_role", CONSUMER_ROLE), ("process_mode", PROCESS_MODE),
+    expected_role = history_bootstrap.BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE if bridged else CONSUMER_ROLE
+    for name, expected in (("consumer_role", expected_role), ("process_mode", PROCESS_MODE),
             ("service_uid", SERVICE_UID), ("service_gid", SERVICE_GID)):
         plan._same(getattr(receiving, name), expected, work, "consume completion history purpose differs")
-    planning = planner.history_material
     _same_bytes(planner.consume_request_bytes, receiving.consume_request_bytes, work,
         "consume completion root grants bind different requests")
     _same_bytes(planning.planner.bootstrap_bytes, receiving.planner.bootstrap_bytes, work,
@@ -144,10 +204,11 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
             ("deliveryKeyDigest", receiving.delivery_key_digest),
             ("receiverIdentity", receiving.receiver_identity)):
         plan._same(payload[name], expected, work, "consume completion cohort differs: " + name)
+    output = receiving.bridge_policy.current_planner if bridged else receiving.planner
     plan._same((planner.payload["configurationDigest"], planner.payload["generation"]["digest"],
         planner.payload["runtimeClosureDigest"], planner.payload["runtimeRoleIdentities"]),
-        (receiving.planner.configuration_digest, receiving.planner.generation["digest"],
-        receiving.planner.runtime_closure_digest, receiving.planner.runtime_role_identities), work,
+        (output.configuration_digest, output.generation["digest"],
+        output.runtime_closure_digest, output.runtime_role_identities), work,
         "consume completion historical configuration/runtime cohort differs")
     pins = (payload["executionBundleKeyDigest"], payload["historicalBundleKeyDigest"],
         payload["deliveryKeyDigest"], planner.payload["journalKeyDigest"], receiving.planner.journal_key_digest)
@@ -158,14 +219,14 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
                 _fail("consume completion key purposes are not separate")
     interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
     if not receiving.attestation_interval[0] <= interval[0] < interval[1] <= receiving.attestation_interval[1]:
-        _fail("consume completion interval escapes its fresh v6 history grant")
+        _fail("consume completion interval escapes its fresh completion history grant")
     # Old intervals are original metadata. They need not contain the current
     # processing window or the new completion-purpose launch.
     if max(planner.attestation_interval[0], planning.attestation_interval[0]) >= min(
             planner.attestation_interval[1], planning.attestation_interval[1]):
         _fail("consume original planner and planning-history launches never overlapped")
     live()
-    return planner, receiving, live
+    return planner, receiving, live, evidence_root, policy_interval
 
 
 def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
@@ -186,24 +247,28 @@ def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_c
         inherited()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed consume completion custody")
-        shape._literal(envelope["schema"], SCHEMA)
+        schema = envelope["schema"]
+        if schema not in (SCHEMA, BRIDGE_SCHEMA):
+            _fail("consume completion custody has an unsupported signed schema")
         shape._base64url(envelope["signatureBase64Url"], signature=True)
         if type(envelope["payload"]) is not dict:
             _fail("consume completion custody payload is not an exact object")
         _canonical(original, envelope, work)
         unsigned = _wire(envelope["payload"], work)
         inherited()
-        capability._signature(root, envelope["signatureBase64Url"], SCHEMA, unsigned, capture._SharedLedger(work))
+        capability._signature(root, envelope["signatureBase64Url"], schema, unsigned, capture._SharedLedger(work))
         inherited()
         payload = envelope["payload"]
-        _payload_shape(payload)
+        bridged = _payload_shape(payload)
+        shape._literal(schema, BRIDGE_SCHEMA if bridged else SCHEMA)
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = _fresh(interval, work)
         current = shared._launch_guard(interval, opening, inherited, work)
-        planner, history, live = _admit_nested(payload, planner_original, planning_original,
+        planner, history, live, evidence_root, policy_interval = _admit_nested(payload, planner_original, planning_original,
             receiving_original, root, window, bound, current, work, _current=_current)
         result = _CustodyMaterial(original, planner_original, planning_original, receiving_original,
-            planner, history, payload["receiverIdentity"], interval, opening, payload)
+            planner, history, payload["receiverIdentity"], interval, opening, payload,
+            evidence_root, policy_interval, live)
         _canonical(original, envelope, work)
         live()
         return result
@@ -227,15 +292,15 @@ def _produce_on_work(*, payload, planner_bootstrap_bytes, planner_history_custod
     bound = min(window[4], transport_deadline_ns)
     inherited = shared._processing(window, bound, work)
     inherited()
-    _payload_shape(owned)
+    bridged = _payload_shape(owned)
     interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
     opening = _fresh(interval, work)
     current = shared._launch_guard(interval, opening, inherited, work)
-    _planner, _history, live = _admit_nested(owned, planner_original, planning_original,
+    _planner, _history, live, _evidence_root, _policy_interval = _admit_nested(owned, planner_original, planning_original,
         receiving_original, root, window, bound, current, work)
     unsigned = _wire(owned, work)
     live()
-    original = shared.signing._sign(owned, SCHEMA, MAX_BYTES, private, root, work)
+    original = shared.signing._sign(owned, BRIDGE_SCHEMA if bridged else SCHEMA, MAX_BYTES, private, root, work)
     live()
     _canonical(unsigned, owned, work)
     _verify_on_work(custody_bytes=original, planner_bootstrap_bytes=planner_original,

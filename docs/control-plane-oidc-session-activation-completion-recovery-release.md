@@ -73,7 +73,9 @@ coordinator return. An error does not establish whether an earlier effect ran.
 
 ## Remaining delivery boundary
 
-A later continuation must independently root-admit the appropriate LIVE
+A later continuation requires fresh release-purpose-bound authorization. It
+must not broaden this preparation-only approval or reuse its closed actor.
+Within that fresh live scope it must independently root-admit the appropriate LIVE
 checkpoint-zero first-release profile or RECOVERY checkpoint-one retained-outcome
 profile, perform the protected exchange, recheck current authentication and
 guard the final cookie send. Missing local intent/outcome and a reconstructed

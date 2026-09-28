@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="760" height="386" viewBox="0 0 760 386" role="img" aria-labelledby="activation-recovery-title activation-recovery-description">
-  <title id="activation-recovery-title">Step 23 recovery is active. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY is active/partial: pure root policy, recovery-grant production and triple admission landed in 1c64354; independent cold acquisition and staging remain open. COMPLETE, EXCHANGE and HTTP remain todo. These six facets are not new milestones or effort percentages. No functional recovery or token delivery is claimed. Source only; unbuilt, unexecuted and unprovisioned.</title>
-  <desc id="activation-recovery-description">Six diagnostic facets inside active step 23, not six new milestones. TARGET binds the retained intent-stage target and old-token possession through a bounded three-record selector. ACTOR supplies fresh WebAuthn, current roles and trust, configured approval, genuine options and a private live context. Both are source-landed in 9f036648f7fee2f88208a1e6b284b39c4acb08ee. AUTHORITY is amber active/partial: independent root policy, genuine historical derivation, checkpoint-one recovery grant production and original triple admission are source-landed in 1c64354034e46db1bc796b3506ee6b73e0ddfd6c. Actual independent cold acquisition/staging and durable-store observation remain open; canonical outcome reconstruction does not prove storage exists. COMPLETE prior-stage recovery, EXCHANGE protected recovery and genuine response, and HTTP public recovery/guarded cookie remain todo. Options alone do not authorize or execute recovery. Activation remains 22/26 landed, with 1 active step and 3 todo; public actions remain 2/3, project 34/46 and production acceptance 0/6 verified. No automatic SQL retry or functional recovery claim. Source is unbuilt, unexecuted and unprovisioned.</desc>
+  <title id="activation-recovery-title">Step 23 recovery is active. TARGET—retained intent-stage target, old-token possession and bounded three-record selection—and ACTOR—fresh WebAuthn, roles, trust, approval, options and live context—are source-landed in 9f03664. AUTHORITY is active/partial: the cold eight-FD issuer and finite verified client landed in eb42425; parent actor configuration, durable acquired originals and recovery-worker staging remain open. COMPLETE, EXCHANGE and HTTP remain todo. These six facets are not new milestones or effort percentages. No functional recovery or token delivery is claimed. Source only; unbuilt, unexecuted and unprovisioned.</title>
+  <desc id="activation-recovery-description">Six diagnostic facets inside active step 23, not six new milestones. TARGET binds the retained intent-stage target and old-token possession through a bounded three-record selector. ACTOR supplies fresh WebAuthn, current roles and trust, configured approval, genuine options and a private live context. Both are source-landed in 9f036648f7fee2f88208a1e6b284b39c4acb08ee. AUTHORITY is amber active/partial: the cold eight-FD UID 65493 recovery issuer and finite verified private client are source-landed in eb4242552861df8924acd8d418140907f7f56cd0, building on the pure policy/producer/triple-admission foundation in 1c64354034e46db1bc796b3506ee6b73e0ddfd6c. Parent actor configuration, durable acquired originals and recovery-worker staging remain open; issuance and canonical outcome reconstruction do not prove storage exists. COMPLETE prior-stage recovery, EXCHANGE protected recovery and genuine response, and HTTP public recovery/guarded cookie remain todo. Options alone do not authorize or execute recovery. Activation remains 22/26 landed, with 1 active step and 3 todo; public actions remain 2/3, project 34/46 and production acceptance 0/6 verified. No automatic SQL retry or functional recovery claim. Source is unbuilt, unexecuted and unprovisioned.</desc>
   <rect x="1" y="1" width="758" height="384" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="33" fill="#f8fafc" font-size="24" font-weight="700">Inside step 23 · Separately authorized recovery</text>
-    <text x="24" y="59" fill="#fde68a" font-size="15" font-weight="600">ACTIVE · .203 / 1c64354 · grant foundation; cold acquisition/staging open</text>
+    <text x="24" y="59" fill="#fde68a" font-size="15" font-weight="600">ACTIVE · .204 / eb42425 · cold issuer + finite client; staging open</text>
     <a href="../production-status.md#activation-recovery-detail">
       <g font-size="12" font-weight="700" text-anchor="middle">
         <g aria-label="TARGET: Retained target, old-token possession and bounded three-record selection; source-landed in 9f03664">
@@ -22,7 +22,7 @@
           <text x="320" y="95" fill="#f1f5f9">COMPLETE</text>
           <text x="320" y="113" fill="#cbd5e1" font-size="11">— TODO</text>
         </g>
-        <g aria-label="AUTHORITY: Active and partial; pure root policy, recovery-grant production and triple admission source-landed in 1c64354; independent cold acquisition and staging unfinished">
+        <g aria-label="AUTHORITY: Active and partial; cold eight-FD issuer and finite verified client source-landed in eb42425; parent actor configuration, durable acquired originals and recovery-worker staging unfinished">
           <rect x="384" y="76" width="112" height="46" rx="5" fill="#422006" stroke="#fbbf24"/>
           <text x="440" y="95" fill="#fef3c7">AUTHORITY</text>
           <text x="440" y="113" fill="#fde68a" font-size="11">→ PARTIAL</text>
@@ -50,7 +50,7 @@
         <text x="736" y="146" fill="#a7f3d0">SOURCE LANDED · 9f03664</text>
         <text x="736" y="170" fill="#a7f3d0">SOURCE LANDED · 9f03664</text>
         <text x="736" y="194" fill="#cbd5e1">TODO</text>
-        <text x="736" y="218" fill="#fde68a">ACTIVE / PARTIAL · 1c64354</text>
+        <text x="736" y="218" fill="#fde68a">ACTIVE / PARTIAL · eb42425</text>
         <text x="736" y="242" fill="#cbd5e1">TODO</text>
         <text x="736" y="266" fill="#cbd5e1">TODO</text>
       </g>

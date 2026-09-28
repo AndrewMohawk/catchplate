@@ -30,23 +30,16 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 dispatch, remains **partial**. The bar shows its named connections rather than
 an estimated percentage.
 
-The private-proof connection is source-landed in [c4270fd](https://github.com/example/private-deployment).
-The `.191` post-intent grant/socket connection is **source-landed** in
-[68d4235](https://github.com/example/private-deployment).
-The `.192` issuer-policy, grant-production and transport foundation plus the
-bounded public request contract are **source-landed** in
-[18cf710](https://github.com/example/private-deployment).
+Latest source: [`.195` / ca2d72f](https://github.com/example/private-deployment)
+adds independently governed consume-input issuance and receiving checks, fixed
+transport, and shared request extraction in the existing consume path.
+Prior release-worker staging is [source-landed](docs/oidc-session-activation-release-dynamic-delivery.md).
+Still open: consume issuer service, durable acquisition and resource delivery;
+per-request proof provisioning; public route/cookie, recovery and portal.
+No service has been run. Full [criteria and commit history](docs/production-status.md#activation-dispatch-detail)
+remain in the tracker.
 
-The prior `.193` is **source-landed** in [0a46302](https://github.com/example/private-deployment): issuer cold delivery and a
-one-shot service, plus public-only parent `/v12` [same-permission acquisition](docs/oidc-session-activation-release-grant-acquisition.md).
-The `.194` exact-bootstrap delivery connection is **source-landed** in [849c74d](https://github.com/example/private-deployment):
-explicit issuer launch `/v2` stages the original at an independently admitting
-receiver before returning grants. A staged acknowledgement is not worker readiness.
-Still open: resource creation/deployment, consume-input acquisition, per-request
-proof provisioning, and public route/cookie, recovery and portal integration.
-No service has been run.
-
-[![Inside step 22: five facets are source-landed; RELEASE remains partial. Intent 30009db, proof c4270fd, direct grants 68d4235, issuer foundation 18cf710 and service/acquisition 0a46302 are source-landed. Current .194 exact-bootstrap staging is source-landed in 849c74d. Actual resource creation/deployment, consume/proof provisioning and public HTTP/cookie, recovery and portal remain open. Activation 21/26, project 34/46 and production 0/6 are unchanged. Source-only status is not runtime or session evidence.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Inside step 22: five facets are source-landed; RELEASE remains partial and HTTP is open. Current .195 consume-input policy, derivation, receiving and transport are source-landed in ca2d72f. Issuer service, durable acquisition, worker resources, proof provisioning, public HTTP/cookie, recovery and portal remain open. Activation 21/26, project 34/46 and production 0/6 are unchanged. Source only, not runtime evidence.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-dispatch-detail).

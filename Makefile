@@ -1175,6 +1175,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_completion_recovery_selection.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_history.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_actor.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery_controls.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery_records.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery_exchange.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery_http.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 	serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 	serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
@@ -3358,6 +3363,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_completion_recovery_selection.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_history.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_actor.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery_controls.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery_records.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery_exchange.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery_http.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
 				serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
 				serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \

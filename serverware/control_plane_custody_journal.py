@@ -58,6 +58,7 @@ from serverware import control_plane_oidc_session_activation_dispatch_attempt as
 from serverware import control_plane_oidc_session_activation_records as activation_records
 from serverware import control_plane_oidc_session_activation_consume_records as consume_records
 from serverware import control_plane_oidc_session_activation_recovery_records as recovery_records
+from serverware import control_plane_oidc_session_activation_completion_recovery_records as completion_recovery
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -72,7 +73,7 @@ _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_B
     signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES,
     finalization_reservations.MAX_RECORD_BYTES, finalization_outcomes.MAX_RECORD_BYTES,
     activation_attempts.MAX_RECORD_BYTES, activation_records.MAX_RECORD_BYTES,
-    consume_records.MAX_RECORD_BYTES, recovery_records.MAX_RECORD_BYTES)
+    consume_records.MAX_RECORD_BYTES, recovery_records.MAX_RECORD_BYTES, completion_recovery.MAX_RECORD_BYTES)
 _FINALIZATION_OUTCOME_FILES = {
     "finalization-" + kind: kind for kind in finalization_outcomes.KINDS}
 _ACTIVATION_RECORD_FILES = {
@@ -80,6 +81,7 @@ _ACTIVATION_RECORD_FILES = {
 _CONSUME_RECORD_FILES = {
     "activation-consume-" + kind: kind for kind in consume_records.KINDS}
 _RECOVERY_RECORD_FILES = dict(zip(recovery_records.FILE_KINDS, recovery_records.KINDS))
+_COMPLETION_RECOVERY_FILES = dict(zip(completion_recovery.FILE_KINDS, completion_recovery.KINDS))
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
     finalization_records.FAMILY})
 _COMPLETION_HISTORY_MAX_BYTES = 64 * 1024**2
@@ -90,6 +92,103 @@ _COMPLETION_RECOVERY_TARGET_FIXED_BYTES = 4096
 
 class CustodyJournalError(RuntimeError):
     pass
+
+
+class _CompletionPublication:
+    """Actual native-owned publication transitions, never a readiness bypass."""
+
+    def __init__(self, owner, name, size, current):
+        self.owner, self.directory_fd = owner, owner._directory_fd
+        self.identities, self.count = owner._file_identities, len(owner._file_identities)
+        self.name, self.temporary, self.size = name, ".tmp-" + name, size
+        self.current, self.stage = current, "initial"
+        self.descriptor, self.inode, self.published_identity = None, None, None
+        if name in self.identities or self.temporary in self.identities:
+            raise CustodyJournalError("completion publication names are already retained")
+        owner._require_ready()
+        current()
+
+    def transition(self, phase, descriptor):
+        owner = self.owner
+        if (owner._directory_fd != self.directory_fd or owner._file_identities is not self.identities
+                or len(self.identities) != self.count):
+            raise CustodyJournalError("completion publication original owner changed")
+        owner._require_process()
+        if phase == "created":
+            if self.stage != "initial" or type(descriptor) is not int or descriptor < 0:
+                raise CustodyJournalError("completion publication create transition differs")
+            metadata = os.fstat(descriptor)
+            if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600
+                    or metadata.st_size != 0 or metadata.st_nlink != 1
+                    or metadata.st_dev != owner._binding[0]
+                    or (metadata.st_uid, metadata.st_gid) != owner._binding[2:]):
+                raise CustodyJournalError("completion publication native-created inode differs")
+            self.descriptor = descriptor
+            self.inode = metadata.st_dev, metadata.st_ino
+            expected_name, expected_identity = self.temporary, _identity(metadata)
+            next_stage = "created"
+        elif phase == "renamed":
+            if self.stage != "created" or descriptor != self.descriptor:
+                raise CustodyJournalError("completion publication rename transition differs")
+            metadata = os.fstat(descriptor)
+            if ((metadata.st_dev, metadata.st_ino) != self.inode
+                    or not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o400
+                    or metadata.st_size != self.size or metadata.st_nlink != 1
+                    or (metadata.st_uid, metadata.st_gid) != owner._binding[2:]):
+                raise CustodyJournalError("completion publication sealed native inode differs")
+            expected_name, expected_identity = self.name, _identity(metadata)
+            self.published_identity = expected_identity
+            next_stage = "renamed"
+        elif phase == "closed":
+            if self.stage not in ("created", "renamed") or descriptor is not None:
+                raise CustodyJournalError("completion publication close transition differs")
+            expected_name = self.name if self.stage == "renamed" else self.temporary
+            metadata = os.stat(expected_name, dir_fd=self.directory_fd, follow_symlinks=False)
+            if ((metadata.st_dev, metadata.st_ino) != self.inode
+                    or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                    or (metadata.st_uid, metadata.st_gid) != owner._binding[2:]
+                    or stat.S_IMODE(metadata.st_mode) not in (0o400, 0o600)
+                    or not 0 <= metadata.st_size <= self.size):
+                raise CustodyJournalError("completion publication closed inode differs")
+            expected_identity = _identity(metadata)
+            if self.stage == "renamed" and expected_identity != self.published_identity:
+                raise CustodyJournalError("completion publication changed before normal close")
+            next_stage = "closed-published" if self.stage == "renamed" else "closed-temporary"
+        elif phase == "removed":
+            if self.stage != "closed-temporary" or descriptor is not None:
+                raise CustodyJournalError("completion publication cleanup transition differs")
+            expected_name, expected_identity, next_stage = None, None, "removed"
+        else:
+            raise CustodyJournalError("completion publication transition is not source fixed")
+        # Directory timestamps change at our create/rename/unlink boundaries.
+        # Before advancing them, compare the entire bounded *metadata* inventory
+        # with admitted immutable names plus this actual native-owned inode.
+        # Stream entries: no body read, retained all-name set or caller path.
+        before = owner._stamp()
+        count, found = 0, False
+        expected_count = self.count + int(expected_name is not None)
+        with os.scandir(self.directory_fd) as entries:
+            for entry in entries:
+                count += 1
+                if count > expected_count:
+                    raise CustodyJournalError("completion publication directory inventory grew")
+                metadata = entry.stat(follow_symlinks=False)
+                actual = _identity(metadata)
+                if entry.name == expected_name:
+                    if found or actual != expected_identity:
+                        raise CustodyJournalError("completion publication expected inode was replaced")
+                    found = True
+                elif self.identities.get(entry.name) != actual:
+                    raise CustodyJournalError("completion publication immutable inventory changed")
+        after = owner._stamp()
+        if (before != after or count != expected_count
+                or found != (expected_name is not None)):
+            raise CustodyJournalError("completion publication metadata changed during admission")
+        self.stage = next_stage
+        owner._directory_stamp = after
+        # Full original ancestry is called only after the exact expected local
+        # transition has been proved. It never sees a disabled readiness check.
+        self.current()
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +333,9 @@ class CustodyJournal:
         self._recovery_grant_records = {}
         # Historical recovery deliberately leaves this continuation set empty.
         self._recovery_grant_live_claims = set()
+        self._completion_recovery_claims = {}
+        self._completion_recovery_responses = {}
+        self._completion_recovery_live_claims = set()
         self._file_identities = {}
         self._used_bytes = 0
         self._reserved_bytes = 0
@@ -344,6 +446,8 @@ class CustodyJournal:
         consume_stages = {}
         recovery_claims = {}
         recovery_grants = {}
+        completion_recovery_claims = {}
+        completion_recovery_responses = {}
         uncertain_completions = set()
         uncertain_finalization_completions = set()
         count = 0
@@ -386,6 +490,9 @@ class CustodyJournal:
                 elif any(name.startswith(prefix + "-") for prefix in _RECOVERY_RECORD_FILES):
                     kind = next(prefix for prefix in _RECOVERY_RECORD_FILES
                         if name.startswith(prefix + "-"))
+                elif any(name.startswith(prefix + "-") for prefix in _COMPLETION_RECOVERY_FILES):
+                    kind = next(prefix for prefix in _COMPLETION_RECOVERY_FILES
+                        if name.startswith(prefix + "-"))
                 else:
                     kind = next((kind for kind in outcome_records.KINDS
                         if name.startswith(kind + "-")), None)
@@ -413,6 +520,7 @@ class CustodyJournal:
                         if kind in _CONSUME_RECORD_FILES else
                     recovery_records._maximum(_RECOVERY_RECORD_FILES[kind])
                         if kind in _RECOVERY_RECORD_FILES else
+                    completion_recovery.MAX_RECORD_BYTES if kind in _COMPLETION_RECOVERY_FILES else
                     outcome_records.MAX_CLAIM_BYTES if kind == "sql-claimed" else
                     outcome_records.MAX_RECORD_BYTES)
                 encoded, identity = self._read_file(name,
@@ -484,6 +592,20 @@ class CustodyJournal:
                             len(encoded), record.intent_record_digest,
                             record.finalization_digest, record.activation_authorization_digest,
                             record.release_intent_digest, record.issuer_policy_digest)
+                elif kind in _COMPLETION_RECOVERY_FILES:
+                    record = completion_recovery.decode(encoded)
+                    record_kind = _COMPLETION_RECOVERY_FILES[kind]
+                    if record.slot_digest != digest or record.kind != record_kind:
+                        raise CustodyJournalError("completion recovery record differs from its fixed filename")
+                    if record_kind == "claimed":
+                        if digest in completion_recovery_claims:
+                            raise CustodyJournalError("completion recovery phase has multiple attempts")
+                        completion_recovery_claims[digest] = record
+                    else:
+                        if digest in completion_recovery_responses:
+                            raise CustodyJournalError("completion recovery phase response repeats")
+                        completion_recovery_responses[digest] = self._completion_recovery_response_metadata(
+                            record, len(encoded))
                 elif kind == "attempted":
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
@@ -532,7 +654,8 @@ class CustodyJournal:
         if count > 7 * self._maximum_records + 10 * len(consume_claims):
             raise CustodyJournalError("journal physical inventory exceeds its consume-specific allowance")
         if (len(prepared) + len(release_claims) + len(activation_claims)
-                + len(consume_claims) + len(recovery_claims) > self._maximum_records):
+                + len(consume_claims) + len(recovery_claims)
+                + len(completion_recovery_claims) > self._maximum_records):
             raise CustodyJournalError("journal recovery acquisition logical limit exceeded")
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
@@ -563,6 +686,10 @@ class CustodyJournal:
         self._recovery_grant_records = recovery_grants
         for digest in recovery_claims.keys() | recovery_grants.keys():
             self._recovery_grant_scope(digest)
+        self._completion_recovery_claims = completion_recovery_claims
+        self._completion_recovery_responses = completion_recovery_responses
+        for digest in completion_recovery_claims.keys() | completion_recovery_responses.keys():
+            self._completion_recovery_scope(digest)
         for association in associated.values():
             _association_scope(association, self._entries)
         self._associations = associated
@@ -786,7 +913,7 @@ class CustodyJournal:
             _ATTEMPT_BYTES + _OBSERVATION_RESERVE)
         if (len(self._entries) + len(self._release_attempts)
                 + len(self._activation_dispatch_attempts) + len(self._consume_claims)
-                + len(self._recovery_grant_claims) >= self._maximum_records
+                + len(self._recovery_grant_claims) + len(self._completion_recovery_claims) >= self._maximum_records
                 or len(self._file_identities) >= self._physical_limit()
                 or len(encoded) + marker_reserve
                     > self._quota - self._used_bytes - self._reserved_bytes):
@@ -868,7 +995,8 @@ class CustodyJournal:
             required_bytes = sum(len(encoded) for _, encoded in missing) + len(association_encoded)
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims)
-                    + len(self._recovery_grant_claims) + len(missing) > self._maximum_records
+                    + len(self._recovery_grant_claims) + len(self._completion_recovery_claims)
+                    + len(missing) > self._maximum_records
                     or len(self._file_identities) + len(missing) + 1 > self._physical_limit()
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete preparation capacity is exhausted")
@@ -951,7 +1079,8 @@ class CustodyJournal:
             required_bytes = missing * len(encoded) + len(marker)
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims)
-                    + len(self._recovery_grant_claims) + missing > self._maximum_records
+                    + len(self._recovery_grant_claims) + len(self._completion_recovery_claims)
+                    + missing > self._maximum_records
                     or len(self._file_identities) + missing + 1 > self._physical_limit()
                     or required_bytes > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal complete finalization retention capacity is exhausted")
@@ -1541,7 +1670,7 @@ class CustodyJournal:
                 raise CustodyJournalError("release client authorization was already claimed; repeat is forbidden")
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims)
-                    + len(self._recovery_grant_claims) >= self._maximum_records
+                    + len(self._recovery_grant_claims) + len(self._completion_recovery_claims) >= self._maximum_records
                     or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal release claim capacity is exhausted")
@@ -1821,7 +1950,7 @@ class CustodyJournal:
                 raise CustodyJournalError("activation target was already claimed; repeat dispatch is forbidden")
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims)
-                    + len(self._recovery_grant_claims) >= self._maximum_records
+                    + len(self._recovery_grant_claims) + len(self._completion_recovery_claims) >= self._maximum_records
                     or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal activation claim capacity is exhausted")
@@ -1927,7 +2056,7 @@ class CustodyJournal:
                 raise CustodyJournalError("consume target was already claimed; preparation cannot repeat")
             if (len(self._entries) + len(self._release_attempts)
                     + len(self._activation_dispatch_attempts) + len(self._consume_claims)
-                    + len(self._recovery_grant_claims) >= self._maximum_records
+                    + len(self._recovery_grant_claims) + len(self._completion_recovery_claims) >= self._maximum_records
                     or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal consume claim capacity is exhausted")
@@ -2368,7 +2497,8 @@ class CustodyJournal:
                 self._io.poison()
                 raise
             if (len(self._entries) + len(self._release_attempts) + len(self._activation_dispatch_attempts)
-                    + len(self._consume_claims) + len(self._recovery_grant_claims) >= self._maximum_records
+                    + len(self._consume_claims) + len(self._recovery_grant_claims)
+                    + len(self._completion_recovery_claims) >= self._maximum_records
                     or len(self._file_identities) >= self._physical_limit()
                     or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                 raise CustodyJournalError("journal recovery acquisition capacity is exhausted")
@@ -2467,6 +2597,388 @@ class CustodyJournal:
                 self._require_ready()
                 current()
                 return recovery_records.RecoveryGrantRecords(claim, grants)
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def _completion_control_scope(self, target, phase):
+        completion_recovery._phase(phase)
+        activation = self._activation_dispatch_attempts.get(target)
+        activation_stages = self._activation_records.get(target, {})
+        if activation is None:
+            if activation_stages:
+                raise CustodyJournalError("completion controls lack their original activation claim")
+            return None, None, activation_stages, {}
+        if (type(activation) is not activation_attempts.ActivationDispatchAttemptRecord
+                or activation.finalization_digest != target):
+            raise CustodyJournalError("completion controls activation association differs")
+        self._activation_scope(target, activation_stages)
+        consume = None
+        stages = {}
+        if phase == "consume":
+            slot = self._consume_targets.get(target)
+            if slot is not None:
+                stages = self._consume_records.get(slot, {})
+                consume = self._consume_scope(slot, stages)
+                if consume.finalization_digest != target:
+                    raise CustodyJournalError("completion controls consume association differs")
+        return activation, consume, activation_stages, stages
+
+    def _completion_control_inventory(self, target, phase, current):
+        """Fixed indexed metadata only; no SQL-outcome or full-prefix bodies."""
+        activation, consume, activation_stages, consume_stages = self._completion_control_scope(target, phase)
+        known = []
+        claim_name = _name(activation_attempts.KIND, target)
+        if (claim_name in self._file_identities) != (activation is not None):
+            raise CustodyJournalError("completion controls claim file index differs")
+        if activation is not None:
+            known.append((claim_name, activation_attempts.MAX_RECORD_BYTES))
+        for kind in activation_records.KINDS:
+            name = _name("activation-" + kind, target)
+            if (name in self._file_identities) != (kind in activation_stages):
+                raise CustodyJournalError("completion controls activation file index differs")
+            if kind in activation_stages:
+                known.append((name, activation_records._maximum(kind)))
+        if consume is not None:
+            known.append((_name("activation-consume-claimed", consume.slot_digest), consume_records.MAX_CLAIM_BYTES))
+            for kind in consume_records.KINDS[1:]:
+                name = _name("activation-consume-" + kind, consume.slot_digest)
+                if (name in self._file_identities) != (kind in consume_stages):
+                    raise CustodyJournalError("completion controls consume file index differs")
+                if kind in consume_stages:
+                    known.append((name, consume_records._maximum(kind)))
+        for name, maximum in known:
+            self._completion_history_metadata(name, maximum, self._file_identities.get(name), current)
+        stages = activation_stages if phase == "activation" else consume_stages
+        required = (("prepared", "grant", "reserved", "sql-claimed") if phase == "activation"
+            else ("prepared", "exported", "authorized", "grant", "reserved", "sql-claimed"))
+        if (activation is None or (phase == "consume" and consume is None)
+                or any(kind not in stages for kind in required)):
+            return None
+        selected = [(0, claim_name, activation_attempts.decode)]
+        if consume is not None:
+            selected.append((1, _name("activation-consume-claimed", consume.slot_digest), consume_records.decode))
+        positions = ((2, "prepared"), (3, "exported"), (4, "authorized"),
+            (5, "grant"), (6, "reserved"), (7, "completion-outcome"),
+            (8, "completion-hints"), (9, "sql-claimed"))
+        for position, kind in positions:
+            if kind not in stages:
+                continue
+            name = _name("activation-" + kind, target) if phase == "activation" else _name(
+                "activation-consume-" + kind, consume.slot_digest)
+            metadata = stages[kind]
+            identity = self._file_identities[name]
+            if (type(metadata) is not tuple or len(metadata) != (3 if phase == "activation" else 4)
+                    or type(metadata[2]) is not int or metadata[2] != identity[6]):
+                raise CustodyJournalError("completion controls encoded size differs from admitted metadata")
+            selected.append((position, name,
+                activation_records.decode if phase == "activation" else consume_records.decode))
+        return activation, consume, stages, tuple(selected)
+
+    def load_oidc_session_activation_completion_recovery_controls(self, finalization_digest, *,
+            phase, work, current, maximum_original_bytes=None):
+        """Return fixed tuple10 historical DATA or ordinary unavailable None."""
+        from serverware.authority_query_read_work import _ValidationWork
+
+        target = _digest(finalization_digest)
+        maximum = completion_recovery.MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
+        _integer(maximum, minimum=0, maximum=completion_recovery.MAX_ORIGINAL_BYTES,
+            label="completion controls remaining original capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("completion controls require original work and guard")
+        work.charge(json_nodes=512)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            try:
+                inventory = self._completion_control_inventory(target, phase, current)
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if inventory is None:
+                return None
+            activation, consume, stages, selected = inventory
+            identities = tuple(self._file_identities[item[1]] for item in selected)
+            total = sum(identity[6] for identity in identities)
+            if 3 * total + completion_recovery.METADATA_RESERVATION_BYTES > maximum:
+                raise CustodyJournalError("completion controls exceed remaining preallocation capacity")
+            work.charge(input_bytes=3 * total + len(selected), hashes=2 * len(selected))
+            try:
+                result = [None] * 10
+                for (position, name, decoder), identity in zip(selected, identities):
+                    original = self._read_completion_history_file(name, identity, current)
+                    current()
+                    record = decoder(original)
+                    current()
+                    if position == 0:
+                        if record != activation:
+                            raise CustodyJournalError("completion controls activation claim changed")
+                    elif position == 1:
+                        if record != consume:
+                            raise CustodyJournalError("completion controls consume claim changed")
+                    else:
+                        metadata = stages[record.kind]
+                        actual = record.source_revision, record.digest, len(original)
+                        if phase == "consume":
+                            actual += (record.originals[0] if record.kind in ("prepared", "exported") else b"",)
+                        if (actual != metadata or record.finalization_digest != target
+                                or record.source_revision != activation.source_revision
+                                or (phase == "consume" and (record.slot_digest != consume.slot_digest
+                                    or record.activation_authorization_digest != consume.activation_authorization_digest))):
+                            raise CustodyJournalError("completion controls original association changed")
+                    result[position] = record
+                    del original
+                refreshed = self._completion_control_inventory(target, phase, current)
+                if refreshed is None or refreshed[3] != selected:
+                    raise CustodyJournalError("completion controls selected prefix changed")
+                self._require_ready()
+                current()
+                return tuple(result)
+            except BaseException:
+                self._io.poison()
+                raise
+
+    @staticmethod
+    def _completion_recovery_response_metadata(record, size):
+        return (record.source_revision, record.digest, size, record.finalization_digest,
+            record.phase, record.authorization_digest, record.packet_digest,
+            record.recovery_configuration_digest, record.predecessor_completion_digest)
+
+    def _completion_recovery_scope(self, slot):
+        claim = self._completion_recovery_claims.get(slot)
+        if (type(claim) is not completion_recovery.CompletionRecoveryRecord or claim.kind != "claimed"
+                or claim.originals != () or claim.slot_digest != slot):
+            raise CustodyJournalError("completion recovery lacks its exact phase attempt")
+        activation, consume, activation_stages, consume_stages = self._completion_control_scope(
+            claim.finalization_digest, claim.phase)
+        stages = activation_stages if claim.phase == "activation" else consume_stages
+        required = (("prepared", "grant", "reserved", "sql-claimed") if claim.phase == "activation"
+            else ("prepared", "exported", "authorized", "grant", "reserved", "sql-claimed"))
+        prior = stages.get("completion-outcome")
+        if (activation is None or (claim.phase == "consume" and consume is None)
+                or any(kind not in stages for kind in required)
+                or (None if prior is None else prior[1]) != claim.predecessor_completion_digest):
+            raise CustodyJournalError("completion recovery original predecessor association differs")
+        metadata = self._completion_recovery_responses.get(slot)
+        if metadata is not None and (metadata[0] != claim.source_revision
+                or metadata[3:] != (claim.finalization_digest, claim.phase, claim.authorization_digest,
+                    claim.packet_digest, claim.recovery_configuration_digest, claim.predecessor_completion_digest)):
+            raise CustodyJournalError("completion recovery response differs from its irreversible attempt")
+        return claim
+
+    def _completion_recovery_metadata(self, slot, current):
+        claim = self._completion_recovery_scope(slot)
+        if self._completion_control_inventory(claim.finalization_digest, claim.phase, current) is None:
+            raise CustodyJournalError("completion recovery original controls disappeared")
+        selected = []
+        for kind in completion_recovery.KINDS:
+            if kind == "response" and slot not in self._completion_recovery_responses:
+                continue
+            name = _name(completion_recovery.FILE_KINDS[completion_recovery.KINDS.index(kind)], slot)
+            identity = self._file_identities.get(name)
+            self._completion_history_metadata(name, completion_recovery._maximum(claim.phase, kind), identity, current)
+            if kind == "response" and identity[6] != self._completion_recovery_responses[slot][2]:
+                raise CustodyJournalError("completion recovery response size changed")
+            selected.append((kind, name, identity))
+        return claim, tuple(selected)
+
+    def _publish_completion_recovery(self, kind, slot, encoded, current):
+        name = _name(completion_recovery.FILE_KINDS[completion_recovery.KINDS.index(kind)], slot)
+        publication = _CompletionPublication(self, name, len(encoded), current)
+        current()
+        self._io.publish(".tmp-" + name, name, encoded, _current=current,
+            _transition=publication.transition)
+        if publication.stage != "closed-published":
+            raise CustodyJournalError("completion recovery publication did not close normally")
+        current()
+        metadata = os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)
+        current()
+        identity = _identity(metadata)
+        if identity != publication.published_identity:
+            raise CustodyJournalError("completion recovery readback differs from its native published inode")
+        self._file_identities[name] = identity
+        self._completion_history_metadata(name, len(encoded), identity, current)
+        if identity[6] != len(encoded):
+            raise CustodyJournalError("published completion recovery length changed")
+        stored = self._read_completion_history_file(name, identity, current)
+        if stored != encoded:
+            raise CustodyJournalError("published completion recovery bytes changed")
+        current()
+        self._directory_stamp = self._stamp()
+        current()
+
+    def claim_oidc_session_activation_completion_recovery_attempt(self, *, finalization_digest,
+            phase, authorization_digest, packet_digest, recovery_configuration_digest,
+            work, current, maximum_original_bytes=None):
+        """One target/phase attempt before contact; no actor or restart can retry."""
+        from serverware.authority_query_read_work import _ValidationWork
+
+        scalars = tuple(_digest(value) for value in (finalization_digest, authorization_digest,
+            packet_digest, recovery_configuration_digest))
+        slot = completion_recovery._slot_digest(scalars[0], phase)
+        maximum = completion_recovery.MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
+        _integer(maximum, minimum=0, maximum=completion_recovery.MAX_ORIGINAL_BYTES,
+            label="completion recovery claim remaining capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("completion recovery claim requires original work and guard")
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            try:
+                inventory = self._completion_control_inventory(scalars[0], phase, current)
+                if slot in self._completion_recovery_claims:
+                    self._completion_recovery_metadata(slot, current)
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if inventory is None:
+                raise CustodyJournalError("completion recovery controls are unavailable")
+            if slot in self._completion_recovery_claims:
+                raise CustodyJournalError("completion recovery phase was already attempted; retry is forbidden")
+            if completion_recovery.MAX_CLAIM_IO_BYTES + completion_recovery.METADATA_RESERVATION_BYTES > maximum:
+                raise CustodyJournalError("completion recovery claim exceeds remaining preallocation capacity")
+            # Three streamed mutation-boundary scans, precharged from the
+            # actual admitted inventory. Large inventories may refuse safely.
+            scans = 3 * (len(self._file_identities) + 1)
+            work.charge(input_bytes=completion_recovery.MAX_CLAIM_IO_BYTES + scans * 512,
+                hashes=16, json_nodes=512 + scans * 16)
+            prior = inventory[2].get("completion-outcome")
+            record, encoded = completion_recovery.encode("claimed", finalization_digest=scalars[0], phase=phase,
+                authorization_digest=scalars[1], packet_digest=scalars[2], recovery_configuration_digest=scalars[3],
+                predecessor_completion_digest=None if prior is None else prior[1], originals=(),
+                source_revision=completion_recovery.authority.SOURCE_REVISION)
+            if (len(self._entries) + len(self._release_attempts) + len(self._activation_dispatch_attempts)
+                    + len(self._consume_claims) + len(self._recovery_grant_claims)
+                    + len(self._completion_recovery_claims) >= self._maximum_records
+                    or len(self._file_identities) >= self._physical_limit()
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("completion recovery attempt capacity is exhausted")
+            try:
+                self._publish_completion_recovery("claimed", slot, encoded, current)
+                self._used_bytes += len(encoded)
+                self._completion_recovery_claims[slot] = record
+                self._completion_recovery_scope(slot)
+                self._require_ready()
+                current()
+                self._completion_recovery_live_claims.add(slot)
+                return slot
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def append_oidc_session_activation_completion_recovery_response(self, *, finalization_digest,
+            phase, authorization_digest, packet_digest, recovery_configuration_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain opaque raw4/raw6 before interpretation, separately from old outcomes."""
+        from serverware.authority_query_read_work import _ValidationWork
+
+        scalars = tuple(_digest(value) for value in (finalization_digest, authorization_digest,
+            packet_digest, recovery_configuration_digest))
+        slot = completion_recovery._slot_digest(scalars[0], phase)
+        held = completion_recovery._originals(phase, originals)
+        maximum = completion_recovery.MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
+        _integer(maximum, minimum=0, maximum=completion_recovery.MAX_ORIGINAL_BYTES,
+            label="completion recovery response remaining capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("completion recovery retention requires original work and guard")
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if slot not in self._completion_recovery_live_claims or slot in self._completion_recovery_responses:
+                raise CustodyJournalError("completion recovery response cannot resume or repeat")
+            try:
+                claim, selected = self._completion_recovery_metadata(slot, current)
+                if (claim.finalization_digest, claim.authorization_digest, claim.packet_digest,
+                        claim.recovery_configuration_digest) != scalars or claim.phase != phase:
+                    raise CustodyJournalError("completion recovery response pins differ from the attempt")
+            except BaseException:
+                self._io.poison()
+                raise
+            io_bytes = completion_recovery._append_io_bytes(phase, held)
+            if io_bytes + completion_recovery.METADATA_RESERVATION_BYTES > maximum:
+                raise CustodyJournalError("completion recovery response exceeds remaining preallocation capacity")
+            scans = 3 * (len(self._file_identities) + 1)
+            work.charge(input_bytes=io_bytes + scans * 512, hashes=16, json_nodes=512 + scans * 16)
+            try:
+                raw_claim = self._read_completion_history_file(selected[0][1], selected[0][2], current)
+                if completion_recovery.decode(raw_claim) != claim:
+                    raise CustodyJournalError("completion recovery attempt original changed")
+                del raw_claim
+                record, encoded = completion_recovery.encode("response", finalization_digest=scalars[0], phase=phase,
+                    authorization_digest=scalars[1], packet_digest=scalars[2], recovery_configuration_digest=scalars[3],
+                    predecessor_completion_digest=claim.predecessor_completion_digest, originals=held,
+                    source_revision=claim.source_revision)
+                if (len(self._file_identities) >= self._physical_limit()
+                        or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                    raise CustodyJournalError("completion recovery response capacity is exhausted")
+                self._publish_completion_recovery("response", slot, encoded, current)
+                self._used_bytes += len(encoded)
+                self._completion_recovery_responses[slot] = self._completion_recovery_response_metadata(record, len(encoded))
+                self._completion_recovery_scope(slot)
+                self._require_ready()
+                current()
+                self._completion_recovery_live_claims.remove(slot)
+                return record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def load_oidc_session_activation_completion_recovery_records(self, finalization_digest, *,
+            phase, work, current, maximum_original_bytes=None):
+        """Read existing attempt/response DATA; it never renews the spent slot."""
+        from serverware.authority_query_read_work import _ValidationWork
+
+        slot = completion_recovery._slot_digest(_digest(finalization_digest), phase)
+        maximum = completion_recovery.MAX_ORIGINAL_BYTES if maximum_original_bytes is None else maximum_original_bytes
+        _integer(maximum, minimum=0, maximum=completion_recovery.MAX_ORIGINAL_BYTES,
+            label="completion recovery history remaining capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("completion recovery history requires original work and guard")
+        work.charge(json_nodes=512)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if slot not in self._completion_recovery_claims:
+                if slot in self._completion_recovery_responses:
+                    self._io.poison()
+                    raise CustodyJournalError("completion recovery response lacks its original attempt")
+                current()
+                return None
+            try:
+                claim, selected = self._completion_recovery_metadata(slot, current)
+            except BaseException:
+                self._io.poison()
+                raise
+            total = sum(item[2][6] for item in selected)
+            if 3 * total + completion_recovery.METADATA_RESERVATION_BYTES > maximum:
+                raise CustodyJournalError("completion recovery history exceeds remaining preallocation capacity")
+            work.charge(input_bytes=3 * total + len(selected), hashes=16)
+            try:
+                response = None
+                for kind, name, identity in selected:
+                    original = self._read_completion_history_file(name, identity, current)
+                    record = completion_recovery.decode(original)
+                    if kind == "claimed":
+                        if record != claim:
+                            raise CustodyJournalError("completion recovery attempt original changed")
+                    else:
+                        if self._completion_recovery_response_metadata(record, len(original)) != self._completion_recovery_responses[slot]:
+                            raise CustodyJournalError("completion recovery response original changed")
+                        response = record
+                    del original
+                    current()
+                self._completion_recovery_metadata(slot, current)
+                self._require_ready()
+                current()
+                return completion_recovery.CompletionRecoveryRecords(claim, response)
             except BaseException:
                 self._io.poison()
                 raise

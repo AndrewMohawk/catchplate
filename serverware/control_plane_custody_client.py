@@ -1054,6 +1054,139 @@ class ControlPlaneCustodyClient:
         current()
         return retained
 
+    def load_oidc_session_activation_completion_recovery_controls(self, finalization_digest, *,
+            phase, work, current, maximum_original_bytes=None):
+        """Read exact fixed historical controls, never successful admission."""
+        from serverware import control_plane_oidc_session_activation_dispatch_attempt as attempts
+        from serverware import control_plane_oidc_session_activation_records as activation
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+        from serverware import control_plane_oidc_session_activation_completion_recovery_records as recovery
+
+        target = journal._digest(finalization_digest)
+        recovery._phase(phase)
+        if not callable(current):
+            raise CustodyClientError("completion controls require the original guard")
+        current()
+        binding = _snapshot(self)
+        held = journal.CustodyJournal.load_oidc_session_activation_completion_recovery_controls(
+            binding.journal, target, phase=phase, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while loading completion controls")
+        if held is None:
+            return None
+        if (type(held) is not tuple or len(held) != 10
+                or type(held[0]) is not attempts.ActivationDispatchAttemptRecord
+                or held[0].finalization_digest != target):
+            raise CustodyClientError("completion controls fixed inventory differs")
+        if phase == "activation":
+            if any(held[index] is not None for index in (1, 3, 4, 8)):
+                raise CustodyClientError("activation completion controls contain consume records")
+            expected_type = activation.ActivationRecord
+            required = (2, 5, 6, 9)
+        else:
+            if (type(held[1]) is not consume.ConsumeRecord or held[1].kind != "claimed"
+                    or held[1].originals != () or held[1].finalization_digest != target
+                    or held[1].source_revision != held[0].source_revision):
+                raise CustodyClientError("consume completion controls lack the original claim")
+            expected_type = consume.ConsumeRecord
+            required = (2, 3, 4, 5, 6, 9)
+        for index, kind in ((2, "prepared"), (3, "exported"), (4, "authorized"),
+                (5, "grant"), (6, "reserved"), (7, "completion-outcome"),
+                (8, "completion-hints"), (9, "sql-claimed")):
+            record = held[index]
+            if record is None and index not in required:
+                continue
+            if (type(record) is not expected_type or record.kind != kind
+                    or record.finalization_digest != target or record.source_revision != held[0].source_revision
+                    or (phase == "consume" and (record.slot_digest != held[1].slot_digest
+                        or record.activation_authorization_digest != held[1].activation_authorization_digest))):
+                raise CustodyClientError("completion controls original association differs")
+        current()
+        return held
+
+    def claim_oidc_session_activation_completion_recovery_attempt(self, *, finalization_digest,
+            phase, authorization_digest, packet_digest, recovery_configuration_digest,
+            work, current, maximum_original_bytes=None):
+        """Burn only this exact target/phase; stored scalars are not authority."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_records as recovery
+
+        scalars = tuple(journal._digest(value) for value in (finalization_digest, authorization_digest,
+            packet_digest, recovery_configuration_digest))
+        expected = recovery._slot_digest(scalars[0], phase)
+        if not callable(current):
+            raise CustodyClientError("completion recovery attempt lacks its original guard")
+        current()
+        binding = _snapshot(self)
+        slot = journal.CustodyJournal.claim_oidc_session_activation_completion_recovery_attempt(
+            binding.journal, finalization_digest=scalars[0], phase=phase,
+            authorization_digest=scalars[1], packet_digest=scalars[2], recovery_configuration_digest=scalars[3],
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes)
+        current()
+        if slot != expected or _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller or completion phase changed after the attempt")
+        return slot
+
+    def append_oidc_session_activation_completion_recovery_response(self, *, finalization_digest,
+            phase, authorization_digest, packet_digest, recovery_configuration_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain unverified response originals separately before interpretation."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_records as recovery
+
+        scalars = tuple(journal._digest(value) for value in (finalization_digest, authorization_digest,
+            packet_digest, recovery_configuration_digest))
+        held = recovery._originals(phase, originals)
+        if not callable(current):
+            raise CustodyClientError("completion recovery response lacks its original guard")
+        current()
+        binding = _snapshot(self)
+        digest = journal.CustodyJournal.append_oidc_session_activation_completion_recovery_response(
+            binding.journal, finalization_digest=scalars[0], phase=phase,
+            authorization_digest=scalars[1], packet_digest=scalars[2], recovery_configuration_digest=scalars[3],
+            originals=held, work=work, current=current, maximum_original_bytes=maximum_original_bytes)
+        current()
+        journal._digest(digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed during completion response retention")
+        return digest
+
+    def load_oidc_session_activation_completion_recovery_records(self, finalization_digest, *,
+            phase, work, current, maximum_original_bytes=None):
+        """Return spent attempt and optional response DATA, never resumed authority."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_records as recovery
+
+        target = journal._digest(finalization_digest)
+        expected = recovery._slot_digest(target, phase)
+        if not callable(current):
+            raise CustodyClientError("completion recovery history lacks its original guard")
+        current()
+        binding = _snapshot(self)
+        retained = journal.CustodyJournal.load_oidc_session_activation_completion_recovery_records(
+            binding.journal, target, phase=phase, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed while reading completion recovery history")
+        if retained is None:
+            return None
+        if (type(retained) is not recovery.CompletionRecoveryRecords
+                or type(retained.claim) is not recovery.CompletionRecoveryRecord
+                or retained.claim.slot_digest != expected or retained.claim.finalization_digest != target
+                or retained.claim.phase != phase or retained.claim.kind != "claimed" or retained.claim.originals != ()):
+            raise CustodyClientError("completion recovery attempt inventory differs")
+        response = retained.response
+        if response is not None and (type(response) is not recovery.CompletionRecoveryRecord
+                or response.kind != "response" or response.slot_digest != expected
+                or (response.source_revision, response.finalization_digest, response.phase,
+                    response.authorization_digest, response.packet_digest, response.recovery_configuration_digest,
+                    response.predecessor_completion_digest) != (retained.claim.source_revision,
+                    target, phase, retained.claim.authorization_digest, retained.claim.packet_digest,
+                    retained.claim.recovery_configuration_digest, retained.claim.predecessor_completion_digest)):
+            raise CustodyClientError("completion recovery response association differs")
+        current()
+        return retained
+
     def claim_oidc_session_activation_recovery_grant_attempt(self, *, finalization_digest,
             activation_authorization_digest, release_intent_digest, issuer_policy_digest):
         """Burn the exact independently authenticated policy slot before contact."""

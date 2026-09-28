@@ -401,7 +401,7 @@ async def _run_bounded_blocking(
 async def csrf_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
 
-    if request.scope.get("path") in {recovery_routes.OPTIONS_PATH, recovery_routes.POST_PATH}:
+    if request.scope.get("path") in recovery_routes.PATHS:
         # The old cookie is possession evidence only on this route. Do not
         # send it through generic current-session authentication even to
         # choose a CSRF branch; the actor repeats this exact cookie check.
@@ -440,7 +440,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
 
-    if request.scope.get("path") in {recovery_routes.OPTIONS_PATH, recovery_routes.POST_PATH}:
+    if request.scope.get("path") in recovery_routes.PATHS:
         refusal = await recovery_routes._frame_request(request)
         if refusal is not None:
             return refusal

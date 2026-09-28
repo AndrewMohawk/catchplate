@@ -22,8 +22,9 @@ expectations, genuine finalization target/ACK and actual old-cookie possession.
 It derives signed old/new token commitments and the exact credential record
 without fabricating a release intent, delivery identity or delivery interval.
 The activation lane additionally matches the independent caller authorization
-digest. The consume lane still needs a separate historical consume-original
-join before any completion request; fresh actor admission alone does not prove
+digest. The consume lane additionally uses the separate
+[historical controls join](control-plane-oidc-session-activation-completion-recovery-controls.md)
+before any completion request; fresh actor admission alone does not prove
 that association or any committed effect.
 
 The assertion binding uses a distinct completion-recovery intent schema. It
@@ -59,12 +60,16 @@ intent-stage actor and exact-type token-acquisition entrypoint remain distinct.
 
 ## Still required
 
-This foundation does not contact a completion service or add a public success
-route. Full earlier-stage recovery still requires historical public-control
-admission, an irreversible token-free completion attempt, the independently
-configured completion-only exchange, genuine response checks and separate
-durable reconciliation that preserves original uncertainty. Private AES/history
-replay stays inside the existing isolated completion service. Missing evidence
-is unavailable/unknown, not SQL nonexecution or retry authority. COMPLETE and
-activation step 23 remain incomplete; no cookie, session or production claim
-is created by these private actor methods.
+The actor itself does not contact a service. Its actual
+[completion-only coordinator and public routes](control-plane-oidc-session-activation-completion-recovery.md)
+now join historical public controls, one durable attempt, independently selected
+exchange, genuine response checks and separately retained reconciliation.
+The receiving child is checked separately after the action and normal trust
+cleanup, never called by its own actor ancestor. No closed-actor fallback exists.
+Private AES/history replay stays in the isolated completion service.
+
+Full recovery still needs the fresh-actor intent/proof and independently admitted
+release-profile/checkpoint/cookie continuation. Missing evidence is unavailable
+or unknown, not SQL nonexecution, private-outcome absence or retry authority.
+COMPLETE and activation step 23 remain incomplete; these actor methods and the
+completion-only response establish no cookie, active session or production claim.

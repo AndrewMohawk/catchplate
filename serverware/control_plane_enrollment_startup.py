@@ -491,6 +491,26 @@ class _EnrollmentOwner:
             recovery_bytes=recovery_bytes, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work, current=current)
 
+    def _recover_oidc_session_activation_completion(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Complete historical activation controls, never repeat activation SQL."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery as recovery
+
+        _require_pid()
+        return recovery._recover_on_owner(self, profile="activation", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
+    def _recover_oidc_session_activation_consume_completion(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Complete historical consume controls without opening or delivering a token."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery as recovery
+
+        _require_pid()
+        return recovery._recover_on_owner(self, profile="consume", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

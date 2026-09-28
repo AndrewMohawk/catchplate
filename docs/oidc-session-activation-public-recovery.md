@@ -307,13 +307,20 @@ It keeps the same owner/work/clock bounds and startup/trust locks. Sharing the
 existing current-auth checks does not let an exact intent-stage acquisition
 accept this different actor type or turn its output into token permission.
 
-These are connected source prerequisites, not a recovered completion. Historical
-public-control admission, an irreversible completion-only attempt, the actual
-service exchange, genuine response admission and separate durable reconciliation
-still need to be connected before the earlier-stage public action is available.
-Original uncertainty must remain immutable. No SQL, completion-service call,
-token release, cookie replacement or automatic retry follows from this private
-actor foundation. COMPLETE remains partial; all enclosing counts are unchanged.
+The [completion-only coordinator and public routes](control-plane-oidc-session-activation-completion-recovery.md)
+now connect historical public-control admission, a phase-only irreversible
+attempt, the configured exchange and genuine response admission. Exact raw replies
+are retained separately before interpretation, preserving original uncertainty.
+An already stored response can be genuinely re-admitted under a fresh actor;
+an absent or uncertain response never permits another socket. Public success
+reports historical reconciliation only, not a session or token.
+
+The pre-intent continuation remains unfinished: existing intent/proof and token
+recovery consumers do not take this separate reconciliation as authority. They
+need fresh-actor intent/proof plus independently admitted release-profile,
+checkpoint and cookie-delivery integration. Local absence and reconstructed
+outcomes cannot establish private-store state. No SQL retry or renewal of original
+delivery expiry is allowed. COMPLETE remains partial; enclosing counts unchanged.
 
 ## Final current-authentication and cookie boundary
 

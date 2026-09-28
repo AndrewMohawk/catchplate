@@ -52,7 +52,7 @@ class _CompletionActorScope(actor._ActorScope):
     """Distinct exact type; existing token acquisition cannot accept it."""
 
     __slots__ = ("_profile", "_parent", "_recovery", "_configuration", "_configuration_pin",
-        "_target_seal", "_completion_recovery_spent")
+        "_target_seal", "_completion_recovery_spent", "_completion_receiving_current")
 
     def __init__(self, construction, *, application, owner, request, original,
             payload, work, current, owner_scope, target, policy, policy_pin,
@@ -94,6 +94,7 @@ class _CompletionActorScope(actor._ActorScope):
         # Never become an intent-stage acquisition, including by inheritance.
         self._recovery_acquisition_spent = True
         self._completion_recovery_spent = False
+        self._completion_receiving_current = None
 
     def _current_target(self):
         target = self._target
@@ -144,6 +145,7 @@ class _CompletionActorScope(actor._ActorScope):
         self._normal_exit = False
         self._active, self._authorized = False, False
         self._old_token = None
+        self._completion_receiving_current = None
         if _ACTIVE is self:
             _ACTIVE = None
 
@@ -294,8 +296,15 @@ def _authorize_on_owner(owner, *, profile, request, recovery_bytes, live_window,
                 scope._authorized = True
                 yield scope
                 scope.current()
+                if scope._completion_receiving_current is not None:
+                    scope._completion_receiving_current()
                 completed = True
             scope._guard()
+            # A genuine receiving child is checked separately, never from
+            # current()/the ancestor it calls. Keep it through normal trust
+            # cleanup without creating an actor/receiver guard cycle.
+            if scope._completion_receiving_current is not None:
+                scope._completion_receiving_current()
         finally:
             if scope is not None:
                 scope._close()

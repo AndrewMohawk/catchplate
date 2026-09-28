@@ -132,7 +132,17 @@ class WitnessJournalIO:
             self._state = "ready"
             return validated_stamp
 
-    def publish(self, temporary_name: str, record_name: str, canonical_record: bytes) -> None:
+    def publish(self, temporary_name: str, record_name: str, canonical_record: bytes, *,
+            _current=None, _transition=None) -> None:
+        if _current is not None and not callable(_current):
+            raise JournalError("witness publication current guard is invalid")
+        if _transition is not None and not callable(_transition):
+            raise JournalError("witness publication transition guard is invalid")
+
+        def current():
+            if _current is not None:
+                _current()
+
         with self.ready():
             _basename(temporary_name)
             _basename(record_name)
@@ -145,31 +155,74 @@ class WitnessJournalIO:
             published = False
             try:
                 try:
+                    current()
                     descriptor = os.open(
                         temporary_name,
                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
                         0o600, dir_fd=self.directory_descriptor,
                     )
+                    if _transition is not None:
+                        _transition("created", descriptor)
+                    current()
                     offset = 0
                     while offset < len(canonical_record):
+                        current()
                         written = os.write(descriptor, canonical_record[offset:])
+                        current()
                         if written <= 0:
                             raise JournalError("witness state record write was incomplete")
                         offset += written
+                    current()
                     os.fchmod(descriptor, 0o400)
+                    current()
                     os.fsync(descriptor)
+                    current()
                     _rename_noreplace(self.directory_descriptor, temporary_name, record_name)
                     published = True
+                    if _transition is not None:
+                        _transition("renamed", descriptor)
+                    current()
                     os.fsync(self.directory_descriptor)
+                    current()
                 finally:
                     if descriptor is not None:
-                        os.close(descriptor)
-                        if not published:
+                        if _current is None and _transition is None:
+                            # Preserve the original publication/cleanup path
+                            # for every existing unguarded caller.
+                            os.close(descriptor)
+                            if not published:
+                                try:
+                                    os.unlink(temporary_name, dir_fd=self.directory_descriptor)
+                                    os.fsync(self.directory_descriptor)
+                                except FileNotFoundError:
+                                    pass
+                            descriptor = None
+                    if descriptor is not None:
+                        try:
+                            current()
+                        finally:
+                            # A failed guard must not skip owned cleanup; a
+                            # visible publication is never rolled back.
                             try:
-                                os.unlink(temporary_name, dir_fd=self.directory_descriptor)
-                                os.fsync(self.directory_descriptor)
-                            except FileNotFoundError:
-                                pass
+                                os.close(descriptor)
+                                if _transition is not None:
+                                    _transition("closed", None)
+                            finally:
+                                if not published:
+                                    try:
+                                        current()
+                                    finally:
+                                        try:
+                                            os.unlink(temporary_name, dir_fd=self.directory_descriptor)
+                                            if _transition is not None:
+                                                _transition("removed", None)
+                                            try:
+                                                current()
+                                            finally:
+                                                os.fsync(self.directory_descriptor)
+                                        except FileNotFoundError:
+                                            pass
+                        current()
             except BaseException:
                 # A visible published record is never removed. Even when the
                 # exception happened before publication, no request may reuse

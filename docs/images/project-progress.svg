@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="418" viewBox="0 0 1000 418" role="img" aria-labelledby="project-title project-description">
-  <title id="project-title">Project checkpoints, one segment per task: 35 of 46 source-landed; 2 active and 9 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05 and N04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.</title>
-  <desc id="project-description">All 46 parent checkpoint segments remain visible. The finalization and sessions group is now 8/8, and F08 is source-landed in 170d0ac5d937a127ca5987508d1a0214de2a7492. Project totals are 35/46 landed, two active and nine todo. Historical authority H05 and workload identity provisioning N04 are in progress; other workload/native, provider/operations and production acceptance remain open. Activation is 26/26, public actions 3/3 and F08 direct children 6/6. The linked ledger preserves individual criteria and source commits. Counts are nonadditive, not effort or readiness percentages. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
+  <title id="project-title">Project checkpoints, one segment per task: 35 of 46 source-landed; 3 active and 8 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04 and O04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.</title>
+  <desc id="project-description">All 46 parent checkpoint segments remain visible. The finalization and sessions group is now 8/8, and F08 is source-landed in 170d0ac5d937a127ca5987508d1a0214de2a7492. Project totals are 35/46 landed, three active and eight todo. Historical authority H05, workload identity provisioning N04 and protected provider/filesystem effects O04 are in progress; other workload/native, provider/operations and production acceptance remain open. Activation is 26/26, public actions 3/3 and F08 direct children 6/6. The linked ledger preserves individual criteria and source commits. Counts are nonadditive, not effort or readiness percentages. Source is unbuilt, unexecuted and unprovisioned; production acceptance remains 0/6 verified.</desc>
   <rect x="1" y="1" width="998" height="416" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="34" fill="#f8fafc" font-size="25" font-weight="700">Whole-project source checkpoints</text>
     <text x="976" y="34" text-anchor="end" fill="#fde68a" font-size="15" font-weight="700">0 / 6 production verified</text>
     <text x="24" y="64" fill="#6ee7b7" font-size="21" font-weight="700">35 / 46 landed</text>
-    <text x="220" y="64" fill="#cbd5e1" font-size="17">2 active · 9 todo · ACTIVE H05 + N04</text>
+    <text x="220" y="64" fill="#cbd5e1" font-size="17">3 active · 8 todo · ACTIVE H05 + N04 + O04</text>
     <text x="24" y="88" fill="#6ee7b7" font-size="13">✓ Landed source</text>
     <text x="190" y="88" fill="#fde68a" font-size="13">→ In progress, still open</text>
     <text x="405" y="88" fill="#e2e8f0" font-size="13">— Open</text>
@@ -107,7 +107,7 @@
         <rect x="514" y="276" width="105" height="32" rx="5"><title>N03 · Signed-handoff Python workload client · LANDED</title></rect>
       </g>
       <g fill="#334155" stroke="#94a3b8">
-        <rect x="627" y="276" width="105" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>N04 · Service identity provisioning &amp; channels · IN PROGRESS; local key/CSR/request preparation and certificate admission source; issuer service, client-CA distribution, rotation and runtime channels remain open</title></rect>
+        <rect x="627" y="276" width="105" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>N04 · Service identity provisioning &amp; channels · IN PROGRESS; local identity, issuer, public submission and standard ingress trust source connected; native/client attestation, lifecycle and runtime channels remain open</title></rect>
         <rect x="740" y="276" width="105" height="32" rx="5"><title>N05 · Native enrollment &amp; trust installation · OPEN</title></rect>
         <rect x="853" y="276" width="105" height="32" rx="5"><title>N06 · Full enclave TLS/proxy/credential path · OPEN</title></rect>
       </g>
@@ -118,21 +118,21 @@
       </g>
     </g>
 
-    <g aria-label="Providers and operations: zero of 7 landed, seven open">
+    <g aria-label="Providers and operations: zero of 7 landed, one active and six todo">
       <text x="24" y="332" fill="#f8fafc" font-size="16" font-weight="600">Providers and operations</text>
-      <text x="24" y="349" fill="#cbd5e1" font-size="12">0 / 7 landed · 7 open</text>
+      <text x="24" y="349" fill="#cbd5e1" font-size="12">0 / 7 landed · 1 active · 6 todo</text>
       <g fill="#334155" stroke="#94a3b8">
         <rect x="288" y="318" width="89" height="32" rx="5"><title>O01 · Cross-deployment OAuth ownership · OPEN</title></rect>
         <rect x="385" y="318" width="89" height="32" rx="5"><title>O02 · Provider issuance in measured custody · OPEN</title></rect>
         <rect x="482" y="318" width="89" height="32" rx="5"><title>O03 · Public durable credential revocation · OPEN</title></rect>
-        <rect x="579" y="318" width="89" height="32" rx="5"><title>O04 · Protected provider/filesystem effects · OPEN</title></rect>
+        <rect x="579" y="318" width="89" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>O04 · Protected provider/filesystem effects · IN PROGRESS; genuine generic approval verification connected in 6a29d2b; remaining protected side effects and durable outcomes open</title></rect>
         <rect x="676" y="318" width="89" height="32" rx="5"><title>O05 · Policy-publication crash recovery · OPEN</title></rect>
         <rect x="773" y="318" width="89" height="32" rx="5"><title>O06 · Witnessed RBAC rollback protection · OPEN</title></rect>
         <rect x="870" y="318" width="89" height="32" rx="5"><title>O07 · mTLS &amp; signed sequenced telemetry · OPEN</title></rect>
       </g>
       <g fill="#e2e8f0" font-size="12" font-weight="700" text-anchor="middle">
         <text x="332.5" y="339">— O01</text><text x="429.5" y="339">— O02</text>
-        <text x="526.5" y="339">— O03</text><text x="623.5" y="339">— O04</text>
+        <text x="526.5" y="339">— O03</text><text x="623.5" y="339" fill="#451a03">→ O04</text>
         <text x="720.5" y="339">— O05</text><text x="817.5" y="339">— O06</text>
         <text x="914.5" y="339">— O07</text>
       </g>

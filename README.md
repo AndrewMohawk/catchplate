@@ -18,15 +18,22 @@ long-lived credential.
 
 Checkpoint: **2026-09-28 — pre-production, source-only.**
 
-**35/46 source checkpoints landed · 2 active · 9 todo.**
+**35/46 source checkpoints landed · 3 active · 8 todo.**
 
 **Production acceptance: 0/6 verified.** Current source is unbuilt, unexecuted and unprovisioned.
 
-[![Project checkpoints, one segment per task: 35 of 46 source-landed; 2 active and 9 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05 and N04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Project checkpoints, one segment per task: 35 of 46 source-landed; 3 active and 8 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04 and O04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: historical recovery and workload identity
+### Current work: approvals, historical recovery and workload identity
 
-[`.233` source / dece33a](https://github.com/example/private-deployment)
+[`.234` source / 6a29d2b](https://github.com/example/private-deployment)
+repairs the [generic approval verification handoff](docs/control-plane-approval-verification.md)
+with a genuine one-use receipt into the locked transaction, without replaying a
+spent challenge or accepting WebAuthn metadata as authority. O04 is active and
+partial: remaining protected side effects and consolidated-fixture adjustments
+stay open; the separate workload approval path is preserved.
+
+Earlier [`.233` / dece33a](https://github.com/example/private-deployment)
 connects [independently authorized public trust publication and standard Rust ingress admission](docs/workload-identity-trust-distribution.md).
 The immutable single-issuer startup profile binds the exact CA bundle, running
 binary, signed policy and complete mTLS selector inventory. Original expiry
@@ -56,11 +63,11 @@ is separately credited for:
   `--admit-workload-certificate` for pinned-issuer certificate admission.
   These local modes remain network-free; they do not submit to the new worker.
 
-N04 remains partial: this is source integration, not a tested pilot or new landed checkpoint.
+H05, N04 and O04 remain partial: no tested pilot or new landed checkpoint.
 Source remains unbuilt, unexecuted and unprovisioned.
 Native/client attestation trust-pin integration, trust rotation and issuer lifecycle,
 authenticated channels, sidecar integration, H05 historical recovery and O04
-approval integration debt remain open.
+protected provider/filesystem side effects remain open.
 [Remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation
@@ -74,13 +81,13 @@ cookie-only WebAuthn and approval continuation, and a separate exact-target
 current-cookie check. Activation uses two distinct fresh ceremonies; historical
 acknowledgments and delivery reports do not establish a current session.
 No automatic retry, profile fallback or original-expiry renewal is authorized.
-Source is unbuilt, unexecuted and unprovisioned. **H05 historical authority and
-N04 workload identity are in progress; production acceptance remains open.**
+Source is unbuilt, unexecuted and unprovisioned. **H05 historical authority,
+N04 workload identity and O04 protected side effects are in progress; production acceptance remains open.**
 Previous source: [`.217` public consume completion and recovery closure](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-recovery-detail)
 live in the tracker.
 
-[![Session activation: all 26 source steps landed; 0 active and 0 todo. Portal steps 24–26 and F08 are source-landed in 170d0ac: explicit target-bound actions, fresh cookie-only WebAuthn and approval continuation, and separate exact-target current-cookie confirmation. Activation uses two distinct fresh ceremonies; generic failures never authorize automatic retry. Step 23 recovery remains credited to dde38d8. Public actions 3/3 and F08 direct children 6/6 are source-landed; project 35/46 has 2 active and 9 todo, with H05 and N04 in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation: all 26 source steps landed; 0 active and 0 todo. Portal steps 24–26 and F08 are source-landed in 170d0ac: explicit target-bound actions, fresh cookie-only WebAuthn and approval continuation, and separate exact-target current-cookie confirmation. Activation uses two distinct fresh ceremonies; generic failures never authorize automatic retry. Step 23 recovery remains credited to dde38d8. Public actions 3/3 and F08 direct children 6/6 are source-landed; project 35/46 has 3 active and 8 todo, with H05, N04 and O04 in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-recovery-detail).
@@ -90,7 +97,7 @@ Nested counts are not additive and are not effort estimates.
 <details>
 <summary>Completed step 23 recovery and step 22 dispatch details</summary>
 
-[![Step 23 recovery is source-landed in dde38d8. TARGET and ACTOR are source-landed in 9f03664; AUTHORITY in 097ce54; EXCHANGE in 272a40e; HTTP in dbd99f6; COMPLETE in dde38d8. Public data-only consume completion connects through the same retained originals to separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Portal steps 24–26 subsequently landed in 170d0ac, completing activation 26/26 and F08 direct 6/6. Project 35/46 has 2 active and 9 todo; H05 and N04 are in progress. These six recovery facets are not new milestones or effort percentages. No automatic retry or original-expiry renewal is authorized. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
+[![Step 23 recovery is source-landed in dde38d8. TARGET and ACTOR are source-landed in 9f03664; AUTHORITY in 097ce54; EXCHANGE in 272a40e; HTTP in dbd99f6; COMPLETE in dde38d8. Public data-only consume completion connects through the same retained originals to separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Portal steps 24–26 subsequently landed in 170d0ac, completing activation 26/26 and F08 direct 6/6. Project 35/46 has 3 active and 8 todo; H05, N04 and O04 are in progress. These six recovery facets are not new milestones or effort percentages. No automatic retry or original-expiry renewal is authorized. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
 
 The completed dispatch graphic below preserves the **historical .201 checkpoint**,
 including its then-current 0 active / 4 todo rollup; step 23 is now source-landed.
@@ -129,7 +136,7 @@ lists every remaining item and its evidence.
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |
 | O03 | Public revocation and authenticated recovery | Todo |
-| O04 | Protected provider and filesystem side effects | Todo |
+| O04 | Protected provider and filesystem side effects | In progress (partial) |
 | O05 | Interrupted policy-publication recovery | Todo |
 | O06 | Independent RBAC rollback witness | Todo |
 | O07 | Authenticated, signed and sequenced telemetry | Todo |

@@ -80,8 +80,8 @@ repair.
 The `withdrawal_approval` setup inside `scripts/test_webauthn_attestation.py`
 currently injects WebAuthn metadata directly with optional MFA. That setup must
 be converted to a genuine signed assertion and verified receipt before the
-consolidated source freeze, preserving its credential-revocation and trust-
-withdrawal checks. The repaired transaction refuses its old shortcut; the fixture
+consolidated source freeze, preserving its credential-revocation and
+trust-withdrawal checks. The repaired transaction refuses its old shortcut; the fixture
 has not been run or presented as passing evidence for this source.
 
 After the complete source freeze, exercise all supported authentication modes,

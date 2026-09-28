@@ -26,12 +26,13 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: historical recovery
 
-[`.220` finalization recovery](https://github.com/example/private-deployment)
-extends [registration history](https://github.com/example/private-deployment)
-through finalization completion, bounded outcome storage and activation's
-finalization prerequisites, using independently archived keys and configuration.
-**H05 remains in progress:** activation's own historical authority and explicit
-older-source replay are still open. [Details and remaining boundaries](docs/historical-authority-resolution.md).
+[`.221` activation recovery targets](https://github.com/example/private-deployment)
+extends [finalization history](https://github.com/example/private-deployment)
+with independently archived planner/caller and release-intent verification,
+bounded record loading and old-token possession checks.
+**H05 remains in progress:** downstream completion/consume/proof/grant/release
+authority and explicit older-source replay are still open.
+[Details and remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation
 

@@ -962,6 +962,102 @@ class ControlPlaneCustodyClient:
             activation_authorization_digest=activation_authorization_digest,
             kind="release-proof-setup", originals=originals)
 
+    def _completion_release_operation(self, *, finalization_digest, activation_authorization_digest,
+            completion_originals, reconciliation_digest, work, current, maximum_original_bytes,
+            kind=None, originals=()):
+        from serverware import control_plane_oidc_session_activation_consume_records as consume
+        from serverware import control_plane_oidc_session_activation_completion_recovery_records as recovery
+
+        target = journal._digest(finalization_digest)
+        authorization_digest = journal._digest(activation_authorization_digest)
+        if reconciliation_digest is not None:
+            reconciliation_digest = journal._digest(reconciliation_digest)
+        completed = recovery._originals("consume", completion_originals)
+        if kind is not None and kind not in consume.COMPLETION_RECOVERY_RELEASE_KINDS:
+            raise CustodyClientError("completion release kind is not source fixed")
+        held = () if kind is None else consume._originals(consume._profile(kind), originals)
+        if not callable(current):
+            raise CustodyClientError("completion release requires its original resource guard")
+        current()
+        binding = _snapshot(self)
+        result = journal.CustodyJournal._completion_release_operation(binding.journal,
+            finalization_digest=target, activation_authorization_digest=authorization_digest,
+            completion_originals=completed, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind=kind, originals=held)
+        current()
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("custody caller changed during completion release retention")
+        if kind is not None:
+            journal._digest(result)
+            return result
+        slot = consume._slot_digest(target, authorization_digest)
+        if type(result) is not tuple or len(result) != len(consume.COMPLETION_RECOVERY_RELEASE_KINDS):
+            raise CustodyClientError("completion release record inventory differs")
+        for expected, record in zip(consume.COMPLETION_RECOVERY_RELEASE_KINDS, result):
+            if record is not None and (type(record) is not consume.ConsumeRecord
+                    or record.finalization_digest != target or record.activation_authorization_digest != authorization_digest
+                    or record.slot_digest != slot or record.kind != expected):
+                raise CustodyClientError("completion release selected record association differs")
+        current()
+        return result
+
+    def load_oidc_session_activation_completion_recovery_release_records(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, work, current,
+            maximum_original_bytes=None):
+        """Return existing claim/intent/claim/setup/proof DATA, never retry authority."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes)
+
+    def claim_oidc_session_activation_completion_recovery_release_intent_attempt(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, work, current,
+            maximum_original_bytes=None):
+        """Spend the existing consume intent slot before signing, including after uncertainty."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="release-intent-claimed")
+
+    def append_oidc_session_activation_completion_recovery_release_intent(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, originals, work, current,
+            maximum_original_bytes=None):
+        """Retain signed raw1 DATA under this work's new intent claim."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind="release-intent", originals=originals)
+
+    def claim_oidc_session_activation_completion_recovery_release_proof_attempt(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, work, current,
+            maximum_original_bytes=None):
+        """Spend the same global proof slot before setup or proof contact."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="release-proof-claimed")
+
+    def append_oidc_session_activation_completion_recovery_release_proof_setup(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, originals, work, current,
+            maximum_original_bytes=None):
+        """Retain setup raw1 before admission without reopening the spent proof claim."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind="release-proof-setup", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_release_proof(self, *, finalization_digest,
+            activation_authorization_digest, completion_originals, reconciliation_digest, originals, work, current,
+            maximum_original_bytes=None):
+        """Retain raw4 DATA before status or enrolled proof admission."""
+        return ControlPlaneCustodyClient._completion_release_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            completion_originals=completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind="release-proof", originals=originals)
+
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):
         """Read bounded ordinary history, not a recovered permission to continue."""

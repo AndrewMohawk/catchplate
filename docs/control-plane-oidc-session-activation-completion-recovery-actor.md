@@ -35,6 +35,14 @@ approval policy still applies to this recovery-only action. A token-recovery
 challenge or another profile's assertion cannot substitute for this different
 payload digest.
 
+The consume lane also supports the source-fixed `release-intent-proof` purpose
+through distinct options/action facades. It uses a different binding schema and
+includes that purpose in the WebAuthn/approval payload; completion-only approval
+cannot authorize signing or proof acquisition. Its exact fixed route is checked
+before actor construction. Future intent/proof and reconciliation capacities are
+reserved before the first target body and carried forward once, not granted as
+a second budget. The existing completion coordinator rejects this new purpose.
+
 ## Current checks and lifecycle
 
 The actor reuses the existing sole-credential, current trust, explicit RBAC and
@@ -68,8 +76,10 @@ The receiving child is checked separately after the action and normal trust
 cleanup, never called by its own actor ancestor. No closed-actor fallback exists.
 Private AES/history replay stays in the isolated completion service.
 
-Full recovery still needs the fresh-actor intent/proof and independently admitted
-release-profile/checkpoint/cookie continuation. Missing evidence is unavailable
+The separate [fresh intent/proof coordinator](control-plane-oidc-session-activation-completion-recovery-release.md)
+now uses this distinct purpose for retained acknowledged consume originals.
+Full recovery still needs independently admitted release-profile/checkpoint and
+current-auth/cookie continuation. Missing evidence is unavailable
 or unknown, not SQL nonexecution, private-outcome absence or retry authority.
 COMPLETE and activation step 23 remain incomplete; these actor methods and the
 completion-only response establish no cookie, active session or production claim.

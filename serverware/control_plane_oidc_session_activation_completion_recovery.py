@@ -106,7 +106,8 @@ def _recover_on_owner(owner, *, profile, request, recovery_bytes, live_window,
                 recovery_bytes=recovery_bytes, live_window=live_window,
                 transport_deadline_ns=transport_deadline_ns, work=work, current=current) as scope:
             scope.current()
-            if (scope._authorized is not True or scope._completion_recovery_spent is not False
+            if (scope._authorized is not True or scope._purpose != "completion"
+                    or scope._completion_recovery_spent is not False
                     or scope._completion_receiving_current is not None):
                 execution._fail("completion recovery requires a fresh unspent actor")
             scope._completion_recovery_spent = True

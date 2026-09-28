@@ -54,10 +54,12 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
             or profile is proof_inputs or profile is recovery_grants or profile is recovery_delivery
         else profile.MAX_BYTES)
     if (maximum_response_bytes is not None
-            and profile is not proof_inputs and profile is not recovery_grants):
+            and profile is not proof_inputs and profile is not recovery_grants
+            and profile is not release_proof):
         raise AuthorityTransportError("activation response cap is not enabled for this fixed profile")
     response_maximum = (profile._response_limit(maximum_response_bytes)
-        if profile is proof_inputs or profile is recovery_grants else profile.MAX_RESPONSE_BYTES)
+        if profile is proof_inputs or profile is recovery_grants or profile is release_proof
+        else profile.MAX_RESPONSE_BYTES)
     capture._SharedLedger(work)
     if type(deadline_ns) is not int or deadline_ns <= 0 or not callable(current):
         raise AuthorityTransportError("activation caller transport requires its original deadline and guard")
@@ -251,9 +253,11 @@ def _consume_completion_release_on_work(endpoint, *, originals, deadline_ns, wor
         deadline_ns=deadline_ns, work=work, current=current)
 
 
-def _release_proof_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _release_proof_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     return _exchange_on_work(release_proof, endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current,
+        maximum_response_bytes=maximum_response_bytes)
 
 
 def _release_grants_on_work(endpoint, *, originals, deadline_ns, work, current):

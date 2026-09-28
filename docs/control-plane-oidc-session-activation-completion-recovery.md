@@ -94,8 +94,10 @@ portal integration, deployment and independent production acceptance must not
 be inferred from this completion-only connection. Source only: no build, test,
 runtime or provisioning evidence is claimed.
 
-The next connection needs fresh-actor intent/proof admission and independently
-selected release authority. Missing local intent or a reconstructed outcome
+The separate [fresh intent/proof action](control-plane-oidc-session-activation-completion-recovery-release.md)
+now continues acknowledged consume originals under a distinct WebAuthn binding,
+without repeating completion. It retains and genuinely admits intent/proof data;
+it still needs independently selected release authority. Missing local intent or a reconstructed outcome
 does not establish whether a private outcome exists. A first-release/checkpoint-zero
 path and a retained-outcome/checkpoint-one recovery path require their respective
 independent root authority; neither can be inferred from local absence. The

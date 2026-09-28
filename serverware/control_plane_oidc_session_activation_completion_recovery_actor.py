@@ -23,6 +23,9 @@ _CONSTRUCTION = object()
 _ACTIVE = None
 INTENT_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryIntent/v1"
 OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryOptions/v1"
+RELEASE_INTENT_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryReleaseIntent/v1"
+RELEASE_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryReleaseOptions/v1"
+RELEASE_PATH = "/api/auth/session/activation/consume/completion/recovery/release-proof"
 
 
 def _configuration(owner, profile):
@@ -52,11 +55,13 @@ class _CompletionActorScope(actor._ActorScope):
     """Distinct exact type; existing token acquisition cannot accept it."""
 
     __slots__ = ("_profile", "_parent", "_recovery", "_configuration", "_configuration_pin",
-        "_target_seal", "_completion_recovery_spent", "_completion_receiving_current")
+        "_target_seal", "_completion_recovery_spent", "_completion_receiving_current",
+        "_purpose", "_purpose_pin", "_future_original_bytes", "_future_original_bytes_pin")
 
     def __init__(self, construction, *, application, owner, request, original,
             payload, work, current, owner_scope, target, policy, policy_pin,
-            request_pin, old_token, profile, parent, recovery, configuration):
+            request_pin, old_token, profile, parent, recovery, configuration,
+            purpose, future_original_bytes):
         if (construction is not _CONSTRUCTION
                 or type(target) is not history._CompletionRecoveryTarget):
             actor._deny("completion recovery scope is privately constructed", 503)
@@ -67,6 +72,8 @@ class _CompletionActorScope(actor._ActorScope):
         self._policy, self._policy_pin, self._request_pin = policy, policy_pin, request_pin
         self._old_token = old_token
         self._profile, self._parent, self._recovery = profile, parent, recovery
+        self._purpose = self._purpose_pin = purpose
+        self._future_original_bytes = self._future_original_bytes_pin = future_original_bytes
         self._configuration = configuration
         self._configuration_pin = _configuration_pin(profile, configuration)
         self._target_pin = _target_pin(target, work)
@@ -82,6 +89,11 @@ class _CompletionActorScope(actor._ActorScope):
             "completionPacketDigest": configuration.packet_digest,
             "completionPendingSequence": sequence, "completionPendingHeadDigest": head,
             "completionFence": fence}
+        if purpose == "release-intent-proof":
+            # Distinct WebAuthn/approval payload: completion-only permission
+            # must never authorize a fresh signature or private proof request.
+            self._binding["schema"] = RELEASE_INTENT_SCHEMA
+            self._binding["recoveryPurpose"] = purpose
         self._binding_pin = actor._snapshot(self._binding, work)
         self._payload_digest = None
         self._credential, self._count, self._roles = None, None, None
@@ -109,6 +121,8 @@ class _CompletionActorScope(actor._ActorScope):
                 or _ACTIVE is not self or actor._ACTIVE is not None
                 or self._owner._activation_permission is not None
                 or startup._owner is not self._owner or target is not self._target_seal
+                or self._purpose is not self._purpose_pin
+                or self._future_original_bytes is not self._future_original_bytes_pin
                 or getattr(self._request.state, actor.ORIGINAL_STATE_NAME, None) is not self._original):
             actor._deny("completion recovery actor is no longer live", 503)
         parent, recovery, selected = _configuration(self._owner, self._profile)
@@ -151,17 +165,31 @@ class _CompletionActorScope(actor._ActorScope):
 
 
 def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
-        live_window, transport_deadline_ns, work, current):
+        live_window, transport_deadline_ns, work, current, _purpose="completion",
+        _additional_original_bytes=0):
     global _ACTIVE
 
     from serverware import app as application
 
     actor._request(request, recovery_bytes)
+    if (type(_purpose) is not str or _purpose not in ("completion", "release-intent-proof")
+            or type(_additional_original_bytes) is not int
+            or not 0 <= _additional_original_bytes < history.MAX_ORIGINAL_BYTES):
+        actor._deny("completion recovery purpose or held capacity differs", 503)
+    if _purpose == "release-intent-proof":
+        path = RELEASE_PATH + "/options" if options else RELEASE_PATH
+        if (profile != "consume" or request.method != "POST"
+                or request.scope.get("path") != path
+                or request.scope.get("query_string", b"") != b""):
+            actor._deny("release proof recovery requires its distinct fixed action", 400)
     if (type(owner) is not startup._EnrollmentOwner or _ACTIVE is not None
             or actor._ACTIVE is not None or owner._activation_permission is not None):
         actor._deny("completion recovery requires a non-overlapping actual owner", 409)
     current()
     parent, recovery, configuration = _configuration(owner, profile)
+    if (_purpose == "release-intent-proof"
+            and (parent.release_intent is None or parent.release_proof is None)):
+        actor._deny("release proof recovery lacks independent cold intent/proof configuration", 503)
     configuration_pin = _configuration_pin(profile, configuration)
     work.charge(input_bytes=4 * len(recovery_bytes),
         json_nodes=4 * contract.permission.framing._JSON_LIMITS.max_total_nodes)
@@ -206,7 +234,7 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
     target = history._inspect_on_owner(owner, local_digest=payload["localDigest"],
         old_token_bytes=old_token, live_window=owner_scope.window,
         transport_deadline_ns=owner_scope.deadline_ns, work=work, current=base_current,
-        _additional_original_bytes=held_bytes)
+        _additional_original_bytes=held_bytes + _additional_original_bytes)
     if type(target) is not history._CompletionRecoveryTarget:
         actor._deny("completion recovery original target is unavailable", 503)
     window = execution.clock._validate(target.live_window)
@@ -221,7 +249,8 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         request=request, original=recovery_bytes, payload=payload, work=work,
         current=current, owner_scope=owner_scope, target=target, policy=policy,
         policy_pin=policy_pin, request_pin=request_pin, old_token=old_token,
-        profile=profile, parent=parent, recovery=recovery, configuration=configuration)
+        profile=profile, parent=parent, recovery=recovery, configuration=configuration,
+        purpose=_purpose, future_original_bytes=_additional_original_bytes)
     _ACTIVE = scope
     try:
         rbac_pin, session_pin, credential, roles, trust_pin = scope._read_current()
@@ -239,7 +268,7 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
 
 
 def _options_on_owner(owner, *, profile, request, recovery_bytes, live_window,
-        transport_deadline_ns, work, current):
+        transport_deadline_ns, work, current, _purpose="completion"):
     """Actual bounded challenge only; no completion or assertion authority."""
     from serverware import app as application
 
@@ -249,7 +278,8 @@ def _options_on_owner(owner, *, profile, request, recovery_bytes, live_window,
             with application.trust_bundle_lock(exclusive=False):
                 scope = _prepare_on_owner(owner, profile=profile, request=request,
                     recovery_bytes=recovery_bytes, options=True, live_window=live_window,
-                    transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+                    transport_deadline_ns=transport_deadline_ns, work=work, current=current,
+                    _purpose=_purpose)
                 scope.current()
                 work.charge(hashes=3)
                 result = scope._native(lambda: pending._options(application,
@@ -258,6 +288,9 @@ def _options_on_owner(owner, *, profile, request, recovery_bytes, live_window,
                     actor._deny("completion recovery options shape changed", 503)
                 work.prepare_copy(result)
                 result = {**result, "schema": OPTIONS_SCHEMA, "completionProfile": profile}
+                if _purpose == "release-intent-proof":
+                    result["schema"] = RELEASE_OPTIONS_SCHEMA
+                    result["recoveryPurpose"] = _purpose
                 scope.current()
             scope._guard()
         finally:
@@ -268,7 +301,8 @@ def _options_on_owner(owner, *, profile, request, recovery_bytes, live_window,
 
 @contextmanager
 def _authorize_on_owner(owner, *, profile, request, recovery_bytes, live_window,
-        transport_deadline_ns, work, current):
+        transport_deadline_ns, work, current, _purpose="completion",
+        _additional_original_bytes=0):
     """One fresh actor; original control admission must precede future effects."""
     from serverware import app as application
 
@@ -280,7 +314,8 @@ def _authorize_on_owner(owner, *, profile, request, recovery_bytes, live_window,
             with application.trust_bundle_lock(exclusive=False):
                 scope = _prepare_on_owner(owner, profile=profile, request=request,
                     recovery_bytes=recovery_bytes, options=False, live_window=live_window,
-                    transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+                    transport_deadline_ns=transport_deadline_ns, work=work, current=current,
+                    _purpose=_purpose, _additional_original_bytes=_additional_original_bytes)
                 scope.current()
                 work.charge(hashes=4)
                 scope._count = scope._native(lambda: pending._assertion(application,

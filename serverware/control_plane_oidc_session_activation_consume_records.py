@@ -56,6 +56,9 @@ _MAXIMA = tuple(_MAX_HEADER_BYTES + count * 8 + maximum
 MAX_RECORD_BYTES = max(_MAXIMA)
 MAX_CLAIM_IO_BYTES = activation.MAX_RECORD_BYTES + 3 * MAX_CLAIM_BYTES
 MAX_LOAD_IO_BYTES = activation.MAX_RECORD_BYTES + sum(_MAXIMA)
+COMPLETION_RECOVERY_METADATA_BYTES = 16 * 1024
+COMPLETION_RECOVERY_RELEASE_KINDS = ("release-intent-claimed", "release-intent",
+    "release-proof-claimed", "release-proof-setup", "release-proof")
 CustodyRecordError = records.CustodyRecordError
 
 
@@ -194,6 +197,14 @@ def _append_io_bytes(kind, originals):
     held = _originals(profile, originals)
     size = _MAX_HEADER_BYTES + 8 * len(held) + sum(len(raw) for raw in held)
     return activation.MAX_RECORD_BYTES + MAX_CLAIM_BYTES + 3 * size
+
+
+def _completion_recovery_publication_bytes(kind, originals):
+    """Publication/readback reservation only; selected history is additional."""
+    if kind not in COMPLETION_RECOVERY_RELEASE_KINDS:
+        raise CustodyRecordError("completion recovery release kind is not source fixed")
+    held = _originals(_profile(kind), originals)
+    return 3 * (_MAX_HEADER_BYTES + 8 * len(held) + sum(len(raw) for raw in held))
 
 
 def encode(kind, *, finalization_digest, activation_authorization_digest,

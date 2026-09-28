@@ -511,6 +511,27 @@ class _EnrollmentOwner:
             recovery_bytes=recovery_bytes, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, work=work, current=current)
 
+    def _oidc_session_activation_completion_release_options(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """Distinct fresh challenge for pre-intent proof preparation, not release."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actor
+
+        _require_pid()
+        return actor._options_on_owner(self, profile="consume", request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current,
+            _purpose="release-intent-proof")
+
+    def _prepare_oidc_session_activation_completion_release(self, *, request, recovery_bytes,
+            live_window, transport_deadline_ns, work, current):
+        """One fresh purpose-bound intent/proof call; no token or cookie."""
+        from serverware import control_plane_oidc_session_activation_completion_recovery_release as release
+
+        _require_pid()
+        return release._prepare_on_owner(self, request=request,
+            recovery_bytes=recovery_bytes, live_window=live_window,
+            transport_deadline_ns=transport_deadline_ns, work=work, current=current)
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

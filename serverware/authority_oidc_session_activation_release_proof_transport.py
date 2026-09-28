@@ -64,6 +64,13 @@ def _request_lengths(lengths):
         _fail("release proof request lengths differ from its exact raw3")
 
 
+def _response_limit(maximum_response_bytes):
+    maximum = MAX_RESPONSE_BYTES if maximum_response_bytes is None else maximum_response_bytes
+    if type(maximum) is not int or not 0 < maximum <= MAX_RESPONSE_BYTES:
+        _fail("release proof response capacity may only tighten the original bound")
+    return maximum
+
+
 def _response_lengths(lengths):
     _exchange_bound()
     if (type(lengths) is not tuple or len(lengths) != len(RESPONSE_LIMITS)
@@ -120,8 +127,10 @@ def _send_response(connection, originals, *, deadline_ns, work, current):
     chunks._guard(work, current, deadline_ns)
 
 
-def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     """One actual same-work caller exchange, returning unauthenticated raw4."""
     from serverware import authority_oidc_session_activation_caller_transport as guarded
     return guarded._release_proof_on_work(endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current,
+        maximum_response_bytes=maximum_response_bytes)

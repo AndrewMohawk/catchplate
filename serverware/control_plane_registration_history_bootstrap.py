@@ -42,6 +42,7 @@ class _RegistrationHistoryScope:
     current_pending: tuple
     completion_packet_digest: str
     original_bytes: bytes
+    caller_public_key: object
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -189,7 +190,7 @@ def _admit_on_work(*, registration_history, configuration_payload, configuration
                 record.planner_receipt_digest, record.valid_from_epoch_ns, record.valid_until_epoch_ns,
                 old_root, held.current_root_enrollment_bytes, held.grant_enrollment_bytes,
                 held.authorization_enrollment_bytes, held.current_pending, held.completion_packet_digest,
-                scope_raw))
+                scope_raw, held.caller_public_key))
         plan._same(configuration._configuration_wire(owned, capture._SharedLedger(work)), original, work,
             "registration history changed during cold admission")
         return _RegistrationHistoryMaterial(admitted, tuple(scopes), start, end, original)

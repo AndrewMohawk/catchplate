@@ -1733,24 +1733,42 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("custody caller changed while retaining finalization SQL outcome")
         return journal._digest(digest)
 
-    def append_registration_finalization_completion_outcome(self, finalization_digest, originals):
+    def append_registration_finalization_completion_outcome(self, finalization_digest, originals, *,
+            work=None, current=None, maximum_original_bytes=None):
         """Retain bounded completion originals before separate semantic admission."""
         local = journal._digest(finalization_digest)
+        guarded = work is not None or current is not None or maximum_original_bytes is not None
+        if guarded:
+            if not callable(current):
+                raise CustodyClientError("finalization completion publication requires its original guard")
+            current()
         binding = _snapshot(self)
         digest = journal.CustodyJournal.append_registration_finalization_completion_outcome(
-            binding.journal, local, originals)
+            binding.journal, local, originals, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes)
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed while retaining finalization completion")
+        if guarded:
+            current()
         return journal._digest(digest)
 
-    def append_registration_finalization_completion_reconciliation(self, finalization_digest, originals):
+    def append_registration_finalization_completion_reconciliation(self, finalization_digest, originals, *,
+            work=None, current=None, maximum_original_bytes=None):
         """Retain a separate acknowledged carrier, never overwrite uncertainty."""
         local = journal._digest(finalization_digest)
+        guarded = work is not None or current is not None or maximum_original_bytes is not None
+        if guarded:
+            if not callable(current):
+                raise CustodyClientError("finalization reconciliation publication requires its original guard")
+            current()
         binding = _snapshot(self)
         digest = journal.CustodyJournal.append_registration_finalization_completion_reconciliation(
-            binding.journal, local, originals)
+            binding.journal, local, originals, work=work, current=current,
+            maximum_original_bytes=maximum_original_bytes)
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed while retaining finalization reconciliation")
+        if guarded:
+            current()
         return journal._digest(digest)
 
     def load_registration_finalization_outcomes(self, finalization_digest):

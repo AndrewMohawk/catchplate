@@ -35,23 +35,24 @@ def _expected_subject(expected_user_id, expected_session_id):
     return user_id, session_id
 
 
-def _inspect_on_owner(owner, *, local_digest, expected_user_id, expected_session_id,
+def _inspect_material_on_owner(owner, *, local_digest, expected_user_id, expected_session_id,
         live_window, transport_deadline_ns, work):
-    """Replay retained originals only on the actual owner's supplied window."""
+    """Replay originals and retain only cold continuity after ACK admission."""
     ledger = evidence.capture._SharedLedger(work)
     digest = journal._digest(local_digest)
     user_id, session_id = _expected_subject(expected_user_id, expected_session_id)
-    subject, held, reserved, observed, common, _endpoint, window, bound, current, _original_bytes = (
-        completion_subject._inspect_on_owner(owner, digest, live_window=live_window,
-            transport_deadline_ns=transport_deadline_ns, work=work))
+    inspected = completion_subject._inspect_material_on_owner(owner, digest,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+    subject, held, reserved, observed, common = (inspected.subject, inspected.originals,
+        inspected.reservation_originals, inspected.observed, inspected.common)
+    window, bound, current = inspected.window, inspected.deadline_ns, inspected.current
     if type(subject) is not dict or set(subject) != _SUBJECT_FIELDS:
         raise RegistrationActivationSubjectError("activation inspection subject shape differs")
     evidence.plan._same((subject["localDigest"], subject["userId"], subject["sessionId"], subject["mode"]),
         (digest, user_id, session_id, "oidc-session-first-enrollment"), work,
         "activation inspection differs from authenticated current user/session or original OIDC mode")
     current()
-    configured = owner._material.finalization
-    pending = configured.current_pending
+    pending = inspected.current_pending
     record = observed.completion_reconciled
     expected_kind = "completion-reconciled"
     if record is None:
@@ -77,6 +78,19 @@ def _inspect_on_owner(owner, *, local_digest, expected_user_id, expected_session
     result = evidence.capture._JSONCapture(ledger,
         maximum_bytes=evidence.authority.MAX_REQUEST_BYTES).visit(subject)
     current()
+    # The ACK has consumed the historical graphs and originals. This narrow
+    # guard retains only actual cold owners/archive lifetime, not the replay
+    # inventory or an authority token; the copied scalar subject is ordinary data.
+    return result, inspected.continuity
+
+
+def _inspect_on_owner(owner, *, local_digest, expected_user_id, expected_session_id,
+        live_window, transport_deadline_ns, work):
+    """Existing same-call effect owners receive only freshly replayed scalars."""
+    result, current = _inspect_material_on_owner(owner, local_digest=local_digest,
+        expected_user_id=expected_user_id, expected_session_id=expected_session_id,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+    current()
     return result
 
 
@@ -94,7 +108,7 @@ def inspect_retained_registration_activation_subject(local_digest, *, expected_u
     callback = evidence.production._callback
     owner, material, binding, window = completion_subject._open_on_work(work)
     custody = owner._custody
-    result = startup._EnrollmentOwner._inspect_retained_registration_activation_subject(
+    result, current = startup._EnrollmentOwner._inspect_retained_registration_activation_subject(
         owner, local_digest=digest, expected_user_id=user_id, expected_session_id=session_id,
         live_window=window, transport_deadline_ns=window[4], work=work)
     if (owner._material is not material or owner._binding is not binding
@@ -102,4 +116,5 @@ def inspect_retained_registration_activation_subject(local_digest, *, expected_u
             or callback(work, completion_subject.custody_startup.require_started) is not custody):
         raise RegistrationActivationSubjectError("activation inspection cold owners changed")
     clock._check_on_work(window, work=work)
+    current()
     return result

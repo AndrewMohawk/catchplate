@@ -723,13 +723,13 @@ class _EnrollmentOwner:
 
     def _inspect_retained_registration_activation_subject(self, *, local_digest,
             expected_user_id, expected_session_id, live_window, transport_deadline_ns, work):
-        """Local original replay only; no activation, completion fetch or retry."""
+        """Return local scalars plus cold continuity through normal lock exit."""
         from serverware import control_plane_registration_activation_subject as activation
 
         _require_pid()
         with _LOCK:
             _live(self, work=work)
-            return activation._inspect_on_owner(self, local_digest=local_digest,
+            return activation._inspect_material_on_owner(self, local_digest=local_digest,
                 expected_user_id=expected_user_id, expected_session_id=expected_session_id,
                 live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
 
@@ -1103,6 +1103,14 @@ def initialize_from_environment():
                     and not material.registration_history.valid_from_epoch_ns
                         <= history_now < material.registration_history.valid_until_epoch_ns):
                 raise EnrollmentStartupError("registration history expired during cold admission")
+            if material.finalization_history is not None:
+                finalization_history = material.finalization_history
+                if (finalization_history.registration_history is not material.registration_history
+                        or material.registration_history is None
+                        or finalization_history.archive is not material.registration_history.archive
+                        or not finalization_history.valid_from_epoch_ns
+                            <= history_now < finalization_history.valid_until_epoch_ns):
+                    raise EnrollmentStartupError("finalization history changed or expired during cold admission")
             key_fd, policy, public_key = (material.issuer_private_key_fd,
                 material.issuer_policy, material.issuer_public_key)
             key, key_identity, response_path, response_pin = None, None, None, None

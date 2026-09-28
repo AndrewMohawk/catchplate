@@ -88,6 +88,8 @@ _COMPLETION_HISTORY_MAX_BYTES = 64 * 1024**2
 _COMPLETION_HISTORY_FIXED_BYTES = 16 * 1024
 REGISTRATION_PREPARATION_MAX_BYTES = _COMPLETION_HISTORY_MAX_BYTES
 REGISTRATION_PREPARATION_METADATA_BYTES = _COMPLETION_HISTORY_FIXED_BYTES
+FINALIZATION_COMPLETION_APPEND_BYTES = (6 * finalization_outcomes.MAX_COMPLETION_OUTCOME_BYTES
+    + 3 * finalization_outcomes.MAX_CLAIM_BYTES + _COMPLETION_HISTORY_FIXED_BYTES)
 _COMPLETION_RECOVERY_TARGET_MAX_BYTES = 64 * 1024**2
 _COMPLETION_RECOVERY_TARGET_FIXED_BYTES = 4096
 _COMPLETION_CONSUME_KINDS = ("claimed", "inputs", "prepared", "exported", "authorized",
@@ -1617,21 +1619,128 @@ class CustodyJournal:
         """
         return self._append_finalization_outcome(finalization_digest, "sql-outcome", originals)
 
-    def append_registration_finalization_completion_outcome(self, finalization_digest, originals):
+    def _append_finalization_completion_on_work(self, finalization_digest, kind, originals, *,
+            work, current, maximum_original_bytes):
+        """Fixed completion publication without reloading prepared originals."""
+        from serverware.authority_query_read_work import _ValidationWork
+
+        digest = _digest(finalization_digest)
+        if kind not in ("completion-outcome", "completion-reconciled"):
+            raise CustodyJournalError("guarded finalization publication kind differs")
+        held = finalization_outcomes._originals(finalization_outcomes._profile(kind), originals)
+        maximum = _COMPLETION_HISTORY_MAX_BYTES if maximum_original_bytes is None else maximum_original_bytes
+        _integer(maximum, minimum=0, maximum=_COMPLETION_HISTORY_MAX_BYTES,
+            label="finalization completion remaining publication capacity")
+        if type(work) is not _ValidationWork or not callable(current):
+            raise CustodyJournalError("finalization completion publication requires original work and guard")
+        work.charge(json_nodes=256)
+        current()
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            if digest not in self._finalization_associations:
+                raise CustodyJournalError("finalization completion preparation is unavailable")
+            try:
+                inventory = self._completion_history_inventory(digest)
+                association, _evidence, files = inventory
+                for name, limit, _decoder in files:
+                    self._completion_history_metadata(name, limit, self._file_identities.get(name), current)
+                by_kind = dict(self._finalization_outcomes.get(digest, {}))
+                selected = []
+                for stage in ("sql-claimed", "completion-outcome", "completion-reconciled"):
+                    if stage in by_kind:
+                        name = _name("finalization-" + stage, digest)
+                        selected.append((stage, name, self._file_identities[name]))
+                self._require_ready()
+                current()
+            except BaseException:
+                self._io.poison()
+                raise
+            if "sql-claimed" not in by_kind or digest not in self._finalization_reservations:
+                raise CustodyJournalError("finalization completion lacks its original reservation and SQL claim")
+            if kind == "completion-reconciled" and "completion-outcome" not in by_kind:
+                raise CustodyJournalError("finalization reconciliation lacks its original outcome")
+            # Existing slots are compared directly, without allocating another
+            # encoding. A new slot reserves encode + native publication/readback.
+            publication_bytes = (0 if kind in by_kind else 3 * (
+                finalization_outcomes.MAX_CLAIM_BYTES + 4 * 8 + sum(map(len, held))))
+            total = sum(identity[6] for _stage, _name_value, identity in selected)
+            if 3 * total + publication_bytes + _COMPLETION_HISTORY_FIXED_BYTES > maximum:
+                raise CustodyJournalError("finalization completion exceeds remaining preallocation capacity")
+            scans = 0 if kind in by_kind else 3 * (len(self._file_identities) + 1)
+            work.charge(input_bytes=3 * total + len(selected) + publication_bytes + scans * 512,
+                hashes=2 * len(selected) + 4, json_nodes=scans * 16)
+            loaded = {}
+            try:
+                for stage, name, identity in selected:
+                    encoded = self._read_completion_history_file(name, identity, current)
+                    record = finalization_outcomes.decode(encoded)
+                    current()
+                    if (record.kind != stage or record.finalization_digest != digest
+                            or (record.source_revision, record.digest) != by_kind[stage]):
+                        raise CustodyJournalError("finalization completion original association changed")
+                    loaded[stage] = record
+                    del encoded
+                if (self._completion_history_inventory(digest) != inventory
+                        or self._finalization_outcomes.get(digest, {}) != by_kind):
+                    raise CustodyJournalError("finalization completion immutable inventory changed")
+                if ("completion-reconciled" in loaded
+                        and loaded["completion-outcome"].originals[0] != b"uncertain"):
+                    raise CustodyJournalError("finalization reconciliation lacks original uncertainty")
+                self._require_ready()
+                current()
+                if kind in loaded:
+                    if loaded[kind].originals != held:
+                        raise CustodyJournalError("finalization completion cannot replace its first originals")
+                    return loaded[kind].digest
+                if (kind == "completion-reconciled"
+                        and loaded["completion-outcome"].originals[0] != b"uncertain"):
+                    raise CustodyJournalError("finalization reconciliation requires retained uncertainty")
+            except BaseException:
+                self._io.poison()
+                raise
+            record, encoded = finalization_outcomes.encode(kind, digest, held,
+                source_revision=association.source_revision)
+            current()
+            if (len(self._file_identities) >= self._physical_limit()
+                    or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
+                raise CustodyJournalError("journal finalization completion capacity is exhausted")
+            try:
+                self._publish_guarded_completion_name(_name("finalization-" + kind, digest), encoded, current)
+                self._used_bytes += len(encoded)
+                self._finalization_outcomes.setdefault(digest, {})[kind] = (
+                    record.source_revision, record.digest)
+                self._finalization_outcome_scope(digest, self._finalization_outcomes[digest])
+                self._require_ready()
+                current()
+                return record.digest
+            except BaseException:
+                self._io.poison()
+                raise
+
+    def append_registration_finalization_completion_outcome(self, finalization_digest, originals, *,
+            work=None, current=None, maximum_original_bytes=None):
         """Retain first bounded completion raw4, not signature admission.
 
         A SQL claim and the complete original/reservation chain are required;
         an unsigned SQL outcome need not have been received. Exact repeats are
         idempotent. Uncertainty is never overwritten or treated as permission.
         """
+        if work is not None or current is not None or maximum_original_bytes is not None:
+            return self._append_finalization_completion_on_work(finalization_digest, "completion-outcome",
+                originals, work=work, current=current, maximum_original_bytes=maximum_original_bytes)
         return self._append_finalization_outcome(finalization_digest, "completion-outcome", originals)
 
-    def append_registration_finalization_completion_reconciliation(self, finalization_digest, originals):
+    def append_registration_finalization_completion_reconciliation(self, finalization_digest, originals, *,
+            work=None, current=None, maximum_original_bytes=None):
         """Retain acknowledged raw4 separately after prior completion uncertainty.
 
         The caller must genuinely authenticate that acknowledgment first.
         Storage admits only bounded opaque bytes and prerequisite relationships.
         """
+        if work is not None or current is not None or maximum_original_bytes is not None:
+            return self._append_finalization_completion_on_work(finalization_digest, "completion-reconciled",
+                originals, work=work, current=current, maximum_original_bytes=maximum_original_bytes)
         return self._append_finalization_outcome(finalization_digest, "completion-reconciled", originals)
 
     def load_registration_finalization_outcomes(self, finalization_digest):

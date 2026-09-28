@@ -141,22 +141,23 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
         return continuity(last_epoch, last_monotonic)[0]
 
     base_current()
-    # Complete existing finalization replay first. Its temporary retained
-    # inventory is discarded before the separately selected intent is read;
-    # no activation prepared ciphertext is loaded or opened.
-    inspected = finalization._inspect_on_owner(owner, digest, live_window=window,
+    # Complete independently selected finalization replay first. Keep its full
+    # result guard through ACK admission; only then release the replay inventory
+    # before reading the separately selected intent. No ciphertext is opened.
+    inspected = finalization._inspect_material_on_owner(owner, digest, live_window=window,
         transport_deadline_ns=bound, work=work,
         _additional_original_bytes=held_history_bytes)
-    (subject, held, reserved, observed, common, _endpoint, selected_window,
-        selected_bound, selected_current, original_bytes) = inspected
-    candidate = clock._validate(selected_window)
+    subject, held, reserved, observed, common = (inspected.subject, inspected.originals,
+        inspected.reservation_originals, inspected.observed, inspected.common)
+    selected_bound, original_bytes = inspected.deadline_ns, inspected.original_bytes
+    candidate = clock._validate(inspected.window)
     shape._integer(selected_bound, minimum=1)
     if (candidate[:3] != window[:3] or selected_bound > bound
             or any(actual > prior for actual, prior in zip(candidate[3:], window[3:]))):
         _fail("recovery finalization replay widened the original lifetime")
     if original_bytes + held_history_bytes > MAX_ORIGINAL_BYTES:
         _fail("recovery finalization originals exceed the shared aggregate bound")
-    window, bound, history_current = candidate, min(selected_bound, candidate[4]), selected_current
+    window, bound, history_current = candidate, min(selected_bound, candidate[4]), inspected.current
     base_current()
     if type(subject) is not dict or set(subject) != subjects._SUBJECT_FIELDS:
         _fail("recovery finalization target differs from its exact source shape")
@@ -174,7 +175,7 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     returned = subjects.wire._originals(record.originals, response=True)
     if returned[0] != b"acknowledged":
         _fail("recovery target cannot infer finalization success from uncertainty")
-    pending = material.finalization.current_pending
+    pending = inspected.current_pending
     base_current()
     completed._verify_on_configuration(**common, originals=held,
         reservation_originals=reserved, response_originals=returned,
@@ -185,7 +186,12 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
         maximum_bytes=intent.MAX_BYTES).visit(subject)
     subject_fields = tuple(sorted(subject))
     subject_values = tuple(subject[name] for name in subject_fields)
+    # A bound `.current` method retains the full historical result. Replace it
+    # only after genuine completion admission and scalar capture, with the cold
+    # owner/archive-only guard; deleting aliases alone would not release bodies.
+    history_current = inspected.continuity
     del inspected, held, reserved, observed, common, record, returned
+    base_current()
 
     selected = selection._select_on_owner(owner, local_digest=digest, live_window=window,
         transport_deadline_ns=bound, work=work, current=base_current)

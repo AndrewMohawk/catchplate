@@ -169,13 +169,14 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
 
     # Existing combined finalization loader reserves all selected bodies and
     # replay captures before reading. It already owns the parent reservation.
-    inspected = finalization._inspect_on_owner(owner, digest, live_window=lifetime.window,
+    inspected = finalization._inspect_material_on_owner(owner, digest, live_window=lifetime.window,
         transport_deadline_ns=lifetime.bound, work=work,
         _additional_original_bytes=_additional_original_bytes + cold_reservation)
-    (subject, held, reserved, observed, common, _endpoint, selected_window,
-        selected_bound, selected_current, finalization_original_bytes) = inspected
-    lifetime.adopt(selected_window, selected_bound)
-    history_current = selected_current
+    subject, held, reserved, observed, common = (inspected.subject, inspected.originals,
+        inspected.reservation_originals, inspected.observed, inspected.common)
+    finalization_original_bytes = inspected.original_bytes
+    lifetime.adopt(inspected.window, inspected.deadline_ns)
+    history_current = inspected.current
     lifetime.current()
     if (type(subject) is not dict or set(subject) != subjects._SUBJECT_FIELDS
             or subject["localDigest"] != digest or subject["mode"] != "oidc-session-first-enrollment"):
@@ -192,7 +193,7 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
         _fail("completion recovery cannot infer finalization from an uncertain result")
     if finalization_original_bytes + _additional_original_bytes + cold_original_bytes > MAX_ORIGINAL_BYTES:
         _fail("completion recovery finalization originals exceed the original aggregate")
-    pending = parent.finalization.current_pending
+    pending = inspected.current_pending
     completed._verify_on_configuration(**common, originals=held, reservation_originals=reserved,
         response_originals=returned, expected_pending_sequence=pending[0],
         expected_pending_head_digest=pending[1], expected_fence=pending[2],
@@ -200,7 +201,12 @@ def _inspect_on_owner(owner, *, local_digest, old_token_bytes, live_window,
     lifetime.current()
     subject = capture._JSONCapture(capture._SharedLedger(work), maximum_bytes=caller.MAX_AUTHORIZATION_BYTES).visit(subject)
     subject_pin = tuple(sorted(subject.items()))
+    # Preserve the actual archive authorization and original clock without
+    # accidentally retaining the complete finalization replay result while the
+    # next bounded activation preparation is read. No proof token is exported.
+    history_current = inspected.continuity
     del inspected, held, reserved, observed, common, record, returned
+    lifetime.current()
 
     # The selector preflights 3*encoded pair + metadata before body1. Tighten
     # its remaining allowance to 3/8, retaining five additional footprints for

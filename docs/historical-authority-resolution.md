@@ -1,14 +1,19 @@
 # Historical authority resolution (H05)
 
-Implementation decision after `.218`, connected for registration in `.219`:
+Implementation decision after `.218`, connected for registration in `.219`
+and finalization history in `.220`:
 reuse the existing independently
 root-admitted historical archive and genuine original replay. Do not create a
 second trust catalog, infer retired keys from stored records, or weaken a
 current-source equality check to an unverified list of source labels.
 H05 remains open. The [registration recovery connection](control-plane-registration-historical-recovery.md)
 now supplies independent historical configuration/key authority through the
-actual completion action under the supported source contract. Finalization,
-activation and explicit older-source replay implementations remain unfinished.
+actual completion action under the supported source contract. The
+[finalization recovery connection](control-plane-registration-finalization-historical-recovery.md)
+extends this rule through nested registration evidence, finalization completion
+and the finalization prerequisites of activation. Activation's own historical
+planner/caller/intent and downstream authority still need their independent
+archive joins. Explicit older-source replay implementations also remain open.
 
 ## Existing components and the actual gap
 
@@ -24,8 +29,10 @@ The generic archive uses each historical configuration root during admission
 but does not retain it in its frozen snapshot. The new operation-specific cold
 material retains that independently authenticated root and the enrollment
 originals; it never recovers authority from a later journal record.
-Parent bootstrap v17 connects this inventory to `_EnrollmentMaterial`; older
-schemas explicitly leave historical registration resolution disabled.
+Parent bootstrap v17 connects registration inventory to `_EnrollmentMaterial`;
+v18 adds optional finalization inventory against that **same** archive and its
+independently authenticated roots. Older schemas leave the corresponding history
+lane disabled. Null is explicit disablement, not archive discovery or fallback.
 The existing sealed parent bootstrap is also capped at 4 MiB: archived originals
 must fit that aggregate, not acquire a second allowance. Its generation summary
 does not carry the complete historical archive admission interval, so that
@@ -37,8 +44,10 @@ Historically, registration recovery obtained `payload`, `configuration_digest`,
 enrollment originals only from the **current** cold owner. The enabled resolver
 now selects independently archived values for original verification and keeps
 current permission/transport separate. The retained pair still requires the
-supported source revision. Finalization and activation retain their current-cohort
-restrictions; preserving an old source label alone does not close those joins.
+supported source revision. Finalization now selects its archived scope separately
+from the nested registration evidence scope. Activation's own authority still
+retains current-cohort restrictions; preserving an old source label alone does
+not close those joins.
 
 The existing genuine replay entry points are reusable:
 
@@ -49,12 +58,16 @@ The existing genuine replay entry points are reusable:
   supplied configuration, root and three enrollment originals.
 - `control_plane_registration_recovery_subject._replay_on_owner` is the first
   public-workflow consumer to connect to independent historical resolution.
+- `control_plane_registration_finalization_completion_subject._inspect_material_on_owner`
+  now connects the actual finalization consumer, including nested signer/evidence
+  replay and independently pinned pending/packet/authorization identities.
 
 ## Implementation and remaining sequence
 
 Steps 1–3 are connected for registration evidence/completion in `.219`, including
 the real producer, startup, bounded loader and public recovery continuation.
-They are not runtime-verified. Steps 4–5 remain open.
+`.220` advances step 4 through finalization and its activation prerequisites;
+the rest of activation history and step 5 remain open. None is runtime-verified.
 
 1. Cold-admit the operation-specific historical enrollment originals alongside
    their exact configuration/root/cohort inventory. Bind the inventory to the
@@ -70,7 +83,11 @@ They are not runtime-verified. Steps 4–5 remain open.
    subject observations. Present actor permission remains a separate decision.
 4. Connect the same authority rule to finalization and activation recovery,
    including nested evidence and completion originals. One registration-only
-   consumer is not H05 completion.
+   consumer is not H05 completion. Finalization now uses independently selected
+   old enrollments/root and pending/packet/authorization pins through completion
+   recovery. Three activation prerequisite readers verify that finalization ACK
+   with the same historical pins; they do not thereby authenticate an old
+   activation planner, caller, intent or release policy under current keys.
 5. Admit older source revisions only through explicit versioned replay code
    covering their original schemas and semantics. Unsupported revisions and
    unknown or ambiguous cohorts continue to fail closed. Do not rewrite signed
@@ -89,3 +106,29 @@ verification must subsequently exercise retired-key/configuration transitions,
 supported and unsupported source revisions, ambiguous/missing inventory,
 mixed-cohort originals, expiration, interrupted recovery and denial controls.
 No build, execution, provisioning or production acceptance is claimed here.
+
+## Finalization-to-activation boundary
+
+```mermaid
+flowchart TD
+    A[One root-admitted configuration and key archive] --> R[Registration historical scope]
+    A --> F[Finalization historical scope]
+    R --> V[Original signer and registration completion replay]
+    F --> V
+    V --> C[Finalization completion and explicit recovery]
+    C --> P[Activation prerequisite: verify retained finalization ACK]
+    P --> N[Separate current activation permission and authority]
+```
+
+Retained headers locate admitted entries; signatures and complete semantic replay
+establish their meaning. The finalization inventory supplies no second root or
+trust catalog, and remains inside the parent bootstrap's 4 MiB aggregate limit.
+Its bounded combined read reserves the held parent, archive/enrollments, replay
+representations and future completion response before reading the first body.
+
+Consumers keep the full same-call result guard until the finalization ACK has
+been verified. Activation prerequisites then retain only copied subject scalars
+and a narrow cold-owner/archive/time continuity guard before dropping replay
+originals and loading the next stage. Merely deleting tuple aliases would not
+release bodies still captured by a bound result method. This continuity function
+is not replay evidence or permission and is never accepted as an external input.

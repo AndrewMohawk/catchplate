@@ -26,13 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: historical recovery and workload identity
 
-[`.230` source / a485aa2](https://github.com/example/private-deployment)
-adds the [independently authorized workload issuer worker](docs/workload-identity-issuer.md):
-root-signed cold bootstrap, separate issuance grant, genuine packet/CSR admission,
-durable claim before CA signing, and retained certificate re-admission.
-The actual control-plane caller, public HTTP action and explicit CLI submission
-remain unconnected; trust distribution, issuer lifecycle and authenticated
-channels remain open.
+[`.231` source / eccad1a](https://github.com/example/private-deployment)
+connects the [cold-admitted control-plane caller and public issuance action](docs/control-plane-workload-identity-issuance.md):
+a cookie-only requester, fresh action-bound WebAuthn and a different approver.
+The independent issuance grant and [`.230` issuer worker](https://github.com/example/private-deployment)
+remain required, including durable claim before signing and retained certificate
+re-admission. Production now requires a signed enabled-or-disabled caller
+bootstrap. Explicit CLI/portal submission, trust distribution, issuer lifecycle
+and authenticated channels remain open.
 
 [`.229` source / fcbe181](https://github.com/example/private-deployment)
 is separately credited for:
@@ -47,7 +48,8 @@ is separately credited for:
   These local modes remain network-free; they do not submit to the new worker.
 
 This is source integration, not a tested pilot or new landed checkpoint.
-Normal-auth configuration is unchanged. [Remaining boundaries](docs/historical-authority-resolution.md).
+Source remains unbuilt, unexecuted and unprovisioned.
+[Remaining boundaries](docs/historical-authority-resolution.md).
 
 ### Source-landed workflow: session activation
 

@@ -34,11 +34,19 @@ def _exchange_bound():
         raise AuthorityTransportError("consume release-hint exchange exceeds its fixed bound")
 
 
-def _response_lengths(lengths):
+def _response_limit(maximum_response_bytes):
+    maximum = MAX_RESPONSE_BYTES if maximum_response_bytes is None else maximum_response_bytes
+    if type(maximum) is not int or not 1 <= maximum <= MAX_RESPONSE_BYTES:
+        raise AuthorityTransportError("consume completion hints response cap must only tighten")
+    return maximum
+
+
+def _response_lengths(lengths, *, maximum_response_bytes=None):
     _exchange_bound()
     if (type(lengths) is not tuple or len(lengths) != 6
             or any(type(size) is not int or not 0 <= size <= maximum
-                for size, maximum in zip(lengths, RESPONSE_LIMITS))):
+                for size, maximum in zip(lengths, RESPONSE_LIMITS))
+            or sum(lengths) > _response_limit(maximum_response_bytes)):
         raise AuthorityTransportError("consume release-hint response lengths differ")
     dispatch._response_lengths(lengths[:4])
     if not ((lengths[0] == len(b"acknowledged") and lengths[4] == 71 and lengths[5] >= 2)
@@ -83,7 +91,9 @@ def _send_response(connection, originals, *, deadline_ns):
     _check_deadline(deadline_ns)
 
 
-def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     from serverware import authority_oidc_session_activation_caller_transport as guarded
     return guarded._consume_completion_release_on_work(endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current,
+        maximum_response_bytes=_response_limit(maximum_response_bytes))

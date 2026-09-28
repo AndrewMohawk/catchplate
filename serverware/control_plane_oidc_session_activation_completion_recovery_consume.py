@@ -1,9 +1,10 @@
 """Private fresh consume continuation after acknowledged activation completion.
 
 The fresh consume purpose authorizes the eventual same-call continuation, not
-reuse of the expired activation permission. This source slice stops at private
-prepare/export; no public route, SQL dispatch, completion or cookie is enabled.
-Opaque responses are durably retained before genuine original admission.
+reuse of the expired activation permission. The private continuation connects
+prepare/export, dedicated signing, grant/reservation, one claimed SQL exchange
+and completion. No public route or cookie is enabled. Opaque responses are
+durably retained before genuine original admission.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ actors, controls, exchange, execution = completion.actors, completion.controls, 
 issuer, receiving, transport = acquisition.issuer, acquisition.receiving, acquisition.transport
 bookkeeping, configured = acquisition.producer, acquisition.configured
 MAX_ORIGINAL_BYTES = controls.MAX_ORIGINAL_BYTES
+EXECUTION_RESERVATION_BYTES = 8 * 1024 * 1024
 _RECONCILIATION_IO_BYTES = 1024 * 1024
 _ACTIVE = None
 _CONSTRUCTION = object()
@@ -51,7 +53,9 @@ class _ConsumeAttempt:
         "_config", "_cold_seal", "_config_pin", "_response_seal", "_lifetime", "_lifetime_seal",
         "_window_pin", "_bound_pin", "_phase", "_closed", "_normal_exit", "_inputs_spent",
         "_planning_spent", "_originals", "_originals_seal", "_input_grants", "_input_grants_seal",
-        "_input_material", "_input_material_seal", "_consume_slot", "_consume_slot_seal", "_plan")
+        "_input_material", "_input_material_seal", "_consume_slot", "_consume_slot_seal", "_plan",
+        "_authorization", "_authorization_seal", "_dispatch", "_dispatch_seal",
+        "_completion", "_completion_seal", "_authorization_spent", "_dispatch_spent", "_completion_spent")
 
     def __init__(self, construction, actor, selected, response, receiving_current, reconciliation):
         if construction is not _CONSTRUCTION:
@@ -72,6 +76,9 @@ class _ConsumeAttempt:
         self._originals = self._originals_seal = self._input_grants = self._input_grants_seal = None
         self._input_material = self._input_material_seal = self._consume_slot = self._consume_slot_seal = None
         self._plan = None
+        self._authorization = self._authorization_seal = self._dispatch = self._dispatch_seal = None
+        self._completion = self._completion_seal = None
+        self._authorization_spent = self._dispatch_spent = self._completion_spent = False
         self._window_pin, self._bound_pin = selected.window, selected.deadline_ns
         self._lifetime = self._lifetime_seal = bookkeeping._Lifetime(
             selected.window, selected.deadline_ns, self._work, self._ancestor)
@@ -102,7 +109,11 @@ class _ConsumeAttempt:
                 or self._input_grants is not self._input_grants_seal
                 or self._input_material is not self._input_material_seal
                 or self._consume_slot is not self._consume_slot_seal
-                or self._phase not in ("inputs", "planning", "prepared")):
+                or self._authorization is not self._authorization_seal
+                or self._dispatch is not self._dispatch_seal
+                or self._completion is not self._completion_seal
+                or self._phase not in ("inputs", "planning", "prepared", "authorizing", "authorized",
+                    "dispatching", "dispatched", "completing", "completion-observed")):
             execution._fail("fresh consume lost its exact owner, originals or purpose")
         lifetime = self._lifetime
         if lifetime is not self._lifetime_seal or lifetime.work is not self._work:
@@ -145,6 +156,16 @@ class _ConsumeAttempt:
         self._input_grants = self._input_grants_seal = None
         self._input_material = self._input_material_seal = None
         self._plan = None
+        self._authorization = self._authorization_seal = self._dispatch = self._dispatch_seal = None
+        self._completion = self._completion_seal = None
+
+    def _terminal_current(self):
+        """Final descendant guard, deliberately absent from all ancestors."""
+        self._current()
+        selected = self._completion or self._dispatch or self._authorization or self._plan
+        if selected is None:
+            execution._fail("fresh consume has no terminal source continuation")
+        return selected.current()
 
 
 def _require_inputs_call(active):
@@ -174,6 +195,53 @@ def _persistence(active):
         "reconciliation_digest": active.reconciliation_digest,
         "work": active._work, "current": active._current,
         "maximum_original_bytes": planning._IO_BYTES}
+
+
+def _execution_held_bytes(active):
+    if type(active) is not _ConsumeAttempt or _ACTIVE is not active:
+        execution._fail("fresh consume execution budget lacks its actual owner")
+    active._current()
+    planning._require_plan(active._plan)
+    reserved = active._plan.original_reservation_bytes
+    if (type(reserved) is not int or reserved != active.controls.original_reservation_bytes
+            or not EXECUTION_RESERVATION_BYTES < reserved <= MAX_ORIGINAL_BYTES
+            or active.actor._future_original_bytes < planning.PLANNING_RESERVATION_BYTES
+                + EXECUTION_RESERVATION_BYTES):
+        execution._fail("fresh consume execution lacks its pre-body reservation")
+    return reserved - EXECUTION_RESERVATION_BYTES
+
+
+def _require_authorization_call(active):
+    if (type(active) is not _ConsumeAttempt or _ACTIVE is not active
+            or active._phase != "prepared" or active._authorization_spent is not False
+            or active._authorization is not None):
+        execution._fail("fresh consume authorization is not its sole source call")
+    active._current()
+    planning._require_plan(active._plan)
+    active._authorization_spent = True
+    active._phase = "authorizing"
+
+
+def _require_dispatch_call(active):
+    if (type(active) is not _ConsumeAttempt or _ACTIVE is not active
+            or active._phase != "authorized" or active._authorization_spent is not True
+            or active._dispatch_spent is not False or active._dispatch is not None
+            or active._authorization is None):
+        execution._fail("fresh consume dispatch is not its sole signed continuation")
+    active._terminal_current()
+    active._dispatch_spent = True
+    active._phase = "dispatching"
+
+
+def _require_completion_call(active):
+    if (type(active) is not _ConsumeAttempt or _ACTIVE is not active
+            or active._phase != "dispatched" or active._dispatch_spent is not True
+            or active._completion_spent is not False or active._completion is not None
+            or active._dispatch is None):
+        execution._fail("fresh consume completion is not its sole dispatched continuation")
+    active._terminal_current()
+    active._completion_spent = True
+    active._phase = "completing"
 
 
 def _acquire(active):
@@ -255,7 +323,7 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, live_window,
         + 24 * planning.MAX_INPUT_RESPONSE_BYTES)
     if cold >= planning.PLANNING_RESERVATION_BYTES:
         execution._fail("fresh consume cold originals leave no bounded acquisition lane")
-    future = (planning.PLANNING_RESERVATION_BYTES + inputs.INPUT_RESERVATION_BYTES
+    future = (planning.PLANNING_RESERVATION_BYTES + EXECUTION_RESERVATION_BYTES + inputs.INPUT_RESERVATION_BYTES
         + exchange._exchange_reservation("activation") + _RECONCILIATION_IO_BYTES
         + completion._CONFIGURATION_RESERVATION)
     if not 0 < future < MAX_ORIGINAL_BYTES:
@@ -296,7 +364,8 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, live_window,
             yield active
             active._current()
             planning._require_plan(active._plan)
-            scope._completion_receiving_current = active._plan.current
+            active._terminal_current()
+            scope._completion_receiving_current = active._terminal_current
         if scope._normal_exit is not True:
             execution._fail("fresh consume lacks normal fresh-actor cleanup")
         active._normal_exit = True
@@ -304,3 +373,32 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, live_window,
         if active is not None:
             active._close()
         _ACTIVE = None
+
+
+@contextmanager
+def _consume_on_owner(owner, *, request, recovery_bytes, live_window,
+        transport_deadline_ns, work, current):
+    """One fresh private consume call; no public response or token delivery."""
+    from serverware import control_plane_oidc_session_activation_completion_recovery_consume_authorization as signing
+    from serverware import control_plane_oidc_session_activation_completion_recovery_consume_dispatch as dispatching
+    from serverware import control_plane_oidc_session_activation_completion_recovery_consume_completion as completing
+
+    with _prepare_on_owner(owner, request=request, recovery_bytes=recovery_bytes,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+            work=work, current=current) as active:
+        active._authorization = active._authorization_seal = signing._authorize_on_active(active)
+        signing._require_authorization(active._authorization)
+        active._phase = "authorized"
+        active._terminal_current()
+        active._dispatch = active._dispatch_seal = dispatching._dispatch_on_active(active)
+        dispatching._require_dispatch(active._dispatch)
+        active._phase = "dispatched"
+        active._terminal_current()
+        active._completion = active._completion_seal = completing._complete_on_active(active)
+        completing._require_completion(active._completion)
+        active._phase = "completion-observed"
+        active._terminal_current()
+        yield active
+        if active._phase != "completion-observed" or active._completion_spent is not True:
+            execution._fail("fresh consume did not retain its one completion observation")
+        active._terminal_current()

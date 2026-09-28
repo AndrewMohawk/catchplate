@@ -1,7 +1,7 @@
-# Guarded consume preparation after activation completion
+# Guarded consume continuation after activation completion
 
-This .215 source continuation reuses the existing global consume target and
-record encodings after genuinely acknowledged activation completion. The caller
+The .215 preparation foundation and .216 fixed continuation reuse the existing
+global consume target and record encodings after genuinely acknowledged activation completion. The caller
 must independently authenticate the original completion and fresh execution
 authority. Persistence checks DATA association, not signatures or permission.
 Missing local records never prove non-execution or authorize SQL retry.
@@ -14,12 +14,24 @@ The custody client and journal expose:
 - `append_oidc_session_activation_completion_recovery_consume_inputs`
 - `append_oidc_session_activation_completion_recovery_consume_prepared`
 - `append_oidc_session_activation_completion_recovery_consume_exported`
+- `append_oidc_session_activation_completion_recovery_consume_authorized`
+- `append_oidc_session_activation_completion_recovery_consume_grant`
+- `append_oidc_session_activation_completion_recovery_consume_reservation`
+- `claim_oidc_session_activation_completion_recovery_consume_sql_attempt`
+- `append_oidc_session_activation_completion_recovery_consume_sql_outcome`
+- `append_oidc_session_activation_completion_recovery_consume_completion_outcome`
+- `append_oidc_session_activation_completion_recovery_consume_completion_hints`
 
 All take keyword-only `finalization_digest`, `activation_authorization_digest`,
 `activation_completion_originals`, `reconciliation_digest`, `work`, `current`
 and optional `maximum_original_bytes`. Appends also take `originals`: input
-issuer raw2, prepare raw6 or export raw7, respectively. The claim returns the
-existing consume slot digest; appends return the retained record digest.
+issuer raw2, prepare raw6, export raw7, authorized raw1, grant raw1, reservation
+raw3, SQL outcome raw4, completion outcome raw4 or completion hints raw2.
+The initial claim returns the existing consume slot digest; appends and the SQL
+claim return the retained record digest. SQL claim alone additionally requires
+`release_hints`, an exact bool selected by the source-owned caller from its
+genuine configured completion profile before SQL contact. It selects only the
+terminal append sequence; it is not authority, a status or a new stored field.
 
 `activation_completion_originals` is exact acknowledged activation raw4.
 `reconciliation_digest=None` selects its original completion record; otherwise
@@ -50,12 +62,23 @@ consume claim from **any** path refuses, even under a fresh actor, changed calle
 identity or process restart. The claim is published before input-issuer contact.
 A lost or unusable reply cannot reopen acquisition.
 
-Only this work's successful new guarded claim permits `inputs`, then `prepared`,
-then `exported`, once each. The transient latch retains only the exact work,
-reconciliation locator and next kind; it is never recovered and does not enable
-the normal live-publication API. A skipped, repeated or reordered stage refuses.
-Uncertain prepare DATA may be retained, but cannot authorize export. Export
-publication ends this append sequence; it does not authorize further execution.
+Only this work's successful new guarded claim permits the fixed sequence
+`inputs → prepared → exported → authorized → grant → reserved → sql-claimed →
+sql-outcome → completion-outcome`, then `completion-hints` only for that profile.
+Each stage may be published once. The transient latch retains the exact work,
+reconciliation locator, next kind and the completion-profile bool, which is
+unset until the SQL claim and cannot change afterward. It is never recovered
+and does not enable the normal live-publication API. A skipped, repeated or
+reordered stage refuses. Uncertain prepare DATA may be retained, but cannot
+authorize export; an uncertain export cannot precede authorized publication.
+
+SQL claim occupies the same existing consume-family `sql-claimed` file, before
+the sole protected SQL contact. An existing claim cannot be replaced or retried,
+including after lost output, a fresh actor or process restart. The `False`
+profile deletes the latch after completion-outcome; `True` permits exactly one
+completion-hints raw2 and then deletes it. A lost completion/hints response does
+not restore SQL authority. Ordinary stored outcomes and unsigned hints are DATA,
+not authenticated commit evidence, permission or a reason to repeat SQL.
 
 Framing-bounded raw replies are retained before the caller's status, signature
 or matching interpretation. Prior consume stage bodies need not be reread for
@@ -98,8 +121,10 @@ exemption is introduced. Missing required history, duplicate claim or insufficie
 capacity refuses; corruption, changed immutable files or publication uncertainty
 poison the owner. Uncertain claims are never removed or retried.
 
-This source slice performs no public SQL, consume authorization/grant/reservation,
-protected token release or current-session/cookie completion. Those require
-their own actual source-owned continuation and independent authority. Byte/work
-bounds are not heap/RSS measurements; local fsync is not an independent rollback
-witness. Source only: unbuilt, unexecuted and unprovisioned.
+These storage methods perform no signing, network SQL, signature admission or
+protected token release. The [same-actor consume continuation](control-plane-oidc-session-activation-completion-recovery-consume.md)
+owns the actual authorization, grant, reservation, dispatch and completion joins;
+retention cannot replace those genuine checks. Public continuation and
+current-session/cookie completion remain separate. Byte/work bounds are not
+heap/RSS measurements; local fsync is not an independent rollback witness.
+Source only: unbuilt, unexecuted and unprovisioned.

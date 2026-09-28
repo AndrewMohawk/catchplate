@@ -166,8 +166,18 @@ def _socket_request(endpoint, *, originals, deadline_ns):
     return received
 
 
-def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _response_limit(value):
+    if value is None:
+        return MAX_RESPONSE_BYTES
+    if type(value) is not int or not len(RESPONSE_LIMITS) * 2 <= value <= MAX_RESPONSE_BYTES:
+        _fail("consume reservation response cap is not a tightening byte allowance")
+    return value
+
+
+def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     """Guarded consume raw5/raw3 exchange; return unverified reserve originals."""
     from serverware import authority_oidc_session_activation_caller_transport as guarded
     return guarded._consume_reservation_on_work(endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current,
+        maximum_response_bytes=maximum_response_bytes)

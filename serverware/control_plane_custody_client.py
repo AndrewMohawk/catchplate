@@ -861,7 +861,7 @@ class ControlPlaneCustodyClient:
 
     def _completion_consume_operation(self, *, finalization_digest, activation_authorization_digest,
             activation_completion_originals, reconciliation_digest, work, current,
-            maximum_original_bytes, kind, originals=()):
+            maximum_original_bytes, kind, originals=(), release_hints=None):
         from serverware import control_plane_oidc_session_activation_consume_records as consume
         from serverware import control_plane_oidc_session_activation_completion_recovery_records as completion
 
@@ -870,8 +870,11 @@ class ControlPlaneCustodyClient:
         if reconciliation_digest is not None:
             reconciliation_digest = journal._digest(reconciliation_digest)
         completed = completion._originals("activation", activation_completion_originals)
-        if type(kind) is not str or kind not in ("claimed", "inputs", "prepared", "exported"):
+        if type(kind) is not str or kind not in journal._COMPLETION_CONSUME_KINDS:
             raise CustodyClientError("consume continuation publication kind is not source fixed")
+        if ((kind == "sql-claimed" and type(release_hints) is not bool)
+                or (kind != "sql-claimed" and release_hints is not None)):
+            raise CustodyClientError("consume completion profile must be fixed only at its SQL claim")
         held = consume._originals(consume._profile(kind), originals)
         if not callable(current):
             raise CustodyClientError("consume continuation requires its original resource guard")
@@ -881,7 +884,7 @@ class ControlPlaneCustodyClient:
             finalization_digest=target, activation_authorization_digest=authorization_digest,
             activation_completion_originals=completed, reconciliation_digest=reconciliation_digest,
             work=work, current=current, maximum_original_bytes=maximum_original_bytes,
-            kind=kind, originals=held)
+            kind=kind, originals=held, release_hints=release_hints)
         current()
         if _snapshot(self) is not binding:
             raise CustodyClientError("custody caller changed during guarded consume continuation")
@@ -920,11 +923,77 @@ class ControlPlaneCustodyClient:
     def append_oidc_session_activation_completion_recovery_consume_exported(self, *, finalization_digest,
             activation_authorization_digest, activation_completion_originals, reconciliation_digest,
             originals, work, current, maximum_original_bytes=None):
-        """Retain export raw7 before admission, then end this work's append sequence."""
+        """Retain export raw7 before admission, preserving this work's fixed continuation."""
         return ControlPlaneCustodyClient._completion_consume_operation(self,
             finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
             activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
             work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="exported", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_authorized(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain signed caller raw1; no stored record grants execution authority."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="authorized", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_grant(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain grant raw1 before genuine response admission on this work."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="grant", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_reservation(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain reservation raw3 before interpretation and any SQL contact."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="reserved", originals=originals)
+
+    def claim_oidc_session_activation_completion_recovery_consume_sql_attempt(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            release_hints, work, current, maximum_original_bytes=None):
+        """Spend the existing SQL slot and pin the completion profile before contact."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind="sql-claimed", release_hints=release_hints)
+
+    def append_oidc_session_activation_completion_recovery_consume_sql_outcome(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain unsigned SQL raw4; it proves neither commit nor safe retry."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes, kind="sql-outcome", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_completion_outcome(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain completion raw4 before admission; normal profile ends this latch."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind="completion-outcome", originals=originals)
+
+    def append_oidc_session_activation_completion_recovery_consume_completion_hints(self, *, finalization_digest,
+            activation_authorization_digest, activation_completion_originals, reconciliation_digest,
+            originals, work, current, maximum_original_bytes=None):
+        """Retain opaque hints raw2 once under the pre-SQL profile, then end the latch."""
+        return ControlPlaneCustodyClient._completion_consume_operation(self,
+            finalization_digest=finalization_digest, activation_authorization_digest=activation_authorization_digest,
+            activation_completion_originals=activation_completion_originals, reconciliation_digest=reconciliation_digest,
+            work=work, current=current, maximum_original_bytes=maximum_original_bytes,
+            kind="completion-hints", originals=originals)
 
     def _append_consume_stage(self, *, finalization_digest,
             activation_authorization_digest, kind, originals):

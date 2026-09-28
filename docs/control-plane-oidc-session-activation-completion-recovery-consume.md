@@ -1,8 +1,9 @@
 # Private fresh consume after acknowledged activation
 
-The .215 source connects genuine acknowledged activation history to independently
-issued consume inputs and one private prepare/export continuation. It stops
-before consume authorization, reservation, SQL, protected completion or delivery.
+The .216 source extends genuine acknowledged activation history through the
+.215 private input/prepare/export foundation to dedicated consume authorization,
+grant/reservation, one claimed SQL exchange and protected completion. It stops
+before a public continuation or token delivery.
 There is no new public options/action route, success HTTP or cookie effect.
 Source only: unbuilt, unexecuted and unprovisioned.
 
@@ -46,11 +47,18 @@ normalization is needed; old-token bytes never enter durable records or HTTP.
    immutable DATA record is published before status, scope and signed-plan
    admission. One export returns raw7, likewise retained before admission and
    exact prepare/export correspondence checks. Ciphertext remains opaque here.
-4. The actual `_ConsumeAttempt` yields only within the live private context in
-   its prepared phase. Parent and child guards remain separate: descendants use
+4. The preparation context yields the actual `_ConsumeAttempt` only while live.
+   The private `_consume_on_owner` wrapper continues that same owner through
+   [dedicated signing](control-plane-oidc-session-activation-completion-recovery-consume-authorization.md),
+   [grant/reserve/SQL](control-plane-oidc-session-activation-completion-recovery-consume-dispatch.md)
+   and [completion receiving](control-plane-oidc-session-activation-completion-recovery-consume-completion.md).
+   The existing SQL slot is claimed before contact; its pinned completion profile
+   permits exactly one raw4 outcome and optional raw2 hints. Returned originals
+   remain DATA until their genuine admission. An uncertain result is not success
+   or retry permission. Parent and child guards remain separate: descendants use
    only original ancestors, while the parent never calls its own plan child.
-   Final plan checks and normal actor cleanup precede closure. Closing clears
-   the ephemeral raw16, input material and plan references; a closed owner is
+   Final deepest-child checks and normal actor cleanup precede closure. Closing clears
+   the ephemeral raw16, input material, plan and execution references; a closed owner is
    not a reusable continuation.
 
 All original operation, subject, packet, enrollment and state joins remain
@@ -62,12 +70,16 @@ that admission or authorize any later SQL effect.
 ## One allowance, remaining work
 
 The future capacity is reserved before the first historical target body. The
-32 MiB shared acquisition/planning lane stays inside the original 64 MiB
+32 MiB shared acquisition/planning lane and additional 8 MiB execution reservation
+stay inside the original 64 MiB
 representation allowance alongside held actor/control history, completion
 receiving and reconciliation inventory. The extractor's fixed 16 KiB is carried
 once. Actual input captures remain held during planning; measured nested
 originals, signatures, frame copies and durable publication copies reduce the
-remaining prepare/export response caps before body allocation.
+remaining prepare/export response caps before body allocation. Execution captures
+use actual original lengths; sequential journal I/O is reclaimed, not counted as
+simultaneously live twice. A 4 MiB completion slice includes its 2 MiB journal
+allowance and fixed 64 KiB response cap. Oversized valid originals still refuse.
 
 The consume-input derivation now exposes a length-only capture reservation and
 accepts only additive already-held capacity. Its signing-output reservation is
@@ -76,9 +88,9 @@ read-only receiving. This separation creates no new allowance and removes no
 actual held capture. Oversized valid originals can be refused. These are
 source-defined representation bounds, not process-heap or throughput evidence.
 
-The next connection must preserve this same fresh owner and durable one-use
-consume boundary through independently admitted consume execution authority and
-protected completion. No SQL retry, automatic fallback, old-permission reuse or
-original-expiry renewal is permitted. Public continuation, current-auth/cookie,
+The next connection must expose a truthful, freshly authorized public continuation
+without returning or accepting this private result as reusable authority. No SQL
+retry, automatic fallback, old-permission reuse or original-expiry renewal is
+permitted. Public continuation, current-auth/cookie,
 portal, deployment resources and independent production acceptance remain open;
-private prepare/export is not their completion evidence.
+private consume completion is not their completion evidence.

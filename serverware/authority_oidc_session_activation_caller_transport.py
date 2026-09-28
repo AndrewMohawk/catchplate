@@ -56,11 +56,14 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
     if (maximum_response_bytes is not None
             and profile is not proof_inputs and profile is not recovery_grants
             and profile is not release_proof and profile is not release_grants
-            and profile is not consume_inputs):
+            and profile is not consume_inputs and profile is not consume_completion_dispatch
+            and profile is not consume_completion_release and profile is not consume_reservation):
         raise AuthorityTransportError("activation response cap is not enabled for this fixed profile")
     response_maximum = (profile._response_limit(maximum_response_bytes)
         if profile is proof_inputs or profile is recovery_grants or profile is release_proof
             or profile is release_grants or profile is consume_inputs
+            or profile is consume_completion_dispatch or profile is consume_completion_release
+            or profile is consume_reservation
         else profile.MAX_RESPONSE_BYTES)
     capture._SharedLedger(work)
     if type(deadline_ns) is not int or deadline_ns <= 0 or not callable(current):
@@ -235,9 +238,10 @@ def _consume_authorizer_on_work(endpoint, *, originals, deadline_ns, work, curre
         deadline_ns=deadline_ns, work=work, current=current)[0]
 
 
-def _consume_reservation_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _consume_reservation_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     return _exchange_on_work(consume_reservation, endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current, maximum_response_bytes=maximum_response_bytes)
 
 
 def _consume_sql_on_work(endpoint, *, originals, deadline_ns, work, current):
@@ -245,14 +249,16 @@ def _consume_sql_on_work(endpoint, *, originals, deadline_ns, work, current):
         deadline_ns=deadline_ns, work=work, current=current)
 
 
-def _consume_completion_dispatch_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _consume_completion_dispatch_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     return _exchange_on_work(consume_completion_dispatch, endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current, maximum_response_bytes=maximum_response_bytes)
 
 
-def _consume_completion_release_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _consume_completion_release_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     return _exchange_on_work(consume_completion_release, endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current, maximum_response_bytes=maximum_response_bytes)
 
 
 def _release_proof_on_work(endpoint, *, originals, deadline_ns, work, current,

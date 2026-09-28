@@ -45,9 +45,18 @@ def _request_lengths(lengths):
         raise AuthorityTransportError("consume completion dispatch request lengths differ")
 
 
-def _response_lengths(lengths):
+def _response_limit(maximum_response_bytes):
+    maximum = MAX_RESPONSE_BYTES if maximum_response_bytes is None else maximum_response_bytes
+    if type(maximum) is not int or not 1 <= maximum <= MAX_RESPONSE_BYTES:
+        raise AuthorityTransportError("consume completion response cap must only tighten")
+    return maximum
+
+
+def _response_lengths(lengths, *, maximum_response_bytes=None):
     _exchange_bound()
     completion._response_lengths(lengths)
+    if sum(lengths) > _response_limit(maximum_response_bytes):
+        raise AuthorityTransportError("consume completion response exceeds its held capacity")
 
 
 def _originals(values, *, response):
@@ -84,8 +93,10 @@ def _send_response(connection, originals, *, deadline_ns):
     completion._send_response(connection, originals, deadline_ns=deadline_ns)
 
 
-def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current):
+def _socket_request_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
     """One same-work/current exchange returns unverified consume raw4 only."""
     from serverware import authority_oidc_session_activation_caller_transport as guarded
     return guarded._consume_completion_dispatch_on_work(endpoint, originals=originals,
-        deadline_ns=deadline_ns, work=work, current=current)
+        deadline_ns=deadline_ns, work=work, current=current,
+        maximum_response_bytes=_response_limit(maximum_response_bytes))

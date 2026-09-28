@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-enrollment-assignment.v1.schema.json",
+  "title": "Independently signed exact native enrollment assignment v1",
+  "description": "Canonical compact sorted UTF-8 JSON plus exactly one LF; envelope at most 16384 bytes. The independent authorizer approves an exact packet digest and scope, not a generic signer or runtime success. Runtime must verify the Ed25519 signature using its independently pinned public PEM, join exact packet originals, enforce a current positive interval at most 300 seconds, and retain a single nonrenewing processing window at most 30 seconds. Schema shape alone establishes none of those properties. No root intake, native policy semantics, durable nonce claim, TLS acquisition, installation or production admission is provided by this contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "assignment",
+    "signatureBase64url"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.signedNativeEnrollmentAssignment/v1"
+    },
+    "assignment": {
+      "$ref": "#/$defs/assignment"
+    },
+    "signatureBase64url": {
+      "type": "string",
+      "minLength": 86,
+      "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])",
+      "description": "Canonical unpadded URL-safe base64 of the 64-byte Ed25519 signature over the fixed NUL-terminated serverware/native-enrollment-assignment/v1 domain followed by canonical compact sorted UTF-8 JSON assignment bytes (without LF)."
+    }
+  },
+  "$defs": {
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizerKeyId",
+        "releaseRecordSha256",
+        "policyHash",
+        "configurationSha256",
+        "runtimeCaCertificateSha256",
+        "runtimeCaSpkiSha256",
+        "ingressLeafCertificateSha256",
+        "clientTrustBundleSha256",
+        "workloadIssuerCertificateSha256",
+        "workloadIssuerSpkiSha256",
+        "clientCertificateSha256",
+        "clientSpkiSha256",
+        "packetSha256",
+        "assignmentId",
+        "clientChallengeBase64url",
+        "principalId",
+        "ingressHost",
+        "serverInstanceId",
+        "proxyEndpoint",
+        "notBeforeUnixSeconds",
+        "expiresAtUnixSeconds"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeEnrollmentAssignment/v1"
+        },
+        "authorizerKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseRecordSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtimeCaCertificateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtimeCaSpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "ingressLeafCertificateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "clientTrustBundleSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workloadIssuerCertificateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workloadIssuerSpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "clientCertificateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "clientSpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "packetSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentId": {
+          "$ref": "#/$defs/nonzeroRaw32"
+        },
+        "clientChallengeBase64url": {
+          "$ref": "#/$defs/nonzeroRaw32"
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[!-~]+(?![\\s\\S])"
+        },
+        "ingressHost": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "description": "Canonical lowercase DNS name or canonical literal IP, checked by both source parsers. Not an endpoint or replacement trust pin."
+        },
+        "serverInstanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Canonical SPIFFE URI under the shared closed native assignment profile; no query, fragment, user information or port."
+        },
+        "proxyEndpoint": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "description": "Canonical literal unicast SocketAddr with nonzero port; no DNS, unspecified/multicast/broadcast destination, or IPv6 scope/flow. Mapped IPv4 exclusions apply. This is operator scope, not proof of network location."
+        },
+        "notBeforeUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036
+        },
+        "expiresAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "nonzeroRaw32": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^(?!A{43}(?![\\s\\S]))[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])"
+    }
+  }
+}

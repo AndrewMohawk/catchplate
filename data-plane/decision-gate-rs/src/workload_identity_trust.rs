@@ -18,7 +18,7 @@ use crate::{Snapshot, ProxyIngressAttestation, ProxyIngressTlsConfig};
 use crate::workload_identity_trust_crypto as crypto;
 
 pub(super) const SOURCE_REVISION: &str =
-    "serverware.policyCandidateAuthoritySource/2026-07-30.235";
+    "serverware.policyCandidateAuthoritySource/2026-07-30.236";
 const PROFILE: &str = "immutable-single-issuer-startup-v1";
 const SCHEMA: &str = "serverware.workloadIdentityTrustAuthorization/v1";
 const PREFIX: &str = "SERVERWARE_WORKLOAD_IDENTITY_TRUST_";

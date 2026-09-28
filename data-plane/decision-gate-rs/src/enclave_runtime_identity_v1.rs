@@ -14,6 +14,10 @@ mod tls_authority_v1;
 mod credential_recipient_v1;
 #[path = "enclave_response_proof_key_v1.rs"]
 mod enclave_response_proof_key_v1;
+// Intentionally private and not re-exported. Enrollment signing remains
+// inaccessible until the actual policy/route/durable-claim gates are wired.
+#[path = "enclave_enrollment_key_v1.rs"]
+mod enclave_enrollment_key_v1;
 
 pub use credential_recipient_v1::CredentialRecipientV1;
 pub use enclave_response_proof_key_v1::{PendingResponseProofKeyV1, QuotedResponseProofKeyV1};
@@ -31,6 +35,7 @@ const TLS_ROOT: u8 = 1;
 const LEASE_RECIPIENT: u8 = 2;
 const MUTUAL_TLS_INGRESS: u8 = 3;
 const RESPONSE_PROOF: u8 = 4;
+const ENROLLMENT: u8 = 5;
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
 const MAX_INGRESS_CERTIFICATE_BYTES: usize = 16 * 1024;
 const MAX_INGRESS_SPKI_BYTES: usize = 1024;

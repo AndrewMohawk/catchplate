@@ -5,12 +5,24 @@ import os
 
 
 def _run_on_work(*, work, live_window, transport_deadline_ns, delivery_current):
+    return _run(work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        delivery_current=delivery_current, dynamic=False)
+
+
+def _run_from_dynamic_delivery_on_work(*, work, live_window, transport_deadline_ns, delivery_current):
+    return _run(work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        delivery_current=delivery_current, dynamic=True)
+
+
+def _run(*, work, live_window, transport_deadline_ns, delivery_current, dynamic):
     from serverware import oidc_session_activation_release_grant_issuer_startup as startup
 
     status = 1
     try:
         delivery_current()
-        startup.initialize_from_environment(work=work, live_window=live_window,
+        initialize = (startup._initialize_from_dynamic_delivery_on_work if dynamic
+            else startup.initialize_from_environment)
+        initialize(work=work, live_window=live_window,
             transport_deadline_ns=transport_deadline_ns, delivery_current=delivery_current)
         if startup.require_started().serve_once() is True:
             status = 0

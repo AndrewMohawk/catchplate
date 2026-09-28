@@ -1,6 +1,6 @@
 # Per-request proof setup policy and receiving
 
-Source `.199`; unbuilt, unexecuted and unprovisioned. Independent root policy,
+Source `.200`; unbuilt, unexecuted and unprovisioned. Independent root policy,
 original-only derivation, public acquisition and private receiving now connect
 to the [finite issuer service](oidc-session-activation-release-proof-input-issuer-service.md).
 It acquires the exact packet, signs the derived bootstrap and stages that original
@@ -98,10 +98,11 @@ inside that later proof request. No root signing key is delivered to the worker.
 
 ## Remaining acceptance
 
-The grant issuer still cold-pins an exact proof bootstrap; connect it to the
-fresh per-request original under independent authorization. Provision all
-independently admitted resources, then connect public HTTP/current-auth/cookie
-completion, recovery and portal work.
+Source `.200` adds explicit launch `/v2` [delivery to both receivers](oidc-session-activation-release-grant-input-delivery.md).
+The separate grant receiver independently admits the fresh original and derives
+the exact signed static policy/launch; the existing cold pins stay strict.
+Provision all independently admitted resources, then connect public
+HTTP/current-auth/cookie completion, recovery and portal work.
 Full verification follows source freeze. This source checkpoint supplies no
 SQL commit, proof, token delivery, current-session, hardware or production
 acceptance evidence.

@@ -1,0 +1,23 @@
+# Opt-in source; independently signed intake pins must match this socket.
+# No resource is provisioned by copying this template.
+[Unit]
+Description=Serverware private grant-issuer proof-bootstrap staging socket
+Before=serverware-oidc-session-activation-release-grant-issuer-dynamic.service
+After=systemd-tmpfiles-setup.service
+Conflicts=serverware-oidc-session-activation-release-grant-issuer.socket serverware-oidc-session-activation-release-grant-issuer.service
+
+[Socket]
+ListenStream=/run/serverware/oidc-session-activation-token-release/grant-issuer-bootstrap.sock
+FileDescriptorName=serverware-oidc-session-activation-release-grant-issuer-bootstrap
+SocketUser=0
+SocketGroup=65494
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=serverware-oidc-session-activation-release-grant-issuer-dynamic.service
+
+[Install]
+WantedBy=sockets.target

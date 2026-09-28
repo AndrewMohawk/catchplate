@@ -72,8 +72,9 @@ The root custody names the actual signed intent. Independent post-intent
 authorization is therefore required; the new [setup policy and producer](oidc-session-activation-release-proof-input-policy.md)
 derive this from authentic originals and a separately acquired private packet.
 Cold public configuration does not guess a future intent or manufacture root
-authority. Source templates are not installed. The grant issuer still independently
-cold-pins an exact proof bootstrap; its fresh per-request connection remains open.
+authority. Source templates are not installed. Source `.200` connects the
+[fresh grant-issuer input](oidc-session-activation-release-grant-input-delivery.md)
+under independent authorization while preserving the exact static proof pin.
 Live provisioning of post-intent release server/client grants, protected token
 handoff and the public route/cookie connection also remain open. Production
 evidence is unchanged.

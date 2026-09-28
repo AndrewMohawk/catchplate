@@ -17,6 +17,7 @@ from types import MethodType
 from serverware import authority_successor_execution_owner as packets
 from serverware import authority_oidc_session_activation_release_proof_input_transport as transport
 from serverware import authority_oidc_session_activation_release_proof_input_delivery_transport as staging
+from serverware import authority_oidc_session_activation_release_grant_input_delivery_transport as grant_staging
 from serverware import oidc_session_activation_release_proof_input_issuer_bootstrap as bootstrap
 from serverware import oidc_session_activation_release_proof_input_issuer_entrypoint as delivery
 from serverware import oidc_session_activation_release_proof_input_production as producer
@@ -30,6 +31,8 @@ _quarantined = []
 _WIRE_RESERVATION = (transport.REQUEST_HEADER_BYTES + transport.RESPONSE_HEADER_BYTES
     + staging.REQUEST_HEADER_BYTES + staging.RESPONSE_HEADER_BYTES
     + len(staging.PURPOSE) + staging.MAX_RESPONSE_BYTES)
+_GRANT_WIRE_RESERVATION = (grant_staging.REQUEST_HEADER_BYTES + grant_staging.RESPONSE_HEADER_BYTES
+    + len(grant_staging.PURPOSE) + grant_staging.MAX_RESPONSE_BYTES)
 
 
 class ReleaseProofInputIssuerStartupError(RuntimeError):
@@ -119,6 +122,8 @@ class _Configuration:
     input_bytes: int
     maximum_request_bytes: int
     delivery_endpoint: tuple
+    grant_delivery_endpoint: tuple | None
+    wire_reservation: int
 
 
 class _DeliveryChannel:
@@ -187,10 +192,80 @@ class _DeliveryChannel:
         self._closed = True
 
 
+class _GrantDeliveryChannel:
+    """The v2 owner's distinct second destination, never a caller-selected FD."""
+
+    __slots__ = ("_owner", "_opened", "_closed")
+
+    def __init__(self):
+        _fail("grant staging requires the actual proof-input issuer channel")
+
+    def _identity(self):
+        owner = self._owner
+        if (type(self) is not _GrantDeliveryChannel or type(owner) is not _IssuerOwner
+                or owner is not _owner or owner._grant_delivery_channel is not self
+                or not owner._grant_delivery_spent or self._closed
+                or owner._configured.grant_delivery_endpoint is None
+                or type(owner._delivery_channel) is not _DeliveryChannel
+                or not owner._delivery_channel._closed or owner._sockets[1].connection is not None):
+            _fail("grant staging changed its actual issuer channel or predecessor")
+        return owner
+
+    def check(self, *, endpoint, deadline_ns, work, current):
+        owner = self._identity()
+        if (type(endpoint) is not tuple or endpoint != owner._configured.grant_delivery_endpoint
+                or work is not owner._configured.work or type(deadline_ns) is not int
+                or not 0 < deadline_ns <= owner._configured.lifetime.bound
+                or type(current) is not MethodType or current.__self__ is not owner
+                or current.__func__ is not _IssuerOwner._current):
+            _fail("grant staging changed its endpoint or original allowance")
+        owner._current()
+
+    def open(self):
+        owner = self._identity()
+        slot, work = owner._sockets[2], owner._configured.work
+        if self._opened or slot.connection is not None or slot.close_attempted:
+            _fail("grant staging socket cannot be reopened")
+        self._opened = True
+        owner._current()
+        work.charge(input_bytes=4096)
+
+        def opening():
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            slot.connection = connection
+            descriptor = connection.fileno()
+            slot.identity = connection, descriptor, _fd_identity(descriptor)
+            connection.setblocking(False)
+            connection.set_inheritable(False)
+
+        production._callback(work, opening)
+        owner._current()
+        return slot.connection
+
+    def connected(self):
+        owner = self._identity()
+        slot, work = owner._sockets[2], owner._configured.work
+        if not self._opened or slot.connection is None or slot.peer is not None:
+            _fail("grant staging cannot replace its connected peer")
+        owner._current()
+        work.charge(input_bytes=12)
+        peer = production._callback(work, lambda: transport.authority_transport._peer_identity(slot.connection))
+        if peer[:2] != (0, 0):
+            _fail("grant staging receiver is not the actual root peer")
+        slot.peer = peer
+        owner._current()
+
+    def close(self):
+        owner = self._identity()
+        owner._close_socket(2, guarded=True)
+        self._closed = True
+
+
 class _IssuerOwner:
     __slots__ = ("_configured", "_seal", "_window_seal", "_bound_seal", "_spent",
         "_failed", "_closed", "_sockets", "_socket_seals", "_packet_spent",
-        "_delivery_channel", "_delivery_spent", "_response_material", "_response_seal")
+        "_delivery_channel", "_delivery_spent", "_grant_delivery_channel", "_grant_delivery_spent",
+        "_response_material", "_response_seal")
 
     def __init__(self):
         _fail("proof input issuer requires genuine original cold construction")
@@ -201,7 +276,8 @@ class _IssuerOwner:
         if (type(self) is not _IssuerOwner or self is not _owner or _state != "started"
                 or self._failed or self._closed or configured is not self._seal
                 or type(configured) is not _Configuration or self._sockets is not self._socket_seals
-                or len(self._sockets) != 2 or any(type(slot) is not _SocketSlot for slot in self._sockets)
+                or len(self._sockets) != (2 if configured.grant_delivery_endpoint is None else 3)
+                or any(type(slot) is not _SocketSlot for slot in self._sockets)
                 or self._response_material is not self._response_seal):
             _fail("proof input issuer owner changed")
         lifetime, material = configured.lifetime, configured.material
@@ -212,7 +288,10 @@ class _IssuerOwner:
                 or lifetime.window[:3] != configured.window[:3]
                 or any(new > old for new, old in zip(lifetime.window[3:], configured.window[3:]))
                 or lifetime.bound > min(configured.deadline_ns, lifetime.window[4])
-                or material.delivery_endpoint is not configured.delivery_endpoint):
+                or material.delivery_endpoint is not configured.delivery_endpoint
+                or material.grant_delivery_endpoint is not configured.grant_delivery_endpoint
+                or (configured.grant_delivery_endpoint is None
+                    and (self._grant_delivery_channel is not None or self._grant_delivery_spent))):
             _fail("proof input issuer changed its original lifetime or staging endpoint")
         _process(configured.namespace)
         for descriptor, maximum, private, identity in configured.sealed:
@@ -250,6 +329,13 @@ class _IssuerOwner:
                 if (type(channel) is not _DeliveryChannel or channel._owner is not self
                         or not channel._opened or channel._closed or not self._delivery_spent):
                     _fail("proof issuer staging socket lacks its actual owned channel")
+            if index == 2:
+                channel = self._grant_delivery_channel
+                if (type(channel) is not _GrantDeliveryChannel or channel._owner is not self
+                        or not channel._opened or channel._closed or not self._grant_delivery_spent
+                        or type(self._delivery_channel) is not _DeliveryChannel
+                        or not self._delivery_channel._closed or self._sockets[1].connection is not None):
+                    _fail("proof issuer grant staging lacks its actual channel or closed predecessor")
             if slot.peer is not None:
                 expected = (65532, 65532) if index == 0 else (0, 0)
                 if (slot.peer[:2] != expected
@@ -301,8 +387,8 @@ class _IssuerOwner:
 
     def _close_socket(self, index, *, guarded):
         global _cleanup_failed
-        if type(index) is not int or index not in (0, 1):
-            _fail("proof issuer cleanup has only its two source-owned socket slots")
+        if type(index) is not int or index not in (0, 1, 2) or index >= len(self._sockets):
+            _fail("proof issuer cleanup requires an actual source-owned socket slot")
         slot = self._sockets[index]
         if slot.connection is None:
             if guarded:
@@ -343,7 +429,7 @@ class _IssuerOwner:
         if self._packet_spent or sum(map(len, originals)) > configured.maximum_request_bytes:
             _fail("proof issuer cannot repeat or enlarge its independent packet acquisition")
         self._packet_spent = True
-        available = bootstrap.MAX_ORIGINAL_BYTES - configured.input_bytes - _WIRE_RESERVATION
+        available = bootstrap.MAX_ORIGINAL_BYTES - configured.input_bytes - configured.wire_reservation
         maximum_packet = min(packets.packet.MAX_BYTES, (available - sum(map(len, originals))) // 8)
         if maximum_packet < 2:
             _fail("proof issuer has no bounded packet-read capacity")
@@ -368,7 +454,7 @@ class _IssuerOwner:
         self._current()
         response = transport._originals(response, response=True)
         del packet
-        if configured.input_bytes + sum(map(len, originals)) + 8 * len(response[0]) + _WIRE_RESERVATION > bootstrap.MAX_ORIGINAL_BYTES:
+        if configured.input_bytes + sum(map(len, originals)) + 8 * len(response[0]) + configured.wire_reservation > bootstrap.MAX_ORIGINAL_BYTES:
             _fail("proof issuer output admission exceeds its complete held inventory")
         checked = producer.bootstrap._verify_on_work(bootstrap_bytes=response[0], root_public_key=configured.root,
             live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work,
@@ -387,7 +473,7 @@ class _IssuerOwner:
         if self._delivery_spent or self._delivery_channel is not None:
             _fail("proof issuer cannot repeat bootstrap staging")
         self._delivery_spent = True
-        if configured.input_bytes + 8 * len(response[0]) + _WIRE_RESERVATION > bootstrap.MAX_ORIGINAL_BYTES:
+        if configured.input_bytes + 8 * len(response[0]) + configured.wire_reservation > bootstrap.MAX_ORIGINAL_BYTES:
             _fail("proof issuer staging exceeds the original held inventory")
         lifetime = configured.lifetime
         expected = staging._bootstrap_identity_on_work(response[0], deadline_ns=lifetime.bound,
@@ -403,6 +489,33 @@ class _IssuerOwner:
         if not channel._closed or self._sockets[1].connection is not None or acknowledged[0] != staging.ACK_STATUS:
             _fail("proof issuer staging and normal close are not established")
         producer._same_bytes(acknowledged[1], expected, work, "proof issuer exact staged bootstrap identity")
+        self._current()
+
+    def _stage_grant_response(self, response):
+        configured, work = self._configured, self._configured.work
+        self._current()
+        if (configured.grant_delivery_endpoint is None or self._grant_delivery_spent
+                or self._grant_delivery_channel is not None
+                or type(self._delivery_channel) is not _DeliveryChannel
+                or not self._delivery_channel._closed or self._sockets[1].connection is not None):
+            _fail("proof issuer cannot omit, reorder or repeat grant staging")
+        self._grant_delivery_spent = True
+        if configured.input_bytes + 8 * len(response[0]) + configured.wire_reservation > bootstrap.MAX_ORIGINAL_BYTES:
+            _fail("proof issuer grant staging exceeds the original held inventory")
+        lifetime = configured.lifetime
+        expected = grant_staging._bootstrap_identity_on_work(response[0], deadline_ns=lifetime.bound,
+            work=work, current=self._current)
+        channel = object.__new__(_GrantDeliveryChannel)
+        channel._owner, channel._opened, channel._closed = self, False, False
+        self._grant_delivery_channel = channel
+        acknowledged = grant_staging._socket_request_on_work(configured.grant_delivery_endpoint,
+            originals=(grant_staging.PURPOSE, response[0]), deadline_ns=lifetime.bound,
+            work=work, current=self._current, channel=channel)
+        self._current()
+        acknowledged = grant_staging._originals(acknowledged, response=True)
+        if not channel._closed or self._sockets[2].connection is not None or acknowledged[0] != grant_staging.ACK_STATUS:
+            _fail("proof issuer grant staging and normal close are not established")
+        producer._same_bytes(acknowledged[1], expected, work, "proof issuer exact grant-staged bootstrap identity")
         self._current()
 
     def serve_once(self):
@@ -443,6 +556,8 @@ class _IssuerOwner:
                 response = self._produce(originals)
                 del originals
                 self._stage_response(response)
+                if configured.grant_delivery_endpoint is not None:
+                    self._stage_grant_response(response)
                 transport._send_response(slot.connection, response, deadline_ns=lifetime.bound,
                     work=work, current=self._current)
                 self._close_socket(0, guarded=True)
@@ -451,7 +566,7 @@ class _IssuerOwner:
                 return True
             except BaseException:
                 self._failed, _state = True, "failed"
-                for index in (1, 0):
+                for index in reversed(range(len(self._sockets))):
                     try:
                         self._close_socket(index, guarded=False)
                     except BaseException:
@@ -569,8 +684,11 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
             current()
             material_bytes = delivery._material_bytes_on_work(material, work, resource_current)
             held_bytes = delivered + sum(sizes) + material_bytes + sum(item[2] for item in delivery._TLS_FILES)
+            wire_reservation = _WIRE_RESERVATION
+            if material.grant_delivery_endpoint is not None:
+                wire_reservation += _GRANT_WIRE_RESERVATION
             maximum_request = min(transport.MAX_REQUEST_BYTES,
-                bootstrap.MAX_ORIGINAL_BYTES - held_bytes - _WIRE_RESERVATION - 16)
+                bootstrap.MAX_ORIGINAL_BYTES - held_bytes - wire_reservation - 16)
             if maximum_request < len(transport.PURPOSE) + 6:
                 _fail("proof issuer decoded originals leave no bounded request")
             key = delivery._key_on_work(material, root, work, current=resource_current)
@@ -598,13 +716,17 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
                 lifetime.window, lifetime.bound, namespace, sealed, _listener_object, listener_pins, tls,
                 reader, packets.SuccessorExecutionRecoveryReader._snapshot_configuration(reader),
                 (completion, completion.packet_digest, completion.current_pending, completion.custody_configuration),
-                delivery_current, delivered, held_bytes, maximum_request, material.delivery_endpoint)
+                delivery_current, delivered, held_bytes, maximum_request, material.delivery_endpoint,
+                material.grant_delivery_endpoint, wire_reservation)
             owner = object.__new__(_IssuerOwner)
             owner._configured = owner._seal = configured
             owner._window_seal, owner._bound_seal = lifetime.window, lifetime.bound
             owner._spent = owner._failed = owner._closed = owner._packet_spent = owner._delivery_spent = False
-            owner._sockets = owner._socket_seals = (_SocketSlot(), _SocketSlot())
+            owner._grant_delivery_spent = False
+            owner._sockets = owner._socket_seals = tuple(_SocketSlot()
+                for _ in range(2 if material.grant_delivery_endpoint is None else 3))
             owner._delivery_channel = owner._response_material = owner._response_seal = None
+            owner._grant_delivery_channel = None
             _owner, _state = owner, "started"
             owner._current()
             return owner
@@ -633,7 +755,7 @@ def close():
     with _LOCK:
         if _owner is not None and not _owner._closed:
             _owner._closed = _owner._failed = True
-            for index in (1, 0):
+            for index in reversed(range(len(_owner._sockets))):
                 try:
                     _owner._close_socket(index, guarded=False)
                 except BaseException:

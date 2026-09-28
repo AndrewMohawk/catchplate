@@ -7,7 +7,7 @@ caller UID/GID 65532. This module performs no file, socket, key-byte or database
 I/O and creates no resources. Its source does not establish deployed custody,
 runtime acceptance or provisioning.
 
-## Closed v1 launch and originals
+## Closed launch profiles and originals
 
 The signed and payload schemas are
 `serverware.signedOidcSessionActivationReleaseProofInputIssuerBootstrap/v1` and
@@ -25,10 +25,13 @@ The payload also pins root-signing-key byte count/digest, source revision,
 fresh issue/expiry and the closed launch. A byte digest is not proof that a
 private key was opened, paired, sealed or independently provisioned.
 
-The only launch schema is
-`serverware.oidcSessionActivationReleaseProofInputIssuerLaunch/v1`.
-`deliveryEndpoint` is mandatory from v1; there is no non-staging profile or
-version fallback. The exact inherited inventory is:
+The original nested launch schema
+`serverware.oidcSessionActivationReleaseProofInputIssuerLaunch/v1` remains closed
+and worker-only. Explicit nested
+`serverware.oidcSessionActivationReleaseProofInputIssuerLaunch/v2` has exactly
+the v1 fields plus mandatory `grantDeliveryEndpoint`; the signed and payload
+schemas above remain v1 and authenticate that version choice. Neither profile
+has a non-staging fallback. The exact inherited inventory is unchanged:
 
 | FD | Source-fixed input |
 | --- | --- |
@@ -53,6 +56,18 @@ with expected root peer 0:0 and timeout 1–30 seconds, no larger than the launc
 request timeout. Signed resource pins are independent policy; this module does
 not observe matching listeners, files, directories or a ready worker.
 
+For launch v2, `grantDeliveryEndpoint` uses the same closed
+`{path, timeoutSeconds, peerUid, peerGid}` grammar but only the separate
+`/run/serverware/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`
+root listener, peer 0:0. Its timeout is 1–30 seconds and cannot exceed the
+original launch timeout. The actual service must stage the exact same issued
+bootstrap to the proof worker, establish that ACK and normal close, then stage
+it to the grant issuer and establish its ACK and normal close before public
+reply. Both exchanges consume the original cumulative allowance. No new
+inherited descriptor, key, policy selected by the public request or renewed window is
+introduced. V1 rejects the extra endpoint and preserves its one-destination
+behavior.
+
 ## Genuine admission and lifetime
 
 `_verify_on_work` requires `bootstrap_bytes`, `issuer_policy_bytes`,
@@ -68,11 +83,13 @@ target data. The launch interval must fit wholly within the policy interval;
 request and staging timeouts only narrow the inherited allowance. The actual
 policy and original clock guards remain live through return.
 
-The private immutable `_IssuerMaterial` has 15 fields: the five original-byte
+The private immutable `_IssuerMaterial` has 16 fields: the five original-byte
 fields, actual `policy_material`, owned `launch`, root-key byte count/digest,
 attestation interval, opening sample, narrowed `live_window`/`deadline_ns`,
-`live`, and mandatory tuple4 `delivery_endpoint`. No admission API accepts this
-material in place of originals.
+`live`, mandatory tuple4 `delivery_endpoint`, and appended
+`grant_delivery_endpoint=None` (a fixed tuple4 for v2). No admission API accepts
+this material in place of originals. The existing cold capacity helper measures
+the actual launch graph, including the second endpoint when present.
 
 `_produce_on_work` replaces `bootstrap_bytes` with a closed `payload` and actual
 `root_private_key`, retaining the same other arguments. It genuinely admits
@@ -109,9 +126,13 @@ remaining capacity, which is checked before decoded inputs and before output
 wrapper/signature allocation. No returned size check substitutes for that
 preallocation bound.
 
-The service still must acquire the exact packet through its actual fixed
-read-only reader, issue from the original complete/ACK/intent request, stage the
-exact raw1 bootstrap and verify the identity-only ACK before returning. The
+The [finite service](oidc-session-activation-release-proof-input-issuer-service.md)
+acquires the exact packet through its actual fixed read-only reader and issues
+from the original complete/ACK/intent request. It stages the exact raw1 bootstrap
+and verifies each profile-required identity-only ACK before returning. V2 adds
+only its second fixed framing/ACK reservation under the same 64 MiB ceiling;
+the immutable bootstrap is reused, not decoded into another sender-side copy.
+Failure at either destination is terminal and cannot restart either exchange. The
 public caller never supplies or receives the private packet. A staged ACK is
 not proof-worker readiness, private replay, proof completion, token delivery
 or a current session. Runtime validation and independent resource provisioning

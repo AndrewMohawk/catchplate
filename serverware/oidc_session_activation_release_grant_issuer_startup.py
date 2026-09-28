@@ -107,6 +107,7 @@ class _Configuration:
     control_age: int
     control_skew: int
     delivery_endpoint: tuple | None
+    delivery_retained_bytes: int | None = None
 
 
 class _DeliveryChannel:
@@ -257,6 +258,11 @@ class _IssuerOwner:
                     or before.input_bytes < self._metrics.input_bytes
                     or before.json_nodes < self._metrics.json_nodes):
                 _fail("release grant issuer replaced or reset its work allowance")
+            if configured.delivery_retained_bytes is not None:
+                from serverware import oidc_session_activation_release_grant_issuer_dynamic_entrypoint as dynamic
+
+                if dynamic._retained_bytes_on_work(configured.delivery_current, work) != configured.delivery_retained_bytes:
+                    _fail("dynamic grant issuer retained original inventory changed")
             work.charge(input_bytes=4096)
             production._callback(work, self._identity)
             for guard in (configured.delivery_current, configured.material.live):
@@ -492,6 +498,20 @@ class _IssuerOwner:
 
 def initialize_from_environment(*, work, live_window, transport_deadline_ns, delivery_current):
     """Continue same-PID root delivery without any new processing allowance."""
+    return _initialize(work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        delivery_current=delivery_current, retained_bytes=None)
+
+
+def _initialize_from_dynamic_delivery_on_work(*, work, live_window, transport_deadline_ns, delivery_current):
+    from serverware import oidc_session_activation_release_grant_issuer_dynamic_entrypoint as dynamic
+
+    retained = dynamic._retained_bytes_on_work(delivery_current, work,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns)
+    return _initialize(work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        delivery_current=delivery_current, retained_bytes=retained)
+
+
+def _initialize(*, work, live_window, transport_deadline_ns, delivery_current, retained_bytes):
     global _state, _owner, _listener_object
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -575,6 +595,13 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
             if (sum(sizes) + transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES
                     + transport.RESPONSE_HEADER_BYTES + transport.MAX_RESPONSE_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
                 _fail("release grant issuer cold originals and bounded exchange exceed 64 MiB")
+            if retained_bytes is not None:
+                # The original dynamic owner is still live while these sealed
+                # originals are reread and the old cold graph is re-admitted.
+                if (retained_bytes + sum(sizes) + 8 * sizes[3] + producer._OUTPUT_RESERVATION
+                        + transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES
+                        + transport.RESPONSE_HEADER_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
+                    _fail("dynamic grant issuer reread and decoding exceed complete retained capacity")
             raws = []
             for descriptor, maximum, _private, identity in sealed[:-1]:
                 current()
@@ -590,12 +617,25 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
             if not isinstance(root, Ed25519PublicKey):
                 _fail("release grant issuer requires the actual Ed25519 runtime root")
             current()
+            extra = {}
+            if retained_bytes is not None:
+                from serverware import oidc_session_activation_release_grant_issuer_dynamic_entrypoint as dynamic
+
+                extra["_continuity"] = lambda epoch, monotonic: dynamic._continuity_on_work(
+                    delivery_current, work, epoch, monotonic)
             material = bootstrap._verify_on_work(bootstrap_bytes=bootstrap_raw, issuer_policy_bytes=policy_raw,
                 proof_bootstrap_bytes=proof_raw, root_public_key=root, live_window=window,
-                transport_deadline_ns=bound, work=work)
+                transport_deadline_ns=bound, work=work, **extra)
             if type(material) is not bootstrap._IssuerMaterial:
                 _fail("release grant issuer requires actual original launch admission")
             current()
+            input_bytes = sum(sizes)
+            if retained_bytes is not None:
+                input_bytes += (retained_bytes + dynamic._material_bytes_on_work(material, work, current)
+                    + max(0, producer._OUTPUT_RESERVATION - transport.MAX_RESPONSE_BYTES))
+                if (input_bytes + transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES
+                        + transport.RESPONSE_HEADER_BYTES + transport.MAX_RESPONSE_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
+                    _fail("dynamic grant issuer complete held graph leaves no bounded exchange")
             selected = clock._validate(material.live_window)
             if (selected[:3] != window[:3] or material.deadline_ns > bound
                     or any(value > prior for value, prior in zip(selected[3:], window[3:]))):
@@ -637,8 +677,8 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
             production._callback(work, wrap_listener)
             current()
             configured = _Configuration(material, root, key, work, limits, ceilings, window, bound,
-                delivery_current, namespace, sealed, _listener_object, listener_pins, sum(sizes), age, skew,
-                material.delivery_endpoint)
+                delivery_current, namespace, sealed, _listener_object, listener_pins, input_bytes, age, skew,
+                material.delivery_endpoint, retained_bytes)
             owner = object.__new__(_IssuerOwner)
             owner._configured = owner._seal = configured
             owner._window = owner._window_seal = window

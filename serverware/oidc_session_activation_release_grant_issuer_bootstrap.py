@@ -195,7 +195,7 @@ def _signature(envelope, root, work):
 
 
 def _material(payload, original, policy_original, proof_original, root, window, bound,
-        work, current, bind_interval):
+        work, current, bind_interval, _continuity=None):
     interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
     opening = window[1], window[0], window[2]
     launch_live = bind_interval(*interval)
@@ -220,7 +220,8 @@ def _material(payload, original, policy_original, proof_original, root, window, 
     selected = processing._narrow(window, deadline_epoch_ns=interval[1],
         maximum_lifetime_ns=window[5], maximum_clock_skew_ns=window[6])
     policy = issuer._verify_on_work(policy_bytes=policy_original, proof_bootstrap_bytes=proof_original,
-        root_public_key=root, live_window=selected, transport_deadline_ns=min(bound, selected[4]), work=work)
+        root_public_key=root, live_window=selected, transport_deadline_ns=min(bound, selected[4]), work=work,
+        _continuity=_continuity)
     if type(policy) is not issuer._IssuerPolicyMaterial:
         _fail("release issuer bootstrap requires actual policy-original admission")
 
@@ -251,7 +252,7 @@ def _material(payload, original, policy_original, proof_original, root, window, 
     if (narrowed[:3] != window[:3]
             or any(value > prior for value, prior in zip(narrowed[3:], window[3:]))):
         _fail("release issuer launch renewed the supplied processing allowance")
-    checked, _bind = issuer.server.storage._processing(narrowed, deadline, work)
+    checked, _bind = issuer._processing(narrowed, deadline, work, _continuity)
 
     def live():
         nonlocal last_epoch
@@ -271,7 +272,7 @@ def _material(payload, original, policy_original, proof_original, root, window, 
 
 
 def _verify_on_work(*, bootstrap_bytes, issuer_policy_bytes, proof_bootstrap_bytes,
-        root_public_key, live_window, transport_deadline_ns, work):
+        root_public_key, live_window, transport_deadline_ns, work, _continuity=None):
     capture._SharedLedger(work)
     root = root_public_key
     original = authorization._original(bootstrap_bytes, MAX_BYTES, "release issuer bootstrap")
@@ -283,14 +284,14 @@ def _verify_on_work(*, bootstrap_bytes, issuer_policy_bytes, proof_bootstrap_byt
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
-    current, bind_interval = issuer.server.storage._processing(window, bound, work)
+    current, bind_interval = issuer._processing(window, bound, work, _continuity)
     current()
     envelope = _read(original, work)
     current()
     _signature(envelope, root, work)
     current()
     material = _material(envelope["payload"], original, policy_original, proof_original,
-        root, window, bound, work, current, bind_interval)
+        root, window, bound, work, current, bind_interval, _continuity)
     material.live()
     _canonical(original, envelope, work)
     material.live()
@@ -298,7 +299,7 @@ def _verify_on_work(*, bootstrap_bytes, issuer_policy_bytes, proof_bootstrap_byt
 
 
 def _produce_on_work(*, payload, issuer_policy_bytes, proof_bootstrap_bytes,
-        root_private_key, root_public_key, live_window, transport_deadline_ns, work):
+        root_private_key, root_public_key, live_window, transport_deadline_ns, work, _continuity=None):
     capture._SharedLedger(work)
     private, root = root_private_key, root_public_key
     policy_original = authorization._original(issuer_policy_bytes, MAX_POLICY_BYTES, "release issuer policy")
@@ -312,10 +313,10 @@ def _produce_on_work(*, payload, issuer_policy_bytes, proof_bootstrap_bytes,
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
-    current, bind_interval = issuer.server.storage._processing(window, bound, work)
+    current, bind_interval = issuer._processing(window, bound, work, _continuity)
     current()
     material = _material(owned, b"", policy_original, proof_original, root, window, bound,
-        work, current, bind_interval)
+        work, current, bind_interval, _continuity)
     material.live()
     keys._pair_on_work(private, root, work)
     material.live()

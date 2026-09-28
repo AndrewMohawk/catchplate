@@ -6,6 +6,12 @@ Its only private signing capability is the actual independently provisioned runt
 root key, confined to this fixed issuer role. The control-plane caller receives no
 root key, AES/history key, completion signer, state writer or SQL writer.
 
+The separate [dynamic input path](oidc-session-activation-release-grant-input-delivery.md)
+in source `.200` admits a fresh proof bootstrap under independent cold
+authorization and derives the exact signed policy/launch originals described
+here. The static entrypoint and its fixed trust files remain strict; replacing
+`proof-bootstrap.json` alone cannot authorize another request.
+
 The role and process mode are `oidc-session-activation-release-grant-issuer`, UID/GID
 65496. The root-created listener is
 `/run/serverware/oidc-session-activation-token-release/grants.sock`, pathname owner

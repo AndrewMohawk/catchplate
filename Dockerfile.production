@@ -137,6 +137,7 @@ COPY --from=verified-production-source /source/serverware/oidc_session_activatio
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_input_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_input_issuer_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_grant_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_grant_issuer_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_dynamic_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_input_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_dynamic_launcher.py
@@ -194,8 +195,12 @@ COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-sessi
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.service.in
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.service.d /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.service.d
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.service.in
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-bootstrap.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-bootstrap.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-dynamic.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-dynamic.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-dynamic.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-dynamic.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.service.d /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.service.d
@@ -244,6 +249,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_release_proof_input_issuer_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_dynamic_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_release_launcher.py \

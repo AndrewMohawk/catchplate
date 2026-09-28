@@ -14,6 +14,7 @@ from cryptography.exceptions import InvalidSignature
 
 from serverware import oidc_session_activation_release_client_authorization as client
 from serverware import oidc_session_activation_release_proof_bootstrap as proof_bootstrap
+from serverware import authority_oidc_session_activation_consume_input_production as lifetime_source
 from serverware.authority_query_read_work import QueryReadWorkError
 
 
@@ -147,7 +148,27 @@ def _signature(envelope, root, work):
             "release grant issuer policy root signature is invalid") from exc
 
 
-def _join_proof(payload, proof_original, root, window, bound, current, bind_interval, work):
+def _processing(window, bound, work, continuity=None):
+    if continuity is None:
+        return server.storage._processing(window, bound, work)
+    lifetime = lifetime_source._Lifetime(clock._validate(window), min(bound, window[4]), work, continuity)
+
+    def bind_interval(issued, expires):
+        lifetime.narrow(expires, lifetime.window[5], lifetime.window[6])
+
+        def live():
+            epoch = lifetime.current()
+            if issued > epoch + lifetime.window[6] or epoch >= expires:
+                _fail("release grant issuer original interval is not live")
+            return epoch
+
+        return live
+
+    return lifetime.current, bind_interval
+
+
+def _join_proof(payload, proof_original, root, window, bound, current, bind_interval, work,
+        _continuity=None):
     interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
     endpoint = client._endpoint(payload["endpoint"], work)
     policy_live = bind_interval(*interval)
@@ -172,7 +193,8 @@ def _join_proof(payload, proof_original, root, window, bound, current, bind_inte
         maximum_clock_skew_ns=window[6])
     selected_bound = min(bound, selected[4])
     material = proof_bootstrap._verify_on_work(bootstrap_bytes=proof_original, root_public_key=root,
-        live_window=selected, transport_deadline_ns=selected_bound, work=work)
+        live_window=selected, transport_deadline_ns=selected_bound, work=work,
+        _current=current if _continuity is not None else None)
     if type(material) is not proof_bootstrap._ProofMaterial:
         _fail("release grant issuer requires actual proof-bootstrap original admission")
 
@@ -202,7 +224,7 @@ def _join_proof(payload, proof_original, root, window, bound, current, bind_inte
     if (narrowed[:3] != window[:3]
             or any(actual > prior for actual, prior in zip(narrowed[3:], window[3:]))):
         _fail("release grant issuer admission renewed the supplied processing allowance")
-    checked, _bind = server.storage._processing(narrowed, deadline, work)
+    checked, _bind = _processing(narrowed, deadline, work, _continuity)
 
     def live():
         nonlocal last_epoch
@@ -218,7 +240,7 @@ def _join_proof(payload, proof_original, root, window, bound, current, bind_inte
 
 
 def _verify_on_work(*, policy_bytes, proof_bootstrap_bytes, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Authenticate root policy and the independently supplied proof original."""
     capture._SharedLedger(work)
     root = root_public_key
@@ -230,7 +252,7 @@ def _verify_on_work(*, policy_bytes, proof_bootstrap_bytes, root_public_key,
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
-    current, bind_interval = server.storage._processing(window, bound, work)
+    current, bind_interval = _processing(window, bound, work, _continuity)
     current()
     envelope = _read(raw, work)
     current()
@@ -238,7 +260,7 @@ def _verify_on_work(*, policy_bytes, proof_bootstrap_bytes, root_public_key,
     current()
     payload = envelope["payload"]
     material, endpoint, narrowed, deadline, live = _join_proof(payload, proof_original,
-        root, window, bound, current, bind_interval, work)
+        root, window, bound, current, bind_interval, work, _continuity)
     live()
     _canonical(raw, envelope, work)
     live()
@@ -253,7 +275,7 @@ def _verify_on_work(*, policy_bytes, proof_bootstrap_bytes, root_public_key,
 
 
 def _produce_on_work(*, payload, proof_bootstrap_bytes, root_private_key, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Sign only after genuine proof-original admission; no resource inspection."""
     capture._SharedLedger(work)
     private, root = root_private_key, root_public_key
@@ -267,10 +289,10 @@ def _produce_on_work(*, payload, proof_bootstrap_bytes, root_private_key, root_p
     window = clock._validate(live_window)
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
-    current, bind_interval = server.storage._processing(window, bound, work)
+    current, bind_interval = _processing(window, bound, work, _continuity)
     current()
     _material, _endpoint, _narrowed, _deadline, live = _join_proof(owned, proof_original,
-        root, window, bound, current, bind_interval, work)
+        root, window, bound, current, bind_interval, work, _continuity)
     live()
     keys._pair_on_work(private, root, work)
     live()

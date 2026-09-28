@@ -75,8 +75,10 @@ records or provisions replacement resources. The existing static proof launcher
 continues to use its unchanged entrypoint. Deployment, independently matching
 resources and public HTTP/session completion remain separate acceptance work.
 Source `.199` connects the [request-scoped issuer](oidc-session-activation-release-proof-input-issuer-service.md)
-to the real bounded packet reader and owned staging channel. The separate grant
-issuer still needs a fresh proof-bootstrap connection instead of its cold pin.
+to the real bounded packet reader and owned staging channel. Source `.200` adds
+a distinct [grant-issuer input receiver](oidc-session-activation-release-grant-input-delivery.md)
+and explicit two-destination issuance, preserving the static grant policy's
+exact proof pin rather than replacing it with an unsigned locator.
 
 ## Opt-in packaging
 

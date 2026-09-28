@@ -1,8 +1,9 @@
 """Root-original eight-FD launch for the one-shot proof-input issuer.
 
 Independent policy, completion and enrollment originals remain separate sealed
-inputs. Mandatory staging is part of this closed v1 launch. This module admits
-no private key bytes and observes or creates no resources.
+inputs. Closed launch v1 stages to the proof worker; explicit v2 also requires
+the separate grant issuer. This module admits no private key bytes and observes
+or creates no resources.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from cryptography.exceptions import InvalidSignature
 
 from serverware import authority_oidc_session_activation_release_proof_input_transport as transport
 from serverware import authority_oidc_session_activation_release_proof_input_delivery_transport as staging
+from serverware import authority_oidc_session_activation_release_grant_input_delivery_transport as grant_staging
 from serverware import oidc_session_activation_release_proof_input_issuer_policy as issuer
 from serverware.authority_query_read_work import QueryReadWorkError
 
@@ -33,6 +35,7 @@ PURPOSE = "launch-oidc-session-activation-release-proof-input-issuer"
 SCHEMA = "serverware.signedOidcSessionActivationReleaseProofInputIssuerBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseProofInputIssuerBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationReleaseProofInputIssuerLaunch/v1"
+LAUNCH_V2_SCHEMA = "serverware.oidcSessionActivationReleaseProofInputIssuerLaunch/v2"
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationReleaseProofInputIssuerBootstrapIdentity/v1"
 MAX_BYTES = MAX_BOOTSTRAP_BYTES = 16 * 1024
 MAX_POLICY_BYTES = issuer.MAX_BYTES
@@ -51,6 +54,7 @@ _LAUNCH_FIELDS = frozenset({"schema", "role", "processMode", "serviceUid", "serv
     "peerUid", "peerGid", *(name for name, _ in _FD_FIELDS), "inheritedFileDescriptors",
     "listenerPath", "requestTimeoutSeconds", "listenerSocketDevice", "listenerSocketInode",
     "listenerPathDevice", "listenerPathInode", "deliveryEndpoint"})
+_LAUNCH_V2_FIELDS = _LAUNCH_FIELDS | {"grantDeliveryEndpoint"}
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "purpose", "role", "trustMode",
     "issuerPolicyDigest", "completionBootstrapDigest", "proofEnrollmentDigest", "intentEnrollmentDigest",
     "rootSigningKey", "issuedAtEpochNs", "expiresAtEpochNs", "launch"})
@@ -82,6 +86,7 @@ class _IssuerMaterial:
     deadline_ns: int
     live: object
     delivery_endpoint: tuple
+    grant_delivery_endpoint: tuple | None = None
 
 
 class _Capture(capture._JSONCapture):
@@ -127,9 +132,22 @@ def _delivery_endpoint(value):
     return value["path"], value["timeoutSeconds"], value["peerUid"], value["peerGid"]
 
 
+def _grant_delivery_endpoint(value):
+    shape._object(value, frozenset({"path", "timeoutSeconds", "peerUid", "peerGid"}),
+        "proof input issuer fixed grant staging endpoint")
+    shape._literal(value["path"], grant_staging.LISTENER_PATH)
+    shape._integer(value["timeoutSeconds"], 30, minimum=1)
+    for name in ("peerUid", "peerGid"):
+        shape._integer(value[name], 2**32 - 2)
+        if value[name] != 0:
+            _fail("proof input issuer grant staging requires the actual root peer")
+    return value["path"], value["timeoutSeconds"], value["peerUid"], value["peerGid"]
+
+
 def _launch_shape(value, work):
-    shape._object(value, _LAUNCH_FIELDS, "proof input issuer launch")
-    for name, expected in (("schema", LAUNCH_SCHEMA), ("role", ROLE),
+    v2 = type(value) is dict and value.get("schema") == LAUNCH_V2_SCHEMA
+    shape._object(value, _LAUNCH_V2_FIELDS if v2 else _LAUNCH_FIELDS, "proof input issuer launch")
+    for name, expected in (("schema", LAUNCH_V2_SCHEMA if v2 else LAUNCH_SCHEMA), ("role", ROLE),
             ("processMode", PROCESS_MODE), ("listenerPath", LISTENER_PATH)):
         shape._literal(value[name], expected)
     for name, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID),
@@ -150,6 +168,8 @@ def _launch_shape(value, work):
     endpoint = _delivery_endpoint(value["deliveryEndpoint"])
     if endpoint[1] > value["requestTimeoutSeconds"]:
         _fail("proof input issuer staging timeout exceeds its original launch timeout")
+    if v2 and _grant_delivery_endpoint(value["grantDeliveryEndpoint"])[1] > value["requestTimeoutSeconds"]:
+        _fail("proof input issuer grant staging timeout exceeds its original launch timeout")
 
 
 def _payload_shape(payload, work):
@@ -251,12 +271,16 @@ def _material(payload, original, originals, root, lifetime, work):
         _fail("proof input issuer actual decoded originals exceed 64 MiB")
     endpoint = _delivery_endpoint(payload["launch"]["deliveryEndpoint"])
     timeout = min(payload["launch"]["requestTimeoutSeconds"], endpoint[1])
+    grant_endpoint = None
+    if payload["launch"]["schema"] == LAUNCH_V2_SCHEMA:
+        grant_endpoint = _grant_delivery_endpoint(payload["launch"]["grantDeliveryEndpoint"])
+        timeout = min(timeout, grant_endpoint[1])
     lifetime.narrow(interval[1], min(lifetime.window[5], timeout * 1_000_000_000), lifetime.window[6])
     launch = _capture(payload["launch"], work)
     current()
     return _IssuerMaterial(original, *originals, policy, launch,
         payload["rootSigningKey"]["byteCount"], payload["rootSigningKey"]["bytesDigest"],
-        interval, opening, lifetime.window, lifetime.bound, current, endpoint)
+        interval, opening, lifetime.window, lifetime.bound, current, endpoint, grant_endpoint)
 
 
 def _verify_on_work(*, bootstrap_bytes, issuer_policy_bytes, completion_bootstrap_bytes,

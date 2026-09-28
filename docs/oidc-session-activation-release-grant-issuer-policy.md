@@ -5,6 +5,11 @@ not a cold issuer service, descriptor loader or provisioner, and does not close
 request-scoped original acquisition. It creates no root, key, directory, listener
 or processing allowance. No runtime, deployment or production assurance is claimed.
 
+Source `.200` adds a separate [dynamic input receiver](oidc-session-activation-release-grant-input-delivery.md)
+that derives this exact policy only after independently authorized fresh-proof
+admission. It does not weaken this policy's exact `proofBootstrapDigest` pin or
+accept a successful-material substitute.
+
 The fixed purpose is `issue-oidc-session-activation-release-grants`. The signed and
 payload schemas are
 `serverware.signedOidcSessionActivationReleaseGrantIssuerPolicy/v1` and

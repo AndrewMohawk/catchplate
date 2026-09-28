@@ -1,7 +1,7 @@
 # Finite proof-input issuer
 
 Source integrated, unbuilt and unexecuted. This isolated one-shot service joins
-the [independent issuer bootstrap](oidc-session-activation-release-proof-input-issuer-bootstrap.md),
+the [independent issuer bootstrap](oidc-session-activation-release-proof-input-issuer-delivery.md),
 actual recovery packet reader, [packet-derived producer](oidc-session-activation-release-proof-input-production.md)
 and exact dynamic proof-worker staging. Source packaging is not installation,
 resource observation, deployment or production acceptance.
@@ -86,6 +86,25 @@ only the receiver's exact authenticated sealed-original/resource handoff,
 The later proof worker still checks actual old-token possession and private
 committed evidence; this service never receives that old token.
 
+Explicit nested launch `/v2` adds the independently signed
+`grantDeliveryEndpoint` at
+`/run/serverware/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`.
+Only after the worker ACK and normal close does the distinct source-owned
+`_GrantDeliveryChannel` open its fixed third socket slot, pin root peer 0:0 and
+stage the **same immutable bootstrap bytes** to the separate grant issuer. Its
+own fixed purpose/codec and independently computed bootstrap identity must
+match the second ACK, with normal close established before public raw1 reply.
+The channel accepts only the actual issuer and `_IssuerOwner._current`, never
+an arbitrary descriptor or resource-guard substitute. Full inventory remains
+the inherited eight plus the actual public connection and the one currently
+owned staging connection; the two outgoing connections never overlap.
+
+Launch `/v1` remains worker-only and rejects the extra endpoint. V2 latches each
+destination once under the same original work/window and narrowing deadline.
+If the second stage is uncertain after the first was acknowledged, no rollback,
+repeat of either stage, replacement allowance or public success reply follows.
+Neither ACK establishes receiver service readiness or a completed release.
+
 ## Bounds and terminal cleanup
 
 The owner measures actual delivered and second-admission originals/graphs and
@@ -97,9 +116,12 @@ allocation. The producer receives the remaining aggregate allowance through
 `maximum_original_bytes`, applied to initial decoding and its existing exact
 wrapped-output/readback reservation before signing or wrapper allocation.
 Output admission/staging have their own conservative eightfold readback bound.
+Only v2 adds the second fixed header/purpose/ACK reservation; both destinations
+reuse the already admitted original, without a second sender-side decoding.
 These are tightening capacity checks, not renewed authority or time.
 
-There is one request, one read, one production and one staging attempt. Missing
+There is one request, one read, one production and one attempt per required
+staging destination. Missing
 responses, failed guards, partial publication or indeterminate cleanup are
 terminal; no status/error reply or reconnect/retry follows. Cleanup checks
 actual object/descriptor identity, closes each owned socket and inherited
@@ -107,8 +129,10 @@ resource once, and preserves uncertainty across repeated `close()` calls.
 The finite runner returns success only after the real exchange and established
 cleanup. Request/packet/root-key bytes are not journaled or logged.
 
-This connection does not complete public activation. In particular, the
-post-proof grant issuer still pins a cold proof-bootstrap original and needs
-its separately authorized dynamic-original integration. Actual resources and
+This sender does not supply the grant receiver's independent policy or turn a
+proof bootstrap into issuance authority. The separate dynamic receiver must
+authenticate its own original policy and the incoming bootstrap before sealing
+resources and acknowledging it; the old static grant profile is unchanged.
+This connection does not complete public activation. Actual resources and
 provisioning/deployment, public HTTP/current-auth/cookie completion, recovery
 and portal work remain separate open boundaries.

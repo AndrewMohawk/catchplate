@@ -16,9 +16,12 @@ completion receiving guard, independently reconstructed release expectations,
 old-token possession, cold scope/enrollment pins and the fresh actor association.
 An externally supplied successful object or callback is not an ingress.
 
-The signer is the actual owner's dedicated intent key on FD 207, with its
+For new signing, the signer is the actual owner's dedicated intent key on FD 207, with its
 original descriptor identity and independent enrollment. Its signer cannot be
 the HTTP response key. No private-key serialization or new key read is added.
+Those private-key/FD and current signing-policy checks occur only after the
+bounded loader establishes that a fresh intent is permitted. Read-only admission
+does not require a current or retired intent private key.
 The original work ledger, clock floors, processing window and transport bound
 continue throughout. The intent lifetime samples `inputs.current()` around the
 input's base-only floor continuation; its own admitted child is not fed back
@@ -47,6 +50,27 @@ proofs have a separate genuine historical read-only admission path.
 The returned `_IntentContinuation` is privately constructed and identity-sealed.
 `_require_intent` checks its exact input association and full current guard. It
 stays inside the actual actor call; it is not a public permission or success DTO.
+
+## Independently selected retired authority
+
+The `.229` retained-original mode keeps the fresh actor current while selecting
+the old RI root, intent/proof enrollments and exact planner original from
+independently admitted archive material. The sealed input carries
+`retained_only` and `retained_authority_interval`; it cannot use a record-carried
+root as authority. The existing five-record loader is matched against the
+pre-actor retained-prefix commitments before genuine original admission.
+
+Both signed intent and proof intervals must be contained in the selected RI
+authority interval after their signatures are genuinely verified. That interval
+is evidence, not a replacement processing window or renewed expiry. The same
+work, current guards, global slots and pre-reserved 64 MiB aggregate remain.
+Missing intent or proof is refusal even on the preparation route: no private
+key requirement, claim, re-signing, setup/proof contact or retry under RI follows.
+
+This mode is limited to `release-intent-proof` readmission. Retired-RI LIVE or
+RECOVERY delivery remains gated until an independent fresh-authority bridge is
+connected. It neither migrates a delivery key/state nor replaces a spent claim;
+a newly signed intent would have a different evidence identity.
 
 ## Separate release-only readmission
 

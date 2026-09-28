@@ -1,0 +1,563 @@
+"""Local, packet-bound workload CSR preparation and direct-issuer admission.
+
+A signed request proves possession, not issuance authority. Issuer trust and
+packet-signing trust are independently pinned inputs; neither is discovered
+from a reply. No network, CA-install token, self-issuer or key export exists.
+The initial profile is SAN-authorized fresh P-256 keys and one direct issuing
+CA, not a general certificate path builder or a SPIFFE lifecycle service.
+Keys are software-held local PKCS#8 originals, not HSM custody or a memory-erasure
+guarantee. Native crypto/filesystem calls still require an outer watchdog.
+"""
+from __future__ import annotations
+
+import base64
+from contextlib import ExitStack
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
+import os
+from pathlib import Path
+import secrets
+import stat
+import time
+
+from cryptography import x509
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa, utils
+from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID
+
+from . import _workload_identity as identity
+from . import _workload_signed_packet as packets
+from . import _workload_tls as tls
+from ._workload_stream import Budget, WorkloadClientError
+from .workload_transport import validate_mtls_identity
+
+
+REQUEST_SCHEMA = "serverware.signedWorkloadIdentityRequest/v1"
+PAYLOAD_SCHEMA = "serverware.workloadIdentityRequest/v1"
+REQUEST_DOMAIN = PAYLOAD_SCHEMA.encode("ascii") + b"\x00"
+MAX_REQUEST_BYTES = 64 * 1024
+MAX_CERTIFICATE_BYTES = 64 * 1024
+MAX_KEY_BYTES = 64 * 1024
+MAX_CSR_BYTES = 16 * 1024
+_PRIVATE_KEY_BYTES = 1024
+_P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+_PAYLOAD_FIELDS = frozenset({
+    "schema", "packetSha256", "packetSigningKeySha256", "principalId", "nonce",
+    "issuerCertificateSha256", "issuerSpkiSha256", "subjectPublicKeyInfoSha256",
+    "selectedSans", "issuedAtEpochMs", "expiresAtEpochMs", "csr",
+})
+_LEAF_EXTENSIONS = frozenset({
+    ExtensionOID.BASIC_CONSTRAINTS, ExtensionOID.KEY_USAGE,
+    ExtensionOID.EXTENDED_KEY_USAGE, ExtensionOID.SUBJECT_ALTERNATIVE_NAME,
+    ExtensionOID.AUTHORITY_KEY_IDENTIFIER, ExtensionOID.SUBJECT_KEY_IDENTIFIER,
+})
+_CA_EXTENSIONS = frozenset({
+    ExtensionOID.BASIC_CONSTRAINTS, ExtensionOID.KEY_USAGE,
+    ExtensionOID.EXTENDED_KEY_USAGE, ExtensionOID.AUTHORITY_KEY_IDENTIFIER,
+    ExtensionOID.SUBJECT_KEY_IDENTIFIER,
+})
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class PreparedIdentity:
+    """Published original descriptions, never an issuance permission."""
+
+    request: tls.PinnedFile
+    csr: tls.PinnedFile
+    private_key: tls.PinnedFile
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProvisionedIdentity:
+    """Direct inputs for WorkloadProxyClient's existing pinned-file interface."""
+
+    client_certificate: tls.PinnedFile
+    client_private_key: tls.PinnedFile
+
+
+def _fail(message: str) -> None:
+    raise WorkloadClientError(message)
+
+
+def _digest(raw: bytes) -> str:
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _spki(key: object) -> bytes:
+    return key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+
+def _path_parts(path: Path | str) -> tuple[str, list[str]]:
+    if not isinstance(path, (Path, str)):
+        _fail("identity output requires an absolute directory path")
+    raw = os.fspath(path)
+    if (not isinstance(raw, str) or not 1 <= len(raw) <= 4096
+            or len(raw.encode("utf-8")) > 4096
+            or not raw.startswith("/") or "\x00" in raw or str(Path(raw)) != raw
+            or any(part in {"", ".", ".."} for part in raw.split("/")[1:])):
+        _fail("identity output directory is not a canonical absolute path")
+    return raw, raw.split("/")[1:]
+
+
+def _open_directory(parts: list[str], budget: Budget) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    descriptor = os.open("/", flags)
+    try:
+        for component in parts:
+            budget.check()
+            child = os.open(component, flags, dir_fd=descriptor)
+            previous, descriptor = descriptor, child
+            os.close(previous)
+        budget.check()
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+class _Directory:
+    def __init__(self, path: Path | str, budget: Budget, owners: ExitStack):
+        self.path, self.parts = _path_parts(path)
+        self.descriptor = _open_directory(self.parts, budget)
+        owners.callback(os.close, self.descriptor)
+        self.metadata = self._metadata(os.fstat(self.descriptor))
+        self.check(budget)
+
+    @staticmethod
+    def _metadata(value: os.stat_result) -> tuple[int, ...]:
+        if (not stat.S_ISDIR(value.st_mode) or value.st_uid != os.geteuid()
+                or stat.S_IMODE(value.st_mode) != 0o700):
+            _fail("identity output directory must be current-user-owned mode 0700")
+        return value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid
+
+    def check(self, budget: Budget) -> None:
+        budget.check()
+        if self._metadata(os.fstat(self.descriptor)) != self.metadata:
+            _fail("identity output directory changed")
+        named = _open_directory(self.parts, budget)
+        try:
+            if self._metadata(os.fstat(named)) != self.metadata:
+                _fail("identity output directory name changed")
+        finally:
+            os.close(named)
+        budget.check()
+
+    def publish(self, name: str, raw: bytes, budget: Budget) -> tls.PinnedFile:
+        """No overwrite; a late failure leaves the published original intact."""
+        self.check(budget)
+        if name not in {"preparation.claim", "private-key.pem", "request.pem",
+                "request.json", "client-certificate.pem"}:
+            _fail("identity publication name is not source-fixed")
+        temporary = ".identity-" + secrets.token_hex(16)
+        descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL
+            | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=self.descriptor)
+        try:
+            offset = 0
+            while offset < len(raw):
+                budget.check()
+                count = os.write(descriptor, raw[offset:offset + 16 * 1024])
+                if count < 1:
+                    _fail("identity original write did not progress")
+                offset += count
+            budget.check()
+            os.fsync(descriptor)
+            budget.check()
+            if tls._read_descriptor(descriptor, len(raw), budget) != raw:
+                _fail("identity original readback differs")
+            self.check(budget)
+            # linkat is atomic and refuses an existing destination. Neither
+            # rename replacement nor deletion of a previous identity is used.
+            os.link(temporary, name, src_dir_fd=self.descriptor,
+                dst_dir_fd=self.descriptor, follow_symlinks=False)
+            os.unlink(temporary, dir_fd=self.descriptor)
+            os.fsync(self.descriptor)
+            budget.check()
+            metadata = os.fstat(descriptor)
+            if (metadata.st_uid != os.geteuid() or metadata.st_nlink != 1
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                    or not stat.S_ISREG(metadata.st_mode) or metadata.st_size != len(raw)):
+                _fail("identity published original permissions or shape changed")
+            named = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                | os.O_NONBLOCK, dir_fd=self.descriptor)
+            try:
+                if (tls._metadata(os.fstat(named)) != tls._metadata(metadata)
+                        or tls._read_descriptor(named, len(raw), budget) != raw
+                        or tls._metadata(os.fstat(named)) != tls._metadata(metadata)):
+                    _fail("identity published original failed exact readback")
+            finally:
+                os.close(named)
+            self.check(budget)
+            return tls.PinnedFile(self.path + "/" + name, _digest(raw))
+        finally:
+            os.close(descriptor)
+            try:
+                os.unlink(temporary, dir_fd=self.descriptor)
+                os.fsync(self.descriptor)
+            except FileNotFoundError:
+                pass
+
+
+def _extension(certificate: x509.Certificate, kind: type, *, critical: bool = False):
+    try:
+        value = certificate.extensions.get_extension_for_class(kind)
+    except x509.ExtensionNotFound:
+        _fail("workload certificate lacks a required extension")
+    if critical and not value.critical:
+        _fail("workload certificate constraints must be critical")
+    return value.value
+
+
+def _valid_now(certificate: x509.Certificate, budget: Budget) -> None:
+    budget.check()
+    now = datetime.now(timezone.utc)
+    if not certificate.not_valid_before_utc <= now < certificate.not_valid_after_utc:
+        _fail("workload certificate is outside its original validity interval")
+    budget.check()
+
+
+def _issuer(raw: bytes, budget: Budget):
+    _text, originals = tls._public_certificates(raw, budget, client=True)
+    if len(originals) != 1:
+        _fail("workload issuance requires exactly one independently pinned issuer")
+    original = originals[0]
+    certificate = original.certificate
+    _valid_now(certificate, budget)
+    constraints = _extension(certificate, x509.BasicConstraints, critical=True)
+    usage = _extension(certificate, x509.KeyUsage, critical=True)
+    if not constraints.ca or not usage.key_cert_sign:
+        _fail("workload issuer is not authorized to sign certificates")
+    if any(extension.oid not in _CA_EXTENSIONS for extension in certificate.extensions):
+        _fail("workload issuer constraints need an unsupported path profile")
+    try:
+        eku = certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    except x509.ExtensionNotFound:
+        eku = None
+    if eku is not None and ExtendedKeyUsageOID.CLIENT_AUTH not in eku:
+        _fail("workload issuer does not admit client authentication")
+    key = certificate.public_key()
+    if not (isinstance(key, ed25519.Ed25519PublicKey)
+            or isinstance(key, ec.EllipticCurvePublicKey)
+            and isinstance(key.curve, (ec.SECP256R1, ec.SECP384R1))
+            or isinstance(key, rsa.RSAPublicKey) and 3072 <= key.key_size <= 4096):
+        _fail("workload issuer key is outside the direct-issuer profile")
+    budget.check()
+    return original
+
+
+def _selected(value: object, selectors: dict[str, object]) -> dict[str, list[str]]:
+    if type(value) is not dict or set(value) != {"dnsNames", "uris"}:
+        _fail("selected workload SANs require the closed DNS/URI profile")
+    selected = {}
+    for name in ("dnsNames", "uris"):
+        items = value[name]
+        if (type(items) is not list or len(items) > 8
+                or any(type(item) is not str or not 1 <= len(item) <= 2048 for item in items)
+                or items != sorted(set(items))):
+            _fail("selected workload SANs must be bounded, unique and sorted")
+        selected[name] = list(items)
+    if (not 1 <= sum(map(len, selected.values())) <= 8
+            or sum(len(item.encode("utf-8")) for items in selected.values() for item in items) > 8192):
+        _fail("selected workload SAN inventory exceeds its profile")
+    shaped = {"verifiedByTrustedIngress": True}
+    if selected["dnsNames"]:
+        shaped["sanDnsNames"] = selected["dnsNames"]
+    if selected["uris"]:
+        shaped["sanUris"] = selected["uris"]
+        for uri in selected["uris"]:
+            identity._canonical_uri(uri)
+    validate_mtls_identity(shaped)
+    dns, uris = set(selected["dnsNames"]), set(selected["uris"])
+    if (not dns <= set(selectors.get("sanDnsNames", ()))
+            or not uris <= set(selectors.get("sanUris", ())) | set(selectors.get("sanSpiffeIds", ()))):
+        _fail("selected workload identity was not permitted by the signed packet")
+    for field, observed in (("sanDnsNames", dns), ("sanUris", uris),
+            ("sanSpiffeIds", {uri for uri in uris if uri.startswith("spiffe://")})):
+        if field in selectors and not observed.intersection(selectors[field]):
+            _fail("selected workload identity omits a signed SAN constraint")
+    return selected
+
+
+def _names(selected: dict[str, list[str]]) -> list[x509.GeneralName]:
+    return ([x509.DNSName(value) for value in selected["dnsNames"]]
+        + [x509.UniformResourceIdentifier(value) for value in selected["uris"]])
+
+
+def _common(packet, packet_signing_key, issuer, expected_principal, expected_nonce,
+        budget: Budget, owners: ExitStack):
+    tls._require_linux()
+    for pin in (packet, packet_signing_key, issuer):
+        tls._validate_pin(pin)
+    packet_original = tls._load_original(packet, 8 * 1024 * 1024, False, budget, owners)
+    signing_original = tls._load_original(packet_signing_key, MAX_KEY_BYTES, False, budget, owners)
+    issuer_original = tls._load_original(issuer, MAX_CERTIFICATE_BYTES, False, budget, owners)
+    authenticated = packets.verify_signed_workload_packet(packet_original.raw, signing_original.raw,
+        expected_principal=expected_principal, expected_nonce=expected_nonce, budget=budget)
+    selectors = validate_mtls_identity(authenticated["identity"].get("mtls"))
+    began_ms, began_monotonic = time.time_ns() // 1_000_000, time.monotonic()
+    last_ms = began_ms
+
+    def current():
+        nonlocal last_ms
+        now = time.time_ns() // 1_000_000
+        if now < last_ms:
+            _fail("workload provisioning clock reversed")
+        packets._live(authenticated, now)
+        last_ms = now
+
+    budget._bind_lifetime(began_monotonic
+        + (authenticated["expiresAtEpochMs"] - began_ms) / 1000, current)
+    issuer_certificate = _issuer(issuer_original.raw, budget)
+    issuer_spki = _digest(issuer_certificate.spki_der)
+    if "issuerSpkiSha256" in selectors and selectors["issuerSpkiSha256"] != issuer_spki:
+        _fail("independent issuer differs from the signed workload issuer constraint")
+    binding = {"packetSha256": packet.sha256, "packetSigningKeySha256": packet_signing_key.sha256,
+        "principalId": authenticated["principalId"], "nonce": authenticated["nonce"],
+        "issuerCertificateSha256": issuer.sha256, "issuerSpkiSha256": issuer_spki,
+        "issuedAtEpochMs": authenticated["issuedAtEpochMs"],
+        "expiresAtEpochMs": authenticated["expiresAtEpochMs"]}
+    return binding, selectors, issuer_certificate, (packet_original, signing_original, issuer_original)
+
+
+def _recheck(originals, issuer_certificate, directory: _Directory, budget: Budget) -> None:
+    for original in originals:
+        original.recheck(budget)
+    _valid_now(issuer_certificate.certificate, budget)
+    directory.check(budget)
+    budget.check()
+
+
+def _retained_key(pin: tls.PinnedFile, budget: Budget, owners: ExitStack):
+    """Existing descriptor primitives, with ownership checked before body one."""
+    _path, parts = tls._validate_pin(pin)
+    descriptor = tls._open_original(parts, budget)
+    owners.callback(os.close, descriptor)
+    budget.check()
+    before = os.fstat(descriptor)
+    tls._check_file(before, _PRIVATE_KEY_BYTES, True)
+    if before.st_uid != os.geteuid():
+        _fail("retained workload key must belong to the current process user")
+    raw = tls._read_descriptor(descriptor, _PRIVATE_KEY_BYTES, budget)
+    budget.check()
+    after = os.fstat(descriptor)
+    if (tls._metadata(before) != tls._metadata(after)
+            or len(raw) != before.st_size or _digest(raw) != pin.sha256):
+        _fail("retained workload key differs from its pinned original")
+    original = tls._Original(descriptor, parts, pin.sha256, _PRIVATE_KEY_BYTES,
+        True, tls._metadata(after), raw)
+    original.recheck(budget)
+    return original
+
+
+def prepare_identity(*, packet: tls.PinnedFile, packet_signing_key: tls.PinnedFile,
+        issuer: tls.PinnedFile, expected_principal: str, expected_nonce: str,
+        selected_sans: dict[str, list[str]], output_directory: Path | str,
+        timeout_ms: int = 30_000) -> PreparedIdentity:
+    """Create one local key/request; partial publications are never retried."""
+    try:
+        budget = Budget(timeout_ms)
+        with ExitStack() as owners:
+            binding, selectors, issuer_certificate, originals = _common(packet, packet_signing_key,
+                issuer, expected_principal, expected_nonce, budget, owners)
+            selected = _selected(selected_sans, selectors)
+            if "certificateSha256" in selectors or "spkiSha256" in selectors:
+                _fail("fresh workload key preparation cannot satisfy a preselected leaf or key")
+            directory = _Directory(output_directory, budget, owners)
+            _recheck(originals, issuer_certificate, directory, budget)
+            # The irreversible local claim prevents repeating key creation in
+            # this directory after any uncertain or partially published result.
+            claim = packets._canonical({"schema": "serverware.workloadIdentityPreparation/v1",
+                **binding, "selectedSans": selected}, MAX_REQUEST_BYTES, budget)
+            directory.publish("preparation.claim", claim, budget)
+            budget.check()
+            private = ec.generate_private_key(ec.SECP256R1())
+            budget.check()
+            csr = (x509.CertificateSigningRequestBuilder().subject_name(x509.Name([]))
+                .add_extension(x509.SubjectAlternativeName(_names(selected)), critical=True)
+                .sign(private, hashes.SHA256()))
+            budget.check()
+            csr_raw = csr.public_bytes(serialization.Encoding.PEM)
+            if len(csr_raw) > MAX_CSR_BYTES:
+                _fail("workload CSR exceeds its original bound")
+            payload = {"schema": PAYLOAD_SCHEMA, **binding, "selectedSans": selected,
+                "subjectPublicKeyInfoSha256": _digest(_spki(private.public_key())),
+                "csr": {"pem": csr_raw.decode("ascii"), "sha256": _digest(csr_raw)}}
+            unsigned = packets._canonical(payload, MAX_REQUEST_BYTES, budget)
+            budget.check()
+            signature = private.sign(REQUEST_DOMAIN + unsigned, ec.ECDSA(hashes.SHA256()))
+            budget.check()
+            r, s = utils.decode_dss_signature(signature)
+            signature = utils.encode_dss_signature(r, min(s, _P256_ORDER - s))
+            request_raw = packets._canonical({"schema": REQUEST_SCHEMA, "payload": payload,
+                "signature": "ecdsa-p256-sha256:"
+                    + base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")},
+                MAX_REQUEST_BYTES, budget)
+            private_raw = private.private_bytes(serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+            if len(private_raw) > _PRIVATE_KEY_BYTES:
+                _fail("workload private key exceeds its local storage bound")
+            _recheck(originals, issuer_certificate, directory, budget)
+            private_pin = directory.publish("private-key.pem", private_raw, budget)
+            csr_pin = directory.publish("request.pem", csr_raw, budget)
+            request_pin = directory.publish("request.json", request_raw, budget)
+            _recheck(originals, issuer_certificate, directory, budget)
+            # Re-read every final original together before returning any pins.
+            _retained_key(private_pin, budget, owners).recheck(budget)
+            for pin, maximum in ((csr_pin, MAX_CSR_BYTES), (request_pin, MAX_REQUEST_BYTES)):
+                tls._load_original(pin, maximum, False, budget, owners).recheck(budget)
+            result = PreparedIdentity(request_pin, csr_pin, private_pin)
+        budget.check()
+        return result
+    except WorkloadClientError:
+        raise
+    except Exception:
+        raise WorkloadClientError("local workload preparation failed; retain any published files and do not retry that directory") from None
+
+
+def _request(raw: bytes, binding: dict, selectors: dict, budget: Budget):
+    if not 1 <= len(raw) <= MAX_REQUEST_BYTES:
+        _fail("workload identity request exceeds its original bound")
+    envelope = packets._parse_packet(raw, budget)
+    if (set(envelope) != {"schema", "payload", "signature"}
+            or envelope["schema"] != REQUEST_SCHEMA
+            or type(envelope["payload"]) is not dict
+            or set(envelope["payload"]) != _PAYLOAD_FIELDS):
+        _fail("workload identity request has an unsupported schema")
+    payload = envelope["payload"]
+    if payload["schema"] != PAYLOAD_SCHEMA or any(
+            type(payload[name]) is not type(value) or payload[name] != value
+            for name, value in binding.items()):
+        _fail("workload identity request differs from its independently verified originals")
+    if packets._canonical(envelope, MAX_REQUEST_BYTES, budget) != raw:
+        _fail("workload identity request is not canonical")
+    selected = _selected(payload["selectedSans"], selectors)
+    wrapped = payload["csr"]
+    if (type(wrapped) is not dict or set(wrapped) != {"pem", "sha256"}
+            or type(wrapped["pem"]) is not str):
+        _fail("workload request CSR wrapper is invalid")
+    csr_raw = wrapped["pem"].encode("ascii")
+    if not 1 <= len(csr_raw) <= MAX_CSR_BYTES or _digest(csr_raw) != wrapped["sha256"]:
+        _fail("workload CSR original differs from its signed digest")
+    budget.check()
+    csr = x509.load_pem_x509_csr(csr_raw)
+    budget.check()
+    public = csr.public_key()
+    if (not isinstance(public, ec.EllipticCurvePublicKey) or not isinstance(public.curve, ec.SECP256R1)
+            or csr.subject != x509.Name([]) or len(csr.attributes) != 1
+            or len(csr.extensions) != 1 or not csr.is_signature_valid
+            or not isinstance(csr.signature_hash_algorithm, hashes.SHA256)
+            or csr.public_bytes(serialization.Encoding.PEM) != csr_raw):
+        _fail("workload CSR is not the genuine bounded P-256 request profile")
+    san = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    if not san.critical or list(san.value) != _names(selected):
+        _fail("workload CSR SANs differ from the exact signed request")
+    if payload["subjectPublicKeyInfoSha256"] != _digest(_spki(public)):
+        _fail("workload CSR key differs from the signed request")
+    encoded = envelope["signature"]
+    prefix = "ecdsa-p256-sha256:"
+    if type(encoded) is not str or not encoded.startswith(prefix) or len(encoded) > 128:
+        _fail("workload request signature profile differs")
+    spelling = encoded[len(prefix):]
+    signature = base64.b64decode(spelling + "=" * (-len(spelling) % 4), altchars=b"-_", validate=True)
+    r, s = utils.decode_dss_signature(signature)
+    if (not 1 <= r < _P256_ORDER or not 1 <= s <= _P256_ORDER // 2
+            or utils.encode_dss_signature(r, s) != signature
+            or base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=") != spelling):
+        _fail("workload request signature is not canonical P-256")
+    budget.check()
+    public.verify(signature, REQUEST_DOMAIN + packets._canonical(payload, MAX_REQUEST_BYTES, budget),
+        ec.ECDSA(hashes.SHA256()))
+    budget.check()
+    return selected, public
+
+
+def _leaf(raw: bytes, issuer_certificate, selected: dict, public, binding: dict,
+        selectors: dict, budget: Budget):
+    _text, originals = tls._public_certificates(raw, budget, client=True)
+    if len(originals) != 1:
+        _fail("workload reply must contain exactly one directly issued leaf")
+    original = originals[0]
+    leaf, issuer = original.certificate, issuer_certificate.certificate
+    _valid_now(leaf, budget)
+    if (leaf.subject != x509.Name([]) or original.spki_der != _spki(public)
+            or leaf.serial_number <= 0
+            or any(extension.oid not in _LEAF_EXTENSIONS for extension in leaf.extensions)):
+        _fail("workload leaf key, subject or extension profile differs")
+    constraints = _extension(leaf, x509.BasicConstraints, critical=True)
+    usage = _extension(leaf, x509.KeyUsage, critical=True)
+    eku = _extension(leaf, x509.ExtendedKeyUsage)
+    sans = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    if (constraints.ca or constraints.path_length is not None
+            or not usage.digital_signature or usage.content_commitment or usage.key_encipherment
+            or usage.data_encipherment or usage.key_agreement or usage.key_cert_sign or usage.crl_sign
+            or list(eku) != [ExtendedKeyUsageOID.CLIENT_AUTH]
+            or not sans.critical or list(sans.value) != _names(selected)):
+        _fail("workload leaf identity or client-auth constraints differ")
+    if (leaf.not_valid_before_utc < issuer.not_valid_before_utc
+            or leaf.not_valid_after_utc > issuer.not_valid_after_utc
+            or leaf.not_valid_before_utc.timestamp() * 1000 < binding["issuedAtEpochMs"]
+            or leaf.not_valid_after_utc.timestamp() * 1000 > binding["expiresAtEpochMs"]):
+        _fail("workload leaf validity exceeds the original requested authority")
+    algorithm = leaf.signature_hash_algorithm
+    if not (isinstance(issuer.public_key(), ed25519.Ed25519PublicKey) and algorithm is None
+            or isinstance(algorithm, (hashes.SHA256, hashes.SHA384, hashes.SHA512))):
+        _fail("workload leaf signature algorithm is outside the direct-issuer profile")
+    budget.check()
+    leaf.verify_directly_issued_by(issuer)
+    budget.check()
+    identity.check_client_selectors((original, issuer_certificate), selectors, budget)
+    _valid_now(leaf, budget)
+    return original
+
+
+def admit_certificate(*, packet: tls.PinnedFile, packet_signing_key: tls.PinnedFile,
+        issuer: tls.PinnedFile, expected_principal: str, expected_nonce: str,
+        request: tls.PinnedFile, private_key: tls.PinnedFile, certificate: tls.PinnedFile,
+        output_directory: Path | str, timeout_ms: int = 30_000) -> ProvisionedIdentity:
+    """Admit one direct-issued leaf and publish the existing client's PEM chain."""
+    try:
+        budget = Budget(timeout_ms)
+        with ExitStack() as owners:
+            binding, selectors, issuer_certificate, common = _common(packet, packet_signing_key,
+                issuer, expected_principal, expected_nonce, budget, owners)
+            for pin in (request, private_key, certificate):
+                tls._validate_pin(pin)
+            requested = tls._load_original(request, MAX_REQUEST_BYTES, False, budget, owners)
+            returned = tls._load_original(certificate, MAX_CERTIFICATE_BYTES, False, budget, owners)
+            selected, public = _request(requested.raw, binding, selectors, budget)
+            admitted_leaf = _leaf(returned.raw, issuer_certificate, selected, public,
+                binding, selectors, budget)
+            # All public originals and direct trust checks precede key bytes.
+            retained = _retained_key(private_key, budget, owners)
+            tls._canonical_private_key(retained.raw, budget)
+            budget.check()
+            private = serialization.load_pem_private_key(retained.raw, password=None)
+            budget.check()
+            if (not isinstance(private, ec.EllipticCurvePrivateKey)
+                    or not isinstance(private.curve, ec.SECP256R1)
+                    or _spki(private.public_key()) != _spki(public)):
+                _fail("workload certificate does not match the exact retained request key")
+            originals = (*common, requested, returned, retained)
+            directory = _Directory(output_directory, budget, owners)
+            _recheck(originals, issuer_certificate, directory, budget)
+            _valid_now(admitted_leaf.certificate, budget)
+            # The existing client expects leaf then issuing certificate when
+            # checking an issuer-SPKI selector. Neither becomes system trust.
+            chain = (admitted_leaf.certificate.public_bytes(serialization.Encoding.PEM)
+                + issuer_certificate.certificate.public_bytes(serialization.Encoding.PEM))
+            if len(chain) > tls._MAX_IDENTITY_BYTES:
+                _fail("workload admitted chain exceeds the existing client bound")
+            published = directory.publish("client-certificate.pem", chain, budget)
+            _recheck(originals, issuer_certificate, directory, budget)
+            _valid_now(admitted_leaf.certificate, budget)
+            tls._load_original(published, tls._MAX_IDENTITY_BYTES, False, budget, owners).recheck(budget)
+            result = ProvisionedIdentity(published, private_key)
+        budget.check()
+        return result
+    except WorkloadClientError:
+        raise
+    except (InvalidSignature, UnsupportedAlgorithm):
+        raise WorkloadClientError("workload request or certificate authentication failed") from None
+    except Exception:
+        raise WorkloadClientError("local workload certificate admission failed; no existing identity was replaced") from None

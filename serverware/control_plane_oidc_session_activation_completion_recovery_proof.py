@@ -146,6 +146,8 @@ def _proof_from_intent(selected_intent):
     setup_size = 0 if setup_originals is None else len(setup_originals[0])
     setup_material = None
     historical = returned is not None
+    if not historical and inputs.retained_only:
+        _fail("retired release authority requires its exact retained proof; contact is forbidden")
     if not historical and inputs._purpose != "release-intent-proof":
         _fail("release requires an existing proof; it cannot contact or resume preparation")
     if historical:
@@ -341,6 +343,8 @@ def _proof_from_intent(selected_intent):
     expected_type = proof._HistoricalProofEvidence if historical else proof._AdmittedProof
     if type(admitted) is not expected_type:
         _fail("recovery proof lacks genuine original signature admission")
+    intent_source._contain_original_interval(inputs, admitted.payload)
+    current()
     lifetime.attach(admitted.live)
     if not historical:
         lifetime.narrow(min(admitted.payload["expiresAtEpochNs"],

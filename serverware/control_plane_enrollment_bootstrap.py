@@ -75,6 +75,8 @@ V20_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v20"
 V20_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v20"
 V21_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v21"
 V21_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v21"
+V22_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v22"
+V22_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v22"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_NODES = capture.MAX_TOTAL_JSON_NODES
 MAX_DEPTH = capture.MAX_JSON_DEPTH
@@ -102,6 +104,7 @@ _V18_PAYLOAD_FIELDS = _V17_PAYLOAD_FIELDS | frozenset({"finalizationHistory"})
 _V19_PAYLOAD_FIELDS = _V18_PAYLOAD_FIELDS | frozenset({"activationHistory"})
 _V20_PAYLOAD_FIELDS = _V19_PAYLOAD_FIELDS
 _V21_PAYLOAD_FIELDS = _V20_PAYLOAD_FIELDS | frozenset({"historicalConsumeInputAcquisition"})
+_V22_PAYLOAD_FIELDS = _V21_PAYLOAD_FIELDS
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _GENERATION_FIELDS = frozenset(configuration._GENERATION_FIELDS)
 _NUMBER_BYTES = frozenset(b"0123456789.eE+-")
@@ -658,6 +661,9 @@ def _v20_payload_shape(value):
     prior["schema"] = V18_PAYLOAD_SCHEMA
     _v18_payload_shape(prior)
     history._shape(value["activationHistory"])
+    if (value["activationHistory"] is not None
+            and value["activationHistory"]["schema"] not in (history.SCHEMA, history.V2_SCHEMA)):
+        raise EnrollmentBootstrapError("v20 activation history supports only original v1/v2 inventories")
     if value["activationHistory"] is not None and (
             value["registrationHistory"] is None or value["finalizationHistory"] is None):
         raise EnrollmentBootstrapError("v20 activation history requires both shared historical scopes")
@@ -693,6 +699,37 @@ def _v21_shape(value):
     capability.shape._literal(value["schema"], V21_SCHEMA)
     capability.shape._base64url(value["signatureBase64Url"], signature=True)
     _v21_payload_shape(value["payload"])
+
+
+def _v22_payload_shape(value):
+    from serverware import control_plane_oidc_session_activation_history_bootstrap as history
+    from serverware import control_plane_oidc_session_activation_consume_input_acquisition_bootstrap as acquisition
+
+    capability.shape._object(value, _V22_PAYLOAD_FIELDS, "v22 enrollment bootstrap payload")
+    capability.shape._literal(value["schema"], V22_PAYLOAD_SCHEMA)
+    # Validate the unchanged preceding lanes without projecting a v3 archive
+    # into an older signed history schema or silently widening v20/v21.
+    prior = {name: value[name] for name in _V18_PAYLOAD_FIELDS}
+    prior["schema"] = V18_PAYLOAD_SCHEMA
+    _v18_payload_shape(prior)
+    history._shape(value["activationHistory"])
+    if value["activationHistory"] is not None and (
+            value["registrationHistory"] is None or value["finalizationHistory"] is None):
+        raise EnrollmentBootstrapError("v22 activation history requires both shared historical scopes")
+    selected = value["historicalConsumeInputAcquisition"]
+    acquisition._shape(selected)
+    if selected is not None:
+        capability.shape._literal(selected["schema"], acquisition.V2_SCHEMA)
+        if any(value[name] is None for name in ("activationHistory", "oidcSessionActivationPlanning",
+                "oidcSessionActivationExecution", "oidcSessionActivationConsumeExecution")):
+            raise EnrollmentBootstrapError("v22 consume bridge requires archived evidence and current execution")
+
+
+def _v22_shape(value):
+    capability.shape._object(value, _ENVELOPE_FIELDS, "v22 enrollment bootstrap envelope")
+    capability.shape._literal(value["schema"], V22_SCHEMA)
+    capability.shape._base64url(value["signatureBase64Url"], signature=True)
+    _v22_payload_shape(value["payload"])
 
 
 def _canonical(raw, value, work):
@@ -1138,7 +1175,10 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         is_v19 = type(envelope) is dict and envelope.get("schema") == V19_SCHEMA
         is_v20 = type(envelope) is dict and envelope.get("schema") == V20_SCHEMA
         is_v21 = type(envelope) is dict and envelope.get("schema") == V21_SCHEMA
-        if is_v21:
+        is_v22 = type(envelope) is dict and envelope.get("schema") == V22_SCHEMA
+        if is_v22:
+            _v22_shape(envelope)
+        elif is_v21:
             _v21_shape(envelope)
         elif is_v20:
             _v20_shape(envelope)
@@ -1182,12 +1222,12 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         payload = envelope["payload"]
         payload_bytes = configuration._configuration_wire(payload, capture._SharedLedger(work))
         capability._signature(key, envelope["signatureBase64Url"],
-            V21_SCHEMA if is_v21 else V20_SCHEMA if is_v20 else V19_SCHEMA if is_v19 else V18_SCHEMA if is_v18 else V17_SCHEMA if is_v17 else V16_SCHEMA if is_v16 else V15_SCHEMA if is_v15 else V14_SCHEMA if is_v14 else V13_SCHEMA if is_v13 else V12_SCHEMA if is_v12 else V11_SCHEMA if is_v11 else V10_SCHEMA if is_v10 else V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
+            V22_SCHEMA if is_v22 else V21_SCHEMA if is_v21 else V20_SCHEMA if is_v20 else V19_SCHEMA if is_v19 else V18_SCHEMA if is_v18 else V17_SCHEMA if is_v17 else V16_SCHEMA if is_v16 else V15_SCHEMA if is_v15 else V14_SCHEMA if is_v14 else V13_SCHEMA if is_v13 else V12_SCHEMA if is_v12 else V11_SCHEMA if is_v11 else V10_SCHEMA if is_v10 else V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
             payload_bytes, capture._SharedLedger(work))
         _canonical(original, envelope, work)
         material = (_v21_material(payload, expected, key, work,
             current_interval=_history_current_interval, now_epoch_ns=_history_now_epoch_ns,
-            live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns) if is_v21
+            live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns) if (is_v21 or is_v22)
             else _v19_material(payload, expected, key, work,
             current_interval=_history_current_interval, now_epoch_ns=_history_now_epoch_ns,
             live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns) if (is_v19 or is_v20)
@@ -2551,5 +2591,74 @@ def _produce_v21_on_work(*, payload, history_current_interval, history_now_epoch
     result = _encode(envelope)
     if len(result) != envelope_size:
         raise EnrollmentBootstrapError("v21 output changed after reservation")
+    live()
+    return result
+
+
+def _produce_v22_on_work(*, payload, history_current_interval, history_now_epoch_ns,
+        history_live_window, history_transport_deadline_ns,
+        runtime_root_private_key, runtime_root_public_key, work):
+    """Sign v22 only after genuine archived intent/proof admission.
+
+    The closed payload retains every existing purpose slot. Archive v3 adds
+    public original enrollment data, never a retired private-key requirement or
+    a successful material accepted instead of the independently signed bytes.
+    """
+    from serverware import control_plane_oidc_session_activation_history_bootstrap as history
+
+    ledger = capture._SharedLedger(work)
+    private, public = runtime_root_private_key, runtime_root_public_key
+    if not isinstance(private, Ed25519PrivateKey) or not isinstance(public, Ed25519PublicKey):
+        raise EnrollmentBootstrapError("v22 bootstrap requires an independently admitted root pair")
+    owned = configuration._ConfigurationCapture(ledger, maximum_bytes=MAX_BYTES).visit(payload)
+    _v22_payload_shape(owned)
+    current = history.planning.planner._processing(history_live_window, history_transport_deadline_ns, work)
+    current()
+    # The shared constructor admits the exact nested originals; only the
+    # source-selected v22 shape and signing domain authorize the new inventory.
+    material = _v21_material(owned, owned["configurationDigest"], public, work,
+        current_interval=history_current_interval, now_epoch_ns=history_now_epoch_ns,
+        live_window=history_live_window, transport_deadline_ns=history_transport_deadline_ns)
+
+    def live():
+        now = current()
+        for selected in (material.registration_history, material.finalization_history, material.activation_history):
+            if selected is not None and not selected.valid_from_epoch_ns <= now < selected.valid_until_epoch_ns:
+                raise EnrollmentBootstrapError("v22 historical authorization expired during production")
+        acquisition = material.historical_consume_input_acquisition
+        if acquisition is not None and acquisition.historical_scope is not None:
+            issued, expires = acquisition.bridge_interval
+            if issued > now + history_live_window[6] or now >= expires:
+                raise EnrollmentBootstrapError("v22 current consume bridge expired during production")
+        return now
+
+    live()
+    keys._pair_on_work(private, public, work)
+    live()
+    envelope = {"schema": V22_SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+    payload_size, payload_nodes = _measure(owned, work)
+    envelope_size, envelope_nodes = _measure(envelope, work)
+    work.charge(input_bytes=3 * payload_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
+        json_nodes=payload_nodes + envelope_nodes)
+    frame_bytes = 2 * len(V22_SCHEMA) + 9 + payload_size + 2 * 71
+    if (work.limits.max_hashes - work.hash_work < 1
+            or work.limits.max_input_bytes - work.input_bytes < frame_bytes + payload_size
+            or work.limits.max_json_nodes - work.json_nodes < 4 + payload_nodes):
+        raise EnrollmentBootstrapError("v22 bootstrap cannot reserve its signature output")
+    original = configuration._configuration_wire(owned, capture._SharedLedger(work))
+    if len(original) != payload_size:
+        raise EnrollmentBootstrapError("v22 payload changed after measurement")
+    message = plan._ascii(plan._frame(V22_SCHEMA, (original,), work), work)
+    live()
+    signature = production._sign_and_verify(private, public, message, work)
+    live()
+    if _measure(owned, work) != (payload_size, payload_nodes) or _encode(owned) != original:
+        raise EnrollmentBootstrapError("v22 payload changed during signing")
+    encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+    capability.shape._base64url(encoded, signature=True)
+    envelope["signatureBase64Url"] = encoded
+    result = _encode(envelope)
+    if len(result) != envelope_size:
+        raise EnrollmentBootstrapError("v22 output changed after reservation")
     live()
     return result

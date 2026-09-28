@@ -45,6 +45,18 @@ LIVE proof without a setup record is allowed only on this read-only branch.
 Original intent/proof signature intervals are historical evidence, not renewed
 authority; the original delivery expiry still constrains the call.
 
+In `.229` retained-only preparation, the root, proof enrollment and exact
+planner original come from the independently selected retired RI authority,
+not the response's enrollment or the current signing configuration. The intent
+stage first matches the full retained tuple to the pre-actor prefix commitments.
+The proof stage genuinely re-admits the original enrollment, custody and proof,
+requires the custody's exact independently held planner original, and checks the
+signed proof interval is contained in the selected RI authority interval. It
+does not require a retired private key or re-admit an old setup as fresh launch
+authority. An absent proof refuses before any claim or service contact, including
+when the retained intent is still within its signed lifetime. Retired-RI delivery
+is separately gated; this preparation result is not fresh LIVE/RECOVERY authority.
+
 The proof lifetime's ancestor samples the actual intent continuation, which
 retains the actual input/actor guards. Nested setup, issuer and proof admissions
 refer only to this lifetime's base; their full guards are attached downstream,

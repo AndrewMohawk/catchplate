@@ -42,6 +42,7 @@ class _SelectedActivationHistory:
     planner_attestation_interval: tuple
     completion_recovery: object
     authority_interval: tuple
+    release_proof: object
     live: object
 
 
@@ -85,6 +86,8 @@ def _cold_originals(owner):
                     lane.current_root_enrollment_bytes, lane.grant_enrollment_bytes))
         if parent.release_intent is not None:
             originals.extend((parent.release_intent.enrollment_bytes, parent.release_intent.expected_scope_bytes))
+        if parent.release_proof is not None:
+            originals.extend((parent.release_proof.enrollment_bytes, parent.release_proof.expected_scope_bytes))
     if any(type(raw) is not bytes or not 2 <= len(raw) <= evidence.authority.MAX_REQUEST_BYTES
             for raw in originals):
         raise ActivationHistoryError("activation history cold original inventory exceeds its source limits")
@@ -144,12 +147,12 @@ def _common(owner, selected, snapshot, work):
             parent.runtime_role_identities, owner._binding.runtime_root_public_key,
             parent.activation_execution, parent.activation_planning, parent.consume_execution,
             parent.release_intent, owner._binding.attestation_interval,
-            parent.completion_recovery, owner._binding.attestation_interval)
+            parent.completion_recovery, owner._binding.attestation_interval, parent.release_proof)
     return (snapshot.payload, snapshot.configuration_digest, snapshot.generation,
         snapshot.runtime_role_identities, selected.root_public_key, selected.activation_execution,
         selected.activation_planning, selected.consume_execution, selected.release_intent,
         selected.planner_attestation_interval, selected.completion_recovery,
-        (snapshot.valid_from_epoch_ns, snapshot.valid_until_epoch_ns))
+        (snapshot.valid_from_epoch_ns, snapshot.valid_until_epoch_ns), selected.release_proof)
 
 
 def _result_on_owner(owner, selected, snapshot, *, originals, work, current):
@@ -161,7 +164,7 @@ def _result_on_owner(owner, selected, snapshot, *, originals, work, current):
     # Current-mode lanes are source-owned too; replacing any lane invalidates
     # an already selected original just as replacing archived material does.
     lanes = (parent.activation_execution, parent.activation_planning, parent.consume_execution,
-        parent.release_intent, parent.completion_recovery)
+        parent.release_intent, parent.completion_recovery, parent.release_proof)
     result = None
 
     def live():
@@ -171,12 +174,12 @@ def _result_on_owner(owner, selected, snapshot, *, originals, work, current):
                 or parent.activation_history is not material
                 or any(actual is not prior for actual, prior in zip((parent.activation_execution,
                     parent.activation_planning, parent.consume_execution, parent.release_intent,
-                    parent.completion_recovery), lanes))
+                    parent.completion_recovery, parent.release_proof), lanes))
                 or any(getattr(result, name) is not value for name, value in zip((
                     "configuration_payload", "configuration_digest", "generation", "runtime_role_identities",
                     "root_public_key", "activation_execution", "activation_planning", "consume_execution",
                     "release_intent", "planner_attestation_interval", "completion_recovery",
-                    "authority_interval"), values))
+                    "authority_interval", "release_proof"), values))
                 or type(originals) is not tuple or any(type(raw) is not bytes for raw in originals)):
             raise ActivationHistoryError("activation historical selected scope changed")
         for graph, pin in zip(graphs, pins):

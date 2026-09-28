@@ -16,16 +16,19 @@ from serverware import control_plane_oidc_session_activation_execution_bootstrap
 from serverware import control_plane_oidc_session_activation_planning_bootstrap as planning
 from serverware import control_plane_oidc_session_activation_consume_execution_bootstrap as consume
 from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as intent
+from serverware import control_plane_oidc_session_activation_release_proof_bootstrap as proof
 from serverware import control_plane_oidc_session_activation_completion_recovery_bootstrap as completion
 
 
 SCHEMA = "serverware.controlPlaneOidcSessionActivationHistory/v1"
 V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationHistory/v2"
+V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationHistory/v3"
 MAX_BYTES = registration.MAX_BYTES
 _FIELDS = frozenset({"schema", "activations"})
 _SCOPE_FIELDS = frozenset({"configurationDigest", "plannerAttestationReceiptDigest",
     "activationExecution", "activationPlanning", "consumeExecution", "releaseIntent"})
 _V2_SCOPE_FIELDS = _SCOPE_FIELDS | frozenset({"completionRecovery"})
+_V3_SCOPE_FIELDS = _V2_SCOPE_FIELDS | frozenset({"releaseProof"})
 shape, capture, plan, clock = planning.shape, planning.capture, planning.plan, planning.planner.clock
 
 
@@ -48,6 +51,7 @@ class _ActivationHistoryScope:
     planner_attestation_interval: tuple
     original_bytes: bytes
     completion_recovery: completion._CompletionRecoveryMaterial | None = None
+    release_proof: proof._ReleaseProofMaterial | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
@@ -65,15 +69,16 @@ def _shape(value):
     if value is None:
         return
     shape._object(value, _FIELDS, "activation history")
-    if type(value["schema"]) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA):
+    if type(value["schema"]) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA):
         raise OidcSessionActivationHistoryBootstrapError("activation history schema is not supported")
-    is_v2 = value["schema"] == V2_SCHEMA
+    is_v3 = value["schema"] == V3_SCHEMA
+    is_v2 = value["schema"] in (V2_SCHEMA, V3_SCHEMA)
     values = value["activations"]
     if type(values) is not list or not 1 <= len(values) <= archive.MAX_ENTRIES + 1:
         raise OidcSessionActivationHistoryBootstrapError("activation history inventory exceeds its fixed bound")
     previous = None
     for selected in values:
-        shape._object(selected, _V2_SCOPE_FIELDS if is_v2 else _SCOPE_FIELDS,
+        shape._object(selected, _V3_SCOPE_FIELDS if is_v3 else _V2_SCOPE_FIELDS if is_v2 else _SCOPE_FIELDS,
             "activation historical scope")
         shape._digest(selected["configurationDigest"])
         shape._digest(selected["plannerAttestationReceiptDigest"])
@@ -91,6 +96,10 @@ def _shape(value):
                 raise OidcSessionActivationHistoryBootstrapError("activation history requires its exact original child profiles")
         if is_v2:
             completion._shape(selected["completionRecovery"])
+        if is_v3:
+            # Nullable is an explicit disabled lane, never permission to use
+            # an enrollment discovered inside a candidate retained proof.
+            proof._shape(selected["releaseProof"])
 
 
 def _histories(registrations, finalized):
@@ -198,12 +207,21 @@ def _admit_on_work(*, activation_history, registration_history, finalization_his
                 historical_interval=interval, live_window=window, transport_deadline_ns=bound,
                 _continuity=continuity, **common, **exclusions)
             current()
+            # Reauthenticate both enrollment originals under this SAME archive
+            # root. The proof helper repeats the intent signature, shared scope
+            # and configured-purpose key separation; no retired private key is
+            # opened and this archived endpoint authorizes no current contact.
+            proved = proof._admit_on_work(
+                release_proof=selected["releaseProof"] if owned["schema"] == V3_SCHEMA else None,
+                release_intent=intended, configuration_payload=snapshot.payload,
+                runtime_root_public_key=registered.root_public_key, work=work)
+            current()
             # These archived endpoints establish the historical execution join
             # only. A current enabled endpoint must independently authorize any
             # later contact; no old endpoint becomes a current routing grant.
             completed = completion._admit_on_work(
                 completion_recovery=(selected["completionRecovery"]
-                    if owned["schema"] == V2_SCHEMA else None),
+                    if owned["schema"] in (V2_SCHEMA, V3_SCHEMA) else None),
                 activation_execution=activated, consume_execution=consumed,
                 runtime_root_public_key=registered.root_public_key,
                 configuration_digest=chosen.configuration_digest,
@@ -213,7 +231,7 @@ def _admit_on_work(*, activation_history, registration_history, finalization_his
             scopes.append(_ActivationHistoryScope(chosen.configuration_digest, chosen.generation_digest,
                 chosen.planner_receipt_digest, chosen.valid_from_epoch_ns, chosen.valid_until_epoch_ns,
                 registered.root_public_key, activated, planned, consumed, intended, planner_interval, scope_raw,
-                completed))
+                completed, proved))
         plan._same(configuration._configuration_wire(owned, capture._SharedLedger(work)), original, work,
             "activation history changed during cold admission")
         current()
@@ -243,7 +261,9 @@ def _scopes(material, work):
                 or type(scope.consume_execution) is not consume._ConsumeExecutionMaterial
                 or type(scope.release_intent) is not intent._ReleaseIntentMaterial
                 or (scope.completion_recovery is not None
-                    and type(scope.completion_recovery) is not completion._CompletionRecoveryMaterial)):
+                    and type(scope.completion_recovery) is not completion._CompletionRecoveryMaterial)
+                or (scope.release_proof is not None
+                    and type(scope.release_proof) is not proof._ReleaseProofMaterial)):
             raise OidcSessionActivationHistoryBootstrapError("activation historical child inventory changed")
     return material.scopes
 

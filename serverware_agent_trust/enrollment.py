@@ -604,6 +604,92 @@ def emit_packet(packet: dict[str, object]) -> None:
     print()
 
 
+def _workload_identity_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
+    """Local-only provisioning; never fall through into enrollment networking."""
+    selected = args.prepare_workload_identity or args.admit_workload_certificate
+    supplied = {item.split("=", 1)[0] for item in sys.argv[1:] if item.startswith("--")}
+    if not selected:
+        if any(flag.startswith("--workload-") for flag in supplied):
+            parser.error("--workload-* inputs require an explicit workload provisioning mode")
+        return False
+    allowed = {
+        "--prepare-workload-identity", "--admit-workload-certificate",
+        "--expected-principal", "--expected-nonce", "--workload-packet",
+        "--workload-packet-sha256", "--workload-packet-signing-key",
+        "--workload-packet-signing-key-sha256", "--workload-issuer",
+        "--workload-issuer-sha256", "--workload-output-directory",
+        "--workload-timeout-ms", "--workload-san-dns", "--workload-san-uri",
+        "--workload-request", "--workload-request-sha256", "--workload-private-key",
+        "--workload-private-key-sha256", "--workload-certificate", "--workload-certificate-sha256",
+    }
+    if supplied - allowed:
+        parser.error("local workload provisioning does not accept enrollment, receipt or network options")
+    required = (
+        ("--expected-principal", args.expected_principal),
+        ("--expected-nonce", args.expected_nonce),
+        ("--workload-packet", args.workload_packet),
+        ("--workload-packet-sha256", args.workload_packet_sha256),
+        ("--workload-packet-signing-key", args.workload_packet_signing_key),
+        ("--workload-packet-signing-key-sha256", args.workload_packet_signing_key_sha256),
+        ("--workload-issuer", args.workload_issuer),
+        ("--workload-issuer-sha256", args.workload_issuer_sha256),
+        ("--workload-output-directory", args.workload_output_directory),
+    )
+    admission = (
+        ("--workload-request", args.workload_request),
+        ("--workload-request-sha256", args.workload_request_sha256),
+        ("--workload-private-key", args.workload_private_key),
+        ("--workload-private-key-sha256", args.workload_private_key_sha256),
+        ("--workload-certificate", args.workload_certificate),
+        ("--workload-certificate-sha256", args.workload_certificate_sha256),
+    )
+    if args.admit_workload_certificate:
+        required += admission
+        if args.workload_san_dns or args.workload_san_uri:
+            parser.error("certificate admission takes SANs only from the authenticated retained request")
+    elif any(value is not None for _flag, value in admission):
+        parser.error("fresh identity preparation cannot accept an existing request, key or certificate")
+    missing = [flag for flag, value in required if value is None or value == ""]
+    if missing:
+        parser.error("local workload provisioning requires " + ", ".join(missing))
+    # Import only for these explicit local modes. These helpers perform no
+    # network calls and cannot consume an admin or CA-install session token.
+    from . import workload_identity_provisioning as provisioning
+    from ._workload_tls import PinnedFile
+
+    common = {
+        "packet": PinnedFile(args.workload_packet, args.workload_packet_sha256),
+        "packet_signing_key": PinnedFile(args.workload_packet_signing_key,
+            args.workload_packet_signing_key_sha256),
+        "issuer": PinnedFile(args.workload_issuer, args.workload_issuer_sha256),
+        "expected_principal": args.expected_principal,
+        "expected_nonce": args.expected_nonce,
+        "output_directory": args.workload_output_directory,
+        "timeout_ms": args.workload_timeout_ms,
+    }
+
+    def description(pin: PinnedFile) -> dict[str, str]:
+        return {"path": os.fspath(pin.path), "sha256": pin.sha256}
+
+    if args.prepare_workload_identity:
+        prepared = provisioning.prepare_identity(**common, selected_sans={
+            "dnsNames": sorted(args.workload_san_dns), "uris": sorted(args.workload_san_uri)})
+        result = {"status": "prepared-local-only", "request": description(prepared.request),
+            "csr": description(prepared.csr), "privateKey": description(prepared.private_key)}
+    else:
+        admitted = provisioning.admit_certificate(**common,
+            request=PinnedFile(args.workload_request, args.workload_request_sha256),
+            private_key=PinnedFile(args.workload_private_key, args.workload_private_key_sha256),
+            certificate=PinnedFile(args.workload_certificate, args.workload_certificate_sha256))
+        result = {"status": "certificate-admitted-local-only",
+            "clientCertificate": description(admitted.client_certificate),
+            "clientPrivateKey": description(admitted.client_private_key)}
+    print(json.dumps({"schema": "serverware.workloadIdentityLocalResult/v1", **result,
+        "issuanceAuthorized": False, "proxyAuthenticated": False, "enrollmentComplete": False},
+        indent=2, sort_keys=True))
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate or verify a Serverware agent enrollment packet, or sign a setup receipt."
@@ -637,6 +723,21 @@ def main() -> None:
     parser.add_argument("--expected-packet-sha256")
     parser.add_argument("--expected-principal")
     parser.add_argument("--expected-nonce")
+    workload_modes = parser.add_mutually_exclusive_group()
+    workload_modes.add_argument("--prepare-workload-identity", action="store_true",
+        help="locally prepare one packet-bound P-256 key and public CSR/request; never contact an issuer")
+    workload_modes.add_argument("--admit-workload-certificate", action="store_true",
+        help="locally admit one directly issued workload leaf against retained originals and a pinned issuer")
+    for name in ("packet", "packet-signing-key", "issuer", "request", "private-key", "certificate"):
+        parser.add_argument("--workload-" + name, type=Path)
+        parser.add_argument("--workload-" + name + "-sha256")
+    parser.add_argument("--workload-output-directory", type=Path,
+        help="existing current-user-owned mode-0700 directory; fixed outputs are never overwritten")
+    parser.add_argument("--workload-timeout-ms", type=int, default=30_000)
+    parser.add_argument("--workload-san-dns", action="append", default=[],
+        help="exact DNS SAN selected from the authenticated packet; repeat for multiple values")
+    parser.add_argument("--workload-san-uri", action="append", default=[],
+        help="exact URI/SPIFFE SAN selected from the authenticated packet; repeat for multiple values")
     parser.add_argument(
         "--sign-setup-receipt",
         action="store_true",
@@ -681,6 +782,9 @@ def main() -> None:
         help="external TEE quote verifier command for non-development attestations",
     )
     args = parser.parse_args()
+
+    if _workload_identity_mode(parser, args):
+        return
 
     if args.verify_packet is not None and args.verified_packet is not None:
         parser.error("--verify-packet and --verified-packet are mutually exclusive")

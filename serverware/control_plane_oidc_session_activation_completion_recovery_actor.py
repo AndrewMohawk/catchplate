@@ -17,6 +17,7 @@ from serverware import control_plane_oidc_session_activation_recovery_actor as a
 from serverware import control_plane_oidc_session_activation_completion_recovery_bootstrap as configured
 from serverware import control_plane_oidc_session_activation_completion_recovery_history as history
 from serverware import control_plane_oidc_session_activation_completion_recovery_consume_selection as consume_selection
+from serverware import control_plane_oidc_session_activation_completion_recovery_intent_selection as intent_selection
 
 
 execution, startup, permission = actor.execution, actor.startup, actor.permission
@@ -25,7 +26,7 @@ _CONSTRUCTION = object()
 _ACTIVE = None
 INTENT_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryIntent/v1"
 OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryOptions/v1"
-RELEASE_INTENT_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryReleaseIntent/v1"
+RELEASE_INTENT_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryReleaseIntent/v2"
 RELEASE_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryReleaseOptions/v1"
 RELEASE_PATH = "/api/auth/session/activation/consume/completion/recovery/release-proof"
 DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1"
@@ -192,12 +193,13 @@ class _CompletionActorScope(actor._ActorScope):
         "_purpose", "_purpose_pin", "_future_original_bytes", "_future_original_bytes_pin",
         "_current_configuration", "_current_configuration_pin", "_configuration_seal",
         "_consume_configuration", "_consume_planner_original", "_consume_configuration_pin",
-        "_consume_recovery_selection", "_consume_recovery_selection_pin")
+        "_consume_recovery_selection", "_consume_recovery_selection_pin",
+        "_retained_intent_selection", "_retained_intent_selection_pin")
 
     def __init__(self, construction, *, application, owner, request, original,
             payload, work, current, owner_scope, target, policy, policy_pin,
             request_pin, old_token, profile, parent, recovery, configuration,
-            current_configuration, purpose, future_original_bytes, selected_consume):
+            current_configuration, purpose, future_original_bytes, selected_consume, selected_intent):
         if (construction is not _CONSTRUCTION
                 or type(target) is not history._CompletionRecoveryTarget):
             actor._deny("completion recovery scope is privately constructed", 503)
@@ -219,6 +221,13 @@ class _CompletionActorScope(actor._ActorScope):
         elif selected_consume is not None:
             actor._deny("consume history selection cannot authorize another effect purpose", 503)
         self._consume_recovery_selection = self._consume_recovery_selection_pin = selected_consume
+        if purpose == "release-intent-proof":
+            intent_selection._require_selection(selected_intent, owner=owner, target=target, work=work)
+            if selected_intent.consume_selection is not selected_consume:
+                actor._deny("retained intent selection changed its original consume prefix", 503)
+        elif selected_intent is not None:
+            actor._deny("retained intent evidence cannot authorize a delivery purpose", 503)
+        self._retained_intent_selection = self._retained_intent_selection_pin = selected_intent
         self._consume_configuration = self._consume_planner_original = self._consume_configuration_pin = None
         if purpose == "consume":
             (self._consume_configuration, self._consume_planner_original,
@@ -241,6 +250,9 @@ class _CompletionActorScope(actor._ActorScope):
             # must never authorize a fresh signature or private proof request.
             self._binding["schema"] = RELEASE_INTENT_SCHEMA
             self._binding["recoveryPurpose"] = purpose
+            self._binding["retainedIntentOnly"] = selected_intent.retained_only
+            self._binding["retainedIntentRecordDigest"] = (
+                None if selected_intent.prefix_pins is None else selected_intent.prefix_pins[2])
         elif purpose == "release":
             # A separate fresh assertion and approval select release. Neither
             # completion nor intent/proof preparation can authorize this use.
@@ -263,6 +275,8 @@ class _CompletionActorScope(actor._ActorScope):
         self._window = target.live_window if selected_consume is None else selected_consume.window
         self._bound = min(target.deadline_ns, owner_scope.deadline_ns, self._window[4],
             target.deadline_ns if selected_consume is None else selected_consume.deadline_ns)
+        if selected_intent is not None:
+            self._window, self._bound = selected_intent.window, min(self._bound, selected_intent.deadline_ns)
         self._epoch, self._monotonic = self._window[0], self._window[2]
         self._pid, self._thread = os.getpid(), threading.get_ident()
         self._active, self._authorized, self._normal_exit = True, False, False
@@ -287,12 +301,17 @@ class _CompletionActorScope(actor._ActorScope):
                 or self._purpose is not self._purpose_pin
                 or self._future_original_bytes is not self._future_original_bytes_pin
                 or self._consume_recovery_selection is not self._consume_recovery_selection_pin
+                or self._retained_intent_selection is not self._retained_intent_selection_pin
                 or getattr(self._request.state, actor.ORIGINAL_STATE_NAME, None) is not self._original):
             actor._deny("completion recovery actor is no longer live", 503)
         parent, recovery, current_configuration = _configuration(self._owner, self._profile)
         selected_consume = self._consume_recovery_selection
         if selected_consume is not None:
             consume_selection._require_selection(selected_consume,
+                owner=self._owner, target=target, work=work)
+        selected_intent = self._retained_intent_selection
+        if selected_intent is not None:
+            intent_selection._require_selection(selected_intent,
                 owner=self._owner, target=target, work=work)
         historical = _historical_configuration(target, self._profile, selected_consume)
         expected = (self._profile, current_configuration.endpoint, historical.packet_digest,
@@ -452,8 +471,14 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
                 or not 0 < selected_consume.deadline_ns <= min(target.deadline_ns, selected_window[4])):
             actor._deny("consume completion selection widened the target allowance", 503)
     configuration = _selected_configuration(target, profile, current_configuration, selected_consume)
+    selected_intent = None
     if _purpose == "release-intent-proof":
-        _require_proof_effect_authority(owner, parent, target, selected_consume, work)
+        selected_intent = intent_selection._select_on_owner(owner, target=target,
+            consume_selection=selected_consume, work=work, current=base_current)
+        # Retained-RI verification is read-only and cannot acquire a fresh
+        # proof. Only the unchanged fresh-current lane needs its contact bridge.
+        if not selected_intent.retained_only:
+            _require_proof_effect_authority(owner, parent, target, selected_consume, work)
     elif _purpose == "release":
         _require_live_release_authority(owner, parent, target, selected_consume, work)
     elif _purpose not in ("completion", "consume"):
@@ -472,7 +497,8 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         policy_pin=policy_pin, request_pin=request_pin, old_token=old_token,
         profile=profile, parent=parent, recovery=recovery, configuration=configuration,
         current_configuration=current_configuration, purpose=_purpose,
-        future_original_bytes=_additional_original_bytes, selected_consume=selected_consume)
+        future_original_bytes=_additional_original_bytes, selected_consume=selected_consume,
+        selected_intent=selected_intent)
     _ACTIVE = scope
     try:
         rbac_pin, session_pin, credential, roles, trust_pin = scope._read_current()

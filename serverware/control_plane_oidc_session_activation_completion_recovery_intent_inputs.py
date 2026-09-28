@@ -95,6 +95,9 @@ class _IntentInputs:
     activation_authorization_digest: str
     original_reservation_bytes: int
     reconciliation_digest: str | None
+    retained_only: bool
+    retained_authority_interval: tuple | None
+    _retained_intent_selection: object
     _lifetime: object
     _live: object
     _bounds: object
@@ -137,7 +140,7 @@ _SEALED_FIELDS = ("_purpose", "actor", "controls", "work", "old_token_bytes", "c
     "intent_scope", "proof_scope_bytes", "proof_scope", "intent_policy", "proof_policy",
     "setup_policy", "planner_original", "root_public_key", "finalization_digest",
     "activation_authorization_digest", "original_reservation_bytes", "reconciliation_digest",
-    "_lifetime", "_live", "_bounds")
+    "retained_only", "retained_authority_interval", "_retained_intent_selection", "_lifetime", "_live", "_bounds")
 
 
 def _identity(value):
@@ -159,12 +162,38 @@ def _identity(value):
             or value.controls._actor is not actor):
         _fail("release preparation outlived its distinct actual fresh actor")
     value._bounds()
+    selection = value._retained_intent_selection
+    if type(value.retained_only) is not bool or actor._retained_intent_selection is not selection:
+        _fail("release inputs changed their original retained authority selection")
+    if selection is not None:
+        actors.intent_selection._require_selection(selection,
+            owner=actor._owner, target=actor._target, work=value.work)
+        if value._purpose != "release-intent-proof" or value.retained_only is not selection.retained_only:
+            _fail("retained intent selection cannot authorize another purpose or mode")
+    if value.retained_only:
+        authority = selection.authority
+        if (value.retained_authority_interval is not authority.authority_interval
+                or value.root_public_key is not authority.root_public_key
+                or value.intent_policy is not authority.release_intent
+                or value.proof_policy is not authority.release_proof
+                or value.planner_original is not authority.activation_planning.planner_bootstrap_bytes
+                or value.setup_policy is not None):
+            _fail("retained release inputs changed their independently archived authority")
+    elif value.retained_authority_interval is not None:
+        _fail("current release inputs cannot borrow a retired authority interval")
 
 
 def _require_inputs(value):
     _identity(value)
     value.current()
     return value
+
+
+def _match_retained_release_records(inputs, held):
+    """Match immutable prefix commitments before any signature or effect."""
+    _require_inputs(inputs)
+    if inputs._retained_intent_selection is not None:
+        actors.intent_selection._match_release_records(inputs._retained_intent_selection, held)
 
 
 def _admit_on_controls(selected, *, response_originals, receiving_current):
@@ -219,8 +248,22 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
     consume_authority = selected.consume_authority
     consume_selection = actor._consume_recovery_selection
     evidence_authority = activation_authority if consume_authority is None else consume_authority
-    intent_policy, proof_policy, setup_policy = (parent.release_intent,
+    current_intent, current_proof, current_setup = (parent.release_intent,
         parent.release_proof, parent.release_proof_acquisition)
+    retained_selection = actor._retained_intent_selection
+    retained_only = False
+    release_authority = None
+    if retained_selection is not None:
+        actors.intent_selection._require_selection(retained_selection, owner=owner, target=target, work=work)
+        if (purpose != "release-intent-proof" or selected._retained_intent_selection is not retained_selection
+                or retained_selection.consume_selection is not consume_selection):
+            _fail("release preparation changed its actual retained-prefix selection")
+        retained_only = retained_selection.retained_only
+        if retained_only:
+            release_authority = retained_selection.authority
+    intent_policy = current_intent if release_authority is None else release_authority.release_intent
+    proof_policy = current_proof if release_authority is None else release_authority.release_proof
+    setup_policy = current_setup if release_authority is None else None
     if (type(intent_policy) is not intent_configuration._ReleaseIntentMaterial
             or type(proof_policy) is not proof_configuration._ReleaseProofMaterial
             or (setup_policy is not None
@@ -235,16 +278,22 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
     if purpose == "release" and (consume_authority is None or consume_selection is None
             or consume_selection.authority is not consume_authority):
         _fail("LIVE release requires its independently selected original consume authority")
-    policy, planner_policy = activation_authority.activation_execution, parent.activation_planning
+    policy = activation_authority.activation_execution
+    planner_policy = parent.activation_planning if release_authority is None else release_authority.activation_planning
     consume_policy, current_policy = evidence_authority.consume_execution, parent.consume_execution
+    release_state_policy = current_policy if release_authority is None else release_authority.consume_execution
     if (type(policy) is not intent_configuration.activation._ActivationExecutionMaterial
             or type(consume_policy) is not intent_configuration.consume._ConsumeExecutionMaterial):
         _fail("release preparation lacks independently selected original execution policies")
-    root, old = binding.runtime_root_public_key, actor._old_token
+    current_root, old = binding.runtime_root_public_key, actor._old_token
+    root = current_root if release_authority is None else release_authority.root_public_key
     if type(old) is not bytes or len(old) != intent.delivery.TOKEN_BYTES:
         _fail("release preparation lost original old-token possession")
     state._public(root)
-    config, generation = parent.configuration_digest, parent.generation["digest"]
+    current_config, current_generation = parent.configuration_digest, parent.generation["digest"]
+    config = current_config if release_authority is None else release_authority.configuration_digest
+    generation = current_generation if release_authority is None else release_authority.generation["digest"]
+    retained_interval = None if release_authority is None else release_authority.authority_interval
     activation_config, activation_root = activation_authority.configuration_digest, activation_authority.root_public_key
     consume_config, consume_root = evidence_authority.configuration_digest, evidence_authority.root_public_key
     authority_interval = activation_authority.authority_interval
@@ -253,14 +302,18 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
     planner_original = planner_policy.planner_bootstrap_bytes
     enrollments = (policy.authorization_enrollment_bytes,
         policy.current_root_enrollment_bytes, policy.grant_enrollment_bytes)
-    state_originals = (consume_policy.current_root_enrollment_bytes, current_policy.current_root_enrollment_bytes)
+    state_originals = (consume_policy.current_root_enrollment_bytes, release_state_policy.current_root_enrollment_bytes)
+    if retained_only:
+        state_originals += (current_policy.current_root_enrollment_bytes,)
     # These are fixed source-selected attributes, not a generic graph walk.
     pins = ((owner, "_material", parent), (owner, "_binding", binding), (owner, "_custody", custody),
-        (parent, "release_intent", intent_policy), (parent, "release_proof", proof_policy),
-        (parent, "release_proof_acquisition", setup_policy), (parent, "consume_execution", current_policy),
-        (parent, "activation_planning", planner_policy), (binding, "runtime_root_public_key", root),
+        (parent, "release_intent", current_intent), (parent, "release_proof", current_proof),
+        (parent, "release_proof_acquisition", current_setup), (parent, "consume_execution", current_policy),
+        (parent, "activation_planning", parent.activation_planning), (binding, "runtime_root_public_key", current_root),
         (target, "authority", activation_authority), (selected, "consume_authority", consume_authority),
         (actor, "_consume_recovery_selection", consume_selection),
+        (actor, "_retained_intent_selection", retained_selection),
+        (selected, "_retained_intent_selection", retained_selection),
         (selected, "root_public_key", evidence_authority.root_public_key),
         (activation_authority, "activation_execution", policy),
         (activation_authority, "root_public_key", activation_root),
@@ -270,7 +323,8 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
         (evidence_authority, "root_public_key", consume_root),
         (evidence_authority, "configuration_digest", consume_config),
         (consume_policy, "current_root_enrollment_bytes", state_originals[0]),
-        (current_policy, "current_root_enrollment_bytes", state_originals[1]),
+        (release_state_policy, "current_root_enrollment_bytes", state_originals[1]),
+        (current_policy, "current_root_enrollment_bytes", state_originals[-1]),
         (planner_policy, "planner_bootstrap_bytes", planner_original),
         (intent_policy, "expected_scope_bytes", intent_scope_original),
         (proof_policy, "expected_scope_bytes", proof_scope_original),
@@ -287,12 +341,24 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
     def identity():
         if (actor._owner is not owner or actor._target is not target or actor._old_token is not old
                 or actor._purpose != purpose or actor._future_original_bytes != future
-                or parent.configuration_digest != config or parent.generation["digest"] != generation
+                or parent.configuration_digest != current_config or parent.generation["digest"] != current_generation
                 or any(getattr(held, name) is not original for held, name, original in pins)):
             _fail("release preparation changed its original actor or cold pins")
+        if release_authority is not None and (retained_selection.authority is not release_authority
+                or release_authority.root_public_key is not root
+                or release_authority.release_intent is not intent_policy
+                or release_authority.release_proof is not proof_policy
+                or release_authority.activation_planning is not planner_policy
+                or release_authority.consume_execution is not release_state_policy
+                or release_authority.configuration_digest != config
+                or release_authority.generation["digest"] != generation
+                or release_authority.authority_interval is not retained_interval):
+            _fail("release preparation changed its original RI authority")
 
     def ancestor(epoch, monotonic):
         identity()
+        if retained_selection is not None:
+            retained_selection.live()
         selected.current()
         received = receiving_current()
         now = selected.current()
@@ -356,24 +422,29 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
         _fail("release preparation activation caller escapes its original authority interval")
     lifetime.narrow(lifetime.window[3], authenticated.maximum_age_ns, authenticated.maximum_clock_skew_ns)
     lifetime.attach(authenticated.live)
-    # Root rotation is not a state migration: authenticate all three originals
+    # Root rotation is not a state migration: authenticate all selected originals
     # under their independently selected roots, then compare COMPLETE payloads.
     # LIVE keeps these evidence roots distinct from the CURRENT root used for
-    # its retained intent/proof and newly issued client/server originals.
+    # its new client/server originals. Read-only retained RI remains separately
+    # selected and must also match the current R2 complete state payload.
     states = []
-    for original_state, selected_root in ((enrollments[1], activation_root),
-            (state_originals[0], consume_root), (state_originals[1], root)):
+    state_roots = ((enrollments[1], activation_root),
+        (state_originals[0], consume_root), (state_originals[1], root))
+    if retained_only:
+        state_roots += ((state_originals[2], current_root),)
+    for original_state, selected_root in state_roots:
         lifetime.current()
         states.append(state._admit_enrollment_on_work(enrollment_bytes=original_state,
             root_public_key=selected_root, work=work))
         lifetime.current()
-    for original_state in states[:2]:
-        plan._same(original_state.payload, states[2].payload, work,
+    for original_state in states[:-1]:
+        plan._same(original_state.payload, states[-1].payload, work,
             "release preparation unchanged complete state enrollment payload")
     for actual, wanted in ((activation_authority.generation["digest"], generation),
             (evidence_authority.generation["digest"], generation),
-            (states[2].payload["generationDigest"], generation),
-            (states[2].payload["databaseId"], selected.marker["database_id"])):
+            (current_generation, generation),
+            (states[-1].payload["generationDigest"], generation),
+            (states[-1].payload["databaseId"], selected.marker["database_id"])):
         plan._same(actual, wanted, work, "release preparation exact original/current state cohort")
     bookkeeping._same_bytes(selected.enrollment_bytes, state_originals[0], work,
         "release preparation exact consume state enrollment original")
@@ -458,7 +529,7 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
         response_originals, release_original, release, intent_scope_original, intent_scope,
         proof_scope_original, proof_scope, intent_policy, proof_policy, setup_policy,
         planner_original, root, finalization, activation_digest, selected.original_reservation_bytes,
-        reconciliation_digest, lifetime, live, bounds)
+        reconciliation_digest, retained_only, retained_interval, retained_selection, lifetime, live, bounds)
     object.__setattr__(result, "_seal", (tuple(getattr(result, name) for name in _SEALED_FIELDS),
         _scope_pin(intent_scope, proof=False), _scope_pin(proof_scope, proof=True), _release_pin(release)))
     result.current()

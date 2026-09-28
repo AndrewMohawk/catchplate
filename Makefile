@@ -1175,6 +1175,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_completion_recovery_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_selection.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_consume_selection.py \
+	serverware/control_plane_oidc_session_activation_completion_recovery_intent_selection.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_history.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_actor.py \
 	serverware/control_plane_oidc_session_activation_completion_recovery_controls.py \
@@ -3090,6 +3091,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				requirements.browser.lock \
 				requirements.proxy-test.lock \
 				serverware_agent_trust/requirements.lock \
+				serverware_agent_trust/workload_identity_provisioning.py \
 				serverware/authority_counted_root_transition.py \
 				serverware/authority_store/counted_installation.py \
 				serverware/authority_complete_query_batch.py \
@@ -3397,6 +3399,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_completion_recovery_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_selection.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_consume_selection.py \
+				serverware/control_plane_oidc_session_activation_completion_recovery_intent_selection.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_history.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_actor.py \
 				serverware/control_plane_oidc_session_activation_completion_recovery_controls.py \

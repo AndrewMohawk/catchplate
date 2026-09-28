@@ -18,6 +18,7 @@ from serverware import authority_oidc_session_activation_delivery_execution_auth
 from serverware import authority_oidc_session_activation_reservation_records as activation_reservations
 from serverware import control_plane_oidc_session_activation_completion_recovery_actor as actors
 from serverware import control_plane_oidc_session_activation_completion_recovery_consume_selection as consume_selection
+from serverware import control_plane_oidc_session_activation_completion_recovery_intent_selection as intent_selection
 from serverware import control_plane_oidc_session_activation_consume_dispatch as consume_dispatch
 from serverware import control_plane_oidc_session_activation_consume_history as consume_history
 from serverware import control_plane_oidc_session_activation_consume_records as consume_records
@@ -65,6 +66,7 @@ class _CompletionControls:
     prior_completion: tuple | None
     authority: object
     consume_authority: object | None
+    _retained_intent_selection: object | None
     _live: object
     _seal: tuple | None = None
 
@@ -78,7 +80,8 @@ class _CompletionControls:
 _SEALED_FIELDS = ("_actor", "profile", "originals", "before_bytes", "after_bytes", "marker",
     "enrollment_bytes", "root_public_key", "current_pending", "endpoint", "packet_digest",
     "authorization_digest", "finalization_digest", "work", "window", "deadline_ns",
-    "original_reservation_bytes", "prior_response", "prior_completion", "authority", "consume_authority", "_live")
+    "original_reservation_bytes", "prior_response", "prior_completion", "authority", "consume_authority",
+    "_retained_intent_selection", "_live")
 
 
 def _identity(value):
@@ -111,6 +114,16 @@ def _identity(value):
             target=actor._target, work=value.work)
         if selection.authority is not value.consume_authority:
             _fail("completion controls changed their independently selected consume authority")
+    retained_selection = actor._retained_intent_selection
+    if retained_selection is not value._retained_intent_selection:
+        _fail("completion controls changed their retained intent selection")
+    if retained_selection is not None:
+        if value.profile != "consume" or actor._purpose != "release-intent-proof":
+            _fail("completion controls borrowed retained intent history for another purpose")
+        intent_selection._require_selection(retained_selection, owner=actor._owner,
+            target=actor._target, work=value.work)
+        if retained_selection.consume_selection is not selection:
+            _fail("completion controls changed the retained intent's consume selection")
 
 
 def _require_controls(value):
@@ -241,6 +254,14 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
         if type(consume_authority) is not consume_history._SelectedConsumeHistory:
             _fail("completion controls require genuine independently selected consume history")
         inherited_reservation = selected_consume.original_reservation_bytes
+    selected_intent = actor._retained_intent_selection
+    if selected_intent is not None:
+        if phase != "consume" or actor._purpose != "release-intent-proof":
+            _fail("completion controls received retained intent history for another purpose")
+        intent_selection._require_selection(selected_intent, owner=owner, target=target, work=work)
+        if selected_intent.consume_selection is not selected_consume:
+            _fail("completion controls retained intent and consume selections differ")
+        inherited_reservation = selected_intent.original_reservation_bytes
     evidence_authority = authority if consume_authority is None else consume_authority
     policy = (evidence_authority.activation_execution if phase == "activation"
         else evidence_authority.consume_execution)
@@ -276,7 +297,8 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     if (type(inherited_reservation) is not int
             or not 0 < inherited_reservation <= MAX_ORIGINAL_BYTES):
         _fail("completion controls lost their original inherited reservation")
-    # Consume preselection already includes the target and future reservations.
+    # Consume/intent preselection already includes the target and all prior
+    # future reservations, including the consume selection where applicable.
     # Replace that base once; this fresh tuple10 read/capture is additional.
     held = (inherited_reservation + _additional_original_bytes + cold
         + 8 * _METADATA_BYTES + 4 * state.vector.MAX_BYTES
@@ -292,6 +314,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
         if (actor._owner is not owner or actor._work is not work or actor._target is not target
                 or actor._configuration is not configured or actor._profile != phase
                 or actor._consume_recovery_selection is not selected_consume
+                or actor._retained_intent_selection is not selected_intent
                 or owner._material is not parent or owner._binding is not binding or owner._custody is not custody
                 or target.authority is not authority or evidence_authority.completion_recovery is not recovery
                 or evidence_authority.authority_interval is not authority_interval
@@ -511,7 +534,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     result = _CompletionControls(_CONSTRUCTION, actor, phase, originals, before, after, marker,
         enrollment_originals[1], root, configured.current_pending, configured.endpoint, configured.packet_digest,
         configured.authorization_digest, finalization, work, lifetime.window, lifetime.bound, reservation, prior_response,
-        prior_completion, authority, consume_authority, lifetime.current)
+        prior_completion, authority, consume_authority, selected_intent, lifetime.current)
     object.__setattr__(result, "_seal", (tuple(getattr(result, name) for name in _SEALED_FIELDS),
         tuple(marker[name] for name in pending._MARKER_COLUMNS)))
     return _require_controls(result)

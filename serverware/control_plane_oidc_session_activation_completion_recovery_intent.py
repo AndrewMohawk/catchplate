@@ -108,7 +108,37 @@ def _read_records(inputs, current):
             or held[2] is not None and held[1] is None
             or any(value is not None for value in held[3:]) and held[2] is None):
         _fail("release preparation retained prefix lacks its irreversible predecessor")
+    inputs_source._match_retained_release_records(inputs, held)
+    current()
     return held
+
+
+def _retained_interval(inputs):
+    """Selected archived evidence only; never a fresh signing interval."""
+    if type(inputs.retained_only) is not bool:
+        _fail("release intent retained mode is not source-exact")
+    interval = inputs.retained_authority_interval
+    if not inputs.retained_only:
+        if interval is not None:
+            _fail("current release authority cannot borrow a retained interval")
+        return None
+    if inputs._purpose != "release-intent-proof":
+        _fail("retired release authority permits preparation readmission only")
+    if type(interval) is not tuple or len(interval) != 2:
+        _fail("retained release authority lacks its independently selected interval")
+    for value in interval:
+        state.shape._integer(value, minimum=1)
+    if interval[0] >= interval[1]:
+        _fail("retained release authority interval is empty")
+    return interval
+
+
+def _contain_original_interval(inputs, payload):
+    """Called only after genuine signature admission; does not retime evidence."""
+    interval = _retained_interval(inputs)
+    if interval is not None and not (interval[0] <= payload["issuedAtEpochNs"]
+            < payload["expiresAtEpochNs"] <= interval[1]):
+        _fail("retained release original exceeds its selected authority interval")
 
 
 class _IntentContinuation:
@@ -184,23 +214,22 @@ def _intent_from_inputs(inputs):
         _fail("intent continuation has no actual source owner")
 
     owner_call._require_intent_call(inputs)
+    _retained_interval(inputs)
     owner, work, policy = inputs.actor._owner, inputs.work, inputs.intent_policy
     root = inputs.root_public_key
-    private, descriptor, descriptor_identity = owner._intent_key, owner._intent_key_fd, owner._intent_key_identity
     response_pin = owner._response_pin
-    if (type(policy) is not configured._ReleaseIntentMaterial or private is None
-            or descriptor != configured.CALLER_KEY_FD or descriptor != policy.caller_private_key_fd
-            or descriptor_identity is None or response_pin is None
+    if (type(policy) is not configured._ReleaseIntentMaterial or response_pin is None
             or type(inputs.original_reservation_bytes) is not int
             or not FUTURE_REPRESENTATION_BYTES <= inputs.original_reservation_bytes <= MAX_ORIGINAL_BYTES):
-        _fail("release intent lacks its actual dedicated cold key or reserved inventory")
+        _fail("release intent lacks its actual cold scope or reserved inventory")
 
-    def key_identity():
-        if (inputs.actor._owner is not owner or owner._material.release_intent is not policy
-                or owner._intent_key is not private or owner._intent_key_fd != descriptor
-                or owner._intent_key_identity is not descriptor_identity
-                or owner._response_pin != response_pin or owner._binding.runtime_root_public_key is not root):
-            _fail("release intent original key or owner changed")
+    def owner_identity():
+        if inputs.actor._owner is not owner or owner._response_pin != response_pin:
+            _fail("release intent original response owner changed")
+
+    # Read-only re-admission needs the selected public originals and actor,
+    # never possession of either a current or retired intent signing key.
+    key_identity = owner_identity
 
     def ancestor(epoch, monotonic):
         key_identity()
@@ -216,12 +245,28 @@ def _intent_from_inputs(inputs):
     retained = _read_records(inputs, current)
     original = _record(retained[1], "release-intent", inputs)
     if original is None:
+        if inputs.retained_only:
+            _fail("retired release authority requires its exact retained intent; signing is forbidden")
         if inputs._purpose != "release-intent-proof":
             _fail("release requires an existing intent; it cannot sign or resume preparation")
         if retained[0] is not None:
             _fail("release intent claim is spent without an original; it cannot be resumed")
         if type(inputs.setup_policy) is not setup_configured._ReleaseProofAcquisitionMaterial:
             _fail("new release intent requires the independently configured proof setup")
+        private, descriptor, descriptor_identity = owner._intent_key, owner._intent_key_fd, owner._intent_key_identity
+        if (private is None or descriptor != configured.CALLER_KEY_FD
+                or descriptor != policy.caller_private_key_fd or descriptor_identity is None):
+            _fail("new release intent lacks its actual dedicated cold key")
+
+        def signing_identity():
+            owner_identity()
+            if (owner._material.release_intent is not policy or owner._intent_key is not private
+                    or owner._intent_key_fd != descriptor or owner._intent_key_identity is not descriptor_identity
+                    or owner._binding.runtime_root_public_key is not root):
+                _fail("new release intent original current key or authority changed")
+
+        key_identity = signing_identity
+        current()
         claim = execution.custody.ControlPlaneCustodyClient.claim_oidc_session_activation_completion_recovery_release_intent_attempt(
             owner._custody, **_persistence(inputs, current, _INTENT_IO_BYTES))
         current()
@@ -261,6 +306,8 @@ def _intent_from_inputs(inputs):
         _continuity=lifetime.continuity)
     if type(admitted) is not intent._HistoricalIntentEvidence:
         _fail("release intent lacks genuine historical original admission")
+    _contain_original_interval(inputs, admitted.payload)
+    current()
     lifetime.attach(admitted.live)
     result = _IntentContinuation(_CONSTRUCTION, inputs, original, admitted, lifetime, retained, key_identity)
     return _require_intent(result)
@@ -270,6 +317,8 @@ def _live_for_proof(value):
     """A fresh contact may not borrow expired historical intent authority."""
     _require_intent(value)
     inputs, lifetime = value.inputs, value._lifetime
+    if inputs.retained_only:
+        _fail("retired release authority cannot authorize a new proof contact")
     policy = inputs.intent_policy
     admitted = intent._verify_on_work(intent_bytes=value.intent_bytes,
         enrollment_bytes=policy.enrollment_bytes, root_public_key=inputs.root_public_key,

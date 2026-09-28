@@ -130,7 +130,7 @@ def _scope_on_owner(owner, *, live_window, transport_deadline_ns, work):
             shape._integer(monotonic_floor, minimum=1)
             last_epoch, last_monotonic = max(last_epoch, epoch_floor), max(last_monotonic, monotonic_floor)
         identity()
-        # Metadata for the five possible sealed inherited originals, then the
+        # Metadata for the sealed inherited originals, then the
         # actual bounded provisioned HTTP key. This key is not borrowed to sign.
         work.charge(input_bytes=4096)
         sample(production._callback(work, lambda: startup._continuity(owner)))
@@ -165,7 +165,10 @@ class _ActivationPermission:
         "_planning_spent", "_planning_bounds", "_planning_observed",
         "_dispatch_phase", "_sql_originals", "_sql_seal", "_completion_originals", "_completion_seal",
         "_completion_context", "_completion_context_seal", "_consume_spent",
-        "_consume_lifetimes", "_consume_lifetimes_seal")
+        "_consume_lifetimes", "_consume_lifetimes_seal",
+        "_consume_originals", "_consume_originals_seal", "_consume_context", "_consume_context_seal",
+        "_consume_possession", "_consume_possession_seal", "_consume_authorization_spent",
+        "_consume_signing", "_consume_signing_seal", "_consume_authorization", "_consume_authorization_seal")
 
     def __init__(self, owner, request, permission_bytes, live_window, transport_deadline_ns, work):
         from serverware import control_plane_oidc_session_activation_permission as permission
@@ -189,6 +192,12 @@ class _ActivationPermission:
         self._completion_context = self._completion_context_seal = None
         self._consume_spent = False
         self._consume_lifetimes = self._consume_lifetimes_seal = None
+        self._consume_originals = self._consume_originals_seal = None
+        self._consume_context = self._consume_context_seal = None
+        self._consume_possession = self._consume_possession_seal = None
+        self._consume_authorization_spent = False
+        self._consume_signing = self._consume_signing_seal = None
+        self._consume_authorization = self._consume_authorization_seal = None
         self._inputs = _PermissionInputs(owner, request, self._original, self._window,
             self._deadline, work, self._pid, self._thread)
         self._seal = self._inputs
@@ -210,15 +219,18 @@ class _ActivationPermission:
                 or self._owner._activation_permission is not self or not self._locked):
             _fail("activation permission context is no longer the active parent-owned call")
         if self._dispatch_phase not in ("new", "preparing", "preparing-completion",
-                "sql", "sql-completion", "completed", "consume-planning", "consume-planned", "closed"):
+                "sql", "sql-completion", "completed", "consume-planning", "consume-planned",
+                "consume-authorizing", "consume-authorized", "closed"):
             _fail("activation permission dispatch phase is not source fixed")
-        if self._dispatch_phase in ("sql", "sql-completion", "completed", "consume-planning", "consume-planned") and (
+        if self._dispatch_phase in ("sql", "sql-completion", "completed", "consume-planning", "consume-planned",
+                "consume-authorizing", "consume-authorized") and (
                 self._spent is not True or self._planning_spent is not True
                 or type(self._sql_originals) is not tuple or len(self._sql_originals) != 8
                 or self._sql_originals is not self._sql_seal
                 or any(type(raw) is not bytes for raw in self._sql_originals)):
             _fail("activation SQL continuation replaced its exact admitted originals")
-        if self._dispatch_phase in ("completed", "consume-planning", "consume-planned") and (
+        if self._dispatch_phase in ("completed", "consume-planning", "consume-planned",
+                "consume-authorizing", "consume-authorized") and (
                 type(self._completion_originals) is not tuple or len(self._completion_originals) != 4
                 or self._completion_originals is not self._completion_seal
                 or self._completion_originals[0] != b"acknowledged"
@@ -229,6 +241,35 @@ class _ActivationPermission:
             _fail("consume planning lost the actual same-call completion continuation")
         if self._consume_lifetimes is not self._consume_lifetimes_seal:
             _fail("consume planning replaced its admitted root-original lifetimes")
+        if self._dispatch_phase in ("consume-planned", "consume-authorizing", "consume-authorized"):
+            if (self._consume_spent is not True or type(self._consume_originals) is not tuple
+                    or len(self._consume_originals) != 2 or self._consume_originals is not self._consume_originals_seal
+                    or any(type(raw) is not tuple or len(raw) != count
+                        or any(type(value) is not bytes for value in raw)
+                        for raw, count in zip(self._consume_originals, (6, 7)))
+                    or self._consume_originals[0][0] != b"prepared" or self._consume_originals[1][0] != b"exported"
+                    or type(self._consume_context) is not tuple or len(self._consume_context) != 4
+                    or self._consume_context is not self._consume_context_seal
+                    or type(self._consume_context[0]) is not bytes
+                    or type(self._consume_context[3]) is not int or self._consume_context[3] < 1
+                    or type(self._consume_possession) is not tuple or len(self._consume_possession) != 2
+                    or self._consume_possession is not self._consume_possession_seal
+                    or self._request.cookies.get(self._consume_possession[0]) != self._consume_possession[1]):
+                _fail("consume authorization lost its actual retained planning or possession originals")
+        if self._consume_signing is not self._consume_signing_seal:
+            _fail("consume signing replaced its original key custody")
+        if self._consume_signing is not None:
+            policy, private, descriptor, identity = self._consume_signing
+            if (self._owner._material.consume_execution is not policy or self._owner._consume_key is not private
+                    or self._owner._consume_key_fd != descriptor or self._owner._consume_key_identity is not identity):
+                _fail("consume signing original cold resources changed")
+        if self._dispatch_phase in ("consume-authorizing", "consume-authorized") and self._consume_authorization_spent is not True:
+            _fail("consume authorization did not spend its one-use signing latch")
+        if self._dispatch_phase == "consume-authorized" and (
+                type(self._consume_authorization) is not bytes
+                or self._consume_authorization is not self._consume_authorization_seal
+                or self._consume_signing is None):
+            _fail("consume authorization lost its exact retained signed original")
 
     def _current(self, epoch_floor=None, monotonic_floor=None):
         self._identity()
@@ -243,7 +284,8 @@ class _ActivationPermission:
             monotonic_floor = max(self._planning_observed[1], monotonic_floor or 0)
         scope.current(epoch_floor, monotonic_floor)
         if self._target is not None and self._dispatch_phase not in (
-                "sql", "sql-completion", "completed", "consume-planning", "consume-planned"):
+                "sql", "sql-completion", "completed", "consume-planning", "consume-planned",
+                "consume-authorizing", "consume-authorized"):
             from serverware import control_plane_registration_finalization_completion_pending as pending
 
             application, session_scope, binding, credential, count = self._target
@@ -321,6 +363,12 @@ class _ActivationPermission:
         self._completion_context = self._completion_context_seal = None
         self._consume_spent = True
         self._consume_lifetimes = self._consume_lifetimes_seal = None
+        self._consume_originals = self._consume_originals_seal = None
+        self._consume_context = self._consume_context_seal = None
+        self._consume_possession = self._consume_possession_seal = None
+        self._consume_authorization_spent = True
+        self._consume_signing = self._consume_signing_seal = None
+        self._consume_authorization = self._consume_authorization_seal = None
         try:
             if trust is not None:
                 trust.__exit__(None, None, None)
@@ -513,6 +561,26 @@ class _ActivationPermission:
                 planner_bootstrap_bytes=originals[0], history_custody_bytes=originals[1])
             self._dispatch_phase = "consume-planned"
             return result
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+    def authorize_consume(self):
+        """Sign and retain once using only this call's sealed consume originals."""
+        from serverware import control_plane_oidc_session_activation_consume_authorization as consume
+
+        try:
+            self._identity()
+            if (self._state != "active" or self._dispatch_phase != "consume-planned"
+                    or self._consume_authorization_spent is not False):
+                _fail("consume authorization requires the unspent actual planning continuation")
+            self._consume_authorization_spent = True
+            self._dispatch_phase = "consume-authorizing"
+            original = consume._authorize_on_permission(self)
+            self._consume_authorization = self._consume_authorization_seal = original
+            self._dispatch_phase = "consume-authorized"
+            return original
         except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:
                 self._revoke()

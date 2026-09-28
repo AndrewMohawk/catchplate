@@ -37,7 +37,7 @@ variable is `SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR`, with
 provisioned listener has mode 0660 and owner/group `65502:65532`, with searchable
 parent directories. A read-only directory bind permits connecting, not replacing
 the listener. Actual peer credentials and signed original response admission
-remain mandatory. Select this overlay only for an explicitly enabled v5–v7 release lane;
+remain mandatory. Select this overlay only for an explicitly enabled v5–v8 release lane;
 it neither creates the worker/socket nor mounts a release or signing key.
 The existing enrollment-only offline preparer is unchanged and does not compose
 this overlay. Any separately composed artifact still requires independent
@@ -178,6 +178,46 @@ retains only token-free control originals in a separate counted custody claim;
 the original old cookie is used only for the bounded private prepare exchange.
 This remains partial RELEASE integration, not consume execution, protected
 handoff, a public route, cookie issuance or current-session confirmation.
+
+## Dedicated consume caller extension
+
+Source `.186` adds explicit parent enrollment `/v8` with nullable
+[`oidcSessionActivationConsumeExecution`](control-plane-oidc-session-activation-consume-execution-bootstrap.md).
+It independently reserves FD206, including when the consume lane is null.
+Earlier parent versions retain their existing descriptor semantics. The lane
+requires the actual activation caller and planner configuration; it does not
+reuse the activation caller key or make a completed response into permission.
+
+Startup authenticates the original parent and consume-only enrollments before
+reading the separately inventoried, sealed Ed25519 PKCS8 key. It checks the
+actual enrolled pair and separates it from the HTTP response, issuer,
+registration, finalization and activation keys. The same parent owner retains
+`_consume_key`, `_consume_key_fd` and `_consume_key_identity`; every existing
+owner-continuity check now includes that descriptor. Null v8 rejects both an
+inherited FD206 and an open-but-undeclared FD206. Shutdown drops its key reference
+without closing the borrowed descriptor or claiming memory erasure.
+
+`consume_execution_enabled` describes cold configuration only. The private
+`_authorize_oidc_session_activation_consume()` facade takes no inputs and selects
+only this owner's actual active permission context. Its
+[one-use authorization continuation](control-plane-oidc-session-activation-consume-authorization.md)
+uses the same call's prepared/exported originals and original processing bounds,
+retains the signed authorization before return, and cannot reopen an escaped
+context. It grants no automatic grant dispatch, SQL, token release or retry.
+
+The optional
+[`docker-compose.oidc-session-activation-consume-execution.yml`](../docker-compose.oidc-session-activation-consume-execution.yml)
+source overlay adds a read-only key bind at
+`/run/secrets/serverware-oidc-session-activation-consume-caller-key` and a
+read-only socket-directory bind at
+`/run/serverware/oidc-session-activation-delivery-execution`. The required host
+inputs are `SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_CALLER_KEY_FILE` and
+`SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_EXECUTION_SOCKET_DIR`; both reject
+automatic host-path creation. They are packaging inputs, not runtime path
+overrides. No key, listener, account or infrastructure is created; the
+independently provisioned authorizer endpoint is not called by this slice.
+The enrollment-only offline preparer is unchanged. Source remains unbuilt and
+unexecuted, and production acceptance remains 0/6.
 
 ## Decision and trust boundary
 

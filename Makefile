@@ -1127,6 +1127,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_dispatch.py \
 	serverware/control_plane_oidc_session_activation_completion.py \
 	serverware/control_plane_oidc_session_activation_consume_bootstrap.py \
+	serverware/control_plane_oidc_session_activation_consume_execution_bootstrap.py \
+	serverware/control_plane_oidc_session_activation_consume_authorization.py \
 	serverware/control_plane_oidc_session_activation_consume_planning.py \
 	serverware/control_plane_oidc_session_activation_consume_records.py \
 	serverware/authority_oidc_session_activation_completion_dispatch_transport.py \
@@ -3211,6 +3213,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_dispatch.py \
 				serverware/control_plane_oidc_session_activation_completion.py \
 				serverware/control_plane_oidc_session_activation_consume_bootstrap.py \
+				serverware/control_plane_oidc_session_activation_consume_execution_bootstrap.py \
+				serverware/control_plane_oidc_session_activation_consume_authorization.py \
 				serverware/control_plane_oidc_session_activation_consume_planning.py \
 				serverware/control_plane_oidc_session_activation_consume_records.py \
 				serverware/authority_oidc_session_activation_completion_dispatch_transport.py \

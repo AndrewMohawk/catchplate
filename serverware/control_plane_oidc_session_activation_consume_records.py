@@ -1,8 +1,9 @@
 """Token-free consume-planning claim and opaque original response retention.
 
-One separate logical claim owns at most three physical files. These records
-contain public identities and raw6/raw7 responses, never the old token or the
-prepare request. Shape and content identity admit no permission or plan.
+One separate logical claim owns at most four physical files. These records
+contain public identities, raw6/raw7 responses and the raw1 signed caller
+control, never the old token or prepare request. Shape and content identity
+admit no permission, plan or grant.
 """
 from __future__ import annotations
 
@@ -10,23 +11,25 @@ from dataclasses import dataclass
 import hashlib
 
 from serverware import authority_contract as authority
+from serverware import authority_oidc_session_activation_delivery_execution_authorization as caller
 from serverware import authority_oidc_session_activation_delivery_planner_transport as transport
 from serverware import control_plane_custody_records as records
 from serverware import control_plane_oidc_session_activation_dispatch_attempt as activation
 
 
 MAGIC = b"SWCOC001"
-KINDS = ("claimed", "prepared", "exported")
-_COUNTS = (0, 6, 7)
+KINDS = ("claimed", "prepared", "exported", "authorized")
+_COUNTS = (0, 6, 7, 1)
 SLOT_DOMAIN = "serverware.controlPlaneOidcSessionActivationConsumeSlot/v1"
 _DOMAINS = tuple("serverware.controlPlaneOidcSessionActivationConsumeRecord/" + kind + "/v1"
     for kind in KINDS)
 _PREFIX_BYTES = 11
 _MAX_HEADER_BYTES = _PREFIX_BYTES + records.MAX_SOURCE_REVISION_BYTES + 64
-_BODY_MAXIMA = (0, transport.MAX_RESPONSE_BYTES, transport.MAX_EXPORT_RESPONSE_BYTES)
+_BODY_MAXIMA = (0, transport.MAX_RESPONSE_BYTES, transport.MAX_EXPORT_RESPONSE_BYTES,
+    caller.MAX_AUTHORIZATION_BYTES)
 _MAXIMA = tuple(_MAX_HEADER_BYTES + count * 8 + maximum
     for count, maximum in zip(_COUNTS, _BODY_MAXIMA))
-MAX_CLAIM_BYTES, MAX_PREPARED_BYTES, MAX_EXPORTED_BYTES = _MAXIMA
+MAX_CLAIM_BYTES, MAX_PREPARED_BYTES, MAX_EXPORTED_BYTES, MAX_AUTHORIZED_BYTES = _MAXIMA
 MAX_RECORD_BYTES = max(_MAXIMA)
 MAX_CLAIM_IO_BYTES = activation.MAX_RECORD_BYTES + 3 * MAX_CLAIM_BYTES
 MAX_LOAD_IO_BYTES = activation.MAX_RECORD_BYTES + sum(_MAXIMA)
@@ -51,6 +54,7 @@ class ConsumeRecords:
     claim: ConsumeRecord
     prepared: ConsumeRecord | None
     exported: ConsumeRecord | None
+    authorized: ConsumeRecord | None = None
 
 
 def _framed_digest(domain, bodies):
@@ -85,7 +89,10 @@ def _lengths(profile, lengths):
     if (type(lengths) is not tuple or len(lengths) != _COUNTS[profile]
             or any(type(size) is not int or size < 0 for size in lengths)):
         raise CustodyRecordError("consume retention length inventory differs")
-    if profile:
+    if profile == 3:
+        if not 2 <= lengths[0] <= caller.MAX_AUTHORIZATION_BYTES:
+            raise CustodyRecordError("consume caller original exceeds its fixed byte bound")
+    elif profile:
         try:
             transport._response_lengths(lengths, export=profile == 2)
         except transport.AuthorityTransportError as exc:
@@ -97,7 +104,7 @@ def _originals(profile, originals):
             or any(type(raw) is not bytes for raw in originals)):
         raise CustodyRecordError("consume retention requires exact immutable response originals")
     _lengths(profile, tuple(len(raw) for raw in originals))
-    if profile:
+    if profile in (1, 2):
         try:
             transport._originals(originals, response=True, export=profile == 2)
         except transport.AuthorityTransportError as exc:

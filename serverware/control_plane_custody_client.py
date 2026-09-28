@@ -746,6 +746,14 @@ class ControlPlaneCustodyClient:
             activation_authorization_digest=activation_authorization_digest,
             kind="exported", originals=originals)
 
+    def append_oidc_session_activation_consume_authorized(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain the original signed caller raw1 without authenticating a grant."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="authorized", originals=originals)
+
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):
         """Read bounded ordinary history, not a recovered permission to continue."""

@@ -339,8 +339,32 @@ def _enrollment(held, work):
         planner_public_key=held.planner, operation_public_key=held.operation_key, work=work)
 
 
-def _clock(held, work):
+def _clock(held, work, continuity=None):
     last_epoch, last_monotonic = held.window[0], held.window[2]
+    if continuity is not None and not callable(continuity):
+        _fail("consume caller restrictive continuity is not callable")
+
+    def continue_owner(selected):
+        nonlocal last_epoch, last_monotonic
+        if continuity is None:
+            return
+        limits, before = work.limits, work.metrics
+        ceilings = limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes
+        observed = continuity(last_epoch, last_monotonic)
+        capture._SharedLedger(work)
+        after = work.metrics
+        if (work.limits is not limits
+                or ceilings != (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+                or after.hash_work < before.hash_work or after.input_bytes < before.input_bytes
+                or after.json_nodes < before.json_nodes):
+            _fail("consume caller continuity reset its original work")
+        if (type(observed) is not tuple or len(observed) != 2
+                or any(type(value) is not int or value < 1 for value in observed)
+                or observed[0] < last_epoch or observed[1] < last_monotonic):
+            _fail("consume caller continuity lowered its retained clock floors")
+        if observed[0] >= selected[3] or observed[1] >= min(held.deadline_ns, selected[4]):
+            _fail("consume caller continuity exceeded its narrowed deadline")
+        last_epoch, last_monotonic = observed
 
     def current(window=None):
         nonlocal last_epoch, last_monotonic
@@ -348,13 +372,15 @@ def _clock(held, work):
         if (selected[:3] != held.window[:3] or selected[3] > held.window[3]
                 or selected[4] > held.window[4] or selected[5] > held.window[5] or selected[6] > held.window[6]):
             _fail("consume caller replaced or widened its original processing bracket")
+        continue_owner(selected)
         now = clock._check_on_work(selected, work=work)
         mono = production._callback(work, time.monotonic_ns)
         shape._integer(mono, minimum=1)
         if now < last_epoch or mono < last_monotonic or mono >= held.deadline_ns:
             _fail("consume caller processing expired or clocks reversed")
         last_epoch, last_monotonic = now, mono
-        return now, mono
+        continue_owner(selected)
+        return last_epoch, last_monotonic
 
     return current
 
@@ -448,7 +474,7 @@ def _verify_on_work(*, authorization_bytes, authorization_enrollment_bytes, curr
 
 def _produce_on_work(*, authorization_enrollment_bytes, current_root_enrollment_bytes, grant_enrollment_bytes,
         root_public_key, configuration_digest, planner_public_key, operation_public_key, caller_private_key,
-        originals, expectations, before_vector_bytes, live_window, transport_deadline_ns, work):
+        originals, expectations, before_vector_bytes, live_window, transport_deadline_ns, work, _continuity=None):
     """Sign a fresh nonce only after genuine live known-plan authentication.
 
     Independently admitted present permission is a caller obligation. This
@@ -461,7 +487,7 @@ def _produce_on_work(*, authorization_enrollment_bytes, current_root_enrollment_
         grant_enrollment_bytes=grant_enrollment_bytes, root_public_key=root_public_key, configuration_digest=configuration_digest,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
-    current = _clock(held, work)
+    current = _clock(held, work, _continuity)
     current()
     enrolled = _enrollment(held, work)
     keys._pair_on_work(signer, enrolled.caller_public_key, work)

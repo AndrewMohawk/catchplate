@@ -128,6 +128,9 @@ def _continuity(owner):
     if (owner._activation_key_fd is not None and _descriptor_identity(
             owner._activation_key_fd, private=True) != owner._activation_key_identity):
         raise EnrollmentStartupError("activation execution caller key custody changed")
+    if (owner._consume_key_fd is not None and _descriptor_identity(
+            owner._consume_key_fd, private=True) != owner._consume_key_identity):
+        raise EnrollmentStartupError("consume execution caller key custody changed")
     return observed_epoch
 
 
@@ -184,7 +187,8 @@ class _EnrollmentOwner:
         "_execution_key", "_execution_key_fd", "_execution_key_identity",
         "_finalization_key", "_finalization_key_fd", "_finalization_key_identity",
         "_release_spent", "_activation_key", "_activation_key_fd",
-        "_activation_key_identity", "_activation_permission")
+        "_activation_key_identity", "_activation_permission",
+        "_consume_key", "_consume_key_fd", "_consume_key_identity")
 
     def __init__(self):
         raise EnrollmentStartupError("enrollment owner requires fixed cold startup")
@@ -302,6 +306,23 @@ class _EnrollmentOwner:
             raise EnrollmentStartupError("consume preparation requires the actual active parent permission")
         return permission.prepare_consume(planner_bootstrap_bytes=planner_bootstrap_bytes,
             history_custody_bytes=history_custody_bytes)
+
+    @property
+    def consume_execution_enabled(self):
+        """Cold configuration only, never permission to sign or execute."""
+        _live(self)
+        return (self._consume_key is not None and self._material is not None
+            and self._material.consume_execution is not None)
+
+    def _authorize_oidc_session_activation_consume(self):
+        """Sign only this still-active permission's exact prepared consume plan."""
+        from serverware import control_plane_oidc_session_activation_execution as execution
+
+        _require_pid()
+        permission = self._activation_permission
+        if type(permission) is not execution._ActivationPermission or permission._owner is not self:
+            raise EnrollmentStartupError("consume authorization requires the actual active parent permission")
+        return permission.authorize_consume()
 
     @property
     def finalization_reservation_enabled(self):
@@ -804,6 +825,7 @@ def initialize_from_environment():
             execution_key, execution_fd, execution_identity = None, None, None
             finalization_key, finalization_fd, finalization_identity = None, None, None
             activation_key, activation_fd, activation_identity = None, None, None
+            consume_key, consume_fd, consume_identity = None, None, None
             if material.release_client is not None and identity != (65532, 65532):
                 raise EnrollmentStartupError("release caller requires the fixed control-plane identity")
             if (material.finalization_slot_reserved and material.finalization is None
@@ -827,6 +849,18 @@ def initialize_from_environment():
                         raise
                 else:
                     raise EnrollmentStartupError("disabled v6 activation has an undeclared open key slot")
+            if material.consume_slot_reserved and key_fd == 206:
+                raise EnrollmentStartupError("v8 reserves the consume caller slot independently of issuer policy")
+            if material.consume_slot_reserved and material.consume_execution is None:
+                if 206 in inventory:
+                    raise EnrollmentStartupError("disabled v8 consume forbids its reserved inherited key slot")
+                try:
+                    fcntl.fcntl(206, fcntl.F_GETFD)
+                except OSError as exc:
+                    if exc.errno != errno.EBADF:
+                        raise
+                else:
+                    raise EnrollmentStartupError("disabled v8 consume has an undeclared open key slot")
             if policy is None:
                 if key_fd is not None or public_key is not None:
                     raise EnrollmentStartupError("disabled enrollment bootstrap contains issuer key material")
@@ -932,6 +966,36 @@ def initialize_from_environment():
                         None if execution_key is None else execution_pin,
                         None if finalization_key is None else finalization_pin):
                     raise EnrollmentStartupError("activation caller key reuses another retained purpose key")
+            if material.consume_execution is not None:
+                from cryptography.hazmat.primitives import serialization
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+                consume = material.consume_execution
+                consume_fd = consume.caller_private_key_fd
+                if (identity != (65532, 65532) or not material.consume_slot_reserved
+                        or material.activation_execution is None or activation_key is None
+                        or material.activation_planning is None or response_pin is None
+                        or consume_fd != 206
+                        or consume_fd in (descriptor, key_fd, execution_fd, finalization_fd, activation_fd)
+                        or consume_fd not in inventory):
+                    raise EnrollmentStartupError("consume caller key requires its distinct admitted slot and activation context")
+                consume_raw, consume_identity = _read_original(consume_fd, private=True)
+                if (not consume_raw.startswith(b"-----BEGIN PRIVATE KEY-----\n")
+                        or not consume_raw.endswith(b"-----END PRIVATE KEY-----\n")):
+                    raise EnrollmentStartupError("consume caller key must be unencrypted PKCS8 PEM")
+                work.charge(input_bytes=len(consume_raw))
+                consume_key = issuer.evidence.production._callback(work,
+                    lambda: serialization.load_pem_private_key(consume_raw, password=None))
+                del consume_raw
+                if not isinstance(consume_key, Ed25519PrivateKey):
+                    raise EnrollmentStartupError("consume caller key must be Ed25519")
+                issuer.evidence.keys._pair_on_work(consume_key, consume.caller_public_key, work)
+                consume_pin = issuer.evidence.keys._spki_on_work(consume.caller_public_key, work)
+                if consume_pin in (response_pin, activation_pin,
+                        None if key is None else issuer_pin,
+                        None if execution_key is None else execution_pin,
+                        None if finalization_key is None else finalization_pin):
+                    raise EnrollmentStartupError("consume caller key reuses another retained purpose key")
             if (material.configuration_digest != digest or _environment() != namespace
                     or (os.geteuid(), os.getegid()) != identity
                     or _descriptor_identity(descriptor, private=False) != original_identity
@@ -942,6 +1006,8 @@ def initialize_from_environment():
                         finalization_fd, private=True) != finalization_identity
                     or activation_fd is not None and _descriptor_identity(
                         activation_fd, private=True) != activation_identity
+                    or consume_fd is not None and _descriptor_identity(
+                        consume_fd, private=True) != consume_identity
                     or custody.require_started() is not custody_owner
                     or client._snapshot(custody_owner) is not binding):
                 raise EnrollmentStartupError("enrollment startup inputs changed during admission")
@@ -957,6 +1023,8 @@ def initialize_from_environment():
             owner._finalization_key_identity = finalization_identity
             owner._activation_key, owner._activation_key_fd = activation_key, activation_fd
             owner._activation_key_identity, owner._activation_permission = activation_identity, None
+            owner._consume_key, owner._consume_key_fd = consume_key, consume_fd
+            owner._consume_key_identity = consume_identity
             owner._release_spent = False
             owner._response_path, owner._response_pin = response_path, response_pin
             _owner, _state = owner, "started"
@@ -1005,3 +1073,4 @@ def close():
             owner._execution_key = None
             owner._finalization_key = None
             owner._activation_key, owner._activation_permission = None, None
+            owner._consume_key = None

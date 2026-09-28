@@ -25,7 +25,7 @@ before the planner request; even exact recovered claims prohibit dispatch.
 Six fixed activation stage records retain only opaque public/cipher originals
 beneath that claim. Recovery permits reads, never resumed stage publication.
 Separate consume-planning claims count as additional logical records with only
-prepared/exported response siblings, never an eighth activation-stage file.
+prepared/exported/authorized siblings, never an eighth activation-stage file.
 
 The private directory open-file description owns the singleton flock. The
 supplied descriptor remains borrowed; use after fork is rejected. Filesystem
@@ -183,7 +183,7 @@ class CustodyJournal:
     the unchanged physical/quota ceilings, without reserving legacy markers.
     An activation claim has exactly six possible stage siblings: seven total
     files, exhausting its unchanged allowance. No stage adds another slot.
-    Consume planning uses a separately counted logical claim with at most three
+    Consume planning uses a separately counted logical claim with at most four
     files; it never appends an eighth file to the activation claim.
     """
 
@@ -439,7 +439,7 @@ class CustodyJournal:
                         if stage_kind in by_kind:
                             raise CustodyJournalError("consume response stage repeats its slot")
                         by_kind[stage_kind] = (record.source_revision, record.digest,
-                            len(encoded), record.originals[0])
+                            len(encoded), record.originals[0] if stage_kind != "authorized" else b"")
                 elif kind == "attempted":
                     if encoded != _ATTEMPT_MAGIC + bytes.fromhex(suffix) or digest in attempted:
                         raise CustodyJournalError("journal attempt marker is not exact")
@@ -1450,10 +1450,11 @@ class CustodyJournal:
         predecessor = self._activation_scope(claim.finalization_digest, activation)
         if ("completion-outcome" not in activation
                 or predecessor.source_revision != claim.source_revision
-                or len(by_kind) > 2
+                or len(by_kind) > 3
                 or set(by_kind) != set(consume_records.KINDS[1:1 + len(by_kind)])
                 or any(value[0] != claim.source_revision for value in by_kind.values())
-                or ("exported" in by_kind and by_kind["prepared"][3] != b"prepared")):
+                or ("exported" in by_kind and by_kind["prepared"][3] != b"prepared")
+                or ("authorized" in by_kind and by_kind["exported"][3] != b"exported")):
             raise CustodyJournalError("consume stages differ from completed predecessor, prefix or source")
         return claim
 
@@ -1489,7 +1490,8 @@ class CustodyJournal:
                 or record.finalization_digest != claim.finalization_digest
                 or record.activation_authorization_digest != claim.activation_authorization_digest
                 or record.kind != kind
-                or (record.source_revision, record.digest, len(original), record.originals[0]) != metadata):
+                or (record.source_revision, record.digest, len(original),
+                    record.originals[0] if kind != "authorized" else b"") != metadata):
             raise CustodyJournalError("consume response changed after admitted recovery")
         return record
 
@@ -1573,8 +1575,9 @@ class CustodyJournal:
                     self._require_ready()
                     return existing.digest
                 if (profile != len(by_kind) + 1
-                        or (kind == "exported" and by_kind["prepared"][3] != b"prepared")):
-                    raise CustodyJournalError("consume publication skipped its fixed prepared predecessor")
+                        or (kind == "exported" and by_kind["prepared"][3] != b"prepared")
+                        or (kind == "authorized" and by_kind["exported"][3] != b"exported")):
+                    raise CustodyJournalError("consume publication skipped its fixed successful predecessor")
                 if (len(self._file_identities) >= 7 * self._maximum_records
                         or len(encoded) > self._quota - self._used_bytes - self._reserved_bytes):
                     raise CustodyJournalError("journal consume response capacity is exhausted")
@@ -1582,7 +1585,8 @@ class CustodyJournal:
                 self._publish("activation-consume-" + kind, slot, encoded)
                 self._used_bytes += len(encoded)
                 self._consume_records.setdefault(slot, {})[kind] = (
-                    record.source_revision, record.digest, len(encoded), record.originals[0])
+                    record.source_revision, record.digest, len(encoded),
+                    record.originals[0] if kind != "authorized" else b"")
                 self._consume_scope(slot, self._consume_records[slot])
                 self._require_ready()
                 return record.digest
@@ -1603,6 +1607,13 @@ class CustodyJournal:
         return self._append_consume_record(finalization_digest=finalization_digest,
             activation_authorization_digest=activation_authorization_digest,
             kind="exported", originals=originals)
+
+    def append_oidc_session_activation_consume_authorized(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain the first signed caller raw1, never repeat-signing or grant authority."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="authorized", originals=originals)
 
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):

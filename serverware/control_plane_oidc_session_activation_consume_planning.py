@@ -109,7 +109,8 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
                 or parent.activation_execution is not policy or policy.consume_planner_endpoint != endpoint
                 or permission._sql_originals is not raw or permission._completion_originals is not completed
                 or permission._completion_context is not continuation
-                or permission._dispatch_phase != "consume-planning"
+                or permission._dispatch_phase not in (
+                    "consume-planning", "consume-planned", "consume-authorizing", "consume-authorized")
                 or permission._request.cookies.get(application.OIDC_SESSION_COOKIE_NAME) != cookie):
             execution._fail("consume planning replaced its actual original context or possession")
         now = guard()
@@ -231,4 +232,10 @@ def _prepare_on_permission(permission, *, planner_bootstrap_bytes, history_custo
     # The source transport checked the distinct ciphertext frame. Only a
     # genuine private receiver can open/replay it; no public AES claim is made.
     current()
-    return prepared, exported
+    originals = prepared, exported
+    permission._consume_originals = permission._consume_originals_seal = originals
+    permission._consume_context = permission._consume_context_seal = (
+        after, current, narrow, held_bytes + sum(map(len, prepared)) + sum(map(len, exported)))
+    permission._consume_possession = permission._consume_possession_seal = (
+        application.OIDC_SESSION_COOKIE_NAME, cookie)
+    return originals

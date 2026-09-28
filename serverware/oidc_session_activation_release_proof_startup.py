@@ -110,6 +110,8 @@ class _Configuration:
     packet_configuration: tuple
     commit_reader: object
     commit_configuration: tuple
+    delivery_retained_bytes: int | None = None
+    retained_bytes: int = 0
 
 
 class _ProofOwner:
@@ -167,6 +169,11 @@ class _ProofOwner:
                     or configured.ceilings != (work.limits.max_hashes,
                         work.limits.max_input_bytes, work.limits.max_json_nodes)):
                 _fail("release proof work allowance was replaced")
+            if configured.delivery_retained_bytes is not None:
+                from serverware import oidc_session_activation_release_proof_dynamic_entrypoint as dynamic
+
+                if dynamic._retained_bytes_on_work(configured.delivery_current, work) != configured.delivery_retained_bytes:
+                    _fail("release proof dynamic retained inventory changed")
             work.charge(input_bytes=4096)
             production._callback(work, self._identity)
             for guard in (configured.delivery_current, configured.material.live, self._custody_live):
@@ -250,14 +257,28 @@ class _ProofOwner:
         old_token = producer.delivery._token(originals[2], work)
         self._current()
         sequence, head, fence = completion.current_pending
+        extra = {}
+        reserved = 0
+        if configured.delivery_retained_bytes is not None:
+            reserved = (configured.retained_bytes + transport.MAX_REQUEST_BYTES + transport.REQUEST_HEADER_BYTES
+                + transport.MAX_RESPONSE_BYTES + transport.RESPONSE_HEADER_BYTES + 2 * producer.MAX_GRAPH_BYTES)
+            maximum_packet = min(packets.packet.MAX_BYTES, (bootstrap.MAX_ORIGINAL_BYTES - reserved) // 3)
+            if maximum_packet < 2:
+                _fail("release proof dynamic originals leave no packet-read capacity")
+            # This exact original delivery guard permits only the real reader
+            # to own its transient DB descriptors. Full worker inventory is
+            # checked immediately before and after the genuine read.
+            extra = {"_current": configured.delivery_current, "maximum_packet_bytes": maximum_packet}
         packet = packets.SuccessorExecutionRecoveryReader.read(configured.packet_reader,
             pending_decision_digest=head, packet_digest=completion.packet_digest,
-            live_window=self._window, transport_deadline_ns=self._bound, work=work)
+            live_window=self._window, transport_deadline_ns=self._bound, work=work, **extra)
         self._current()
         if (type(packet) is not bytes or len(packet) < 2
                 or len(packet) + len(material.bootstrap_bytes) + len(old_token)
                     + transport.MAX_RESPONSE_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
             _fail("release proof retained originals and reserved response exceed 64 MiB")
+        if configured.delivery_retained_bytes is not None and reserved + 3 * len(packet) > bootstrap.MAX_ORIGINAL_BYTES:
+            _fail("release proof dynamic packet exceeds its complete reserved inventory")
         proof = producer._produce_on_work(packet_bytes=packet,
             completion_request_bytes=material.completion_request_bytes,
             state_receipt_bytes=material.state_receipt_bytes,
@@ -347,6 +368,21 @@ class _ProofOwner:
 
 def initialize_from_environment(*, work, live_window, transport_deadline_ns, delivery_current):
     """Continue the actual root delivery, without opening another allowance."""
+    return _initialize(work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        delivery_current=delivery_current, retained_bytes=None)
+
+
+def _initialize_from_dynamic_delivery_on_work(*, work, live_window, transport_deadline_ns, delivery_current):
+    """Require this PID's real sealed dynamic delivery and measured capacity."""
+    from serverware import oidc_session_activation_release_proof_dynamic_entrypoint as dynamic
+
+    retained = dynamic._retained_bytes_on_work(delivery_current, work,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns)
+    return _initialize(work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
+        delivery_current=delivery_current, retained_bytes=retained)
+
+
+def _initialize(*, work, live_window, transport_deadline_ns, delivery_current, retained_bytes):
     global _state, _owner
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -429,15 +465,30 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
             current()
             if root_identity != sealed[0][3] or bootstrap_identity != sealed[1][3]:
                 _fail("release proof initial original identities changed")
+            retained_total = 0
+            if retained_bytes is not None:
+                reserved = (retained_bytes + len(root_raw) + len(bootstrap_raw)
+                    + 16 * len(bootstrap_raw) + transport.MAX_RESPONSE_BYTES + transport.RESPONSE_HEADER_BYTES
+                    + transport.MAX_REQUEST_BYTES + transport.REQUEST_HEADER_BYTES + 2 * producer.MAX_GRAPH_BYTES)
+                if reserved >= bootstrap.MAX_ORIGINAL_BYTES:
+                    _fail("release proof dynamic second admission exceeds the complete allocation reserve")
             work.charge(input_bytes=len(root_raw))
             root = production._callback(work, lambda: serialization.load_pem_public_key(root_raw))
             if not isinstance(root, Ed25519PublicKey):
                 _fail("release proof requires its actual Ed25519 public root")
+            extra = {} if retained_bytes is None else {"_current": delivery_current}
             material = bootstrap._verify_on_work(bootstrap_bytes=bootstrap_raw, root_public_key=root,
-                live_window=window, transport_deadline_ns=bound, work=work)
+                live_window=window, transport_deadline_ns=bound, work=work, **extra)
             current()
             if type(material) is not bootstrap._ProofMaterial:
                 _fail("release proof cold originals did not yield actual same-call material")
+            if retained_bytes is not None:
+                from serverware import oidc_session_activation_release_proof_dynamic_entrypoint as dynamic
+
+                retained_total = (retained_bytes + len(root_raw) + len(bootstrap_raw)
+                    + 2 * dynamic._material_bytes_on_work(material, work, current))
+                if retained_total + transport.MAX_RESPONSE_BYTES + 2 * producer.MAX_GRAPH_BYTES >= bootstrap.MAX_ORIGINAL_BYTES:
+                    _fail("release proof dynamic reread and private custody exhaust retained capacity")
             narrowed = clock._validate(material.live_window)
             if (narrowed[:3] != window[:3]
                     or any(new > old for new, old in zip(narrowed[3:], window[3:]))
@@ -503,7 +554,8 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
                 historical.OidcSessionActivationDeliveryCompletionCustody._snapshot_configuration(historical_owner),
                 custody_live,
                 packet_reader, packets.SuccessorExecutionRecoveryReader._snapshot_configuration(packet_reader),
-                commit_reader, committed.CurrentRootCommitReader._snapshot_configuration(commit_reader))
+                commit_reader, committed.CurrentRootCommitReader._snapshot_configuration(commit_reader),
+                retained_bytes, retained_total)
             owner = object.__new__(_ProofOwner)
             owner._configured = owner._seal = configured
             owner._window = owner._window_seal = window

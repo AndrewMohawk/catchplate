@@ -43,9 +43,11 @@ measurement is the independently pinned producer measurement; this is a
 trusted-host-local claim, not a hardware measurement.
 
 The original release custody contains the actual signed intent digest. That
-custody and this proof bootstrap therefore require independent root provisioning
-after intent exists. Neither the public caller nor the worker manufactures root
-authority. The original intent signature, root enrollment, target, cohort and
+custody and this proof bootstrap therefore require independent root authorization
+after intent exists. Source `.198` adds the [setup policy and receiving contracts](oidc-session-activation-release-proof-input-policy.md)
+and an opt-in dynamic worker; issuer-side packet acquisition and its finite
+signing/staging service remain open. Neither the public caller nor the worker
+manufactures root authority. The original intent signature, root enrollment, target, cohort and
 lifetime are checked before private resource delivery; the request's old token
 is admitted later by the genuine producer, once, with the complete originals.
 
@@ -101,7 +103,9 @@ read-only configuration does not import completion signing or state authority.
 transport_deadline_ns, work)` requires the actual supplied allowance. Its
 private `_ProofMaterial` contains same-call observations only; startup admits
 the actual sealed originals again rather than accepting that material as proof.
-The paired root-only `_produce_on_work` accepts `payload`, `root_private_key`,
+Both verifier and publisher accept an optional restrictive `_current` that is
+propagated through the selected nested cold-admission path; defaults retain the
+fixed path. The paired root-only `_produce_on_work` accepts `payload`, `root_private_key`,
 `root_public_key` and the same mandatory current-bound arguments.
 
 Root delivery opens the construction work/window before any root, key or TLS

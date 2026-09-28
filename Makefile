@@ -1106,6 +1106,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_release_proof.py \
 	serverware/authority_oidc_session_activation_release_proof_production.py \
 	serverware/oidc_session_activation_release_proof_bootstrap.py \
+	serverware/oidc_session_activation_release_proof_input_issuer_policy.py \
+	serverware/oidc_session_activation_release_proof_input_production.py \
+	serverware/authority_oidc_session_activation_release_proof_input_transport.py \
+	serverware/authority_oidc_session_activation_release_proof_input_delivery_transport.py \
+	serverware/oidc_session_activation_release_proof_input_delivery_admission.py \
+	serverware/oidc_session_activation_release_proof_dynamic_entrypoint.py \
+	serverware/oidc_session_activation_release_proof_dynamic_launcher.py \
 	serverware/oidc_session_activation_release_proof_entrypoint.py \
 	serverware/oidc_session_activation_release_proof_startup.py \
 	serverware/oidc_session_activation_release_proof_launcher.py \
@@ -1140,6 +1147,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oidc_session_activation_release_intent_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_release_intent.py \
 	serverware/control_plane_oidc_session_activation_release_proof_bootstrap.py \
+	serverware/control_plane_oidc_session_activation_release_proof_acquisition_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_release_proof.py \
 	serverware/control_plane_oidc_session_activation_release_handoff_bootstrap.py \
 	serverware/control_plane_oidc_session_activation_release_handoff.py \
@@ -3240,6 +3248,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_release_proof.py \
 				serverware/authority_oidc_session_activation_release_proof_production.py \
 				serverware/oidc_session_activation_release_proof_bootstrap.py \
+				serverware/oidc_session_activation_release_proof_input_issuer_policy.py \
+				serverware/oidc_session_activation_release_proof_input_production.py \
+				serverware/authority_oidc_session_activation_release_proof_input_transport.py \
+				serverware/authority_oidc_session_activation_release_proof_input_delivery_transport.py \
+				serverware/oidc_session_activation_release_proof_input_delivery_admission.py \
+				serverware/oidc_session_activation_release_proof_dynamic_entrypoint.py \
+				serverware/oidc_session_activation_release_proof_dynamic_launcher.py \
 				serverware/oidc_session_activation_release_proof_entrypoint.py \
 				serverware/oidc_session_activation_release_proof_startup.py \
 				serverware/oidc_session_activation_release_proof_launcher.py \
@@ -3274,6 +3289,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oidc_session_activation_release_intent_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_release_intent.py \
 				serverware/control_plane_oidc_session_activation_release_proof_bootstrap.py \
+				serverware/control_plane_oidc_session_activation_release_proof_acquisition_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_release_proof.py \
 				serverware/control_plane_oidc_session_activation_release_handoff_bootstrap.py \
 				serverware/control_plane_oidc_session_activation_release_handoff.py \

@@ -30,6 +30,7 @@ No opener override, public packet/candidate input, retry or legacy gate exists.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 import os
 import time
 
@@ -89,6 +90,10 @@ _EXECUTE_SQL = ("SELECT serverware_metadata.serverware_policy_authority_execute_
     "AS marker_json")
 _READ_SQL = ("SELECT serverware_metadata.serverware_policy_authority_read_successor_execution(%s, %s) "
     "AS packet_json")
+_BOUNDED_READ_SQL = ("WITH held AS MATERIALIZED (SELECT serverware_metadata."
+    "serverware_policy_authority_read_successor_execution(%s, %s) AS packet_json) "
+    "SELECT CASE WHEN octet_length(packet_json) <= %s THEN packet_json ELSE NULL END "
+    "AS packet_json FROM held")
 _ISSUE_FIELDS = frozenset({"pending_decision_digest", "packet_digest",
     "issued_at_epoch_ns", "expires_at_epoch_ns"})
 
@@ -155,7 +160,7 @@ def _marker_on_work(value, pending_digest, work):
 
 
 def _run_on_configuration(config, *, purpose, parameters, expected, live_window, work,
-        transport_deadline_ns=None):
+        transport_deadline_ns=None, _current=None, maximum_packet_bytes=None):
     """Private fixed continuation; public owners cannot accept SQL or packets."""
     if purpose not in ("issue", "execute", "read"):
         raise SuccessorExecutionOwnerError("successor database purpose is not source fixed")
@@ -163,22 +168,56 @@ def _run_on_configuration(config, *, purpose, parameters, expected, live_window,
         else authority.SUCCESSOR_EXECUTOR_ROLE if purpose == "execute"
         else authority.SUCCESSOR_RECOVERY_ROLE)
     recovery = purpose == "read"
+    if not recovery and (_current is not None or maximum_packet_bytes is not None):
+        raise SuccessorExecutionOwnerError("successor optional read bounds cannot select a write purpose")
+    packet_maximum = packet.MAX_BYTES if maximum_packet_bytes is None else maximum_packet_bytes
+    if type(packet_maximum) is not int or not 2 <= packet_maximum <= packet.MAX_BYTES:
+        raise SuccessorExecutionOwnerError("successor packet capacity may only tighten its fixed maximum")
     configured = _configuration(config, role)
     evidence.capture._SharedLedger(work)
     window, bound = _window(live_window, transport_deadline_ns)
     expires = min(window[3], expected.expires_at_epoch_ns) if purpose == "issue" else window[3]
-    callback = evidence.production._callback
+    raw_callback = evidence.production._callback
     last_epoch, last_monotonic = window[0], window[2]
+    from serverware import oidc_session_activation_delivery as guarded_delivery
+    current = guarded_delivery._join_current(
+        lambda: clock._check_on_work(window, work=work), _current, work)
 
     def remaining():
         nonlocal last_epoch, last_monotonic
-        epoch = clock._check_on_work(window, work=work)
-        monotonic = callback(work, time.monotonic_ns)
+        epoch = current()
+        monotonic = raw_callback(work, time.monotonic_ns)
         authorization.shape._integer(monotonic, minimum=1)
         if epoch < last_epoch or monotonic < last_monotonic or monotonic >= bound or epoch >= expires:
             raise SuccessorExecutionOwnerError("successor original transaction window expired or clock reversed")
         last_epoch, last_monotonic = epoch, monotonic
         return min(expires - epoch, bound - monotonic)
+
+    def callback(active_work, operation, *args):
+        if _current is None:
+            return raw_callback(active_work, operation, *args)
+        remaining()
+        try:
+            return raw_callback(active_work, operation, *args)
+        finally:
+            remaining()
+
+    @contextmanager
+    def owned_context(manager):
+        if _current is None:
+            with connection_owner._context(manager, work) as value:
+                yield value
+            return
+        remaining()
+        try:
+            with connection_owner._context(manager, work) as value:
+                remaining()
+                yield value
+                remaining()
+        finally:
+            # The actual owner context always gets its unconditional failure
+            # cleanup before a final currentness failure can escape.
+            remaining()
 
     remaining()
     bindings = vector._source_bindings_on_work(work=work)
@@ -199,12 +238,12 @@ def _run_on_configuration(config, *, purpose, parameters, expected, live_window,
     try:
         remaining()
         physical = callback(work, connection_owner._connection_identity, connection, 0)
-        with connection_owner._context(connection, work) as active_connection:
+        with owned_context(connection) as active_connection:
             if active_connection is not connection:
                 raise SuccessorExecutionOwnerError("successor connection context replaced its actual handle")
             callback(work, connection_owner._require_connection, connection, physical, 0)
             cursor = callback(work, lambda: connection.cursor())
-            with connection_owner._context(cursor, work) as active_cursor:
+            with owned_context(cursor) as active_cursor:
                 if active_cursor is not cursor:
                     raise SuccessorExecutionOwnerError("successor cursor context replaced its actual handle")
                 remaining()
@@ -269,10 +308,13 @@ def _run_on_configuration(config, *, purpose, parameters, expected, live_window,
                     marker = _marker_on_work(row["marker_json"], parameters[0], work)
                     result = SuccessorExecutionObservation(parameters[0], parameters[1], marker)
                 else:
-                    row = one(_READ_SQL, parameters)
+                    # Bound the driver's returned text before client receive/
+                    # decode, not merely after psycopg allocated the full row.
+                    row = (one(_READ_SQL, parameters) if maximum_packet_bytes is None
+                        else one(_BOUNDED_READ_SQL, (*parameters, packet_maximum)))
                     authorization.shape._object(row, frozenset({"packet_json"}), "successor recovery response")
                     original = row["packet_json"]
-                    if (type(original) is not str or not 2 <= len(original) <= packet.MAX_BYTES
+                    if (type(original) is not str or not 2 <= len(original) <= packet_maximum
                             or not original.isascii()):
                         raise SuccessorExecutionOwnerError("successor recovery original exceeds its byte bound")
                     work.charge(input_bytes=len(original))
@@ -454,7 +496,7 @@ class SuccessorExecutionExecutor:
 
 
 def _read_on_configuration(config, *, pending_decision_digest, packet_digest,
-        live_window, work, transport_deadline_ns=None):
+        live_window, work, transport_deadline_ns=None, _current=None, maximum_packet_bytes=None):
     """Fixed read continuation using configuration held before other callbacks."""
     configured = _configuration(config, authority.SUCCESSOR_RECOVERY_ROLE)
     evidence.capture._SharedLedger(work)
@@ -465,7 +507,8 @@ def _read_on_configuration(config, *, pending_decision_digest, packet_digest,
     for value in parameters:
         work.prepare_utf8(value)
     return _run_on_configuration(configured, purpose="read", parameters=parameters,
-        expected=None, live_window=window, work=work, transport_deadline_ns=bound)
+        expected=None, live_window=window, work=work, transport_deadline_ns=bound,
+        _current=_current, maximum_packet_bytes=maximum_packet_bytes)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -494,8 +537,9 @@ class SuccessorExecutionRecoveryReader:
         return _configuration(self._configuration, authority.SUCCESSOR_RECOVERY_ROLE)
 
     def read(self, *, pending_decision_digest, packet_digest, live_window, work,
-            transport_deadline_ns=None):
+            transport_deadline_ns=None, _current=None, maximum_packet_bytes=None):
         configured = SuccessorExecutionRecoveryReader._snapshot_configuration(self)
         return _read_on_configuration(configured, pending_decision_digest=pending_decision_digest,
             packet_digest=packet_digest, live_window=live_window, work=work,
-            transport_deadline_ns=transport_deadline_ns)
+            transport_deadline_ns=transport_deadline_ns, _current=_current,
+            maximum_packet_bytes=maximum_packet_bytes)

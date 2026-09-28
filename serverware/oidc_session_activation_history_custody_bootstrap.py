@@ -423,7 +423,7 @@ def _verify_consume_grant_on_work(*, custody_bytes, root_public_key, work, live_
 
 
 def _verify_historical_consume_on_work(*, custody_bytes, root_public_key, work,
-        live_window, transport_deadline_ns):
+        live_window, transport_deadline_ns, _continuity=None):
     """Verify original v2 planning scope as data under a real current allowance."""
     try:
         original, root = custody_bytes, root_public_key
@@ -433,7 +433,7 @@ def _verify_historical_consume_on_work(*, custody_bytes, root_public_key, work,
         window = clock._validate(live_window)
         shape._integer(transport_deadline_ns, minimum=1)
         bound = min(window[4], transport_deadline_ns)
-        current = planner_bootstrap._processing(window, bound, work)
+        current = planner_bootstrap._processing(window, bound, work, _continuity=_continuity)
         current()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "historical consume planning custody")
@@ -451,10 +451,13 @@ def _verify_historical_consume_on_work(*, custody_bytes, root_public_key, work,
         _payload_for_purpose(payload, purpose=CONSUME_CONSUMER_ROLE)
         if payload["issuedAtEpochNs"] > current():
             _fail("historical planning custody is future-issued")
-        planner = _admit_planner(payload, root, window, bound, work, current)
+        planner = _admit_planner(payload, root, window, bound, work, current, _continuity=_continuity)
         request = _admit_consume_request(payload, work, current)
         opening = clock._sample_on_work(work)
-        current()
+        if _continuity is not None:
+            current((opening[1], opening[2]))
+        else:
+            current()
         result = _HistoricalPlanningMaterial(original, planner, CONSUME_CONSUMER_ROLE,
             CONSUME_PROCESS_MODE, CONSUME_SERVICE_UID, CONSUME_SERVICE_GID,
             payload["receiverIdentity"], payload["bundleKeyDigest"], payload["deliveryKeyDigest"],
@@ -469,10 +472,10 @@ def _verify_historical_consume_on_work(*, custody_bytes, root_public_key, work,
 
 
 def _verify_consume_completion_on_work(*, custody_bytes, root_public_key, work,
-        live_window, transport_deadline_ns):
+        live_window, transport_deadline_ns, _continuity=None):
     return _verify_fixed_purpose(custody_bytes=custody_bytes, root_public_key=root_public_key,
         work=work, live_window=live_window, transport_deadline_ns=transport_deadline_ns,
-        purpose=CONSUME_COMPLETION_CONSUMER_ROLE)
+        purpose=CONSUME_COMPLETION_CONSUMER_ROLE, _continuity=_continuity)
 
 
 def _produce_consume_completion_on_work(*, payload, root_private_key, root_public_key, work,

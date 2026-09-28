@@ -8,6 +8,7 @@ signing of completion, plaintext release or cross-cohort resolution occurs here.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 
 from cryptography.exceptions import InvalidSignature
 
@@ -83,14 +84,33 @@ def _payload_shape(payload):
         _fail("consume completion claims unsupported hardware or witness assurance")
 
 
+def _continuity(current, work):
+    if current is None:
+        return None
+    if not callable(current):
+        _fail("consume completion continuation is not callable")
+
+    def floors(epoch, monotonic):
+        before = current()
+        sampled = production._callback(work, time.monotonic_ns)
+        after = current()
+        if (type(before) is not int or type(after) is not int or type(sampled) is not int
+                or before < epoch or after < before or sampled < monotonic):
+            _fail("consume completion continuation reversed original clock floors")
+        return after, sampled
+
+    return floors
+
+
 def _admit_nested(payload, planner_original, planning_original, receiving_original,
-        root, window, bound, current, work):
+        root, window, bound, current, work, *, _current=None):
     for name, original in (("plannerBootstrap", planner_original),
             ("plannerHistoryCustody", planning_original), ("receivingHistoryCustody", receiving_original)):
         _bind_original(payload[name], original, current, work)
     planner = planner_bootstrap._verify_historical_on_work(bootstrap_bytes=planner_original,
         history_custody_bytes=planning_original, root_public_key=root,
-        live_window=window, transport_deadline_ns=bound, work=work)
+        live_window=window, transport_deadline_ns=bound, work=work,
+        _continuity=_continuity(_current, work))
     current()
     if (type(planner) is not planner_bootstrap._HistoricalPlannerMaterial
             or type(planner.history_material) is not history_bootstrap._HistoricalPlanningMaterial):
@@ -102,7 +122,8 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
             if roles[name][field] == SERVICE_UID:
                 _fail("consume completion identity collides with a configured generic role")
     receiving = history_bootstrap._verify_consume_completion_on_work(custody_bytes=receiving_original,
-        root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work)
+        root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work,
+        _continuity=_continuity(_current, work))
     current()
     live = shared._launch_guard(receiving.attestation_interval, receiving.opening_sample, current, work)
     live()
@@ -148,7 +169,8 @@ def _admit_nested(payload, planner_original, planning_original, receiving_origin
 
 
 def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_custody_bytes,
-        receiving_history_custody_bytes, root_public_key, live_window, transport_deadline_ns, work):
+        receiving_history_custody_bytes, root_public_key, live_window, transport_deadline_ns, work,
+        _current=None):
     try:
         original, root = custody_bytes, root_public_key
         if type(original) is not bytes or not 2 <= len(original) <= MAX_BYTES:
@@ -160,6 +182,7 @@ def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_c
         shape._integer(transport_deadline_ns, minimum=1)
         bound = min(window[4], transport_deadline_ns)
         inherited = shared._processing(window, bound, work)
+        inherited = shared.delivery._join_current(inherited, _current, work)
         inherited()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed consume completion custody")
@@ -178,7 +201,7 @@ def _verify_on_work(*, custody_bytes, planner_bootstrap_bytes, planner_history_c
         opening = _fresh(interval, work)
         current = shared._launch_guard(interval, opening, inherited, work)
         planner, history, live = _admit_nested(payload, planner_original, planning_original,
-            receiving_original, root, window, bound, current, work)
+            receiving_original, root, window, bound, current, work, _current=_current)
         result = _CustodyMaterial(original, planner_original, planning_original, receiving_original,
             planner, history, payload["receiverIdentity"], interval, opening, payload)
         _canonical(original, envelope, work)

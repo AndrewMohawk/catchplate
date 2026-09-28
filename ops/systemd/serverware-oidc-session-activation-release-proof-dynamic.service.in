@@ -1,0 +1,80 @@
+# Unrendered, uninstalled alternate to fixed release-proof delivery.
+# Independent provisioning supplies the exact five public trust originals,
+# proof signer, three AES keys, listener identities and read-only reader TLS.
+# No issuer root key, completion signer, journal or SQL/state write role.
+[Unit]
+Description=Serverware dynamically staged committed-release proof worker
+BindsTo=serverware-oidc-session-activation-release-proof-bootstrap.socket serverware-oidc-session-activation-release-proof-dynamic.socket
+After=local-fs.target serverware-oidc-session-activation-release-proof-bootstrap.socket serverware-oidc-session-activation-release-proof-dynamic.socket
+Conflicts=serverware-oidc-session-activation-release-proof.socket serverware-oidc-session-activation-release-proof.service
+RequiresMountsFor=@RELEASE_PROOF_RELEASE_ROOT@ @RELEASE_PROOF_DYNAMIC_TRUST_DIR@ @RELEASE_PROOF_SIGNING_KEY@ @RELEASE_PROOF_EXECUTION_BUNDLE_KEY@ @RELEASE_PROOF_HISTORICAL_BUNDLE_KEY@ @RELEASE_PROOF_DELIVERY_KEY@ @RELEASE_PROOF_TLS_DIR@
+AssertPathIsDirectory=@RELEASE_PROOF_RELEASE_ROOT@
+AssertPathIsDirectory=@RELEASE_PROOF_DYNAMIC_TRUST_DIR@
+AssertPathIsDirectory=@RELEASE_PROOF_TLS_DIR@
+AssertPathExists=@RELEASE_PROOF_DYNAMIC_TRUST_DIR@/root-public-key.pem
+AssertPathExists=@RELEASE_PROOF_DYNAMIC_TRUST_DIR@/issuer-policy.json
+AssertPathExists=@RELEASE_PROOF_DYNAMIC_TRUST_DIR@/completion-bootstrap.json
+AssertPathExists=@RELEASE_PROOF_DYNAMIC_TRUST_DIR@/proof-enrollment.json
+AssertPathExists=@RELEASE_PROOF_DYNAMIC_TRUST_DIR@/intent-enrollment.json
+AssertPathExists=@RELEASE_PROOF_SIGNING_KEY@
+AssertPathExists=@RELEASE_PROOF_EXECUTION_BUNDLE_KEY@
+AssertPathExists=@RELEASE_PROOF_HISTORICAL_BUNDLE_KEY@
+AssertPathExists=@RELEASE_PROOF_DELIVERY_KEY@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Root receives exactly two named sockets in either order. Exact original and
+# resource admission precedes the staged ACK; the same PID permanently drops
+# to 65497:65497 with the existing seven FDs198..204 and one original allowance.
+# One subsequent proof request; Type=exec and staged are not readiness evidence.
+User=root
+Group=root
+RootDirectory=@RELEASE_PROOF_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@RELEASE_PROOF_DYNAMIC_TRUST_DIR@:/run/serverware/oidc-session-activation-release-proof-dynamic-trust
+BindReadOnlyPaths=@RELEASE_PROOF_SIGNING_KEY@:/run/secrets/serverware-oidc-session-activation-release-proof-signing-key
+BindReadOnlyPaths=@RELEASE_PROOF_EXECUTION_BUNDLE_KEY@:/run/secrets/serverware-oidc-session-activation-release-proof-execution-bundle-key
+BindReadOnlyPaths=@RELEASE_PROOF_HISTORICAL_BUNDLE_KEY@:/run/secrets/serverware-oidc-session-activation-release-proof-historical-bundle-key
+BindReadOnlyPaths=@RELEASE_PROOF_DELIVERY_KEY@:/run/secrets/serverware-oidc-session-activation-release-proof-delivery-key
+BindReadOnlyPaths=@RELEASE_PROOF_TLS_DIR@:/run/serverware/oidc-session-activation-delivery-completion-tls
+BindReadOnlyPaths=/run/serverware/oidc-session-activation-token-release:/run/serverware/oidc-session-activation-token-release
+Sockets=serverware-oidc-session-activation-release-proof-bootstrap.socket serverware-oidc-session-activation-release-proof-dynamic.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_launcher.py --root-delivery
+Restart=no
+RuntimeMaxSec=300s
+TimeoutStartSec=35s
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native

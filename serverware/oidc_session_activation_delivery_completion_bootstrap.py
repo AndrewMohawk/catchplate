@@ -17,6 +17,7 @@ from serverware import authority_oidc_session_activation_delivery_execution_hist
 from serverware import authority_successor_execution_window as processing_window
 from serverware import oidc_session_activation_completion_bootstrap as grammar
 from serverware import oidc_session_activation_delivery_completion_custody_bootstrap as receiving
+from serverware import oidc_session_activation_delivery as delivery
 
 
 primitives = receiving.shared
@@ -324,11 +325,11 @@ def _configured_keys(configured, caller_pin, completion_pin, work):
                 _fail("consume completion/caller key shares another configured purpose")
 
 
-def _material(payload, original, root, window, bound, opening, work, current):
+def _material(payload, original, root, window, bound, opening, work, current, *, _current=None):
     raw4 = tuple(grammar._original(payload[name], maximum, work, current) for name, maximum in _CUSTODY_LIMITS)
     custody = receiving._verify_on_work(custody_bytes=raw4[0], planner_bootstrap_bytes=raw4[1],
         planner_history_custody_bytes=raw4[2], receiving_history_custody_bytes=raw4[3],
-        root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work)
+        root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     admitted, configured = custody.planner, custody.planner.payload
     for actual, expected in ((payload["receiverIdentity"], custody.receiver_identity),
             (payload["configurationDigest"], configured["configurationDigest"]),
@@ -453,12 +454,14 @@ def _material(payload, original, root, window, bound, opening, work, current):
     return material, live
 
 
-def _verify_on_work(*, bootstrap_bytes, root_public_key, work, live_window=None, transport_deadline_ns=None):
+def _verify_on_work(*, bootstrap_bytes, root_public_key, work, live_window=None, transport_deadline_ns=None,
+        _current=None):
     try:
         original = authorization._original(bootstrap_bytes, MAX_BYTES, "consume completion bootstrap")
         root = root_public_key
         authorization._public(root)
         window, bound, inherited = _processing(live_window, transport_deadline_ns, work)
+        inherited = delivery._join_current(inherited, _current, work)
         inherited()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed consume completion bootstrap")
@@ -473,7 +476,8 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, work, live_window=None,
         opening = window[1], window[0], window[2]
         _fresh(interval, work, opening=opening)
         current = primitives._launch_guard(interval, opening, inherited, work)
-        material, live = _material(envelope["payload"], original, root, window, bound, opening, work, current)
+        material, live = _material(envelope["payload"], original, root, window, bound, opening, work, current,
+            _current=_current)
         _canonical(original, envelope, work)
         live()
         return material
@@ -484,13 +488,14 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, work, live_window=None,
 
 
 def _produce_on_work(*, payload, root_private_key, root_public_key, work,
-        live_window=None, transport_deadline_ns=None):
+        live_window=None, transport_deadline_ns=None, _current=None):
     try:
         private, root = root_private_key, root_public_key
         authorization._private(private)
         authorization._public(root)
         owned = _capture(payload, work)
         window, bound, inherited = _processing(live_window, transport_deadline_ns, work)
+        inherited = delivery._join_current(inherited, _current, work)
         inherited()
         _payload_shape(owned, work)
         interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
@@ -498,7 +503,8 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, work,
         _fresh(interval, work, opening=opening)
         current = primitives._launch_guard(interval, opening, inherited, work)
         unsigned = _wire(owned, work)
-        _material_value, live = _material(owned, unsigned, root, window, bound, opening, work, current)
+        _material_value, live = _material(owned, unsigned, root, window, bound, opening, work, current,
+            _current=_current)
         primitives.keys._pair_on_work(private, root, work)
         envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
         size, nodes = work.measure(envelope)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 import hashlib
+import time
 
 from cryptography.exceptions import InvalidSignature
 
@@ -154,7 +155,25 @@ def _payload_shape(payload, work):
         _fail("activation release custody claims unsupported hardware or witness assurance")
 
 
-def _material(payload, original, root, window, deadline, opening, work, current):
+def _continuity(current, work):
+    if current is None:
+        return None
+    if not callable(current):
+        _fail("release custody continuation is not callable")
+
+    def floors(epoch, monotonic):
+        before = current()
+        sampled = production._callback(work, time.monotonic_ns)
+        after = current()
+        if (type(before) is not int or type(after) is not int or type(sampled) is not int
+                or before < epoch or after < before or sampled < monotonic):
+            _fail("release custody continuation reversed original clock floors")
+        return after, sampled
+
+    return floors
+
+
+def _material(payload, original, root, window, deadline, opening, work, current, *, _current=None):
     record = payload["plannerBootstrap"]
     current()
     planner_original = authorization.transport._decode(record["base64Url"], record["byteCount"],
@@ -164,7 +183,8 @@ def _material(payload, original, root, window, deadline, opening, work, current)
     current()
     plan._same(digest, record["bytesDigest"], work, "activation release original planner bytes")
     admitted = planner_bootstrap._verify_historical_on_work(bootstrap_bytes=planner_original,
-        root_public_key=root, live_window=window, transport_deadline_ns=deadline, work=work)
+        root_public_key=root, live_window=window, transport_deadline_ns=deadline, work=work,
+        _continuity=_continuity(_current, work))
     current()
     for field, expected in (("configurationDigest", admitted.configuration_digest),
             ("generationDigest", admitted.generation["digest"]),
@@ -200,7 +220,8 @@ def _material(payload, original, root, window, deadline, opening, work, current)
     return result
 
 
-def _verify_on_work(*, custody_bytes, root_public_key, live_window, transport_deadline_ns, work):
+def _verify_on_work(*, custody_bytes, root_public_key, live_window, transport_deadline_ns, work,
+        _current=None):
     """Admit original root scope; never infer release intent or consumption."""
     try:
         original = authorization._original(custody_bytes, MAX_BYTES, "activation release custody")
@@ -210,6 +231,7 @@ def _verify_on_work(*, custody_bytes, root_public_key, live_window, transport_de
         shape._integer(transport_deadline_ns, minimum=1)
         deadline = min(window[4], transport_deadline_ns)
         inherited = planner_bootstrap._processing(window, deadline, work)
+        inherited = delivery._join_current(inherited, _current, work)
         inherited()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed activation release custody")
@@ -229,7 +251,8 @@ def _verify_on_work(*, custody_bytes, root_public_key, live_window, transport_de
         opening = (window[1], window[0], window[2])
         _fresh(interval, work, opening=opening)
         current = planner_bootstrap._launch_guard(interval, opening, inherited, work)
-        result = _material(payload, original, root, window, deadline, opening, work, current)
+        result = _material(payload, original, root, window, deadline, opening, work, current,
+            _current=_current)
         _canonical(original, envelope, work)
         current()
         return result
@@ -293,7 +316,7 @@ def _verify_historical_on_work(*, custody_bytes, root_public_key, live_window,
 
 
 def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
-        transport_deadline_ns, work):
+        transport_deadline_ns, work, _current=None):
     """Sign independent custody pins; do not manufacture verified intent/proof."""
     try:
         private, root = root_private_key, root_public_key
@@ -304,6 +327,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
         shape._integer(transport_deadline_ns, minimum=1)
         deadline = min(window[4], transport_deadline_ns)
         inherited = planner_bootstrap._processing(window, deadline, work)
+        inherited = delivery._join_current(inherited, _current, work)
         inherited()
         _payload_shape(owned, work)
         interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
@@ -311,7 +335,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
         _fresh(interval, work, opening=opening)
         current = planner_bootstrap._launch_guard(interval, opening, inherited, work)
         unsigned = _wire(owned, work)
-        _material(owned, unsigned, root, window, deadline, opening, work, current)
+        _material(owned, unsigned, root, window, deadline, opening, work, current, _current=_current)
         planner_bootstrap.keys._pair_on_work(private, root, work)
         current()
         envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}

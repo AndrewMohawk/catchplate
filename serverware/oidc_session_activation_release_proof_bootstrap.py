@@ -178,7 +178,7 @@ def _unique_keys(values, work):
     return tuple(result)
 
 
-def _material(payload, original, root, window, bound, work, inherited):
+def _material(payload, original, root, window, bound, work, inherited, *, _current=None):
     # Bound the complete nested byte inventory before any base64 allocation.
     if len(original) + sum(payload[name]["byteCount"] for name, _ in _ORIGINAL_LIMITS) > MAX_ORIGINAL_BYTES:
         _fail("proof bootstrap and nested originals exceed 64 MiB")
@@ -211,7 +211,7 @@ def _material(payload, original, root, window, bound, work, inherited):
     raw = tuple(completion.grammar._original(payload[name], maximum, work, live)
         for name, maximum in _ORIGINAL_LIMITS)
     cm = completion._verify_on_work(bootstrap_bytes=raw[0], root_public_key=root,
-        live_window=window, transport_deadline_ns=bound, work=work)
+        live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     if type(cm) is not completion._CompletionMaterial:
         _fail("proof cold admission requires genuine completion originals")
     for material in (cm, cm.custody_material, cm.custody_material.history):
@@ -219,7 +219,7 @@ def _material(payload, original, root, window, bound, work, inherited):
             material.opening_sample, inherited, work))
     live()
     rm = release_bootstrap._verify_on_work(custody_bytes=raw[2], root_public_key=root,
-        live_window=window, transport_deadline_ns=bound, work=work)
+        live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     guards.append(release_bootstrap.planner_bootstrap._launch_guard(rm.attestation_interval,
         rm.opening_sample, inherited, work))
     live()
@@ -305,7 +305,8 @@ def _material(payload, original, root, window, bound, work, inherited):
     return result
 
 
-def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_deadline_ns, work):
+def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_deadline_ns, work,
+        _current=None):
     root = root_public_key
     authorization._public(root)
     original = authorization._original(bootstrap_bytes, MAX_BYTES, "release proof bootstrap")
@@ -313,6 +314,7 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
     _window, inherited = delivery._window(window, bound, work)
+    inherited = delivery._join_current(inherited, _current, work)
     inherited()
     try:
         envelope = _decode(original, work)
@@ -324,7 +326,8 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
             _wire(envelope["payload"], work), capture._SharedLedger(work))
         inherited()
         _payload_shape(envelope["payload"], work)
-        material = _material(envelope["payload"], original, root, window, bound, work, inherited)
+        material = _material(envelope["payload"], original, root, window, bound, work, inherited,
+            _current=_current)
         _canonical(original, envelope, work)
         material.live()
         return material
@@ -334,7 +337,8 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
         raise ReleaseProofBootstrapError("release proof cold admission failed") from exc
 
 
-def _produce_on_work(*, payload, root_private_key, root_public_key, live_window, transport_deadline_ns, work):
+def _produce_on_work(*, payload, root_private_key, root_public_key, live_window, transport_deadline_ns, work,
+        _current=None):
     private, root = root_private_key, root_public_key
     authorization._private(private)
     authorization._public(root)
@@ -343,6 +347,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
     shape._integer(transport_deadline_ns, minimum=1)
     bound = min(transport_deadline_ns, window[4])
     _window, inherited = delivery._window(window, bound, work)
+    inherited = delivery._join_current(inherited, _current, work)
     inherited()
     _payload_shape(owned, work)
     unsigned = _wire(owned, work)
@@ -350,7 +355,8 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
     # Reserve the full fixed-signature envelope, including its wrapper, in the
     # complete original inventory before opening nested originals.
     reserved_original = _wire(envelope, work)
-    material = _material(owned, reserved_original, root, window, bound, work, inherited)
+    material = _material(owned, reserved_original, root, window, bound, work, inherited,
+        _current=_current)
     authorization.keys._pair_on_work(private, root, work)
     size, nodes = work.measure(envelope)
     payload_size, payload_nodes = work.measure(owned)

@@ -1,4 +1,4 @@
-"""Guarded caller I/O for thirteen source-fixed activation/consume wire profiles.
+"""Guarded caller I/O for fourteen source-fixed activation/consume wire profiles.
 
 These private adapters preserve the actual caller's work and current guard;
 they do not admit requests, replies, socket peers or callback results as proof.
@@ -25,20 +25,23 @@ from serverware import authority_oidc_session_activation_delivery_completion_rel
 from serverware import authority_oidc_session_activation_release_proof_transport as release_proof
 from serverware import authority_oidc_session_activation_release_grant_transport as release_grants
 from serverware import authority_oidc_session_activation_consume_input_transport as consume_inputs
+from serverware import authority_oidc_session_activation_release_proof_input_transport as proof_inputs
 
 
 AuthorityTransportError = authority_transport.AuthorityTransportError
 capture = production.capability.capture
 
 
-def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, current):
-    # The thirteen literal entry functions below choose this closed source set.
+def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
+    # The fourteen literal entry functions below choose this closed source set.
     # No path, framing callback or caller-selected profile is accepted instead.
     if not (profile is authorizer or profile is reservation or profile is sql
             or profile is completion or profile is completion_dispatch
             or profile is consume_authorizer or profile is consume_reservation or profile is consume_sql
             or profile is consume_completion_dispatch or profile is consume_completion_release
-            or profile is release_proof or profile is release_grants or profile is consume_inputs):
+            or profile is release_proof or profile is release_grants or profile is consume_inputs
+            or profile is proof_inputs):
         raise AuthorityTransportError("activation caller transport profile is not source fixed")
     # Completion's MAX_BYTES intentionally means only its fixed raw2 request;
     # its separate source exchange ceiling covers the bounded raw4/raw6 response.
@@ -46,7 +49,12 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
         if profile is completion or profile is completion_dispatch
             or profile is consume_completion_dispatch or profile is consume_completion_release
             or profile is release_proof or profile is release_grants or profile is consume_inputs
+            or profile is proof_inputs
         else profile.MAX_BYTES)
+    if maximum_response_bytes is not None and profile is not proof_inputs:
+        raise AuthorityTransportError("activation response cap is not enabled for this fixed profile")
+    response_maximum = (proof_inputs._response_limit(maximum_response_bytes)
+        if profile is proof_inputs else profile.MAX_RESPONSE_BYTES)
     capture._SharedLedger(work)
     if type(deadline_ns) is not int or deadline_ns <= 0 or not callable(current):
         raise AuthorityTransportError("activation caller transport requires its original deadline and guard")
@@ -155,12 +163,13 @@ def _exchange_on_work(profile, endpoint, *, originals, deadline_ns, work, curren
             for offset in range(0, len(length_header), 8))
         if (profile is sql or profile is completion or profile is completion_dispatch
                 or profile is consume_sql or profile is consume_completion_dispatch or profile is consume_completion_release
-                or profile is release_proof or profile is release_grants or profile is consume_inputs):
+                or profile is release_proof or profile is release_grants or profile is consume_inputs
+                or profile is proof_inputs):
             profile._response_lengths(lengths)
         else:
             profile._lengths(lengths, response=True)
         response_bytes = sum(lengths)
-        if (response_bytes > profile.MAX_RESPONSE_BYTES
+        if (response_bytes > response_maximum
                 or request_bytes + response_bytes + profile.REQUEST_HEADER_BYTES
                     + profile.RESPONSE_HEADER_BYTES > exchange_maximum):
             raise AuthorityTransportError("activation caller whole exchange exceeds its fixed bound")
@@ -252,3 +261,10 @@ def _release_grants_on_work(endpoint, *, originals, deadline_ns, work, current):
 def _consume_inputs_on_work(endpoint, *, originals, deadline_ns, work, current):
     return _exchange_on_work(consume_inputs, endpoint, originals=originals,
         deadline_ns=deadline_ns, work=work, current=current)
+
+
+def _release_proof_inputs_on_work(endpoint, *, originals, deadline_ns, work, current,
+        maximum_response_bytes=None):
+    return _exchange_on_work(proof_inputs, endpoint, originals=originals,
+        deadline_ns=deadline_ns, work=work, current=current,
+        maximum_response_bytes=maximum_response_bytes)

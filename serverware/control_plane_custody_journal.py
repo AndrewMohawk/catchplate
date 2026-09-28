@@ -174,7 +174,7 @@ class CustodyJournal:
     their separate association is published last. Each may retain one opaque
     reservation raw3, one SQL claim, one SQL outcome, one completion outcome
     and one completion reconciliation under that association.
-    Seven times maximum_records plus nine per consume claim bounds published files, including associations and
+    Seven times maximum_records plus ten per consume claim bounds published files, including associations and
     fixed registration outcomes: legacy records use at most three, evidence
     grants seven, signer records one and finalization grants seven each.
     Old records are never rewritten or removed; legacy marker byte
@@ -183,8 +183,8 @@ class CustodyJournal:
     the unchanged physical/quota ceilings, without reserving legacy markers.
     An activation claim has exactly six possible stage siblings: seven total
     files, exhausting its unchanged allowance. No stage adds another slot.
-    Consume uses a separately counted logical claim with at most sixteen files.
-    Only that namespace adds nine physical allowances; other codecs remain strict.
+    Consume uses a separately counted logical claim with at most seventeen files.
+    Only that namespace adds ten physical allowances; other codecs remain strict.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -266,7 +266,7 @@ class CustodyJournal:
     def _physical_limit(self):
         # Only a separately counted, admitted consume claim may use its nine
         # suffix files beyond seven. Older families retain their fixed inventories.
-        return 7 * self._maximum_records + 9 * len(self._consume_claims)
+        return 7 * self._maximum_records + 10 * len(self._consume_claims)
 
     def _require_process(self):
         if os.getpid() != self._pid:
@@ -333,7 +333,7 @@ class CustodyJournal:
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
                 count += 1
-                if count > 16 * self._maximum_records:
+                if count > 17 * self._maximum_records:
                     raise CustodyJournalError("journal physical file limit exceeded")
                 name = entry.name
                 if name.startswith("prepared-"):
@@ -491,7 +491,7 @@ class CustodyJournal:
                         uncertain_completions.add(digest)
         # Directory order is not authority: first bound the scan by the worst
         # possible inventory, then require the exact admitted consume allowance.
-        if count > 7 * self._maximum_records + 9 * len(consume_claims):
+        if count > 7 * self._maximum_records + 10 * len(consume_claims):
             raise CustodyJournalError("journal physical inventory exceeds its consume-specific allowance")
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
@@ -1458,13 +1458,14 @@ class CustodyJournal:
             raise CustodyJournalError("consume response lacks its irreversible target claim")
         activation = self._activation_records.get(claim.finalization_digest, {})
         predecessor = self._activation_scope(claim.finalization_digest, activation)
-        # Optional acquisition response uses a new codec index, preserving all
-        # old domains, but is a prologue to the unchanged ordered stage prefix.
-        stages = set(by_kind) - {"inputs"}
+        # Optional acquisition responses use appended codec indices, preserving
+        # old domains and the unchanged ordered stage prefix.
+        stages = set(by_kind) - {"inputs", "release-proof-setup"}
         if ("completion-outcome" not in activation
                 or predecessor.source_revision != claim.source_revision
                 or len(by_kind) > len(consume_records.KINDS) - 1
                 or stages != set(consume_records.KINDS[1:1 + len(stages)])
+                or ("release-proof-setup" in by_kind and "release-proof-claimed" not in by_kind)
                 or any(value[0] != claim.source_revision for value in by_kind.values())
                 or ("exported" in by_kind and by_kind["prepared"][3] != b"prepared")
                 or ("authorized" in by_kind and by_kind["exported"][3] != b"exported")):
@@ -1589,8 +1590,10 @@ class CustodyJournal:
                         raise CustodyJournalError("consume cannot replace first exact response originals")
                     self._require_ready()
                     return existing.digest
+                stages = set(by_kind) - {"inputs", "release-proof-setup"}
                 if ((kind == "inputs" and by_kind)
-                        or (kind != "inputs" and profile != len(by_kind) - int("inputs" in by_kind) + 1)
+                        or (kind == "release-proof-setup" and stages != set(consume_records.KINDS[1:13]))
+                        or (kind not in ("inputs", "release-proof-setup") and profile != len(stages) + 1)
                         or (kind == "exported" and by_kind["prepared"][3] != b"prepared")
                         or (kind == "authorized" and by_kind["exported"][3] != b"exported")):
                     raise CustodyJournalError("consume publication skipped its fixed successful predecessor")
@@ -1714,6 +1717,13 @@ class CustodyJournal:
         return self._append_consume_record(finalization_digest=finalization_digest,
             activation_authorization_digest=activation_authorization_digest,
             kind="inputs", originals=originals)
+
+    def append_oidc_session_activation_consume_release_proof_setup(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain opaque raw1 after proof claim and before proof, never authorize retry."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-proof-setup", originals=originals)
 
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):

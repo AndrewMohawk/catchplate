@@ -134,6 +134,7 @@ COPY --from=verified-production-source /source/serverware/oidc_session_activatio
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_completion_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_launcher.py
+COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_grant_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_input_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_launcher.py
 COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_launcher.py
@@ -187,6 +188,9 @@ COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-sessi
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-completion.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-completion.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof.service.in
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-bootstrap.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-bootstrap.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.socket
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.service.in
 COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.socket
@@ -234,6 +238,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
         /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_delivery_completion_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_release_proof_launcher.py \
+        /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_launcher.py \
         /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_launcher.py \

@@ -41,6 +41,10 @@ CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEn
 CONTROL_PLANE_ENROLLMENT_V12_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v12"
 CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v13"
 CONTROL_PLANE_ENROLLMENT_V13_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v13"
+CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v14"
+CONTROL_PLANE_ENROLLMENT_V14_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v14"
+CONTROL_PLANE_PROOF_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseProofAcquisition/v1"
+CONTROL_PLANE_PROOF_ACQUISITION_SOCKET = "/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock"
 CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeInputAcquisition/v1"
 CONTROL_PLANE_CONSUME_INPUT_ACQUISITION_SOCKET = "/run/serverware/oidc-session-activation-consume-inputs/grants.sock"
 CONTROL_PLANE_GRANT_ACQUISITION_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseGrantAcquisition/v1"
@@ -1137,8 +1141,35 @@ def _control_plane_consume_input_acquisition_public_shape(value, *, planning_val
         raise RuntimeError("consume input issuer policy encoding is not canonical")
 
 
+def _control_plane_proof_acquisition_public_shape(value, *, intent_value, proof_value):
+    """Closed v14 public policy/endpoint; no packet or additional key slot."""
+    if value is None:
+        return
+    if (type(value) is not dict or set(value) != {"schema", "endpoint", "issuerPolicy"}
+            or value["schema"] != CONTROL_PLANE_PROOF_ACQUISITION_SCHEMA
+            or type(intent_value) is not dict or type(proof_value) is not dict):
+        raise RuntimeError("proof acquisition requires closed policy and enabled intent/proof")
+    endpoint = value["endpoint"]
+    if (type(endpoint) is not dict or set(endpoint) != {"path", "timeoutSeconds", "peerUid", "peerGid"}
+            or type(endpoint["path"]) is not str or endpoint["path"] != CONTROL_PLANE_PROOF_ACQUISITION_SOCKET
+            or type(endpoint["timeoutSeconds"]) is not int or not 1 <= endpoint["timeoutSeconds"] <= 30
+            or any(type(endpoint[name]) is not int or endpoint[name] != 0 for name in ("peerUid", "peerGid"))):
+        raise RuntimeError("proof acquisition endpoint differs from the fixed issuer")
+    original = value["issuerPolicy"]
+    if type(original) is not dict or set(original) != {"base64Url", "byteCount"}:
+        raise RuntimeError("proof issuer policy original is not closed")
+    encoded, size = original["base64Url"], original["byteCount"]
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    if (type(size) is not int or not 2 <= size <= 64 * 1024 or type(encoded) is not str
+            or len(encoded) != (4 * size + 2) // 3 or any(character not in alphabet for character in encoded)):
+        raise RuntimeError("proof issuer policy exceeds its original bound")
+    unused = 4 if size % 3 == 1 else 2 if size % 3 == 2 else 0
+    if unused and alphabet.index(encoded[-1]) & ((1 << unused) - 1):
+        raise RuntimeError("proof issuer policy encoding is not canonical")
+
+
 def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
-    """Project closed v2-v13 slots; child admission alone supplies authority."""
+    """Project closed v2-v14 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -1166,7 +1197,8 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
                     CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
         is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
@@ -1178,7 +1210,9 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
         is_v10 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA
         is_v11 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA
         is_v12 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA
-        is_v13 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA
+        is_v14 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V14_BOOTSTRAP_SCHEMA
+        # v14 preserves the entire exact v13 prefix and all ten purpose slots.
+        is_v13 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V13_BOOTSTRAP_SCHEMA or is_v14
         payload_fields = {"schema", "sourceRevision", "configurationDigest", "configurationPayload",
             "generation", "runtimeRoleIdentities", "issuerPrivateKeyFd", "signerEndpoint"}
         if is_v3 or is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12 or is_v13:
@@ -1203,9 +1237,12 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             payload_fields.add("oidcSessionActivationReleaseGrantAcquisition")
         if is_v13:
             payload_fields.add("oidcSessionActivationConsumeInputAcquisition")
+        if is_v14:
+            payload_fields.add("oidcSessionActivationReleaseProofAcquisition")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V13_PAYLOAD_SCHEMA if is_v13
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V14_PAYLOAD_SCHEMA if is_v14
+                    else CONTROL_PLANE_ENROLLMENT_V13_PAYLOAD_SCHEMA if is_v13
                     else CONTROL_PLANE_ENROLLMENT_V12_PAYLOAD_SCHEMA if is_v12
                     else CONTROL_PLANE_ENROLLMENT_V11_PAYLOAD_SCHEMA if is_v11
                     else CONTROL_PLANE_ENROLLMENT_V10_PAYLOAD_SCHEMA if is_v10
@@ -1271,6 +1308,10 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             _control_plane_consume_input_acquisition_public_shape(payload["oidcSessionActivationConsumeInputAcquisition"],
                 planning_value=payload["oidcSessionActivationPlanning"],
                 activation_value=payload["oidcSessionActivationExecution"])
+        if is_v14:
+            _control_plane_proof_acquisition_public_shape(payload["oidcSessionActivationReleaseProofAcquisition"],
+                intent_value=payload["oidcSessionActivationReleaseIntent"],
+                proof_value=payload["oidcSessionActivationReleaseProof"])
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:

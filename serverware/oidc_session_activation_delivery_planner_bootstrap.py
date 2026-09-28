@@ -263,8 +263,6 @@ def _material(payload, original, custody, root, window, bound, opening, current,
     verifier = history._verify_historical_consume_on_work if historical else history._verify_consume_on_work
     continuity_arguments = {}
     if _continuity is not None:
-        if historical:
-            _fail("consume planner live continuity does not select historical authority")
         continuity_arguments["_continuity"] = _continuity
     nested = verifier(custody_bytes=custody, root_public_key=root,
         work=work, live_window=window, transport_deadline_ns=bound, **continuity_arguments)
@@ -369,7 +367,7 @@ def _verify_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
 
 
 def _verify_historical_on_work(*, bootstrap_bytes, history_custody_bytes, root_public_key,
-        live_window, transport_deadline_ns, work):
+        live_window, transport_deadline_ns, work, _continuity=None):
     """Original v2 planner/history data; never renew either old launch."""
     try:
         original, custody, root = bootstrap_bytes, history_custody_bytes, root_public_key
@@ -380,7 +378,7 @@ def _verify_historical_on_work(*, bootstrap_bytes, history_custody_bytes, root_p
         window = clock._validate(live_window)
         shape._integer(transport_deadline_ns, minimum=1)
         bound = min(window[4], transport_deadline_ns)
-        current = shared._processing(window, bound, work)
+        current = shared._processing(window, bound, work, _continuity=_continuity)
         current()
         envelope = shared.codec._decode(original, work)
         shape._object(envelope, shared._ENVELOPE_FIELDS, "historical signed consume bootstrap")
@@ -398,9 +396,12 @@ def _verify_historical_on_work(*, bootstrap_bytes, history_custody_bytes, root_p
         if payload["issuedAtEpochNs"] > current():
             _fail("historical consume planner is future-issued")
         opening = clock._sample_on_work(work)
-        current()
+        if _continuity is not None:
+            current((opening[1], opening[2]))
+        else:
+            current()
         result = _material(payload, original, custody, root, window, bound, opening, current, work,
-            historical=True)
+            historical=True, _continuity=_continuity)
         shared.codec._canonical(original, envelope, work)
         current()
         return result

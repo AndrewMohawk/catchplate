@@ -1,8 +1,11 @@
 # Same-context committed-release proof
 
-Source `.190`; unbuilt, unexecuted and unprovisioned. This connects the actual
-public permission to the separately provisioned private proof worker. It does
-not open the new token, issue a cookie or establish current session state.
+The `.190` source connection remains unbuilt, unexecuted and unprovisioned.
+Source `.198` adds optional [per-request proof setup acquisition](control-plane-oidc-session-activation-release-proof-acquisition.md)
+under explicit parent `/v14`, preserving the direct-worker path below. The
+issuer-side packet read, finite signer and staging channel remain unimplemented;
+configuration does not make that endpoint available. Neither path opens the new
+token, issues a cookie or establishes current session state.
 
 ## Cold public configuration
 
@@ -65,7 +68,10 @@ existing completion-purpose UID/GID `65497:65497`; a separate process/socket is
 not a new OS isolation boundary from that same-UID purpose.
 
 The root custody names the actual signed intent. Independent post-intent
-provisioning is therefore required; cold public configuration does not guess a
-future intent or manufacture root authority. Source templates are not installed.
-Exact post-intent release server/client grants, protected token handoff, and the
-public route/cookie connection remain open. Production evidence is unchanged.
+authorization is therefore required; the new [setup policy and producer](oidc-session-activation-release-proof-input-policy.md)
+derive this from authentic originals and a separately acquired private packet.
+Cold public configuration does not guess a future intent or manufacture root
+authority. Source templates are not installed, and the setup issuer is still open.
+Live provisioning of post-intent release server/client grants and protected token
+handoff, plus the public route/cookie connection, remains open. Production
+evidence is unchanged.

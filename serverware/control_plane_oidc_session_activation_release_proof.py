@@ -1,6 +1,7 @@
 """Same-permission private proof exchange and original-only public admission.
 
-The worker performs private replay. This caller retains the exact reply before
+Optional root-policy setup uses the same irreversible claim before worker I/O.
+The worker performs private replay. This caller retains the exact replies before
 authenticating its root custody and distinct proof against the actual intent,
 completion and expected delivery. Neither path opens the new token here.
 """
@@ -10,11 +11,14 @@ from serverware import authority_current_root_authorization as state
 from serverware import authority_oidc_session_activation_release_intent as intent
 from serverware import authority_oidc_session_activation_release_proof as proof
 from serverware import authority_oidc_session_activation_release_proof_transport as transport
+from serverware import authority_oidc_session_activation_release_proof_input_transport as setup_transport
 from serverware import control_plane_oidc_session_activation_consume_records as retained
 from serverware import control_plane_oidc_session_activation_execution as execution
 from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as intent_config
 from serverware import control_plane_oidc_session_activation_release_proof_bootstrap as configured
+from serverware import control_plane_oidc_session_activation_release_proof_acquisition_bootstrap as acquisition
 from serverware import control_plane_oidc_session_activation_consume_planning as planning
+from serverware import oidc_session_activation_release_proof_bootstrap as worker_bootstrap
 
 
 plan, production = intent.plan, intent.production
@@ -28,6 +32,7 @@ def _prove_on_permission(permission):
     owner, work = permission._owner, permission._work
     parent, binding, custody = owner._material, owner._binding, owner._custody
     policy, intent_policy = parent.release_proof, parent.release_intent
+    setup_policy = parent.release_proof_acquisition
     original, context = permission._release_intent_original, permission._release_intent_context
     completed, activation_raw = permission._consume_completion_originals, permission._sql_originals
     possession, target = permission._consume_possession, permission._target
@@ -46,6 +51,10 @@ def _prove_on_permission(permission):
     scope_original, enrollment = policy.expected_scope_bytes, policy.enrollment_bytes
     forbidden, public_key = policy.forbidden_public_keys, policy.proof_public_key
     endpoint = transport._endpoint(policy.endpoint)
+    if setup_policy is not None and type(setup_policy) is not acquisition._ReleaseProofAcquisitionMaterial:
+        execution._fail("release proof setup requires actual cold acquisition configuration")
+    setup_endpoint = setup_transport._endpoint(setup_policy.endpoint) if setup_policy is not None else None
+    setup_original = setup_policy.issuer_policy_bytes if setup_policy is not None else None
     response_pin = owner._response_pin
     planner_original = parent.activation_planning.planner_bootstrap_bytes
     intent_enrollment, intent_scope_original = intent_policy.enrollment_bytes, intent_policy.expected_scope_bytes
@@ -64,10 +73,14 @@ def _prove_on_permission(permission):
     if reserved > planning.consume.MAX_ORIGINAL_BYTES:
         execution._fail("release proof exceeds the original whole-call inventory")
     guards = []
+    setup_material = None
 
     def base_current():
         if (owner._material is not parent or owner._binding is not binding or owner._custody is not custody
                 or parent.release_proof is not policy or parent.release_intent is not intent_policy
+                or parent.release_proof_acquisition is not setup_policy
+                or (setup_policy is not None and (setup_policy.endpoint != setup_endpoint
+                    or setup_policy.issuer_policy_bytes is not setup_original))
                 or binding.runtime_root_public_key is not root or policy.endpoint != endpoint
                 or policy.expected_scope_bytes is not scope_original or policy.enrollment_bytes is not enrollment
                 or policy.forbidden_public_keys is not forbidden or policy.proof_public_key is not public_key
@@ -136,6 +149,30 @@ def _prove_on_permission(permission):
     narrow(intent_interval[1], age, skew)
     activation_digest = plan._frame(execution.caller.REQUEST_IDENTITY_DOMAIN, (activation_raw[0],), work)
     request = transport._originals((transport.PURPOSE, admitted_intent.intent_digest.encode("ascii"), old), response=False)
+    setup_request, setup_budget = None, None
+    if setup_policy is not None:
+        current()
+        setup_payload = acquisition._policy_on_work(setup_original, release_intent=intent_policy,
+            release_proof=policy, root_public_key=root, work=work)
+        current()
+        window, _bound = permission._planning_bounds
+        interval = setup_payload["issuedAtEpochNs"], setup_payload["expiresAtEpochNs"]
+        guards.append(worker_bootstrap.completion.primitives._launch_guard(interval,
+            (window[1], window[0], window[2]), base_current, work))
+        narrow(interval[1], age, skew)
+        setup_request = setup_transport._originals(
+            (setup_transport.PURPOSE, completed[2], completed[3], original), response=False)
+        policy_size, _policy_nodes = work.measure(setup_payload)
+        current()
+        reserved += (4 * len(setup_original) + 2 * policy_size + sum(map(len, setup_request))
+            + setup_transport.REQUEST_HEADER_BYTES + setup_transport.RESPONSE_HEADER_BYTES)
+        # Reserve outer JSON, decoded originals and both independently admitted
+        # nested material graphs before accepting any body. This conservative
+        # fixed multiplier also covers simultaneous canonical readback copies.
+        setup_budget = min(worker_bootstrap.MAX_BYTES,
+            (planning.consume.MAX_ORIGINAL_BYTES - reserved) // 8)
+        if setup_budget < 2:
+            execution._fail("release proof setup has no bounded whole-call response capacity")
     work.charge(input_bytes=retained._append_io_bytes("release-proof-claimed", ()))
     current()
     production._callback(work, lambda:
@@ -143,6 +180,53 @@ def _prove_on_permission(permission):
             custody, finalization_digest=target_digest, activation_authorization_digest=activation_digest))
     current()
     window, bound = permission._planning_bounds
+    if setup_request is not None:
+        returned = setup_transport._socket_request_on_work(setup_endpoint, originals=setup_request,
+            deadline_ns=bound, work=work, current=current, maximum_response_bytes=setup_budget)
+        current()
+        returned = setup_transport._originals(returned, response=True)
+        if len(returned[0]) > setup_budget:
+            execution._fail("release proof setup exceeded its original response reservation")
+        work.charge(input_bytes=retained._append_io_bytes("release-proof-setup", returned))
+        current()
+        setup_digest = production._callback(work, lambda:
+            execution.custody.ControlPlaneCustodyClient.append_oidc_session_activation_consume_release_proof_setup(
+                custody, finalization_digest=target_digest, activation_authorization_digest=activation_digest,
+                originals=returned))
+        current()
+        state.shape._digest(setup_digest)
+        reserved += 8 * len(returned[0])
+        setup_material = worker_bootstrap._verify_on_work(bootstrap_bytes=returned[0], root_public_key=root,
+            live_window=window, transport_deadline_ns=bound, work=work, _current=base_current)
+        if type(setup_material) is not worker_bootstrap._ProofMaterial:
+            execution._fail("release proof setup lacks actual original bootstrap admission")
+        guards.append(setup_material.live)
+        current()
+        for actual, expected, label in (
+                (setup_material.intent_bytes, original, "intent"),
+                (setup_material.intent_enrollment_bytes, intent_enrollment, "intent enrollment"),
+                (setup_material.proof_enrollment_bytes, enrollment, "proof enrollment"),
+                (setup_material.completion_request_bytes, completed[2], "completion request"),
+                (setup_material.state_receipt_bytes, completed[3], "state receipt")):
+            planning._same_bytes(actual, expected, work, "release proof setup exact " + label)
+        for actual, expected, label in (
+                (setup_material.expected_proof_scope, scope, "proof scope"),
+                (setup_material.expected_release, release, "release"),
+                (setup_material.caller_id, intent_scope["callerId"], "caller")):
+            plan._same(actual, expected, work, "release proof setup independent " + label)
+        narrow(setup_material.live_window[3], setup_material.live_window[5], setup_material.live_window[6])
+        window, bound = permission._planning_bounds
+        issued = acquisition.issuer._verify_on_work(policy_bytes=setup_original,
+            completion_bootstrap_bytes=setup_material.completion_bootstrap_bytes,
+            proof_enrollment_bytes=enrollment, intent_enrollment_bytes=intent_enrollment,
+            root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work,
+            _continuity=continuity)
+        if type(issued) is not acquisition.issuer._IssuerPolicyMaterial:
+            execution._fail("release proof setup requires genuine independent issuer policy admission")
+        guards.append(issued.live)
+        plan._same(setup_material.launch, issued.proof_launch, work, "release proof setup root launch")
+        narrow(issued.live_window[3], issued.live_window[5], issued.live_window[6])
+        window, bound = permission._planning_bounds
     response = transport._socket_request_on_work(endpoint, originals=request, deadline_ns=bound,
         work=work, current=current)
     current()
@@ -157,6 +241,9 @@ def _prove_on_permission(permission):
     state.shape._digest(record_digest)
     if response[0] != b"proved":
         execution._fail("release proof returned no successful original proof")
+    if setup_material is not None:
+        planning._same_bytes(response[1], setup_material.release_custody_bytes, work,
+            "release proof response differs from the exact acquired root custody")
     planning._same_bytes(response[3], enrollment, work, "release proof exact independently enrolled signer")
     root_custody = proof.bootstrap._verify_on_work(custody_bytes=response[1], root_public_key=root,
         live_window=window, transport_deadline_ns=bound, work=work)

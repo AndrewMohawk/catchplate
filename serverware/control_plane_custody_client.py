@@ -850,6 +850,14 @@ class ControlPlaneCustodyClient:
             activation_authorization_digest=activation_authorization_digest,
             kind="inputs", originals=originals)
 
+    def append_oidc_session_activation_consume_release_proof_setup(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain the first opaque setup bootstrap before root or content admission."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="release-proof-setup", originals=originals)
+
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):
         """Read bounded ordinary history, not a recovered permission to continue."""

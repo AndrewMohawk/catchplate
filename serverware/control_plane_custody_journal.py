@@ -174,7 +174,7 @@ class CustodyJournal:
     their separate association is published last. Each may retain one opaque
     reservation raw3, one SQL claim, one SQL outcome, one completion outcome
     and one completion reconciliation under that association.
-    Seven times maximum_records plus one per consume claim bounds published files, including associations and
+    Seven times maximum_records plus two per consume claim bounds published files, including associations and
     fixed registration outcomes: legacy records use at most three, evidence
     grants seven, signer records one and finalization grants seven each.
     Old records are never rewritten or removed; legacy marker byte
@@ -183,8 +183,8 @@ class CustodyJournal:
     the unchanged physical/quota ceilings, without reserving legacy markers.
     An activation claim has exactly six possible stage siblings: seven total
     files, exhausting its unchanged allowance. No stage adds another slot.
-    Consume uses a separately counted logical claim with at most eight files.
-    Only that namespace adds one physical allowance; other codecs remain strict.
+    Consume uses a separately counted logical claim with at most nine files.
+    Only that namespace adds two physical allowances; other codecs remain strict.
     """
 
     def __init__(self, *, directory_fd, expected_device, expected_inode,
@@ -265,8 +265,8 @@ class CustodyJournal:
 
     def _physical_limit(self):
         # Only a separately counted, admitted consume claim may use its eighth
-        # file. This is not a generic eight-file allowance for older families.
-        return 7 * self._maximum_records + len(self._consume_claims)
+        # and ninth files. Older families retain their fixed inventories.
+        return 7 * self._maximum_records + 2 * len(self._consume_claims)
 
     def _require_process(self):
         if os.getpid() != self._pid:
@@ -333,7 +333,7 @@ class CustodyJournal:
         with os.scandir(self._directory_fd) as entries:
             for entry in entries:
                 count += 1
-                if count > 8 * self._maximum_records:
+                if count > 9 * self._maximum_records:
                     raise CustodyJournalError("journal physical file limit exceeded")
                 name = entry.name
                 if name.startswith("prepared-"):
@@ -491,7 +491,7 @@ class CustodyJournal:
                         uncertain_completions.add(digest)
         # Directory order is not authority: first bound the scan by the worst
         # possible inventory, then require the exact admitted consume allowance.
-        if count > 7 * self._maximum_records + len(consume_claims):
+        if count > 7 * self._maximum_records + 2 * len(consume_claims):
             raise CustodyJournalError("journal physical inventory exceeds its consume-specific allowance")
         if not attempted <= prepared.keys():
             raise CustodyJournalError("journal attempt marker has no prepared original")
@@ -1654,6 +1654,13 @@ class CustodyJournal:
         return self._append_consume_record(finalization_digest=finalization_digest,
             activation_authorization_digest=activation_authorization_digest,
             kind="sql-outcome", originals=originals)
+
+    def append_oidc_session_activation_consume_completion_outcome(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain exact raw4 after SQL history; no completion or retry authority."""
+        return self._append_consume_record(finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="completion-outcome", originals=originals)
 
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):

@@ -29,11 +29,25 @@ The completion signer is not given to the independently admitted private caller.
 The listener is
 `/run/serverware/oidc-session-activation-delivery-execution/completion.sock`,
 named `serverware-oidc-session-activation-delivery-completion`, with pathname
-ownership **65497:65497**, mode **0660**. The actual private peer is fixed to
-that same purpose/identity, not generic caller 65532. The journal is the existing
+ownership **65497:65497**, mode **0660**, for private launch v1. Explicit
+dispatch launch v2 requires ownership **65497:65532**, still mode **0660**,
+and fixes its request peer to **65532:65532**. Root first checks only the
+activated descriptor's fixed socket shape; after actual bootstrap admission,
+the closed signed launch schema selects exactly one pathname group and peer.
+That exact ACL is checked before private reads and throughout startup/use.
+Neither an observed group nor a request can choose or widen the profile.
+The service always runs as 65497 and keeps the same private key/FD inventory.
+The journal is the existing
 mode-0700 **65497:65497** directory
 `/var/lib/serverware/oidc-session-activation-delivery-completions`; descriptor
 and protected root pathname must match its signed device/inode.
+
+The existing socket unit remains private launch v1. The separate uninstalled
+`ops/systemd/serverware-oidc-session-activation-delivery-completion.socket.d/dispatch-v2.conf`
+is an explicit operator opt-in to group 65532 for a separately root-signed
+launch v2 only. It must not be installed with a v1 bootstrap: mismatched
+schema/ACL admission fails. It changes no service user, key mount, journal or
+descriptor, and is not a provisioner or automatic permission change.
 
 The five original TLS files are under
 `/run/serverware/oidc-session-activation-delivery-completion-tls/`:
@@ -71,8 +85,10 @@ failure. Idle polling is allowed only while startup authority remains live.
 There is no automatic retry, signer substitution, ambient secret fallback or
 generic completion path.
 
-The private receiving helper requires a separate genuinely admitted same-purpose
-custodian and original scope. Sharing the trusted-host-local UID is not OS
-isolation, and this server delivery does not provision a separate caller or
-connect a public route. Cold application-caller packaging, plaintext token
-release and public handoff remain separate obligations.
+The old private receiving helper still requires a separate genuinely admitted
+same-purpose custodian and original scope; it is not moved to UID65532. Sharing
+the trusted-host-local private UID is not OS isolation. The dispatch profile
+gives the control plane only its signed-original request/response connection,
+not AES/history keys or the private receiving API. This delivery provisions
+neither caller and does not connect a public route. Plaintext token release and
+the complete public handoff remain separate obligations.

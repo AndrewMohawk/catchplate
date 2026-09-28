@@ -1,6 +1,6 @@
 # Guarded activation and consume caller transports
 
-The five fixed activation and three fixed consume transport profiles expose the same private
+The five fixed activation and four fixed consume transport profiles expose the same private
 caller API:
 
 ```text
@@ -16,7 +16,7 @@ and older helpers are unchanged. SQL's existing uncertainty and empty-frame
 grammar is not widened.
 
 `authority_oidc_session_activation_caller_transport.py` shares only the bounded
-I/O implementation. Eight literal entry functions select the exact eight
+I/O implementation. Nine literal entry functions select the exact nine
 existing transport modules; its private engine rejects any other module. It
 does not accept request-selected profiles, framing callbacks or arbitrary
 endpoints. Shape-valid response bytes and a matching local socket peer are not
@@ -97,6 +97,16 @@ uses a distinct fixed purpose and request magic with the signed caller
 authorization original instead of a packet selector. Its launch-selected service
 must join that original to genuine root-held authorization before using its own
 packet pin. It does not loosen the existing selector profile or response grammar.
+
+The distinct consume
+[completion dispatch profile](oidc-session-activation-delivery-completion-dispatch-transport.md)
+uses `SWODCM02` and the exact signed consume caller authorization. It is available
+only with the consume service's independently signed launch `/v2`, whose request
+peer is 65532; the legacy selector launch `/v1` still admits only peer 65497.
+The isolated service remains 65497, while the caller checks the root listener
+peer 0:0. The service joins the original authorization before using its own packet
+pin. This ninth guarded profile preserves the same original work/deadline and
+response grammar; neither a SQL locator nor a response status supplies authority.
 
 This is a source-only downstream caller seam. It does not establish completed
 public activation dispatch, installed services, runtime success or production

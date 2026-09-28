@@ -170,7 +170,9 @@ class _ActivationPermission:
         "_consume_possession", "_consume_possession_seal", "_consume_authorization_spent",
         "_consume_signing", "_consume_signing_seal", "_consume_authorization", "_consume_authorization_seal",
         "_consume_dispatch_spent", "_consume_sql_originals", "_consume_sql_seal",
-        "_consume_sql_context", "_consume_sql_context_seal", "_consume_sql_outcome", "_consume_sql_outcome_seal")
+        "_consume_sql_context", "_consume_sql_context_seal", "_consume_sql_outcome", "_consume_sql_outcome_seal",
+        "_consume_completion_spent", "_consume_completion_originals", "_consume_completion_seal",
+        "_consume_completion_context", "_consume_completion_context_seal")
 
     def __init__(self, owner, request, permission_bytes, live_window, transport_deadline_ns, work):
         from serverware import control_plane_oidc_session_activation_permission as permission
@@ -204,6 +206,9 @@ class _ActivationPermission:
         self._consume_sql_originals = self._consume_sql_seal = None
         self._consume_sql_context = self._consume_sql_context_seal = None
         self._consume_sql_outcome = self._consume_sql_outcome_seal = None
+        self._consume_completion_spent = False
+        self._consume_completion_originals = self._consume_completion_seal = None
+        self._consume_completion_context = self._consume_completion_context_seal = None
         self._inputs = _PermissionInputs(owner, request, self._original, self._window,
             self._deadline, work, self._pid, self._thread)
         self._seal = self._inputs
@@ -226,17 +231,20 @@ class _ActivationPermission:
             _fail("activation permission context is no longer the active parent-owned call")
         if self._dispatch_phase not in ("new", "preparing", "preparing-completion",
                 "sql", "sql-completion", "completed", "consume-planning", "consume-planned",
-                "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched", "closed"):
+                "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
+                "consume-completing", "consume-completion-observed", "closed"):
             _fail("activation permission dispatch phase is not source fixed")
         if self._dispatch_phase in ("sql", "sql-completion", "completed", "consume-planning", "consume-planned",
-                "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched") and (
+                "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
+                "consume-completing", "consume-completion-observed") and (
                 self._spent is not True or self._planning_spent is not True
                 or type(self._sql_originals) is not tuple or len(self._sql_originals) != 8
                 or self._sql_originals is not self._sql_seal
                 or any(type(raw) is not bytes for raw in self._sql_originals)):
             _fail("activation SQL continuation replaced its exact admitted originals")
         if self._dispatch_phase in ("completed", "consume-planning", "consume-planned",
-                "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched") and (
+                "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
+                "consume-completing", "consume-completion-observed") and (
                 type(self._completion_originals) is not tuple or len(self._completion_originals) != 4
                 or self._completion_originals is not self._completion_seal
                 or self._completion_originals[0] != b"acknowledged"
@@ -248,7 +256,7 @@ class _ActivationPermission:
         if self._consume_lifetimes is not self._consume_lifetimes_seal:
             _fail("consume planning replaced its admitted root-original lifetimes")
         if self._dispatch_phase in ("consume-planned", "consume-authorizing", "consume-authorized",
-                "consume-dispatching", "consume-sql", "consume-dispatched"):
+                "consume-dispatching", "consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed"):
             if (self._consume_spent is not True or type(self._consume_originals) is not tuple
                     or len(self._consume_originals) != 2 or self._consume_originals is not self._consume_originals_seal
                     or any(type(raw) is not tuple or len(raw) != count
@@ -271,16 +279,18 @@ class _ActivationPermission:
                     or self._owner._consume_key_fd != descriptor or self._owner._consume_key_identity is not identity):
                 _fail("consume signing original cold resources changed")
         if self._dispatch_phase in ("consume-authorizing", "consume-authorized", "consume-dispatching",
-                "consume-sql", "consume-dispatched") and self._consume_authorization_spent is not True:
+                "consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed") and self._consume_authorization_spent is not True:
             _fail("consume authorization did not spend its one-use signing latch")
-        if self._dispatch_phase in ("consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched") and (
+        if self._dispatch_phase in ("consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
+                "consume-completing", "consume-completion-observed") and (
                 type(self._consume_authorization) is not bytes
                 or self._consume_authorization is not self._consume_authorization_seal
                 or self._consume_signing is None):
             _fail("consume authorization lost its exact retained signed original")
-        if self._dispatch_phase in ("consume-dispatching", "consume-sql", "consume-dispatched") and self._consume_dispatch_spent is not True:
+        if self._dispatch_phase in ("consume-dispatching", "consume-sql", "consume-dispatched",
+                "consume-completing", "consume-completion-observed") and self._consume_dispatch_spent is not True:
             _fail("consume dispatch did not spend its one-use continuation")
-        if self._dispatch_phase in ("consume-sql", "consume-dispatched") and (
+        if self._dispatch_phase in ("consume-sql", "consume-dispatched", "consume-completing", "consume-completion-observed") and (
                 type(self._consume_sql_originals) is not tuple or len(self._consume_sql_originals) != 8
                 or self._consume_sql_originals is not self._consume_sql_seal
                 or any(type(raw) is not bytes for raw in self._consume_sql_originals)
@@ -289,11 +299,22 @@ class _ActivationPermission:
                 or type(self._consume_sql_context[0]) is not bytes
                 or type(self._consume_sql_context[3]) is not int or self._consume_sql_context[3] < 1):
             _fail("consume SQL continuation lost its exact admitted originals")
-        if self._dispatch_phase == "consume-dispatched" and (
+        if self._dispatch_phase in ("consume-dispatched", "consume-completing", "consume-completion-observed") and (
                 type(self._consume_sql_outcome) is not tuple or len(self._consume_sql_outcome) != 4
                 or self._consume_sql_outcome is not self._consume_sql_outcome_seal
                 or any(type(raw) is not bytes for raw in self._consume_sql_outcome)):
             _fail("consume SQL continuation lost its retained unsigned outcome")
+        if self._dispatch_phase in ("consume-completing", "consume-completion-observed") and self._consume_completion_spent is not True:
+            _fail("consume completion did not spend its one-use continuation")
+        if self._dispatch_phase == "consume-completion-observed" and (
+                type(self._consume_completion_originals) is not tuple or len(self._consume_completion_originals) != 4
+                or self._consume_completion_originals is not self._consume_completion_seal
+                or any(type(raw) is not bytes for raw in self._consume_completion_originals)
+                or type(self._consume_completion_context) is not tuple or len(self._consume_completion_context) != 4
+                or self._consume_completion_context is not self._consume_completion_context_seal
+                or type(self._consume_completion_context[0]) is not bytes
+                or type(self._consume_completion_context[3]) is not int or self._consume_completion_context[3] < 1):
+            _fail("consume completion lost its exact original observation or live continuation")
 
     def _current(self, epoch_floor=None, monotonic_floor=None):
         self._identity()
@@ -309,7 +330,8 @@ class _ActivationPermission:
         scope.current(epoch_floor, monotonic_floor)
         if self._target is not None and self._dispatch_phase not in (
                 "sql", "sql-completion", "completed", "consume-planning", "consume-planned",
-                "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched"):
+                "consume-authorizing", "consume-authorized", "consume-dispatching", "consume-sql", "consume-dispatched",
+                "consume-completing", "consume-completion-observed"):
             from serverware import control_plane_registration_finalization_completion_pending as pending
 
             application, session_scope, binding, credential, count = self._target
@@ -397,6 +419,9 @@ class _ActivationPermission:
         self._consume_sql_originals = self._consume_sql_seal = None
         self._consume_sql_context = self._consume_sql_context_seal = None
         self._consume_sql_outcome = self._consume_sql_outcome_seal = None
+        self._consume_completion_spent = True
+        self._consume_completion_originals = self._consume_completion_seal = None
+        self._consume_completion_context = self._consume_completion_context_seal = None
         try:
             if trust is not None:
                 trust.__exit__(None, None, None)
@@ -626,6 +651,23 @@ class _ActivationPermission:
             self._consume_dispatch_spent = True
             self._dispatch_phase = "consume-dispatching"
             return consume._dispatch_on_permission(self)
+        except BaseException:
+            if os.getpid() == self._pid and threading.get_ident() == self._thread:
+                self._revoke()
+            raise
+
+    def complete_consume(self):
+        """Ask once for original completion controls on this exact SQL call."""
+        from serverware import control_plane_oidc_session_activation_consume_completion as consume
+
+        try:
+            self._identity()
+            if (self._state != "active" or self._dispatch_phase != "consume-dispatched"
+                    or self._consume_completion_spent is not False):
+                _fail("consume completion requires the unspent actual SQL continuation")
+            self._consume_completion_spent = True
+            self._dispatch_phase = "consume-completing"
+            return consume._complete_on_permission(self)
         except BaseException:
             if os.getpid() == self._pid and threading.get_ident() == self._thread:
                 self._revoke()

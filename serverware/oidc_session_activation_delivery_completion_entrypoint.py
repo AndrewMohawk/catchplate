@@ -27,6 +27,9 @@ LISTENER_NAME = "serverware-oidc-session-activation-delivery-completion"
 JOURNAL_PATH = "/var/lib/serverware/oidc-session-activation-delivery-completions"
 PROCESS_MODE = "oidc-session-activation-delivery-completion"
 SERVICE_UID = SERVICE_GID = PEER_UID = PEER_GID = 65497
+DISPATCH_PEER_UID = DISPATCH_PEER_GID = 65532
+LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v1"
+DISPATCH_LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v2"
 (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, JOURNAL_FD,
     EXECUTION_BUNDLE_KEY_FD, HISTORICAL_BUNDLE_KEY_FD, DELIVERY_KEY_FD) = range(198, 206)
 INHERITED_DESCRIPTORS = tuple(range(198, 206))
@@ -156,7 +159,18 @@ def _keys_on_work(material, work):
     return private, execution, historical, delivery_key
 
 
-def _listener(descriptor):
+def _launch_peer(launch_schema):
+    if type(launch_schema) is not str:
+        raise RuntimeError("consume completion launch profile is not a literal")
+    if launch_schema == LAUNCH_SCHEMA:
+        return PEER_UID, PEER_GID
+    if launch_schema == DISPATCH_LAUNCH_SCHEMA:
+        return DISPATCH_PEER_UID, DISPATCH_PEER_GID
+    raise RuntimeError("consume completion launch profile is not source fixed")
+
+
+def _listener_socket(descriptor):
+    """Descriptor shape only; pathname/profile admission follows root verification."""
     value = os.fstat(descriptor)
     observed = socket.fromfd(descriptor, socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -168,11 +182,17 @@ def _listener(descriptor):
             raise RuntimeError("consume completion listener differs from fixed socket activation")
     finally:
         observed.close()
+    return value
+
+
+def _listener(descriptor, *, launch_schema=LAUNCH_SCHEMA):
+    _peer_uid, peer_gid = _launch_peer(launch_schema)
+    value = _listener_socket(descriptor)
     parent = _parent(LISTENER_PATH)
     try:
         named = os.stat(os.path.basename(LISTENER_PATH), dir_fd=parent, follow_symlinks=False)
         if (not stat.S_ISSOCK(named.st_mode) or named.st_nlink != 1
-                or (named.st_uid, named.st_gid, stat.S_IMODE(named.st_mode)) != (SERVICE_UID, PEER_GID, 0o660)):
+                or (named.st_uid, named.st_gid, stat.S_IMODE(named.st_mode)) != (SERVICE_UID, peer_gid, 0o660)):
             raise RuntimeError("consume completion socket pathname protection differs")
         return value.st_dev, value.st_ino, named.st_dev, named.st_ino
     finally:
@@ -317,7 +337,7 @@ def main():
         _window, current = lifetime._window(window, bound, work)
         current()
         os.set_blocking(3, False)
-        _listener(3)
+        _listener_socket(3)
         for target in INHERITED_DESCRIPTORS:
             reserved = fcntl.fcntl(3, fcntl.F_DUPFD_CLOEXEC, target)
             owned.add(reserved)
@@ -362,11 +382,13 @@ def main():
 
         current()
         launch = material.launch
+        launch_schema = launch["schema"]
+        peer_uid, peer_gid = _launch_peer(launch_schema)
         fields = ("processMode", "serviceUid", "serviceGid", "peerUid", "peerGid",
             "rootPublicKeyFd", "bootstrapFd", "listenerFd", "signingKeyFd", "journalDirectoryFd",
             "executionBundleKeyFd", "historicalBundleKeyFd", "deliveryKeyFd", "listenerPath", "journalDirectoryPath")
         if (tuple(launch[name] for name in fields) != (PROCESS_MODE, SERVICE_UID, SERVICE_GID,
-                PEER_UID, PEER_GID, *INHERITED_DESCRIPTORS, LISTENER_PATH, JOURNAL_PATH)
+                peer_uid, peer_gid, *INHERITED_DESCRIPTORS, LISTENER_PATH, JOURNAL_PATH)
                 or tuple(launch["inheritedFileDescriptors"]) != INHERITED_DESCRIPTORS
                 or {name: path for name, path, _maximum, _private in _TLS_FILES} != bootstrap.TLS_PATHS
                 or {name: maximum for name, _path, maximum, _private in _TLS_FILES} != bootstrap.TLS_LIMITS):
@@ -374,7 +396,7 @@ def main():
         listener_pins = tuple(launch[name] for name in ("listenerSocketDevice", "listenerSocketInode",
             "listenerPathDevice", "listenerPathInode"))
         journal_pins = launch["journalDirectoryDevice"], launch["journalDirectoryInode"]
-        if _listener(3) != listener_pins:
+        if _listener(3, launch_schema=launch_schema) != listener_pins:
             raise RuntimeError("consume completion listener differs from signed launch")
         for descriptor, identity in retained.items():
             if delivery._material_identity(os.fstat(descriptor)) != identity:
@@ -408,7 +430,8 @@ def main():
         retained[LISTENER_FD] = delivery._material_identity(os.fstat(LISTENER_FD))
         os.close(3)
         owned.remove(3)
-        if reservations or _listener(LISTENER_FD) != listener_pins or _journal(JOURNAL_FD) != journal_pins:
+        if (reservations or _listener(LISTENER_FD, launch_schema=launch_schema) != listener_pins
+                or _journal(JOURNAL_FD) != journal_pins):
             raise RuntimeError("consume completion resource inventory changed")
         for _path, descriptor, maximum in _TRUST_FILES:
             current()
@@ -431,7 +454,8 @@ def main():
             if delivery._material_identity(os.fstat(descriptor)) != identity:
                 owned.discard(descriptor)
                 raise RuntimeError("consume completion descriptor changed before continuation")
-        if _listener(LISTENER_FD) != listener_pins or _journal(JOURNAL_FD) != journal_pins:
+        if (_listener(LISTENER_FD, launch_schema=launch_schema) != listener_pins
+                or _journal(JOURNAL_FD) != journal_pins):
             raise RuntimeError("consume completion bound resources changed before continuation")
         bootstrap._fresh(material.attestation_interval, work, opening=material.opening_sample)
         current()

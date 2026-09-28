@@ -16,13 +16,16 @@ from serverware import control_plane_oidc_session_activation_planning_bootstrap 
 
 SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v1"
 V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v2"
+V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v3"
 CALLER_KEY_FD = 206
 AUTHORIZER_SOCKET_PATH = "/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock"
 RESERVATION_SOCKET_PATH = "/run/serverware/oidc-session-activation-delivery-execution/reserver.sock"
 SQL_SOCKET_PATH = "/run/serverware/oidc-session-activation-delivery-execution/sql.sock"
+COMPLETION_SOCKET_PATH = "/run/serverware/oidc-session-activation-delivery-execution/completion.sock"
 _FIELDS = frozenset({"schema", "callerPrivateKeyFd", "grantEnrollment",
     "authorizationEnrollment", "authorizerEndpoint"})
 _V2_FIELDS = _FIELDS | frozenset({"reservationEndpoint", "reservationPredecessor", "sqlEndpoint"})
+_V3_FIELDS = _V2_FIELDS | frozenset({"completionEndpoint"})
 _PREDECESSOR_FIELDS = frozenset({"sequence", "headDigest", "nextFence"})
 _ORIGINAL_FIELDS = frozenset({"base64Url", "byteCount"})
 _ORIGINAL_LIMITS = (("grantEnrollment", caller.enrollments.MAX_ENROLLMENT_BYTES),
@@ -54,10 +57,12 @@ class _ConsumeExecutionMaterial:
     reservation_endpoint: tuple | None = None
     reservation_predecessor: tuple | None = None
     sql_endpoint: tuple | None = None
+    completion_endpoint: tuple | None = None
 
 
 def _endpoint(value, *, _path=AUTHORIZER_SOCKET_PATH):
-    if type(_path) is not str or _path not in (AUTHORIZER_SOCKET_PATH, RESERVATION_SOCKET_PATH, SQL_SOCKET_PATH):
+    if type(_path) is not str or _path not in (AUTHORIZER_SOCKET_PATH, RESERVATION_SOCKET_PATH,
+            SQL_SOCKET_PATH, COMPLETION_SOCKET_PATH):
         raise OidcSessionActivationConsumeExecutionBootstrapError("consume endpoint profile is not source fixed")
     shape._object(value, _ENDPOINT_FIELDS, "consume caller endpoint")
     shape._literal(value["socketPath"], _path)
@@ -82,9 +87,11 @@ def _predecessor(value):
 def _shape(value):
     if value is None:
         return
-    if type(value) is not dict or type(value.get("schema")) is not str or value["schema"] not in (SCHEMA, V2_SCHEMA):
+    if (type(value) is not dict or type(value.get("schema")) is not str
+            or value["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA)):
         raise OidcSessionActivationConsumeExecutionBootstrapError("consume caller purpose version differs")
-    shape._object(value, _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS,
+    fields = _V3_FIELDS if value["schema"] == V3_SCHEMA else _V2_FIELDS if value["schema"] == V2_SCHEMA else _FIELDS
+    shape._object(value, fields,
         "control-plane consume caller purpose")
     shape._integer(value["callerPrivateKeyFd"], 1023, minimum=32)
     if value["callerPrivateKeyFd"] != CALLER_KEY_FD:
@@ -97,10 +104,12 @@ def _shape(value):
         caller.authorization.transport._transport_shape(
             original["base64Url"], original["byteCount"], maximum)
     _endpoint(value["authorizerEndpoint"])
-    if value["schema"] == V2_SCHEMA:
+    if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
         _endpoint(value["reservationEndpoint"], _path=RESERVATION_SOCKET_PATH)
         _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
         _predecessor(value["reservationPredecessor"])
+    if value["schema"] == V3_SCHEMA:
+        _endpoint(value["completionEndpoint"], _path=COMPLETION_SOCKET_PATH)
 
 
 def _admit_on_work(*, consume_execution, configuration_payload, configuration_digest,
@@ -162,8 +171,8 @@ def _admit_on_work(*, consume_execution, configuration_payload, configuration_di
             if pin == other:
                 raise OidcSessionActivationConsumeExecutionBootstrapError(
                     "consume caller key reuses another independently configured purpose")
-        reservation_endpoint = reservation_predecessor = sql_endpoint = None
-        if value["schema"] == V2_SCHEMA:
+        reservation_endpoint = reservation_predecessor = sql_endpoint = completion_endpoint = None
+        if value["schema"] in (V2_SCHEMA, V3_SCHEMA):
             current = caller.authorization._admit_enrollment_on_work(
                 enrollment_bytes=current_raw, root_public_key=root, work=work)
             for actual, expected in (
@@ -180,11 +189,13 @@ def _admit_on_work(*, consume_execution, configuration_payload, configuration_di
                 plan._same(head, current.enrollment_digest, work, "consume independent genesis head")
             reservation_endpoint = _endpoint(value["reservationEndpoint"], _path=RESERVATION_SOCKET_PATH)
             sql_endpoint = _endpoint(value["sqlEndpoint"], _path=SQL_SOCKET_PATH)
+        if value["schema"] == V3_SCHEMA:
+            completion_endpoint = _endpoint(value["completionEndpoint"], _path=COMPLETION_SOCKET_PATH)
         return _ConsumeExecutionMaterial(CALLER_KEY_FD, admitted.caller_public_key, planner_key, root,
             current_raw, grant_raw, caller_raw, admitted.enrollment_digest, policy["callerId"],
             policy["callerKey"]["measurementDigest"], policy["maximumAgeNs"],
             policy["maximumClockSkewNs"], _endpoint(value["authorizerEndpoint"]),
-            reservation_endpoint, reservation_predecessor, sql_endpoint)
+            reservation_endpoint, reservation_predecessor, sql_endpoint, completion_endpoint)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, OidcSessionActivationConsumeExecutionBootstrapError):
             raise

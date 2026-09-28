@@ -216,6 +216,18 @@ must authenticate and durably retain the actual grant/reserve originals and
 claim the SQL attempt before I/O; its unsigned SQL result is not completion,
 token release or present session authority.
 
+Explicit nested consume execution `/v3` additionally admits the fixed completion
+endpoint. The no-argument `_complete_oidc_session_activation_consume()` facade
+selects the same actual consume-dispatched context; it neither takes a SQL
+result/packet locator nor reopens an expired permission. The
+[consume completion continuation](control-plane-oidc-session-activation-consume-completion.md)
+uses the original signed caller authorization with the service's explicit
+launch `/v2` dispatch profile, retains the exact raw4 response before
+interpretation, and authenticates public signed completion/state controls
+against the original consume grant/reserve/snapshot/ACK. The service keeps its
+own root-pinned packet and private custody. Completion uncertainty is not
+noncommit, current session state, protected token release or retry permission.
+
 The optional
 [`docker-compose.oidc-session-activation-consume-execution.yml`](../docker-compose.oidc-session-activation-consume-execution.yml)
 source overlay adds a read-only key bind at
@@ -226,8 +238,8 @@ inputs are `SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_CALLER_KEY_FILE` and
 `SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_EXECUTION_SOCKET_DIR`; both reject
 automatic host-path creation. They are packaging inputs, not runtime path
 overrides. No key, listener, account or infrastructure is created. The same
-directory bind covers the independently provisioned authorizer, reserver and
-SQL sockets; mounting it does not authorize or perform a request.
+directory bind covers the independently provisioned authorizer, reserver, SQL
+and completion sockets; mounting it does not authorize or perform a request.
 The enrollment-only offline preparer is unchanged. Source remains unbuilt and
 unexecuted, and production acceptance remains 0/6.
 

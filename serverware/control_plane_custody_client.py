@@ -786,6 +786,14 @@ class ControlPlaneCustodyClient:
             activation_authorization_digest=activation_authorization_digest,
             kind="sql-outcome", originals=originals)
 
+    def append_oidc_session_activation_consume_completion_outcome(self, *, finalization_digest,
+            activation_authorization_digest, originals):
+        """Retain raw4 before status, identity or signed-control interpretation."""
+        return ControlPlaneCustodyClient._append_consume_stage(self,
+            finalization_digest=finalization_digest,
+            activation_authorization_digest=activation_authorization_digest,
+            kind="completion-outcome", originals=originals)
+
     def load_oidc_session_activation_consume_records(self, *, finalization_digest,
             activation_authorization_digest):
         """Read bounded ordinary history, not a recovered permission to continue."""

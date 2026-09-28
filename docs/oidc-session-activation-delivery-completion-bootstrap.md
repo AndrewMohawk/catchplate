@@ -3,16 +3,31 @@
 `oidc_session_activation_delivery_completion_bootstrap` genuinely admits a
 root-signed, current-source `oidc.session.activation-delivery.consume` completion
 launch. The fixed process is `oidc-session-activation-delivery-completion`,
-UID/GID **65497**. Its private caller is also **65497:65497**, not the general
-control-plane caller. This is a trusted-host-local purpose: all five hardware,
+UID/GID **65497**. Launch v1 retains its private caller **65497:65497**;
+explicit launch v2 selects control-plane dispatch peer **65532:65532**.
+This is a trusted-host-local purpose: all five hardware,
 TEE and witness claims remain exactly false. A shared UID is not isolation
 between the worker and its separately admitted private caller.
 
 The signed envelope, payload and launch use dedicated
 `signedOidcSessionActivationDeliveryCompletionBootstrap/v1`,
-`oidcSessionActivationDeliveryCompletionBootstrap/v1` and
-`oidcSessionActivationDeliveryCompletionLaunch/v1` serverware schemas.
-There is no legacy launch fallback or generic replay widening.
+`oidcSessionActivationDeliveryCompletionBootstrap/v1` serverware schemas.
+Nested `oidcSessionActivationDeliveryCompletionLaunch/v1` remains the private
+packet-selector profile. Distinct nested
+`oidcSessionActivationDeliveryCompletionLaunch/v2` has the same closed fields
+but fixes peer UID/GID to 65532 and selects only signed-authorization dispatch.
+Service UID/GID, eight descriptors, private custody and reader/signing purposes
+remain unchanged. There is no request-selected profile, legacy fallback,
+peer-OR admission or generic replay widening.
+
+The dispatch service compares the received authorization original byte-for-byte
+with genuinely admitted `material.authorization_bytes`. Only the server's own
+root-pinned packet digest, current pending tuple, checkpoint and replay
+expectations drive recovery. A SQL locator never supplies a selector or new
+authority. The caller's nested consume execution v3 adds only the fixed
+completion endpoint, not a new key, enrollment or future packet pin. Original
+caller lifetime and same-context permission checks remain the caller's duty;
+the server performs its actual private original replay and commit admission.
 
 ## Actual originals and independent scope
 
@@ -78,5 +93,6 @@ same-call data, not a reusable admission capability.
 
 See [eight-FD delivery](oidc-session-activation-delivery-completion-delivery.md)
 and [service composition](oidc-session-activation-delivery-completion-service.md).
-This source is unbuilt, unexecuted and unprovisioned. Public dispatch, cold
-application-caller packaging and plaintext release are separate work.
+This source is unbuilt, unexecuted and unprovisioned. The explicit dispatch
+profile does not itself complete the public route, authorize plaintext release
+or establish a current session.

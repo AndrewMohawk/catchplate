@@ -33,11 +33,13 @@ CONTROL_PLANE_ENROLLMENT_V8_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnr
 CONTROL_PLANE_ENROLLMENT_V8_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v8"
 CONTROL_PLANE_CONSUME_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v1"
 CONTROL_PLANE_CONSUME_V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v2"
+CONTROL_PLANE_CONSUME_V3_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeExecution/v3"
 CONTROL_PLANE_CONSUME_KEY_FD = 206
 CONTROL_PLANE_CONSUME_KEY_NAME = "serverware-oidc-session-activation-consume-caller-key"
 CONTROL_PLANE_CONSUME_SOCKET = "/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock"
 CONTROL_PLANE_CONSUME_RESERVATION_SOCKET = "/run/serverware/oidc-session-activation-delivery-execution/reserver.sock"
 CONTROL_PLANE_CONSUME_SQL_SOCKET = "/run/serverware/oidc-session-activation-delivery-execution/sql.sock"
+CONTROL_PLANE_CONSUME_COMPLETION_SOCKET = "/run/serverware/oidc-session-activation-delivery-execution/completion.sock"
 CONTROL_PLANE_ACTIVATION_PLANNING_SCHEMA = "serverware.controlPlaneOidcSessionActivationPlanning/v1"
 CONTROL_PLANE_ACTIVATION_PLANNER_SOCKET = "/run/serverware/oidc-session-activation/planner.sock"
 CONTROL_PLANE_ACTIVATION_SCHEMA = "serverware.controlPlaneOidcSessionActivationExecution/v1"
@@ -884,11 +886,14 @@ def _control_plane_consume_key_slot(value, *, issuer_descriptor, bootstrap_descr
     if value is None:
         return None
     if (type(value) is not dict or type(value.get("schema")) is not str
-            or value["schema"] not in (CONTROL_PLANE_CONSUME_SCHEMA, CONTROL_PLANE_CONSUME_V2_SCHEMA)):
+            or value["schema"] not in (CONTROL_PLANE_CONSUME_SCHEMA, CONTROL_PLANE_CONSUME_V2_SCHEMA,
+                CONTROL_PLANE_CONSUME_V3_SCHEMA)):
         raise RuntimeError("consume caller delivery schema differs")
     fields = {"schema", "callerPrivateKeyFd", "grantEnrollment", "authorizationEnrollment", "authorizerEndpoint"}
-    if value["schema"] == CONTROL_PLANE_CONSUME_V2_SCHEMA:
+    if value["schema"] in (CONTROL_PLANE_CONSUME_V2_SCHEMA, CONTROL_PLANE_CONSUME_V3_SCHEMA):
         fields |= {"reservationEndpoint", "reservationPredecessor", "sqlEndpoint"}
+    if value["schema"] == CONTROL_PLANE_CONSUME_V3_SCHEMA:
+        fields.add("completionEndpoint")
     if (set(value) != fields or type(value["callerPrivateKeyFd"]) is not int
             or value["callerPrivateKeyFd"] != CONTROL_PLANE_CONSUME_KEY_FD
             or type(activation_value) is not dict
@@ -909,7 +914,7 @@ def _control_plane_consume_key_slot(value, *, issuer_descriptor, bootstrap_descr
         if unused and alphabet.index(encoded[-1]) & ((1 << unused) - 1):
             raise RuntimeError("consume caller enrollment encoding is not canonical")
     endpoints = (("authorizerEndpoint", CONTROL_PLANE_CONSUME_SOCKET),)
-    if value["schema"] == CONTROL_PLANE_CONSUME_V2_SCHEMA:
+    if value["schema"] in (CONTROL_PLANE_CONSUME_V2_SCHEMA, CONTROL_PLANE_CONSUME_V3_SCHEMA):
         endpoints += (("reservationEndpoint", CONTROL_PLANE_CONSUME_RESERVATION_SOCKET),
             ("sqlEndpoint", CONTROL_PLANE_CONSUME_SQL_SOCKET))
         predecessor = value["reservationPredecessor"]
@@ -922,6 +927,8 @@ def _control_plane_consume_key_slot(value, *, issuer_descriptor, bootstrap_descr
         if (type(head) is not str or len(head) != 71 or not head.startswith("sha256:")
                 or any(character not in "0123456789abcdef" for character in head[7:])):
             raise RuntimeError("consume predecessor head is not canonical SHA256")
+    if value["schema"] == CONTROL_PLANE_CONSUME_V3_SCHEMA:
+        endpoints += (("completionEndpoint", CONTROL_PLANE_CONSUME_COMPLETION_SOCKET),)
     for name, path in endpoints:
         endpoint = value[name]
         if (type(endpoint) is not dict

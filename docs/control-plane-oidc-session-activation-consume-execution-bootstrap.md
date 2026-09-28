@@ -57,6 +57,34 @@ returned originals still require genuine admission under the caller's same
 live permission and original work/window/deadline. No recovery retry, AES
 custody, token release or current-session claim follows from configuration.
 
+## Explicit completion dispatch profile
+
+Source `.188` adds nested
+`serverware.controlPlaneOidcSessionActivationConsumeExecution/v3`: exactly the
+v2 fields plus `completionEndpoint`. Parent v8, FD206 and all enrollment/key
+purposes remain unchanged. Nested v1 and v2 stay closed; their material has
+`completion_endpoint=None` and cannot select this continuation.
+
+The new endpoint is only
+`/run/serverware/oidc-session-activation-delivery-execution/completion.sock`,
+with integer timeout 1–30 seconds and root-created listener peer 0:0. Material
+appends `completion_endpoint` as the same exact `(path, timeout, 0, 0)` tuple.
+The stdlib selector recognizes this closed data shape without crypto imports
+or extra descriptor delivery. The existing read-only socket-directory mount
+already covers the path and creates nothing.
+
+This is the explicit signed-authorization dispatch profile, not the older
+private packet-selector request. The [completion service](oidc-session-activation-delivery-completion-service.md)
+must independently admit launch v2 and actual peer 65532, compare the original
+consume authorization bytes with its own root-held original, and use only its
+own root-pinned packet, pending state, checkpoint and replay expectations.
+No future packet identifier, completion enrollment or extra private key is
+added to the caller configuration; a returned SQL locator or ACK cannot supply
+those server pins. Actual caller continuation still needs the retained
+same-context originals, live permission and original work/window/deadline.
+The public process receives no AES/history custody, and raw completion output
+is not a packet-currentness, token-release or current-session proof.
+
 ## Original admission and purpose separation
 
 Enabling this lane requires actual activation execution v4 and enabled
@@ -113,6 +141,6 @@ separation from the HTTP and other retained private purposes. The same active
 permission context remains necessary for post-plan consume authorization.
 Cold admission creates no request work/window, opens no socket and cannot
 renew the original caller allowance. No AES or historical custody moves into
-the public process. This source slice is not grant issuance, SQL, completion,
-token delivery, a cookie update or a current-session claim; it remains unbuilt
-and unexecuted.
+the public process. This cold configuration alone is not grant issuance, SQL,
+completion, token delivery, a cookie update or a current-session claim; it
+remains unbuilt and unexecuted.

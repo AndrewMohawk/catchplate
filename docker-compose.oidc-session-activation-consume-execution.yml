@@ -2,8 +2,9 @@
 # Inputs are independently provisioned; this creates no key, socket or service.
 # The signed bootstrap stays in the existing read-only authority-trust mount.
 # Nested v1 configures authorizer.sock only. Explicit nested v2 additionally
-# configures reserver.sock and sql.sock in the same fixed directory; this mount
-# neither selects a profile nor admits a listener or grants dispatch authority.
+# configures reserver.sock and sql.sock; nested v3 additionally configures
+# completion.sock in the same fixed directory. This mount neither selects a
+# profile nor admits a listener or grants dispatch authority.
 services:
   serverware:
     volumes:

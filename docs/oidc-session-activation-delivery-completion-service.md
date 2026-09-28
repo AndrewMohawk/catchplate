@@ -49,19 +49,34 @@ completion and actual retained state acknowledgment, joined to this invocation's
 result. The server does not replay its own response as independent receiving
 verification.
 
-## One private exchange, one bounded lifetime
+## One root-selected exchange, one bounded lifetime
 
 The listener is
 `/run/serverware/oidc-session-activation-delivery-execution/completion.sock`.
-Its owner/group is 65497:65497 and mode is 0660. Only peer 65497:65497 is admitted:
-a separately root-admitted, same-purpose private receiving process can use the
-actual custody-aware response client. There is no 65532/application peer and no
-ambient application AES access. Public/control-plane caller packaging and
-permission remain F08.5 work. A client pin of root 0:0 identifies the inherited
-root-created socket endpoint, not an attestation of the serving UID.
+Launch v1 retains owner/group 65497:65497, mode 0660 and only peer
+65497:65497: a separately root-admitted, same-purpose private receiving process
+can use the actual custody-aware response client. Distinct root-signed launch
+v2 requires owner/group 65497:65532, the same mode and only control-plane peer
+65532:65532. The service UID stays 65497. Its lifecycle seal retains the selected
+schema, and listener checks derive one exact ACL from that schema; no peer-OR
+fallback is accepted. The opt-in socket drop-in must match the admitted v2
+bootstrap. Neither profile gives the application AES/history access. A client
+pin of root 0:0 identifies the inherited root-created socket endpoint, not an
+attestation of the serving UID.
 
 The [fixed transport](oidc-session-activation-delivery-completion-transport.md)
-accepts only the recovery purpose and independently expected packet digest.
+retains v1's recovery purpose and independently expected packet digest. V2
+selects the separate dispatch transport before peer/header/body intake:
+`SWODCM02`, fixed purpose `complete-oidc-session-activation-delivery`, and the
+exact signed consume caller authorization original. The actual peer must match
+the selected profile. After genuine root bootstrap re-admission, the service
+compares that authorization byte-for-byte with `material.authorization_bytes`.
+It never derives packet or pending scope from the caller or SQL response; both
+profiles use only the server's independent root pins for actual recovery.
+Old v1 wire/schema/peer acceptance stays strict, with no fallback. Both profiles
+return the existing `SWODCR01` raw4 acknowledged/uncertain grammar, not a packet
+identifier or authenticated current-session claim.
+
 One request allowance opens before peer/prefix/body intake and is capped by the
 original startup allowance. Original role and custody lifetimes and the minimum
 enrolled control/caller/planner age and skew can only narrow it; old historical
@@ -83,5 +98,7 @@ eight inherited descriptors without deleting durable records.
 
 The source units require independent account, key, TLS, database, checkpoint,
 journal, socket-DAC and state-v9 provisioning. They create none of those trust
-facts and are not installed or started by this change. Their isolation claim is
+facts and are not installed or started by this change. V2's explicit dispatch
+connection does not itself close the public activation route or authorize token
+release. Their isolation claim is
 trusted-host-local, not TEE, off-host attestation or production verification.

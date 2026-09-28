@@ -29,6 +29,7 @@ expectations_wire = caller.expectations_wire
 ROLE = PROCESS_MODE = receiving.PROCESS_MODE
 OPERATION = caller.OPERATION
 SERVICE_UID = SERVICE_GID = PEER_UID = PEER_GID = 65497
+DISPATCH_PEER_UID = DISPATCH_PEER_GID = 65532
 STATE_SERVICE_UID = STATE_SERVICE_GID = 65516
 STATE_LISTENER_UID = STATE_LISTENER_GID = 0
 (ROOT_FD, BOOTSTRAP_FD, LISTENER_FD, KEY_FD, JOURNAL_FD,
@@ -55,6 +56,7 @@ MAX_RECEIPT_AGE_NS = primitives.MAX_RECEIPT_AGE_NS
 SCHEMA = "serverware.signedOidcSessionActivationDeliveryCompletionBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v1"
+DISPATCH_LAUNCH_SCHEMA = "serverware.oidcSessionActivationDeliveryCompletionLaunch/v2"
 _FALSE_FIELDS = receiving._FALSE_FIELDS
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 _CUSTODY_FIELDS = frozenset({"base64Url", "byteCount", "bytesDigest"})
@@ -218,11 +220,14 @@ def _state_endpoint(value):
 
 def _launch_shape(value, work):
     shape._object(value, _LAUNCH_FIELDS, "consume completion launch")
-    for name, expected in (("schema", LAUNCH_SCHEMA), ("processMode", PROCESS_MODE),
+    if type(value["schema"]) is not str or value["schema"] not in (LAUNCH_SCHEMA, DISPATCH_LAUNCH_SCHEMA):
+        _fail("consume completion launch profile differs")
+    peer = (PEER_UID, PEER_GID) if value["schema"] == LAUNCH_SCHEMA else (DISPATCH_PEER_UID, DISPATCH_PEER_GID)
+    for name, expected in (("processMode", PROCESS_MODE),
             ("listenerPath", LISTENER_PATH), ("journalDirectoryPath", JOURNAL_PATH)):
         shape._literal(value[name], expected)
     for name, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID),
-            ("peerUid", PEER_UID), ("peerGid", PEER_GID), *_FD_FIELDS):
+            ("peerUid", peer[0]), ("peerGid", peer[1]), *_FD_FIELDS):
         shape._integer(value[name], 2**32 - 2, minimum=1)
         if value[name] != expected:
             _fail("consume completion launch scalar differs")

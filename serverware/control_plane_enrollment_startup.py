@@ -334,6 +334,16 @@ class _EnrollmentOwner:
             raise EnrollmentStartupError("consume dispatch requires the actual active parent permission")
         return permission.dispatch_consume()
 
+    def _complete_oidc_session_activation_consume(self):
+        """Receive original completion controls on this exact consume attempt."""
+        from serverware import control_plane_oidc_session_activation_execution as execution
+
+        _require_pid()
+        permission = self._activation_permission
+        if type(permission) is not execution._ActivationPermission or permission._owner is not self:
+            raise EnrollmentStartupError("consume completion requires the actual active parent permission")
+        return permission.complete_consume()
+
     @property
     def finalization_reservation_enabled(self):
         _live(self)

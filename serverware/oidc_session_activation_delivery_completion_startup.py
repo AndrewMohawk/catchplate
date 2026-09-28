@@ -1,4 +1,4 @@
-"""One private consume completion exchange under the original cold allowance.
+"""One root-selected consume completion exchange under the original cold allowance.
 
 The root delivery continues in this same permanently dropped PID. Startup never
 opens a replacement allowance; a single request allowance starts before peer or
@@ -91,7 +91,7 @@ class _CompletionOwner:
         "_listener", "_listener_pins", "_sealed", "_tls", "_journal", "_journal_fd", "_journal_pins",
         "_delivery", "_custody_reader", "_commit_reader", "_custody_configuration", "_commit_configuration",
         "_client", "_client_configuration", "_policy", "_startup_window", "_inherited_deadline",
-        "_opening", "_interval", "_deadline", "_seal", "_last_epoch", "_last_monotonic",
+        "_opening", "_interval", "_deadline", "_launch_schema", "_seal", "_last_epoch", "_last_monotonic",
         "_closed", "_failed", "_accepted", "_connection")
 
     def __init__(self):
@@ -102,7 +102,7 @@ class _CompletionOwner:
             self._listener, self._listener_pins, self._sealed, self._tls, self._journal,
             self._journal_fd, self._journal_pins, self._delivery, self._custody_reader, self._commit_reader,
             self._custody_configuration, self._commit_configuration, self._client, self._client_configuration,
-            self._policy, self._startup_window, self._inherited_deadline, self._deadline)
+            self._policy, self._startup_window, self._inherited_deadline, self._deadline, self._launch_schema)
 
     def _live(self):
         global _state
@@ -122,6 +122,7 @@ class _CompletionOwner:
                     or any(actual is not original for actual, original in zip(held, self._seal))
                     or self._opening is not self._material.opening_sample
                     or self._interval is not self._material.attestation_interval
+                    or self._material.launch["schema"] != self._launch_schema
                     or self._deadline > min(self._inherited_deadline, self._startup_window[4],
                         self._opening[0] + self._interval[1] - self._opening[1])):
                 raise DeliveryCompletionStartupError("consume completion held lifetime or owners changed")
@@ -129,8 +130,8 @@ class _CompletionOwner:
             for descriptor, maximum, private, identity in self._sealed:
                 if delivery._sealed_identity(descriptor, maximum, private=private) != identity:
                     raise DeliveryCompletionStartupError("consume completion sealed originals changed")
-            if (delivery._listener(delivery.LISTENER_FD) != self._listener_pins
-                    or delivery._listener(self._listener.fileno()) != self._listener_pins
+            if (delivery._listener(delivery.LISTENER_FD, launch_schema=self._launch_schema) != self._listener_pins
+                    or delivery._listener(self._listener.fileno(), launch_schema=self._launch_schema) != self._listener_pins
                     or delivery._journal(delivery.JOURNAL_FD) != self._journal_pins
                     or delivery._journal(self._journal_fd) != self._journal_pins
                     or historical.OidcSessionActivationDeliveryCompletionCustody._snapshot_configuration(
@@ -176,10 +177,21 @@ class _CompletionOwner:
         from serverware import oidc_session_activation_delivery_completion_bootstrap as bootstrap
         from serverware import authority_oidc_session_activation_delivery_completion_custody as historical
         from serverware import authority_oidc_session_activation_delivery_completion_recovery as recovery
-        from serverware import authority_oidc_session_activation_delivery_completion_transport as transport
+        from serverware import authority_oidc_session_activation_delivery_completion_transport as private_transport
+        from serverware import authority_oidc_session_activation_delivery_completion_dispatch_transport as dispatch_transport
         from serverware import authority_successor_execution_window as processing
         from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
+        profile = self._launch_schema
+        if profile == bootstrap.LAUNCH_SCHEMA:
+            transport = private_transport
+        elif profile == bootstrap.DISPATCH_LAUNCH_SCHEMA:
+            transport = dispatch_transport
+        else:
+            raise DeliveryCompletionRequestError("consume completion launch profile differs")
+        expected_peer = delivery._launch_peer(profile)
+        if (transport.REQUEST_PEER_UID, transport.REQUEST_PEER_GID) != expected_peer:
+            raise DeliveryCompletionRequestError("consume completion transport peer profile differs")
         work = _ValidationWork(QueryReadValidationLimits())
         age, skew = self._policy
         window = bootstrap.clock._open_on_work(
@@ -210,9 +222,9 @@ class _CompletionOwner:
         current()
         peer_uid, peer_gid, _pid = transport.io._call_until(connection, bound,
             lambda: transport.authority_transport._peer_identity(connection))
-        if (peer_uid, peer_gid) != (delivery.PEER_UID, delivery.PEER_GID):
-            raise DeliveryCompletionRequestError("consume completion private caller peer differs")
-        # The fixed request is tiny; charge its complete ceiling before any
+        if (peer_uid, peer_gid) != expected_peer:
+            raise DeliveryCompletionRequestError("consume completion root-selected caller peer differs")
+        # Charge the selected request's complete ceiling before any
         # prefix/body allocation. The wire helper separately reserves raw4.
         work.charge(input_bytes=transport.REQUEST_HEADER_BYTES + transport.MAX_REQUEST_BYTES)
         originals = transport._recv_request(connection, deadline_ns=bound)
@@ -221,9 +233,20 @@ class _CompletionOwner:
             root_public_key=self._root, live_window=window, transport_deadline_ns=bound, work=work)
         bootstrap.plan._same(material.attestation_interval, self._interval, work,
             "consume completion launch interval changed")
-        work.prepare_utf8(material.packet_digest)
-        bootstrap.plan._same(originals[1], material.packet_digest.encode("ascii"), work,
-            "consume completion selector differs from independent root scope")
+        bootstrap.plan._same(material.launch["schema"], profile, work,
+            "consume completion root-selected profile changed")
+        if profile == bootstrap.DISPATCH_LAUNCH_SCHEMA:
+            work.charge(input_bytes=len(originals[1]) + len(material.authorization_bytes))
+            if originals[1] != material.authorization_bytes:
+                raise DeliveryCompletionRequestError(
+                    "consume completion dispatch authorization differs from independent root original")
+        else:
+            work.prepare_utf8(material.packet_digest)
+            selector = material.packet_digest.encode("ascii")
+            work.charge(input_bytes=len(originals[1]) + len(selector))
+            if originals[1] != selector:
+                raise DeliveryCompletionRequestError(
+                    "consume completion selector differs from independent root scope")
         policy = _policy(material, self._root, work)
         bootstrap.plan._same(policy, self._policy, work, "consume completion enrolled policy changed")
         window = processing._narrow(window, deadline_epoch_ns=material.attestation_interval[1],
@@ -387,19 +410,21 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns):
                 live_window=window, transport_deadline_ns=bound, work=work)
             current()
             launch = material.launch
+            launch_schema = launch["schema"]
+            peer_uid, peer_gid = delivery._launch_peer(launch_schema)
             fd_fields = ("rootPublicKeyFd", "bootstrapFd", "listenerFd", "signingKeyFd", "journalDirectoryFd",
                 "executionBundleKeyFd", "historicalBundleKeyFd", "deliveryKeyFd")
             if ((launch["processMode"], launch["serviceUid"], launch["serviceGid"],
                     launch["peerUid"], launch["peerGid"], launch["listenerPath"])
                     != (delivery.PROCESS_MODE, delivery.SERVICE_UID, delivery.SERVICE_GID,
-                        delivery.PEER_UID, delivery.PEER_GID, delivery.LISTENER_PATH)
+                        peer_uid, peer_gid, delivery.LISTENER_PATH)
                     or tuple(launch[name] for name in fd_fields) != delivery.INHERITED_DESCRIPTORS
                     or tuple(launch["inheritedFileDescriptors"]) != delivery.INHERITED_DESCRIPTORS):
                 raise DeliveryCompletionStartupError("consume completion fixed delivery inventory differs")
             listener_pins = tuple(launch[name] for name in ("listenerSocketDevice", "listenerSocketInode",
                 "listenerPathDevice", "listenerPathInode"))
             journal_pins = launch["journalDirectoryDevice"], launch["journalDirectoryInode"]
-            if (delivery._listener(delivery.LISTENER_FD) != listener_pins
+            if (delivery._listener(delivery.LISTENER_FD, launch_schema=launch_schema) != listener_pins
                     or delivery._journal(delivery.JOURNAL_FD) != journal_pins):
                 raise DeliveryCompletionStartupError("consume completion resources differ from signed pins")
             policy = _policy(material, root, work)
@@ -475,6 +500,7 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns):
             owner._client, owner._client_configuration = client, state_transport.CurrentRootDecisionClient._snapshot_configuration(client)
             owner._policy, owner._startup_window, owner._inherited_deadline = policy, window, inherited_deadline
             owner._opening, owner._interval, owner._deadline = material.opening_sample, material.attestation_interval, bound
+            owner._launch_schema = launch_schema
             owner._last_epoch, owner._last_monotonic = sample[1], sample[2]
             owner._closed = owner._failed = owner._accepted = False
             owner._connection = None

@@ -30,18 +30,18 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 dispatch, remains **partial**. The bar shows its named connections rather than
 an estimated percentage.
 
-Latest source: [`.196` / 7244464](https://github.com/example/private-deployment)
-adds the one-shot consume-input issuer and durable same-permission acquisition.
-Exact consume-worker bootstrap delivery is next. The
-[`.195` issuance and receiving foundation](https://github.com/example/private-deployment)
-remains source-landed.
-Prior release-worker staging is [source-landed](docs/oidc-session-activation-release-dynamic-delivery.md).
-Still open: consume-worker delivery and resource provisioning;
-per-request proof provisioning; public route/cookie, recovery and portal.
-No service has been run. Full [criteria and commit history](docs/production-status.md#activation-dispatch-detail)
+Latest source: [`.197` / 98fda21](https://github.com/example/private-deployment)
+connects exact issued consume-pair dynamic staging to private prepare and exact
+export under the same original work and clock allowance, with guarded and
+capped native joins. Earlier source: [`.196` issuer/acquisition](https://github.com/example/private-deployment),
+[`.195` issuance/receiving](https://github.com/example/private-deployment),
+and [release-worker staging](docs/oidc-session-activation-release-dynamic-delivery.md).
+Next: per-request proof-worker bootstrap/setup and resources; public
+HTTP/current-auth/cookie completion; recovery and portal. This checkpoint adds
+no execution or provisioning evidence. Full [criteria and commit history](docs/production-status.md#activation-dispatch-detail)
 remain in the tracker.
 
-[![Inside step 22: five facets are source-landed; RELEASE remains partial and HTTP is open. Current .196 one-shot consume-input issuer and durable same-permission acquisition are source-landed in 7244464. Exact consume-worker bootstrap delivery is next; resource and proof provisioning, public HTTP/cookie, recovery and portal remain open. Activation 21/26, project 34/46 and production 0/6 are unchanged. Source only, not runtime evidence.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
+[![Inside step 22: five facets are source-landed; RELEASE remains partial and HTTP is open. Current .197 exact consume-pair staging and same-original-work private prepare then exact export are source-landed in 98fda21, with guarded and capped native joins. Per-request proof-worker setup and resources, public HTTP/current-auth/cookie completion, recovery and portal remain open. Activation 21/26, project 34/46 and production 0/6 are unchanged. Source only, not execution or provisioning evidence.](docs/images/activation-dispatch-progress.svg)](docs/production-status.md#activation-dispatch-detail)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-dispatch-detail).

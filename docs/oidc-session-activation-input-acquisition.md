@@ -68,10 +68,13 @@ A signed empty checkpoint is an independent authorization expectation, not an
 observation that a directory is empty. Likewise, signed device/inode values do
 not prove that resources were opened, remain owned, or were delivered to a
 worker. Existing release startup must authenticate and observe its exact
-resources; issuer deployment and delivery remain necessary. In particular,
-returning a newly signed server bootstrap to the caller does not install those
-exact bytes in the separate release worker. That resource/delivery connection,
-consume-input acquisition and per-request proof provisioning remain open.
+resources; independent resource creation and service deployment remain necessary.
+With explicit issuer launch `/v2`, the [dynamic delivery receiver](oidc-session-activation-release-dynamic-delivery.md)
+now admits and stages the exact issued server bootstrap before the issuer
+returns grants to the caller. Its same-process continuation enters the existing
+release resource intake/worker; the staged identity is not readiness or a token
+receipt. Legacy launch `/v1` still requires separately delivered worker originals.
+Consume-input acquisition and per-request proof provisioning remain open.
 
 ## Public request and truthful response
 

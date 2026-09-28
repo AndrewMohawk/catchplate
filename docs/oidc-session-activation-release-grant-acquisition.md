@@ -14,6 +14,9 @@ sequenceDiagram
     P->>P: Spend shared handoff latch
     P->>I: Purpose + actual LIVE raw7
     I->>I: Admit independent policy/proof originals; derive grants
+    I->>R: Exact server bootstrap (explicit issuer launch v2)
+    R->>R: Independent admission, sealed original and resource staging
+    R-->>I: Staged bootstrap identity, not worker readiness
     I-->>P: Opaque client/server raw2
     P->>J: Retain exact bounded grant originals
     P->>P: Admit grants against actual retained history
@@ -74,9 +77,15 @@ provisioned socket read-only and refuses host-path creation. It supplies no
 root signing key to the public application. The uninstalled issuer systemd
 templates and exact-source launcher packaging are separate from public Compose.
 
-Independent resource observation, issuance-policy/proof-worker delivery and
-delivery of the exact newly signed server bootstrap to the actual release
-worker remain required. Grants delivered only to this caller do not configure
-that worker. Consume planner/history acquisition, per-request proof provisioning,
+Explicit issuer launch `/v2` now stages the exact newly signed server bootstrap
+through the private [dynamic delivery receiver](oidc-session-activation-release-dynamic-delivery.md)
+before returning grants to this caller. The receiver genuinely admits it against
+independent policy/proof originals, retains sealed bytes and actual pinned
+resources, then continues into the existing same-process release worker. Its
+identity acknowledgement is staging only, not readiness or token delivery.
+Legacy issuer launch `/v1` retains the separate preprovisioned-worker path.
+
+Independent resource creation, issuance-policy/proof-worker provisioning and
+actual deployment remain required. Consume planner/history acquisition, per-request proof provisioning,
 the public HTTP/cookie flow, separately authorized recovery and portal remain
 open. All implementation here is source-only, unbuilt and unexecuted.

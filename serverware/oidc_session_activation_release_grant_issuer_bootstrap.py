@@ -29,6 +29,8 @@ PURPOSE = "launch-oidc-session-activation-release-grant-issuer"
 SCHEMA = "serverware.signedOidcSessionActivationReleaseGrantIssuerBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseGrantIssuerBootstrap/v1"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationReleaseGrantIssuerLaunch/v1"
+DELIVERY_LAUNCH_SCHEMA = "serverware.oidcSessionActivationReleaseGrantIssuerLaunch/v2"
+DELIVERY_SOCKET_PATH = "/run/serverware/oidc-session-activation-token-release/bootstrap.sock"
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationReleaseGrantIssuerBootstrapIdentity/v1"
 MAX_BYTES = MAX_BOOTSTRAP_BYTES = 16 * 1024
 MAX_POLICY_BYTES = issuer.MAX_BYTES
@@ -44,6 +46,7 @@ _LAUNCH_FIELDS = frozenset({"schema", "role", "processMode", "serviceUid", "serv
     "peerUid", "peerGid", *(name for name, _ in _FD_FIELDS), "inheritedFileDescriptors",
     "listenerPath", "requestTimeoutSeconds", "listenerSocketDevice", "listenerSocketInode",
     "listenerPathDevice", "listenerPathInode"})
+_DELIVERY_LAUNCH_FIELDS = _LAUNCH_FIELDS | frozenset({"deliveryEndpoint"})
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "purpose", "role", "trustMode",
     "issuerPolicyDigest", "proofBootstrapDigest", "rootSigningKey", "issuedAtEpochNs",
     "expiresAtEpochNs", "launch"})
@@ -73,6 +76,7 @@ class _IssuerMaterial:
     live_window: tuple
     deadline_ns: int
     live: object
+    delivery_endpoint: tuple | None = None
 
 
 class _Capture(capture._JSONCapture):
@@ -97,9 +101,27 @@ def _canonical(original, value, work):
     return capability._canonical(original, value, capture._SharedLedger(work), MAX_BYTES, MAX_NODES)
 
 
+def _delivery_endpoint(value):
+    shape._object(value, frozenset({"path", "timeoutSeconds", "peerUid", "peerGid"}),
+        "release issuer fixed bootstrap delivery endpoint")
+    shape._literal(value["path"], DELIVERY_SOCKET_PATH)
+    shape._integer(value["timeoutSeconds"], 30, minimum=1)
+    for name in ("peerUid", "peerGid"):
+        shape._integer(value[name], 2**32 - 2)
+        if value[name] != 0:
+            _fail("release issuer bootstrap staging requires the actual root peer")
+    return value["path"], value["timeoutSeconds"], value["peerUid"], value["peerGid"]
+
+
 def _launch_shape(value, work):
-    shape._object(value, _LAUNCH_FIELDS, "release grant issuer launch")
-    for name, expected in (("schema", LAUNCH_SCHEMA), ("role", ROLE),
+    if type(value) is not dict or type(value.get("schema")) is not str:
+        _fail("release issuer launch requires its explicit closed version")
+    version = value["schema"]
+    if version not in (LAUNCH_SCHEMA, DELIVERY_LAUNCH_SCHEMA):
+        _fail("release issuer launch version is not source fixed")
+    shape._object(value, _DELIVERY_LAUNCH_FIELDS if version == DELIVERY_LAUNCH_SCHEMA else _LAUNCH_FIELDS,
+        "release grant issuer launch")
+    for name, expected in (("schema", version), ("role", ROLE),
             ("processMode", PROCESS_MODE), ("listenerPath", LISTENER_PATH)):
         shape._literal(value[name], expected)
     for name, expected in (("serviceUid", SERVICE_UID), ("serviceGid", SERVICE_GID),
@@ -117,6 +139,10 @@ def _launch_shape(value, work):
         shape._integer(value[name], 2**64 - 1)
     for name in ("listenerSocketInode", "listenerPathInode"):
         shape._integer(value[name], 2**64 - 1, minimum=1)
+    if version == DELIVERY_LAUNCH_SCHEMA:
+        endpoint = _delivery_endpoint(value["deliveryEndpoint"])
+        if endpoint[1] > value["requestTimeoutSeconds"]:
+            _fail("release issuer staging timeout exceeds its original launch timeout")
 
 
 def _payload_shape(payload, work):
@@ -213,7 +239,11 @@ def _material(payload, original, policy_original, proof_original, root, window, 
     plan._same(policy.policy_digest, payload["issuerPolicyDigest"], work,
         "release issuer admitted policy identity")
     originals_current()
+    endpoint = (_delivery_endpoint(payload["launch"]["deliveryEndpoint"])
+        if payload["launch"]["schema"] == DELIVERY_LAUNCH_SCHEMA else None)
     timeout = payload["launch"]["requestTimeoutSeconds"]
+    if endpoint is not None:
+        timeout = min(timeout, endpoint[1])
     narrowed = processing._narrow(policy.live_window, deadline_epoch_ns=interval[1],
         maximum_lifetime_ns=min(policy.live_window[5], timeout * 1_000_000_000),
         maximum_clock_skew_ns=policy.live_window[6])
@@ -237,7 +267,7 @@ def _material(payload, original, policy_original, proof_original, root, window, 
     live()
     return _IssuerMaterial(original, policy_original, proof_original, policy, launch,
         payload["rootSigningKey"]["byteCount"], payload["rootSigningKey"]["bytesDigest"],
-        interval, opening, narrowed, deadline, live)
+        interval, opening, narrowed, deadline, live, endpoint)
 
 
 def _verify_on_work(*, bootstrap_bytes, issuer_policy_bytes, proof_bootstrap_bytes,

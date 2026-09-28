@@ -79,7 +79,8 @@ fn timestamp(seconds: i64) -> Result<OffsetDateTime, String> {
 impl NativeSettingsV1 {
     pub(super) fn into_parameters(self, launch: LaunchV1, configuration_pin: &str,
         checkpoint: &PolicyHighWater, control_plane_tls: ControlPlaneClientConfig,
-        policy_bytes: Vec<u8>) -> Result<NativeStartupParametersV1, String>
+        policy_bytes: Vec<u8>, enrollment: Option<(super::EnrollmentAuthorizerV1, String)>)
+        -> Result<NativeStartupParametersV1, String>
     {
         ensure((1..=32).contains(&self.ingress_client_roots_der_base64url.len())
             && (1..=32).contains(&self.relay_assignments.len()),
@@ -104,6 +105,17 @@ impl NativeSettingsV1 {
             &self.control_plane_response_public_key_pem, "native startup control-plane response")?;
         ensure(response_key_id == self.control_plane_response_key_id,
             "native startup response public key differs from its key ID")?;
+        let enrollment_authorizer = match enrollment {
+            None => None,
+            Some((original, endpoint)) => {
+                ensure(original.api_version == "serverware.nativeEnrollmentAuthorizer/v1",
+                    "native enrollment authorizer version differs")?;
+                Some(native_enrollment_authorizer::NativeEnrollmentAuthorizer::from_original(
+                    original.public_key_pem.as_bytes(), &original.public_key_pem_sha256, &endpoint,
+                    self.listener_port, &response_key, &self.expected_policy_signing_key_id,
+                    launch.deadline_boottime_ns)?)
+            },
+        };
         bounded_absolute_path(&self.attempt_ledger_directory)?;
         let scope = RuntimeScopeCommitmentsV1::new(
             native_lease_digest_bytes(&launch.release_record_sha256)?,
@@ -122,6 +134,7 @@ impl NativeSettingsV1 {
             proof_nonce: nonce(&launch.proof_nonce_base64url)?,
             control_plane_response_key: response_key,
             control_plane_response_key_id: response_key_id,
+            enrollment_authorizer,
             attempt_ledger_directory: self.attempt_ledger_directory,
             relay_assignments: self.relay_assignments.into_iter().map(|relay|
                 NativeRelayAssignmentV1 { host: relay.host, endpoint: relay.endpoint,

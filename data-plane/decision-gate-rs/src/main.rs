@@ -19,6 +19,8 @@ mod native_startup;
 mod native_startup_config;
 mod native_public_identity;
 mod native_ingress_attestation;
+mod native_enrollment_authorizer;
+mod native_enrollment_admission;
 mod workload_identity_trust;
 mod workload_identity_trust_crypto;
 
@@ -2548,6 +2550,7 @@ struct GateState {
     pinned_upstream_clients: Mutex<PinnedUpstreamClientCache>,
     native_upstream_relays: Option<Arc<NativeUpstreamRelaysV1>>,
     native_runtime_lifetime: Option<Arc<NativeRuntimeLifetimeV1>>,
+    native_enrollment_authorizer: Option<Arc<native_enrollment_authorizer::NativeEnrollmentAuthorizer>>,
     audit_client: Client,
     credential_lease_client: Client,
     audit_url: Option<String>,
@@ -4271,12 +4274,51 @@ impl<T: ConfigureIoTimeout + Write> Write for DeadlineIo<T> {
     }
 }
 
+/// Constructed only with the configuration actually used for this handshake.
+/// Keeping it beside the connection avoids treating a later configuration
+/// argument as evidence of which trust store created that connection.
+struct RetainedProxyIngressTls {
+    stream: StreamOwned<ServerConnection, DeadlineIo<GateSocket>>,
+    configuration: Arc<ProxyIngressTlsConfig>,
+}
+
+impl std::ops::Deref for RetainedProxyIngressTls {
+    type Target = StreamOwned<ServerConnection, DeadlineIo<GateSocket>>;
+    fn deref(&self) -> &Self::Target { &self.stream }
+}
+
+impl std::ops::DerefMut for RetainedProxyIngressTls {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.stream }
+}
+
+impl Read for RetainedProxyIngressTls {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> { self.stream.read(buffer) }
+}
+
+impl Write for RetainedProxyIngressTls {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> { self.stream.write(buffer) }
+    fn flush(&mut self) -> io::Result<()> { self.stream.flush() }
+}
+
+impl TerminalDeadlineWrite for RetainedProxyIngressTls {
+    fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
+        self.stream.set_terminal_write_deadline(deadline);
+    }
+}
+
 enum DirectProxyStream {
     DevelopmentRaw(DeadlineIo<GateSocket>),
-    MutualTls(StreamOwned<ServerConnection, DeadlineIo<GateSocket>>),
+    MutualTls(RetainedProxyIngressTls),
 }
 
 impl DirectProxyStream {
+    fn native_enrollment_tls_config(&self) -> Option<&Arc<ProxyIngressTlsConfig>> {
+        match self {
+            Self::MutualTls(tls) => Some(&tls.configuration),
+            Self::DevelopmentRaw(_) => None,
+        }
+    }
+
     // Only the explicit attestation-to-CONNECT path installs this cap. Phase
     // resets and terminal-write changes cannot widen or remove it afterward.
     fn restrict_operation_deadline(&mut self, deadline: Instant) {
@@ -48410,7 +48452,9 @@ fn establish_gate_listener_stream(
     require_workload_ingress_trust(state, proxy_ingress)?;
     tls.sock.reset_read_deadline(state.request_head_deadline);
     tls.sock.reset_write_deadline(state.response_write_deadline);
-    Ok((DirectProxyStream::MutualTls(tls), Some(evidence)))
+    Ok((DirectProxyStream::MutualTls(RetainedProxyIngressTls {
+        stream: tls, configuration: Arc::clone(config),
+    }), Some(evidence)))
 }
 
 fn handle_connection(
@@ -52150,6 +52194,7 @@ mod tests {
             )),
             native_upstream_relays: None,
             native_runtime_lifetime: None,
+            native_enrollment_authorizer: None,
             audit_client: client.clone(),
             credential_lease_client: client,
             audit_url: None,

@@ -417,6 +417,24 @@ impl VsockStreamV1 {
     /// Cached routing metadata, not an authenticated principal.
     pub fn peer_cid(&self) -> u32 { self.peer.cid }
     pub fn peer_port(&self) -> u32 { self.peer.port }
+    /// Join this actual accepted socket to the independently retained native
+    /// listener port. Vsock addresses remain routing metadata, never a client
+    /// IP, authenticated principal or the client-facing TCP proxy endpoint.
+    pub fn verify_accepted_local_port(&self, expected_port: u32, deadline: u64)
+        -> io::Result<()> {
+        let deadline = deadline.min(self.deadline);
+        self.check(deadline)?;
+        if self.connected_local.is_some() || !valid_port(expected_port) {
+            return Err(error(io::ErrorKind::PermissionDenied,
+                "native enrollment requires an accepted fixed-listener socket"));
+        }
+        let local = address(self.socket.fd.as_raw_fd(), false)?;
+        if !valid_peer_cid(local.cid) || local.port != expected_port {
+            return Err(error(io::ErrorKind::PermissionDenied,
+                "native enrollment accepted local listener port differs"));
+        }
+        self.check(deadline)
+    }
     /// Original nonrenewable session bound for composing another transport.
     pub(crate) fn deadline(&self) -> u64 { self.deadline }
 

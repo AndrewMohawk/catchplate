@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-enrollment-authorizer.v1.schema.json",
+  "title": "Serverware native enrollment public authorizer v1",
+  "description": "Closed public authorizer input carried only by the explicit nativeStartupConfiguration/v2 enrollmentAuthorizer member. That startup version also requires a separate top-level enrollmentProxyEndpoint; it is not a fourth authorizer member. Startup v1 remains closed and rejects both additions. Runtime must admit the exact canonical non-weak Ed25519 SPKI PEM and its independently configured exact-PEM SHA-256 pin, retain the original configuration commitment, and enforce separation from the actual control-plane response and policy signing keys. Schema validation alone establishes no key provenance, signature verification, deployment admission, policy authority, signing permission or runtime success. No private key, file path, environment lookup or per-request assignment is part of this object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "publicKeyPem",
+    "publicKeyPemSha256"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.nativeEnrollmentAuthorizer/v1"
+    },
+    "publicKeyPem": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "description": "Exact canonical ASCII Ed25519 SubjectPublicKeyInfo PEM original, including its canonical final LF, at most 16384 UTF-8 bytes. Runtime parses and re-encodes the key to require byte equality; a private key, alternate algorithm, noncanonical PEM, generated fallback or pathname is not accepted. This string is public key material only."
+    },
+    "publicKeyPemSha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])",
+      "description": "Independently configured nonzero lowercase SHA-256 of the exact publicKeyPem bytes, not the DER-SPKI key ID used by an assignment. Runtime recomputes and joins the digest. A matching digest does not establish who admitted the enclosing cold configuration."
+    }
+  }
+}

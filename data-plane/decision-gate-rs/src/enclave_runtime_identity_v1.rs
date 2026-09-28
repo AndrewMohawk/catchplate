@@ -283,6 +283,59 @@ impl EnclaveRuntimeIdentityV1 {
 
     pub fn ca_certificate_der(&self) -> &[u8] { self.authority.certificate_der() }
 
+    /// Compare assignment inputs to this actual runtime and retained ingress.
+    /// This read-only check performs no NSM operation or signing and returns no
+    /// permission carrier. Invalid request pins cannot poison the shared key
+    /// owner. The caller separately admits policy, principal, packet and claims.
+    pub fn verify_enrollment_scope(&self, ingress: &QuotedMutualTlsIngressV1,
+        release: [u8; 32], policy: [u8; 32], configuration: [u8; 32],
+        ca_certificate: [u8; 32], ca_spki: [u8; 32], leaf: [u8; 32],
+        client_roots: [u8; 32], deadline: u64) -> Result<(), String> {
+        let deadline = deadline.min(self.deadline).min(ingress.deadline());
+        live(deadline)?;
+        if self.poisoned || unsafe { libc::getpid() } != self.owner_pid {
+            return Err("native enrollment runtime owner is unavailable".to_owned());
+        }
+        ingress.verify_live(deadline)?;
+        let opening = OffsetDateTime::now_utc();
+        let original_binding = self.retained_ingress_binding(ingress, opening)?;
+        let tls = ingress.tls();
+        let roots = tls.client_trust_certificates();
+        if roots.is_empty() || roots.len() > 32 {
+            return Err("native enrollment retained root count differs".to_owned());
+        }
+        let mut root_bytes = 0usize;
+        let mut root_hash = Sha256::new();
+        root_hash.update(b"serverware/mutual-tls-client-trust/v1\0");
+        root_hash.update((roots.len() as u32).to_be_bytes());
+        for root in roots {
+            live(deadline)?;
+            root_bytes = root_bytes.checked_add(root.len())
+                .ok_or("native enrollment retained root size overflow")?;
+            if root.is_empty() || root.len() > 64 * 1024 || root_bytes > 1024 * 1024 {
+                return Err("native enrollment retained roots exceed their bounds".to_owned());
+            }
+            root_hash.update((root.len() as u64).to_be_bytes());
+            root_hash.update(root);
+        }
+        let actual_roots: [u8; 32] = root_hash.finalize().into();
+        let sha = |bytes: &[u8]| -> [u8; 32] { Sha256::digest(bytes).into() };
+        if release != self.scope.release_record || policy != self.scope.policy
+            || configuration != self.scope.configuration
+            || ca_certificate != sha(self.authority.certificate_der())
+            || ca_spki != sha(&self.authority.public_key_spki_der())
+            || leaf != sha(tls.leaf_certificate_der())
+            || client_roots != actual_roots || actual_roots != tls.client_trust_sha256() {
+            return Err("native enrollment assignment differs from actual runtime originals".to_owned());
+        }
+        let closing = OffsetDateTime::now_utc();
+        if closing < opening || self.retained_ingress_binding(ingress, closing)? != original_binding {
+            return Err("native enrollment runtime scope changed or expired during comparison".to_owned());
+        }
+        ingress.verify_live(deadline)?;
+        live(deadline)
+    }
+
     pub fn quote_tls_root(&mut self, nonce: [u8; 32], deadline: u64)
         -> Result<RuntimeKeyQuoteV1, String> {
         let deadline = self.begin(deadline)?;

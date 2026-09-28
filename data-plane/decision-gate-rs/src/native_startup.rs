@@ -36,6 +36,7 @@ pub(super) struct NativeStartupParametersV1 {
     pub(super) proof_nonce: [u8; 32],
     pub(super) control_plane_response_key: VerifyingKey,
     pub(super) control_plane_response_key_id: String,
+    pub(super) enrollment_authorizer: Option<native_enrollment_authorizer::NativeEnrollmentAuthorizer>,
     pub(super) attempt_ledger_directory: PathBuf,
     pub(super) relay_assignments: Vec<NativeRelayAssignmentV1>,
     pub(super) listener_port: u32,
@@ -133,7 +134,7 @@ fn validate_parameters(parameters: &NativeStartupParametersV1) -> Result<(), Str
 
 pub(super) fn run(
     mut inputs: GateStateInputs,
-    parameters: NativeStartupParametersV1,
+    mut parameters: NativeStartupParametersV1,
     shadow_config: PolicyShadowGenerationConfig,
     v2_config: ResponseObservationV2ClientConfig,
     public_identity_stdout: bool,
@@ -148,6 +149,14 @@ pub(super) fn run(
     }
     super::native_gate_inputs::validate_native_gate_static_inputs(&inputs)?;
     validate_parameters(&parameters)?;
+    if let Some(authorizer) = &parameters.enrollment_authorizer {
+        authorizer.check()?;
+        authorizer.require_response_key(&parameters.control_plane_response_key)?;
+        if authorizer.deadline() != parameters.deadline_boottime_ns
+            || authorizer.listener_port() != parameters.listener_port {
+            return Err("native enrollment authorizer lost its original deadline or listener port".to_owned());
+        }
+    }
     validate_response_observation_v2_client_config(&v2_config)?;
     if !matches!(&inputs.policy_trust_root_source,
         PolicyTrustRootSource::AttestedControlPlane {
@@ -196,13 +205,30 @@ pub(super) fn run(
     let bootstrap = EnclaveBootstrapV1::new(identity, ingress, parameters.relay_assignments,
         OffsetDateTime::now_utc(), parameters.deadline_boottime_ns)?;
     startup.check()?;
-    let prepared = prepare_native_tls_gate_state(inputs, proof, bootstrap,
+    let mut prepared = prepare_native_tls_gate_state(inputs, proof, bootstrap,
         &parameters.policy_bytes, &parameters.expected_policy_signing_key_id,
         &parameters.control_plane_tls, parameters.minimum_sequence,
         parameters.minimum_rollback_epoch)?;
     startup.check()?;
     if prepared.deadline != parameters.deadline_boottime_ns {
         return Err("native startup preparation changed its original lifetime".to_owned());
+    }
+    if let Some(authorizer) = parameters.enrollment_authorizer.take() {
+        // The expected key label was not the final exclusion authority: join
+        // the actual freshly verified policy key before this owner can serve.
+        let snapshot = current_snapshot(&prepared.state);
+        if !snapshot_is_active(&prepared.state, &snapshot) {
+            return Err("native enrollment authorizer requires the active prepared policy".to_owned());
+        }
+        authorizer.require_policy_key(&snapshot.policy_verifying_key)?;
+        drop(snapshot);
+        let state = Arc::get_mut(&mut prepared.state)
+            .ok_or("native enrollment authorizer state was shared before cold attachment")?;
+        if state.native_enrollment_authorizer.is_some() {
+            return Err("native enrollment authorizer was already attached".to_owned());
+        }
+        state.native_enrollment_authorizer = Some(Arc::new(authorizer));
+        startup.check()?;
     }
     // This opt-in writes public originals only. Publication is not independent
     // attestation verification, CA installation permission or service readiness.

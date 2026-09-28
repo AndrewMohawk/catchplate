@@ -57,9 +57,11 @@ nanosecond window representation, not merely JSON's larger integer range.
 
 The public authorizer is a separately supplied canonical Ed25519 SPKI PEM with
 an independent exact-PEM SHA-256 pin. `authorizerKeyId` is the SHA-256 of its DER
-SPKI, **not** the PEM pin. A matching hash is not proof of how the operator
-admitted that authorizer. Cold root delivery and independent administration still
-have to establish that origin; the assignment cannot select its own trusted key.
+SPKI, **not** the PEM pin. The [explicit startup-v2 authorizer and policy/TLS
+admission gate](native-enrollment-admission.md) now retain that cold public input
+with key-role separation. A matching hash is not proof of how the operator
+admitted its origin; independent configuration/trust delivery remains required,
+and the per-request assignment cannot select its own trusted key.
 Canonical PKCS8 private-key input is accepted only by the explicit Python
 operator-signing helper, paired with this public key. No key file, environment
 fallback, key generation, network request or private-key output is added there.
@@ -67,8 +69,9 @@ fallback, key generation, network request or private-key output is added there.
 Both implementations take the exact unsigned packet original (1–512 KiB) and
 compare its actual digest. That comparison is not semantic approval of firewall
 commands, routes, installation paths or a principal. The operator authorizes
-those exact bytes; the future runtime gate must independently join the intended
-native assignment to its actual policy and reconstruct the supported packet.
+those exact bytes. The fixed runtime gate now joins the intended assignment to
+its actual policy and complete principal, but supported full packet semantics
+and reconstruction remain required before enabling signing.
 
 ## Source ownership and retained bounds
 
@@ -90,9 +93,11 @@ The [purpose-specific native key foundation](../data-plane/decision-gate-rs/src/
 consumes the genuine assignment owner and joins actual native identity/ingress,
 certificate, challenge and packet originals. The generated key has no import,
 private-key export, cloning or debug interface. Its signing operation remains
-private and inaccessible to an external caller because the actual main-binary
-`Snapshot` policy/principal admission has not yet been connected. A supplied
-hash or synthetic permission object is not a substitute for that gate.
+private and inaccessible to an external caller. The actual main-binary
+`Snapshot`/full-principal and native TLS admission gate is now source-connected,
+but packet reconstruction, durable claim/recovery and the request route remain
+missing producer gates. A supplied hash or synthetic permission object cannot
+replace them.
 
 The private signature preimage is fixed, not a caller-selected signing purpose:
 
@@ -119,19 +124,22 @@ runtime policy.
 
 ## Required next connections
 
-1. Deliver the independently admitted enrollment authorizer and assignment
-   through explicit cold native startup, with current release/configuration
-   authority and key-role separation. Do not borrow the HTTP-response key's role.
-2. Join the actual policy `Snapshot`, principal and complete mTLS selectors to
-   the assignment; reconstruct the supported full enrollment handoff from
-   admitted originals, preserving its routes, runtime-scoped CA, transport,
-   egress and safe canary obligations.
+1. Independently provision the [startup-v2 public authorizer and endpoint
+   pins](native-enrollment-admission.md), preserving their actual configuration
+   origin and key-role separation. Keep the signed assignment per request,
+   outside self-hashed static configuration; connect its original acquisition.
+2. Build the supported full enrollment handoff from admitted originals around
+   the source-connected actual `Snapshot`/full-principal/TLS gate, preserving
+   routes, runtime-scoped CA, transport, egress and safe canary obligations.
+   Assignment hash equality alone does not establish those packet semantics.
 3. Durably claim the exact assignment/packet before any irreversible signature.
    Unknown or interrupted outcomes must not authorize re-signing or a fresh
    key/nonce attempt; recovery needs its own exact retained outcome contract.
-4. Supply challenge/exporter and client identity from the actual retained native
-   TLS owner, then produce purpose-specific signature and original role-5 NSM
-   evidence without changing the existing role-4 response authority.
+4. Connect the request/serving path to the gate's actual retained native TLS
+   challenge/exporter and client identity, then connect purpose-specific signing
+   and original role-5 NSM evidence only after the missing producer gates.
+   Preserve role-4 authority; the vsock runtime's public TCP endpoint is a cold
+   pin, not a socket observation or a client address inferred from a CID.
 5. Connect actual acquisition and an explicit packet/SDK version around the
    [original-only receiver](native-enrollment-verification.md), which now joins
    role-3 and role-5 runtime, policy, signer and actual session scope. Preserve the

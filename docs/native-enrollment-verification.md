@@ -95,11 +95,14 @@ schema, runtime permission, or durable one-use outcome.
 
 ## Remaining integration and verification
 
-The runtime still needs independently admitted cold assignment/root intake,
-actual `Snapshot` policy/principal and full packet construction, retained
-instance/listener/configuration ownership, durable claim-before-sign and exact
-interruption recovery, a deliberately enabled serving/acquisition path, and an
-explicit packet/SDK version. Authenticating an exact packet digest does not
+The [explicit startup-v2 public authorizer and actual policy/TLS admission
+gate](native-enrollment-admission.md) now supply the server-side cold input and
+`Snapshot`/full-principal join in source. Independent trust deployment, per-request
+assignment acquisition, full packet construction, durable claim-before-sign and
+exact interruption recovery, a deliberately enabled serving/client-acquisition
+path, and an explicit packet/SDK version remain required. The native server's
+public TCP endpoint is a cold pin because its listener is vsock; this receiver
+still uses its actual client-side TCP peer. Authenticating an exact packet digest does not
 approve its routes, commands, principal selectors or installation instructions.
 Verifier-mediated scoped CA installation, proxy/egress setup and allow/deny
 canaries remain required. Legacy Python enrollment and role-4 signing are unchanged.

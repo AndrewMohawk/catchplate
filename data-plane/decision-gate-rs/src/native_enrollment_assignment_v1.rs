@@ -154,6 +154,21 @@ fn authorizer(original: &[u8], expected: &str) -> Result<(VerifyingKey, [u8; 32]
     Ok((key, digest(&der)))
 }
 
+/// Public-original shape/key validation for cold intake, not root provenance
+/// or an assignment verification. No signing key or accepted carrier escapes.
+pub(crate) fn validate_authorizer_original(original: &[u8], expected: &str)
+    -> Result<[u8; 32], String> {
+    let (key, key_id) = authorizer(original, expected)?;
+    require(!key.is_weak(), "native enrollment authorizer key is weak")?;
+    Ok(key_id)
+}
+
+/// Reuse the exact assignment endpoint profile for independently pinned cold
+/// configuration. This is a public endpoint pin, not observed transport data.
+pub(crate) fn validate_proxy_endpoint_original(original: &str) -> Result<SocketAddr, String> {
+    endpoint(original)
+}
+
 // The only containers are the envelope and its assignment. Bound depth before
 // the shared duplicate-rejecting canonical decoder allocates a JSON graph.
 fn framing(original: &[u8]) -> Result<&[u8], String> {

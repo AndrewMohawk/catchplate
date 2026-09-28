@@ -49,8 +49,8 @@ def _verify_on_work(*, proof_bootstrap_bytes, issuer_policy_bytes, completion_bo
         intent_enrollment_bytes, work, len(policy_original))
     # Tightening whole-call reservation includes nested base64 originals and
     # canonical/capture copies; individual wire maxima are not additive quotas.
-    reserved = 8 * (len(original) + len(originals[0])) + 4 * (len(policy_original)
-        + len(originals[1]) + len(originals[2]))
+    reserved = 8 * len(original) + issuer._cold_reservation_bytes(len(policy_original),
+        *(len(raw) for raw in originals))
     if reserved > MAX_ORIGINAL_BYTES:
         _fail("proof staging exceeds its original and decoded capacity")
     work.charge(input_bytes=len(original))
@@ -79,6 +79,14 @@ def _verify_on_work(*, proof_bootstrap_bytes, issuer_policy_bytes, completion_bo
             (material.intent_enrollment_bytes, originals[2], "intent enrollment")):
         bootstrap.completion.receiving._same_bytes(actual, expected, work,
             "proof staging exact independent " + label)
+        current()
+    if policy.current_activation_planner_bytes is None:
+        if material.current_activation_planner_bytes is not None:
+            _fail("legacy proof staging changed its independently selected version")
+    else:
+        bootstrap.completion.receiving._same_bytes(material.current_activation_planner_bytes,
+            policy.current_activation_planner_bytes, work,
+            "proof staging exact independently current activation planner")
         current()
     for actual, expected, label in ((material.expected_proof_scope, policy.proof_scope, "proof scope"),
             (material.caller_id, policy.caller_id, "intent caller"),

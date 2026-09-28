@@ -182,7 +182,11 @@ def _proof_from_intent(selected_intent):
         current()
         setup_policy = acquisition._policy_on_work(setup.issuer_policy_bytes,
             release_intent=inputs.intent_policy, release_proof=policy,
-            root_public_key=root, work=work)
+            root_public_key=root, work=work,
+            activation_planner_bytes=inputs.planner_original, current=current)
+        if setup.current_activation_planner_bytes is not None:
+            _same(setup.current_activation_planner_bytes, inputs.planner_original, work,
+                "independently current setup planner")
         current()
         interval = setup_policy["issuedAtEpochNs"], setup_policy["expiresAtEpochNs"]
         launch_guard = worker_bootstrap.completion.primitives._launch_guard(interval,
@@ -226,12 +230,27 @@ def _proof_from_intent(selected_intent):
             _fail("recovery proof setup lacks genuine root-original admission")
         lifetime.attach(setup_material.live)
         lifetime.adopt(setup_material.live_window, setup_material.deadline_ns)
+        if setup.current_activation_planner_bytes is None:
+            if (setup_material.current_activation_planner_bytes is not None
+                    or setup_material.current_activation_planner is not None):
+                _fail("legacy proof policy cannot select a versioned current planner")
+        else:
+            _same(setup_material.current_activation_planner_bytes,
+                setup.current_activation_planner_bytes, work, "versioned setup current planner")
+            if type(setup_material.current_activation_planner) is not worker_bootstrap.release_bootstrap.planner_bootstrap._PlannerMaterial:
+                _fail("versioned proof setup lacks genuine current planner admission")
+        cm = setup_material.completion_material
+        plan._same(proof.enrollments.keys._spki_on_work(cm.evidence_root_public_key, work),
+            proof.enrollments.keys._spki_on_work(inputs.controls.root_public_key, work), work,
+            "independently selected original consume evidence root")
         for actual, expected, label in (
                 (setup_material.intent_bytes, selected_intent.intent_bytes, "intent"),
                 (setup_material.intent_enrollment_bytes, inputs.intent_policy.enrollment_bytes, "intent enrollment"),
                 (setup_material.proof_enrollment_bytes, policy.enrollment_bytes, "proof enrollment"),
                 (setup_material.completion_request_bytes, inputs.completion_originals[2], "completion request"),
-                (setup_material.state_receipt_bytes, inputs.completion_originals[3], "state receipt")):
+                (setup_material.state_receipt_bytes, inputs.completion_originals[3], "state receipt"),
+                (cm.authorization_bytes, inputs.controls.originals[0], "consume authorization"),
+                (cm.current_root_enrollment_bytes, inputs.controls.enrollment_bytes, "consume state enrollment")):
             _same(actual, expected, work, "setup exact " + label)
         for actual, expected, label in (
                 (setup_material.expected_proof_scope, scope, "proof scope"),
@@ -248,6 +267,15 @@ def _proof_from_intent(selected_intent):
         if type(issued) is not acquisition.issuer._IssuerPolicyMaterial:
             _fail("recovery proof setup lacks its independent original issuer policy")
         lifetime.attach(issued.live)
+        if setup.current_activation_planner_bytes is None:
+            if issued.current_activation_planner_bytes is not None or issued.current_activation_planner is not None:
+                _fail("legacy setup policy changed its original planner profile")
+        else:
+            _same(issued.current_activation_planner_bytes, setup.current_activation_planner_bytes,
+                work, "issuer original current planner")
+            _same(issued.current_activation_planner.bootstrap_bytes,
+                setup_material.current_activation_planner.bootstrap_bytes, work,
+                "genuine issuer and setup current context")
         plan._same(setup_material.launch, issued.proof_launch, work, "recovery proof root launch")
         lifetime.adopt(issued.live_window, issued.deadline_ns)
         if len(setup_material.release_custody_bytes) > setup_size:

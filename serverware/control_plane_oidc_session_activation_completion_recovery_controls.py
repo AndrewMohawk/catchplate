@@ -104,7 +104,7 @@ def _identity(value):
         if value.consume_authority is not None:
             _fail("completion controls invented a separate consume authority")
     else:
-        if (value.profile != "consume" or actor._purpose != "completion"
+        if (value.profile != "consume" or actor._purpose not in actors._CONSUME_SELECTION_PURPOSES
                 or type(value.consume_authority) is not consume_history._SelectedConsumeHistory):
             _fail("completion controls changed their separate consume purpose")
         consume_selection._require_selection(selection, owner=actor._owner,
@@ -234,7 +234,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
     consume_authority = None
     inherited_reservation = target.original_reservation_bytes
     if selected_consume is not None:
-        if phase != "consume" or actor._purpose != "completion":
+        if phase != "consume" or actor._purpose not in actors._CONSUME_SELECTION_PURPOSES:
             _fail("completion controls received consume history for another purpose")
         consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
         consume_authority = selected_consume.authority

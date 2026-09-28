@@ -68,6 +68,14 @@ allocations; the actual startup uses retained capacity when reserving packet,
 produced-bootstrap and transport space. Individual file caps are not additive
 allowances.
 
+The policy FD accepts the versioned 6 MiB upper bound; genuine admission still
+caps legacy v1 at 64 KiB. Public cold reads reserve eight footprints before
+each body, inherited intake preflights all sealed lengths before body one, and
+known retained graphs include the explicit current planner from policy v2.
+Request and packet caps subtract repeated policy-admission captures and reserve
+eight body footprints. The 64 MiB total, roles and eight-descriptor inventory
+are unchanged; larger otherwise valid originals can refuse before allocation.
+
 The runner invokes the actual startup once and requires exactly one successful
 `serve_once()` result, followed by normal close. There is no post-drop `exec`,
 new processing window, retry or second public request. Startup performs the

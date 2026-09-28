@@ -430,7 +430,11 @@ class _IssuerOwner:
             _fail("proof issuer cannot repeat or enlarge its independent packet acquisition")
         self._packet_spent = True
         available = bootstrap.MAX_ORIGINAL_BYTES - configured.input_bytes - configured.wire_reservation
-        maximum_packet = min(packets.packet.MAX_BYTES, (available - sum(map(len, originals))) // 8)
+        repeated_cold = bootstrap.issuer._cold_reservation_bytes(len(material.issuer_policy_bytes),
+            len(material.completion_bootstrap_bytes), len(material.proof_enrollment_bytes),
+            len(material.intent_enrollment_bytes))
+        maximum_packet = min(packets.packet.MAX_BYTES,
+            (available - repeated_cold - 8 * sum(map(len, originals))) // 8)
         if maximum_packet < 2:
             _fail("proof issuer has no bounded packet-read capacity")
         completion, packet_digest, pending, _reader_configuration = configured.packet_scope
@@ -646,7 +650,9 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
                 for descriptor, maximum, private in descriptions)
             sizes = production._callback(work, lambda: tuple(os.fstat(descriptor).st_size
                 for descriptor, _maximum, _private in descriptions))
-            if delivered + sum(sizes) + 8 * sizes[3] + _WIRE_RESERVATION >= bootstrap.MAX_ORIGINAL_BYTES:
+            admission_reservation = (bootstrap.issuer._cold_reservation_bytes(*sizes[2:6])
+                + 4 * (sizes[0] + sizes[1] + sizes[6]))
+            if delivered + sum(sizes) + admission_reservation + _WIRE_RESERVATION >= bootstrap.MAX_ORIGINAL_BYTES:
                 _fail("proof issuer cold originals leave no bounded decoded inventory")
             raws = []
             for descriptor, maximum, _private, identity in sealed[:-1]:
@@ -687,8 +693,10 @@ def initialize_from_environment(*, work, live_window, transport_deadline_ns, del
             wire_reservation = _WIRE_RESERVATION
             if material.grant_delivery_endpoint is not None:
                 wire_reservation += _GRANT_WIRE_RESERVATION
+            repeated_cold = bootstrap.issuer._cold_reservation_bytes(len(policy_raw), len(completion_raw),
+                len(proof_raw), len(intent_raw))
             maximum_request = min(transport.MAX_REQUEST_BYTES,
-                bootstrap.MAX_ORIGINAL_BYTES - held_bytes - wire_reservation - 16)
+                (bootstrap.MAX_ORIGINAL_BYTES - held_bytes - wire_reservation - repeated_cold - 16) // 8)
             if maximum_request < len(transport.PURPOSE) + 6:
                 _fail("proof issuer decoded originals leave no bounded request")
             key = delivery._key_on_work(material, root, work, current=resource_current)

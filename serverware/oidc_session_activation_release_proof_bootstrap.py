@@ -34,6 +34,8 @@ LISTENER_PATH = "/run/serverware/oidc-session-activation-token-release/proof.soc
 LISTENER_NAME = "serverware-oidc-session-activation-release-proof"
 SCHEMA = "serverware.signedOidcSessionActivationReleaseProofBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseProofBootstrap/v1"
+V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseProofBootstrap/v2"
+V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseProofBootstrap/v2"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationReleaseProofLaunch/v1"
 PURPOSE = "launch-oidc-session-activation-release-proof"
 MAX_BYTES = MAX_BOOTSTRAP_BYTES = 48 * 1024 * 1024
@@ -46,6 +48,8 @@ _ORIGINAL_LIMITS = (("completionBootstrap", completion.MAX_BYTES),
     ("releaseCustody", release_bootstrap.MAX_BYTES), ("intent", intent.MAX_BYTES),
     ("intentEnrollment", intent_enrollments.MAX_BYTES),
     ("completionRequest", records.MAX_REQUEST_BYTES), ("stateReceipt", records.MAX_RECEIPT_BYTES))
+_V2_ORIGINAL_LIMITS = (*_ORIGINAL_LIMITS,
+    ("currentActivationPlanner", release_bootstrap.planner_bootstrap.MAX_BYTES))
 _FD_FIELDS = (("rootPublicKeyFd", ROOT_FD), ("bootstrapFd", BOOTSTRAP_FD),
     ("listenerFd", LISTENER_FD), ("signingKeyFd", KEY_FD),
     ("executionBundleKeyFd", EXECUTION_BUNDLE_KEY_FD),
@@ -57,6 +61,7 @@ _LAUNCH_FIELDS = frozenset({"schema", "role", "processMode", "serviceUid", "serv
 _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "purpose", "role", "trustMode",
     *(name for name, _ in _ORIGINAL_LIMITS), "proofScope", "expectedRelease", "callerId",
     "issuedAtEpochNs", "expiresAtEpochNs", "launch"})
+_V2_PAYLOAD_FIELDS = _PAYLOAD_FIELDS | {"currentActivationPlanner"}
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 
 
@@ -91,6 +96,8 @@ class _ProofMaterial:
     live_window: tuple
     deadline_ns: int
     live: object
+    current_activation_planner_bytes: bytes | None = None
+    current_activation_planner: object = None
 
 
 class _Capture(capture._JSONCapture):
@@ -142,11 +149,12 @@ def _launch_shape(value, work):
 
 
 def _payload_shape(payload, work):
-    shape._object(payload, _PAYLOAD_FIELDS, "release proof bootstrap")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    bridged = type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA
+    shape._object(payload, _V2_PAYLOAD_FIELDS if bridged else _PAYLOAD_FIELDS, "release proof bootstrap")
+    for name, expected in (("schema", V2_PAYLOAD_SCHEMA if bridged else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("role", ROLE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
-    for name, maximum in _ORIGINAL_LIMITS:
+    for name, maximum in (_V2_ORIGINAL_LIMITS if bridged else _ORIGINAL_LIMITS):
         record = payload[name]
         shape._object(record, _ORIGINAL_FIELDS, "proof root original")
         shape._integer(record["byteCount"], maximum, minimum=2)
@@ -164,6 +172,7 @@ def _payload_shape(payload, work):
         shape._digest(value)
     authorization._interval(payload, completion.MAX_RECEIPT_AGE_NS)
     _launch_shape(payload["launch"], work)
+    return bridged
 
 
 def _unique_keys(values, work):
@@ -178,9 +187,68 @@ def _unique_keys(values, work):
     return tuple(result)
 
 
+def _current_activation_on_work(original, *, completion_material, root_public_key,
+        live_window, transport_deadline_ns, work, _current=None):
+    """Same-call current-root template join after genuine completion admission.
+
+    Only source callers pass their freshly derived completion material. This
+    does not admit an incoming successful result or revive an activation launch.
+    """
+    cm, root = completion_material, root_public_key
+    planner = release_bootstrap.planner_bootstrap
+    if (type(cm) is not completion._CompletionMaterial
+            or type(cm.custody_material) is not completion.receiving._CustodyMaterial
+            or cm.custody_material.payload["schema"] != completion.receiving.BRIDGE_PAYLOAD_SCHEMA
+            or cm.custody_material.bridge_policy_interval is None
+            or cm.custody_material.history.consumer_role
+                != completion.receiving.history_bootstrap.BRIDGE_CONSUME_COMPLETION_CONSUMER_ROLE):
+        _fail("current proof context requires genuine completion custody v2/history v11")
+    raw = authorization._original(original, planner.MAX_BYTES, "proof current activation planner")
+    if 8 * len(raw) + 8 * authorization.MAX_ENROLLMENT_BYTES + 64 * 1024 > MAX_ORIGINAL_BYTES:
+        _fail("proof current context capture exceeds its original representation bound")
+    window = clock._validate(live_window)
+    shape._integer(transport_deadline_ns, minimum=1)
+    bound = min(transport_deadline_ns, window[4])
+    _window, current = delivery._window(window, bound, work)
+    current = delivery._join_current(current, _current, work)
+    current()
+    admitted = planner._verify_historical_on_work(bootstrap_bytes=raw, root_public_key=root,
+        live_window=window, transport_deadline_ns=bound, work=work,
+        _continuity=release_bootstrap._continuity(current, work))
+    current()
+    if type(admitted) is not planner._PlannerMaterial:
+        _fail("proof current configuration lacks genuine planner originals")
+    old = authorization._admit_enrollment_on_work(enrollment_bytes=cm.current_root_enrollment_bytes,
+        root_public_key=cm.evidence_root_public_key, work=work)
+    current()
+    new = authorization._admit_enrollment_on_work(enrollment_bytes=admitted.state_enrollment_bytes,
+        root_public_key=root, work=work)
+    current()
+    for actual, wanted in ((old.payload, new.payload),
+            (old.enrollment_digest, cm.enrollment_digest),
+            (new.enrollment_digest, admitted.state_enrollment_digest),
+            (admitted.generation["digest"], cm.generation_digest),
+            (new.payload["databaseId"], cm.database_id),
+            (admitted.delivery_key_digest, cm.custody_material.history.planner.delivery_key_digest)):
+        plan._same(actual, wanted, work, "proof current/evidence complete state and original delivery key")
+    current()
+    return admitted
+
+
 def _material(payload, original, root, window, bound, work, inherited, *, _current=None):
     # Bound the complete nested byte inventory before any base64 allocation.
-    if len(original) + sum(payload[name]["byteCount"] for name, _ in _ORIGINAL_LIMITS) > MAX_ORIGINAL_BYTES:
+    bridged = payload["schema"] == V2_PAYLOAD_SCHEMA
+    limits = _V2_ORIGINAL_LIMITS if bridged else _ORIGINAL_LIMITS
+    original_count = sum(payload[name]["byteCount"] for name, _ in limits)
+    reserved = len(original) + original_count
+    current_captures = 0
+    if bridged:
+        current_captures = (8 * payload["currentActivationPlanner"]["byteCount"]
+            + 8 * authorization.MAX_ENROLLMENT_BYTES + 64 * 1024)
+        # Nested decoded originals are no larger than their containing signed
+        # base64 wrappers. Reserve that extra inventory before opening body one.
+        reserved += original_count + current_captures
+    if reserved > MAX_ORIGINAL_BYTES:
         _fail("proof bootstrap and nested originals exceed 64 MiB")
     interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
     opening = window[1], window[0], window[2]
@@ -209,7 +277,7 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
 
     live()
     raw = tuple(completion.grammar._original(payload[name], maximum, work, live)
-        for name, maximum in _ORIGINAL_LIMITS)
+        for name, maximum in limits)
     cm = completion._verify_on_work(bootstrap_bytes=raw[0], root_public_key=root,
         live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     if type(cm) is not completion._CompletionMaterial:
@@ -218,6 +286,14 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
         guards.append(completion.primitives._launch_guard(material.attestation_interval,
             material.opening_sample, inherited, work))
     live()
+    current_planner = (_current_activation_on_work(raw[7], completion_material=cm,
+        root_public_key=root, live_window=window, transport_deadline_ns=bound, work=work,
+        _current=inherited) if bridged else None)
+    if bridged:
+        # Keep the genuine historical policy chain, not only its fresh outer
+        # interval. Its ancestor excludes this new aggregate guard.
+        guards.append(cm.custody_material.live)
+        live()
     rm = release_bootstrap._verify_on_work(custody_bytes=raw[2], root_public_key=root,
         live_window=window, transport_deadline_ns=bound, work=work, _current=_current)
     guards.append(release_bootstrap.planner_bootstrap._launch_guard(rm.attestation_interval,
@@ -226,20 +302,29 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
     nested = (cm.custody_bytes, cm.planner_bootstrap_bytes, cm.planner_history_custody_bytes,
         cm.receiving_history_custody_bytes, cm.authorization_bytes, cm.current_root_enrollment_bytes,
         cm.grant_enrollment_bytes, cm.authorization_enrollment_bytes, rm.planner.bootstrap_bytes)
-    if len(original) + sum(map(len, (*raw, *nested))) > MAX_ORIGINAL_BYTES:
+    if bridged:
+        nested += (current_planner.state_enrollment_bytes, current_planner.complete_root_vector_bytes)
+    if max(reserved, len(original) + sum(map(len, (*raw, *nested))) + current_captures) > MAX_ORIGINAL_BYTES:
         _fail("proof complete retained originals exceed 64 MiB")
     for actual in (cm.attestation_interval, rm.attestation_interval,
             cm.custody_material.attestation_interval, cm.custody_material.history.attestation_interval):
         if not actual[0] <= interval[0] < interval[1] <= actual[1]:
             _fail("proof launch escapes genuinely admitted current authority")
     scope, expected = payload["proofScope"], payload["expectedRelease"]
-    for actual, wanted in ((scope["configurationDigest"], cm.configuration_digest),
+    configured = current_planner if bridged else None
+    configuration_digest = configured.configuration_digest if bridged else cm.configuration_digest
+    generation_digest = configured.generation["digest"] if bridged else cm.generation_digest
+    runtime_digest = configured.runtime_closure_digest if bridged else cm.runtime_closure_digest
+    if bridged:
+        completion.receiving._same_bytes(rm.planner.bootstrap_bytes, raw[7], work,
+            "proof release custody differs from exact current activation planner")
+    for actual, wanted in ((scope["configurationDigest"], configuration_digest),
             (scope["databaseId"], cm.database_id), (scope["generationDigest"], cm.generation_digest),
-            (scope["runtimeClosureDigest"], cm.runtime_closure_digest),
+            (scope["runtimeClosureDigest"], runtime_digest),
             (scope["producerIdentity"], cm.receiver_identity), (scope["receiverIdentity"], rm.receiver_identity),
-            (rm.planner.configuration_digest, cm.configuration_digest),
-            (rm.planner.generation["digest"], cm.generation_digest),
-            (rm.planner.runtime_closure_digest, cm.runtime_closure_digest),
+            (rm.planner.configuration_digest, configuration_digest),
+            (rm.planner.generation["digest"], generation_digest),
+            (rm.planner.runtime_closure_digest, runtime_digest),
             (expected["activationRequestDigest"], rm.activation_request_digest),
             (expected["activationOperationId"], rm.activation_operation_id),
             (expected["consumeRequestDigest"], rm.consume_request_digest),
@@ -248,13 +333,31 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
             (expected["deliveryScope"], rm.delivery_scope),
             (expected["consumeBinding"]["packetDigest"], cm.packet_digest)):
         plan._same(actual, wanted, work, "proof independent root cohort/target")
-    completion.receiving._same_bytes(rm.planner.state_enrollment_bytes,
-        cm.current_root_enrollment_bytes, work, "proof original state enrollment differs")
+    if not bridged:
+        completion.receiving._same_bytes(rm.planner.state_enrollment_bytes,
+            cm.current_root_enrollment_bytes, work, "proof original state enrollment differs")
+    evidence_root = cm.evidence_root_public_key if bridged else root
     state = authorization._admit_enrollment_on_work(enrollment_bytes=cm.current_root_enrollment_bytes,
-        root_public_key=root, work=work)
+        root_public_key=evidence_root, work=work)
     live()
     base = _unique_keys((rm.planner.planner_public_key, state.computation_public_key,
         state.completion_public_key, state.state_public_key), work)
+    caller = grant = None
+    if bridged:
+        caller = completion.caller._admit_enrollment_on_work(
+            authorization_enrollment_bytes=cm.authorization_enrollment_bytes,
+            current_root_enrollment_bytes=cm.current_root_enrollment_bytes,
+            grant_enrollment_bytes=cm.grant_enrollment_bytes, root_public_key=evidence_root,
+            configuration_digest=cm.configuration_digest, planner_public_key=cm.planner_public_key,
+            operation_public_key=cm.operation_public_key, work=work)
+        grant = completion.grants._admit_enrollment_on_work(grant_enrollment_bytes=cm.grant_enrollment_bytes,
+            current_root_enrollment_bytes=cm.current_root_enrollment_bytes, root_public_key=evidence_root, work=work)
+        live()
+        base = _unique_keys((*base, root, evidence_root,
+            cm.custody_material.history.historical_root_public_key,
+            cm.custody_material.history.planner.planner_public_key,
+            cm.planner_public_key, cm.operation_public_key, caller.caller_public_key,
+            grant.authorizer_public_key), work)
     intent_scope = {name: scope[name] for name in ("configurationDigest", "databaseId",
         "generationDigest", "runtimeClosureDigest", "receiverIdentity")}
     intent_scope["callerId"] = payload["callerId"]
@@ -272,14 +375,15 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
     intent_interval = envelope["payload"]["issuedAtEpochNs"], envelope["payload"]["expiresAtEpochNs"]
     if not intent_interval[0] <= interval[0] < interval[1] <= intent_interval[1]:
         _fail("proof launch escapes its exact original intent")
-    caller = completion.caller._admit_enrollment_on_work(
-        authorization_enrollment_bytes=cm.authorization_enrollment_bytes,
-        current_root_enrollment_bytes=cm.current_root_enrollment_bytes,
-        grant_enrollment_bytes=cm.grant_enrollment_bytes, root_public_key=root,
-        configuration_digest=cm.configuration_digest, planner_public_key=cm.planner_public_key,
-        operation_public_key=cm.operation_public_key, work=work)
-    grant = completion.grants._admit_enrollment_on_work(grant_enrollment_bytes=cm.grant_enrollment_bytes,
-        current_root_enrollment_bytes=cm.current_root_enrollment_bytes, root_public_key=root, work=work)
+    if not bridged:
+        caller = completion.caller._admit_enrollment_on_work(
+            authorization_enrollment_bytes=cm.authorization_enrollment_bytes,
+            current_root_enrollment_bytes=cm.current_root_enrollment_bytes,
+            grant_enrollment_bytes=cm.grant_enrollment_bytes, root_public_key=evidence_root,
+            configuration_digest=cm.configuration_digest, planner_public_key=cm.planner_public_key,
+            operation_public_key=cm.operation_public_key, work=work)
+        grant = completion.grants._admit_enrollment_on_work(grant_enrollment_bytes=cm.grant_enrollment_bytes,
+            current_root_enrollment_bytes=cm.current_root_enrollment_bytes, root_public_key=evidence_root, work=work)
     live()
     forbidden = _unique_keys((*base, enrolled_intent.caller_public_key, cm.planner_public_key,
         cm.operation_public_key, caller.caller_public_key, grant.authorizer_public_key,
@@ -289,18 +393,24 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
     live()
     proof_pin = enrolled.payload["proofKey"]["spkiDigest"]
     completion._configured_keys(cm.configuration_payload, proof_pin, proof_pin, work)
+    if bridged:
+        intent_pin = enrolled_intent.payload["callerKey"]["spkiDigest"]
+        for context in (current_planner.configuration_payload,
+                cm.custody_material.history.planner.configuration_payload, cm.configuration_payload):
+            completion._configured_keys(context, intent_pin, proof_pin, work)
     policy = cm.custody_material.planner.payload
     _created, delivery_expiry = release_bootstrap._scope(expected["deliveryScope"], work)
     narrow(min(interval[1], delivery_expiry),
-        min(policy["maximumPlanAgeNs"], enrolled.payload["maximumAgeNs"],
+        min(policy["maximumPlanAgeNs"], current_planner.maximum_plan_age_ns if bridged else policy["maximumPlanAgeNs"], enrolled.payload["maximumAgeNs"],
             enrolled_intent.payload["maximumAgeNs"]),
-        min(policy["maximumClockSkewNs"], enrolled.payload["maximumClockSkewNs"],
+        min(policy["maximumClockSkewNs"], current_planner.maximum_clock_skew_ns if bridged else policy["maximumClockSkewNs"], enrolled.payload["maximumClockSkewNs"],
             enrolled_intent.payload["maximumClockSkewNs"]))
     if payload["launch"]["requestTimeoutSeconds"] * 1_000_000_000 > window[5]:
         _fail("proof socket timeout exceeds its original processing lifetime")
     result = _ProofMaterial(original, raw[0], cm, raw[1], enrolled.proof_public_key, proof_pin,
         scope, raw[2], raw[3], raw[4], raw[5], raw[6], expected, expected["consumeBinding"],
-        payload["callerId"], payload["launch"], interval, opening, window, bound, live)
+        payload["callerId"], payload["launch"], interval, opening, window, bound, live,
+        raw[7] if bridged else None, current_planner)
     live()
     return result
 
@@ -319,13 +429,16 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
     try:
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed release proof bootstrap")
-        shape._literal(envelope["schema"], SCHEMA)
+        schema = envelope["schema"]
+        if schema not in (SCHEMA, V2_SCHEMA):
+            _fail("release proof bootstrap has an unsupported signed schema")
         shape._base64url(envelope["signatureBase64Url"], signature=True)
         _canonical(original, envelope, work)
-        capability._signature(root, envelope["signatureBase64Url"], SCHEMA,
+        capability._signature(root, envelope["signatureBase64Url"], schema,
             _wire(envelope["payload"], work), capture._SharedLedger(work))
         inherited()
-        _payload_shape(envelope["payload"], work)
+        bridged = _payload_shape(envelope["payload"], work)
+        shape._literal(schema, V2_SCHEMA if bridged else SCHEMA)
         material = _material(envelope["payload"], original, root, window, bound, work, inherited,
             _current=_current)
         _canonical(original, envelope, work)
@@ -349,9 +462,10 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
     _window, inherited = delivery._window(window, bound, work)
     inherited = delivery._join_current(inherited, _current, work)
     inherited()
-    _payload_shape(owned, work)
+    bridged = _payload_shape(owned, work)
+    schema = V2_SCHEMA if bridged else SCHEMA
     unsigned = _wire(owned, work)
-    envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+    envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     # Reserve the full fixed-signature envelope, including its wrapper, in the
     # complete original inventory before opening nested originals.
     reserved_original = _wire(envelope, work)
@@ -364,7 +478,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
         _fail("signed proof bootstrap exceeds output bounds")
     work.charge(input_bytes=size + 2 * payload_size + production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=nodes + payload_nodes)
-    message = plan._ascii(plan._frame(SCHEMA, (unsigned,), work), work)
+    message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
     material.live()
     signature = production._sign_and_verify(private, root, message, work)
     material.live()

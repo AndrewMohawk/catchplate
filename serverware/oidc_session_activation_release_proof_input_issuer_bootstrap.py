@@ -216,7 +216,8 @@ def _originals(policy, completion, proof, intent):
 
 def _inventory(size, originals, work):
     total = size + sum(map(len, originals)) + MAX_KEY_BYTES
-    if total + 3 * len(originals[1]) > MAX_ORIGINAL_BYTES:
+    reserved = issuer._cold_reservation_bytes(*(len(raw) for raw in originals)) + 4 * (size + MAX_KEY_BYTES)
+    if reserved > MAX_ORIGINAL_BYTES:
         _fail("proof input issuer originals and decoded reservation exceed 64 MiB")
     work.charge(input_bytes=total)
 
@@ -267,6 +268,10 @@ def _material(payload, original, originals, root, lifetime, work):
         cm.receiving_history_custody_bytes, cm.authorization_bytes, cm.current_root_enrollment_bytes,
         cm.grant_enrollment_bytes, cm.authorization_enrollment_bytes,
         cm.custody_material.history.planner.bootstrap_bytes)
+    if policy.current_activation_planner_bytes is not None:
+        nested += (policy.current_activation_planner_bytes,
+            policy.current_activation_planner.state_enrollment_bytes,
+            policy.current_activation_planner.complete_root_vector_bytes)
     if MAX_BYTES + MAX_KEY_BYTES + sum(map(len, (*originals, *nested))) > MAX_ORIGINAL_BYTES:
         _fail("proof input issuer actual decoded originals exceed 64 MiB")
     endpoint = _delivery_endpoint(payload["launch"]["deliveryEndpoint"])

@@ -11,12 +11,22 @@ the private proof worker has completed its later proof request.
 
 `oidc_session_activation_release_proof_input_issuer_policy.py` admits the closed
 root-signed `serverware.signedOidcSessionActivationReleaseProofInputIssuerPolicy/v1`
-envelope. Its payload contains `schema`, `sourceRevision`, `purpose`, `trustMode`,
+envelope. Its legacy payload contains `schema`, `sourceRevision`, `purpose`, `trustMode`,
 `completionBootstrapDigest`, `proofEnrollmentDigest`, `intentEnrollmentDigest`,
 `proofScope`, `callerId`, `proofLaunch`, `issuedAtEpochNs`, and `expiresAtEpochNs`.
 Purpose is `issue-oidc-session-activation-release-proof-inputs`; trust mode is
 `trusted-host-local`. No posted target, packet hint or successful result object
 supplies authority.
+
+Explicit policy `/v2` adds only `currentActivationPlanner`, a closed
+`{base64Url, byteCount, bytesDigest}` original wrapper. Its independently
+R2-signed current template supplies new proof/intent configuration and keys;
+completion custody v2/history v11 still authenticates original R1 consume and
+R0 activation evidence. Genuine complete state-payload equality, database,
+generation and delivery-key equality are mandatory. This supports root or
+configuration changes, not state or delivery-key migration, and never renews
+the old activation launch or delivery expiry. The output is explicit proof
+bootstrap v2 with the exact same current original; legacy v1 is not relabeled.
 
 The completion identity frames the exact signed original using
 `serverware.oidcSessionActivationReleaseProofInputCompletionBootstrapIdentity/v1`.
@@ -31,7 +41,9 @@ state, consume and historical signing purposes.
 The full verifier takes `policy_bytes`, `completion_bootstrap_bytes`,
 `proof_enrollment_bytes`, `intent_enrollment_bytes`, `root_public_key`, and the
 mandatory original `live_window`, `transport_deadline_ns`, and `work`, with an
-optional restrictive two-clock `_continuity`. Its immutable 16-field material
+optional restrictive two-clock `_continuity`. Its immutable material appends
+`current_activation_planner_bytes` and `current_activation_planner` (both `None`
+for v1) to the original 16 fields. It
 is a same-call observation, not an accepted authority input. The root-only
 publisher receives these independent originals plus a closed payload and actual
 root private/public pair; it verifies the joins before signing and reads back
@@ -40,8 +52,10 @@ the signed output. It is not a public payload-signing endpoint.
 Policy admission preserves the original clock samples and cumulative ledger.
 The fresh policy interval must fit all admitted completion/custody intervals;
 enrollment limits and launch timeout may only narrow it. Policy bytes are capped
-at 64 KiB; nested originals remain within the complete 64 MiB bound, not the sum
-of individual contract maxima.
+at 64 KiB for v1 and 6 MiB for v2. Eight actual cold-original footprints plus
+128 KiB are reserved before nested decoding, inside the same complete 64 MiB
+bound, not the sum of individual contract maxima. Actual root file delivery,
+worker intake, request/packet sizing and output admission preserve that bound.
 
 ## Public request and private packet boundary
 
@@ -85,7 +99,8 @@ matches the returned identity to the staged original before normal close.
 
 Receiving independently authenticates the policy and all four signed originals,
 compares exact completion/enrollment bytes, scope, caller, signer and resource
-launch, and retains the same work/window. Its seven-field result remains
+launch, and for v2 the exact independently pinned current planner original.
+It rejects a version mismatch and retains the same work/window. Its seven-field result remains
 same-call data. It has neither the private packet nor old-token possession and
 does not claim to rederive those facts. Conservative decoded-original capacity
 reservations tighten the wire ceiling before admission.

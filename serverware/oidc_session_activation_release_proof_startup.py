@@ -259,16 +259,35 @@ class _ProofOwner:
         sequence, head, fence = completion.current_pending
         extra = {}
         reserved = 0
-        if configured.delivery_retained_bytes is not None:
+        bridged = completion.custody_material.bridge_policy_interval is not None
+        bounded_packet = configured.delivery_retained_bytes is not None or bridged
+        packet_copies = 3
+        if bounded_packet:
             reserved = (configured.retained_bytes + transport.MAX_REQUEST_BYTES + transport.REQUEST_HEADER_BYTES
                 + transport.MAX_RESPONSE_BYTES + transport.RESPONSE_HEADER_BYTES + 2 * producer.MAX_GRAPH_BYTES)
-            maximum_packet = min(packets.packet.MAX_BYTES, (bootstrap.MAX_ORIGINAL_BYTES - reserved) // 3)
+            if bridged:
+                producer_originals = (material.completion_request_bytes, material.state_receipt_bytes,
+                    completion.authorization_bytes, completion.authorization_enrollment_bytes,
+                    completion.grant_enrollment_bytes, completion.current_root_enrollment_bytes,
+                    material.release_custody_bytes, material.intent_bytes,
+                    material.intent_enrollment_bytes, material.proof_enrollment_bytes, old_token)
+                reserved += (8 * sum(map(len, producer_originals)) + 4 * producer.MAX_GRAPH_BYTES
+                    + producer.contract.MAX_BYTES
+                    + 8 * len(configured.historical_configuration.historical_configuration.custody_bytes)
+                    + 4 * len(completion.current_root_enrollment_bytes) + 64 * 1024)
+                # Retain the reader's three copies as well as all eight new
+                # producer captures before the first selected packet body.
+                packet_copies += 8
+            maximum_packet = min(packets.packet.MAX_BYTES,
+                (bootstrap.MAX_ORIGINAL_BYTES - reserved) // packet_copies)
             if maximum_packet < 2:
                 _fail("release proof dynamic originals leave no packet-read capacity")
+            extra = {"maximum_packet_bytes": maximum_packet}
+        if configured.delivery_retained_bytes is not None:
             # This exact original delivery guard permits only the real reader
             # to own its transient DB descriptors. Full worker inventory is
             # checked immediately before and after the genuine read.
-            extra = {"_current": configured.delivery_current, "maximum_packet_bytes": maximum_packet}
+            extra["_current"] = configured.delivery_current
         packet = packets.SuccessorExecutionRecoveryReader.read(configured.packet_reader,
             pending_decision_digest=head, packet_digest=completion.packet_digest,
             live_window=self._window, transport_deadline_ns=self._bound, work=work, **extra)
@@ -277,8 +296,8 @@ class _ProofOwner:
                 or len(packet) + len(material.bootstrap_bytes) + len(old_token)
                     + transport.MAX_RESPONSE_BYTES > bootstrap.MAX_ORIGINAL_BYTES):
             _fail("release proof retained originals and reserved response exceed 64 MiB")
-        if configured.delivery_retained_bytes is not None and reserved + 3 * len(packet) > bootstrap.MAX_ORIGINAL_BYTES:
-            _fail("release proof dynamic packet exceeds its complete reserved inventory")
+        if bounded_packet and reserved + packet_copies * len(packet) > bootstrap.MAX_ORIGINAL_BYTES:
+            _fail("release proof packet exceeds its complete reserved inventory")
         proof = producer._produce_on_work(packet_bytes=packet,
             completion_request_bytes=material.completion_request_bytes,
             state_receipt_bytes=material.state_receipt_bytes,
@@ -482,10 +501,11 @@ def _initialize(*, work, live_window, transport_deadline_ns, delivery_current, r
             current()
             if type(material) is not bootstrap._ProofMaterial:
                 _fail("release proof cold originals did not yield actual same-call material")
-            if retained_bytes is not None:
+            if (retained_bytes is not None
+                    or material.completion_material.custody_material.bridge_policy_interval is not None):
                 from serverware import oidc_session_activation_release_proof_dynamic_entrypoint as dynamic
 
-                retained_total = (retained_bytes + len(root_raw) + len(bootstrap_raw)
+                retained_total = ((0 if retained_bytes is None else retained_bytes) + len(root_raw) + len(bootstrap_raw)
                     + 2 * dynamic._material_bytes_on_work(material, work, current))
                 if retained_total + transport.MAX_RESPONSE_BYTES + 2 * producer.MAX_GRAPH_BYTES >= bootstrap.MAX_ORIGINAL_BYTES:
                     _fail("release proof dynamic reread and private custody exhaust retained capacity")
@@ -527,7 +547,7 @@ def _initialize(*, work, live_window, transport_deadline_ns, delivery_current, r
             del execution_key, historical_key, delivery_key
             current()
             historical.OidcSessionActivationDeliveryCompletionCustody.bind_context_on_work(
-                historical_owner, root_public_key=root,
+                historical_owner, root_public_key=completion.evidence_root_public_key,
                 current_root_enrollment_bytes=completion.current_root_enrollment_bytes, work=work)
             window, bound = historical.OidcSessionActivationDeliveryCompletionCustody.processing_bounds_on_work(
                 historical_owner, live_window=window, transport_deadline_ns=bound, work=work)

@@ -12,6 +12,7 @@ from serverware import authority_oidc_session_activation_release_committed as co
 from serverware import authority_oidc_session_activation_release_intent as intent
 from serverware import authority_oidc_session_activation_release_proof as verification
 from serverware import authority_successor_execution_window as processing
+from serverware import oidc_session_activation_consume_input_issuer_policy as bridge_policy
 from serverware import oidc_session_activation_release_custody_bootstrap as bootstrap
 from serverware import oidc_session_activation_release_proof as contract
 from serverware import oidc_session_activation_release_proof_enrollment as enrollments
@@ -99,12 +100,24 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
         (intent_enrollment_bytes, intent.enrollments.MAX_BYTES, "release proof intent enrollment"),
         (proof_enrollment_bytes, enrollments.MAX_BYTES, "release proof signer enrollment")))
     old_token = delivery._token(old_token_bytes, work)
-    if sum(map(len, (*raw7, *extra, old_token))) + contract.MAX_BYTES > MAX_ORIGINAL_BYTES:
+    original_size = sum(map(len, (*raw7, *extra, old_token)))
+    if original_size + contract.MAX_BYTES > MAX_ORIGINAL_BYTES:
         _fail("release proof originals and reserved proof exceed the complete 64 MiB inventory")
     planner, operation_key, root = planner_public_key, operation_public_key, root_public_key
     owner, observer, caller_id = historical_custody, commit_reader, expected_caller_id
+    owner_type = custody.OidcSessionActivationDeliveryCompletionCustody
+    owner_configuration = owner_type._snapshot_configuration(owner)
+    bridged = owner_configuration.bridge_policy_interval is not None
+    evidence_root = owner_configuration.evidence_root_public_key if bridged else root
+    capture_reservation = 0
+    if bridged:
+        capture_reservation = 8 * original_size + 4 * MAX_GRAPH_BYTES + contract.MAX_BYTES
+        nested_capture = (8 * len(owner_configuration.historical_configuration.custody_bytes)
+            + 4 * len(raw7[6]) + 64 * 1024)
+        if capture_reservation + nested_capture > MAX_ORIGINAL_BYTES:
+            _fail("bridged proof captures exceed the unchanged original representation ceiling")
     authorization._token(caller_id)
-    for key in (planner, operation_key, root):
+    for key in (planner, operation_key, root, evidence_root):
         authorization._public(key)
     work.charge(input_bytes=sum(map(len, extra)))
     # One structural, callback-free pass owns ALL four mutable graphs. In
@@ -117,7 +130,7 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
     held = inputs._capture_on_work(packet_bytes=raw7[0], completion_request_bytes=raw7[1],
         state_receipt_bytes=raw7[2], expected_consume_binding=graphs["binding"],
         expected_release=graphs["release"], expectations=graphs["expectations"],
-        planner_public_key=planner, operation_public_key=operation_key, root_public_key=root,
+        planner_public_key=planner, operation_public_key=operation_key, root_public_key=evidence_root,
         authorization_bytes=raw7[3], authorization_enrollment_bytes=raw7[4],
         grant_enrollment_bytes=raw7[5], current_root_enrollment_bytes=raw7[6],
         configuration_digest=configuration_digest, expected_authorization_digest=expected_authorization_digest,
@@ -125,8 +138,6 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
         expected_pending_sequence=expected_pending_sequence, expected_pending_head_digest=expected_pending_head_digest,
         expected_fence=expected_fence, historical_custody=owner, commit_reader=observer,
         live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
-    owner_type = custody.OidcSessionActivationDeliveryCompletionCustody
-    owner_configuration = owner_type._snapshot_configuration(owner)
     window, bound = held.live_window, held.transport_deadline_ns
     _window, original_current = delivery._window(window, bound, work)
     guards = [original_current]
@@ -181,6 +192,15 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
         continue_owner()
         return last_epoch
 
+    def parent_current():
+        # A descendant history guard must never call the aggregate that owns it.
+        continue_owner()
+        identities()
+        now = original_current()
+        identities()
+        continue_owner()
+        return max(now, last_epoch)
+
     def narrow(expiry, age, skew):
         nonlocal window, bound
         window = processing._narrow(window, deadline_epoch_ns=expiry,
@@ -193,7 +213,11 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
     current()
     owner_type.require_completion_on_work(owner, work=work)
     current()
-    owner_type.bind_context_on_work(owner, root_public_key=root,
+    if bridged:
+        plan._same(keys._spki_on_work(root, work),
+            keys._spki_on_work(owner_configuration.root_public_key, work), work,
+            "proof current signing root differs from fresh completion authority")
+    owner_type.bind_context_on_work(owner, root_public_key=evidence_root,
         current_root_enrollment_bytes=held.current_root_enrollment_bytes, work=work)
     current()
     window, bound = owner_type.processing_bounds_on_work(owner,
@@ -203,6 +227,21 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
         transport_deadline_ns=bound, work=work)
     guards.append(owner_live)
     current()
+    historical_context = None
+    if bridged:
+        historical_context = custody.history.OidcSessionActivationHistoryCustody._completion_context_on_work(
+            owner_configuration.historical, root_public_key=evidence_root,
+            current_root_enrollment_bytes=held.current_root_enrollment_bytes,
+            configuration_digest=held.configuration_digest, live_window=window,
+            transport_deadline_ns=bound, work=work, _current=parent_current,
+            _additional_original_bytes=capture_reservation)
+        if (type(historical_context) is not custody.history._ConsumeContext
+                or historical_context.bridge_policy_bytes is None):
+            _fail("bridged proof needs actual completion-purpose original history")
+        narrow(historical_context.window[3], historical_context.window[5], historical_context.window[6])
+        bound = min(bound, historical_context.deadline_ns)
+        guards.append(historical_context.live)
+        current()
     _bytes_equal(custody.neutral._identity(proof_scope["producerIdentity"], work),
         owner_configuration.receiver_identity_bytes, work, "release proof actual producer identity")
     current()
@@ -213,19 +252,35 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
         material.opening_sample, original_current, work))
     narrow(material.attestation_interval[1], material.planner.maximum_plan_age_ns,
         material.planner.maximum_clock_skew_ns)
-    _bytes_equal(material.planner.state_enrollment_bytes, held.current_root_enrollment_bytes,
-        work, "release proof original planner/current-root enrollment")
+    if not bridged:
+        _bytes_equal(material.planner.state_enrollment_bytes, held.current_root_enrollment_bytes,
+            work, "release proof original planner/current-root enrollment")
     current()
     state = authorization._admit_enrollment_on_work(enrollment_bytes=held.current_root_enrollment_bytes,
-        root_public_key=root, work=work)
+        root_public_key=evidence_root, work=work)
     current()
+    current_state = state
+    if bridged:
+        current_state = authorization._admit_enrollment_on_work(
+            enrollment_bytes=material.planner.state_enrollment_bytes, root_public_key=root, work=work)
+        current()
+        plan._same(state.payload, current_state.payload, work,
+            "proof current/evidence complete state payload compatibility")
+        signed_bridge = bridge_policy._read(historical_context.bridge_policy_bytes, work)
+        if signed_bridge["payload"]["schema"] != bridge_policy.V2_PAYLOAD_SCHEMA:
+            _fail("proof original completion history lacks its exact signed bridge profile")
+        plan._same(material.delivery_key_digest, signed_bridge["payload"]["history"]["deliveryKeyDigest"],
+            work, "proof current custody must retain the original activation delivery key")
+        current()
     for actual, expected, label in (
-            (state.enrollment_digest, material.planner.state_enrollment_digest, "state enrollment identity"),
-            (material.planner.configuration_digest, held.configuration_digest, "configuration"),
+            (current_state.enrollment_digest, material.planner.state_enrollment_digest, "state enrollment identity"),
+            (material.planner.configuration_digest,
+                proof_scope["configurationDigest"] if bridged else held.configuration_digest, "configuration"),
             (material.planner.generation["digest"], held.expected_generation_digest, "planner generation"),
             (state.payload["generationDigest"], held.expected_generation_digest, "state generation"),
             (state.payload["databaseId"], held.expected_database_id, "database"),
-            (proof_scope["configurationDigest"], held.configuration_digest, "proof configuration"),
+            (proof_scope["configurationDigest"],
+                material.planner.configuration_digest if bridged else held.configuration_digest, "proof configuration"),
             (proof_scope["databaseId"], held.expected_database_id, "proof database"),
             (proof_scope["generationDigest"], held.expected_generation_digest, "proof generation"),
             (proof_scope["runtimeClosureDigest"], material.planner.runtime_closure_digest, "runtime closure"),
@@ -246,6 +301,21 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
         "receiverIdentity": material.receiver_identity}
     base_keys = (material.planner.planner_public_key, state.computation_public_key,
         state.completion_public_key, state.state_public_key)
+    if bridged:
+        evidence_caller = inputs.caller._admit_enrollment_on_work(
+            authorization_enrollment_bytes=held.authorization_enrollment_bytes,
+            current_root_enrollment_bytes=held.current_root_enrollment_bytes,
+            grant_enrollment_bytes=held.grant_enrollment_bytes, root_public_key=evidence_root,
+            configuration_digest=held.configuration_digest, planner_public_key=planner,
+            operation_public_key=operation_key, work=work)
+        evidence_grant = inputs.enrollments._admit_enrollment_on_work(
+            grant_enrollment_bytes=held.grant_enrollment_bytes,
+            current_root_enrollment_bytes=held.current_root_enrollment_bytes,
+            root_public_key=evidence_root, work=work)
+        current()
+        base_keys = _unique_keys((*base_keys, root, evidence_root, planner, operation_key,
+            historical_context.root_public_key, historical_context.planner_public_key,
+            evidence_caller.caller_public_key, evidence_grant.authorizer_public_key), work)
     admitted_intent = intent._verify_on_work(intent_bytes=extra[1], enrollment_bytes=extra[2],
         root_public_key=root, forbidden_public_keys=base_keys, expected_scope=intent_scope,
         expected_release=held.expected_release, old_token_bytes=old_token,
@@ -280,7 +350,7 @@ def _produce_on_work(*, packet_bytes, completion_request_bytes, state_receipt_by
         completion_request_bytes=held.completion_request_bytes, state_receipt_bytes=held.state_receipt_bytes,
         expected_consume_binding=held.expected_consume_binding, expected_release=held.expected_release,
         expectations=held.expectations, planner_public_key=planner, operation_public_key=operation_key,
-        root_public_key=root, authorization_bytes=held.authorization_bytes,
+        root_public_key=evidence_root, authorization_bytes=held.authorization_bytes,
         authorization_enrollment_bytes=held.authorization_enrollment_bytes,
         grant_enrollment_bytes=held.grant_enrollment_bytes,
         current_root_enrollment_bytes=held.current_root_enrollment_bytes,

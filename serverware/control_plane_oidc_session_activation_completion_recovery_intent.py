@@ -52,10 +52,22 @@ def _additional_original_bytes(owner):
         _fail("release preparation lacks its independent cold configuration")
     originals = (policy.enrollment_bytes, policy.expected_scope_bytes,
         proof.enrollment_bytes, proof.expected_scope_bytes)
-    if setup is not None:
-        originals += (setup.issuer_policy_bytes,)
     if any(type(raw) is not bytes or not 2 <= len(raw) <= configured.MAX_BYTES for raw in originals):
         _fail("release preparation cold originals exceed their source bounds")
+    if setup is not None:
+        template = setup.current_activation_planner_bytes
+        maximum = (setup_configured.issuer.V1_MAX_BYTES if template is None
+            else setup_configured.issuer.V2_MAX_BYTES)
+        if type(setup.issuer_policy_bytes) is not bytes or not 2 <= len(setup.issuer_policy_bytes) <= maximum:
+            _fail("release preparation original setup policy exceeds its versioned bound")
+        originals += (setup.issuer_policy_bytes,)
+        if template is not None:
+            if (type(template) is not bytes
+                    or not 2 <= len(template) <= setup_configured.issuer.bootstrap.release_bootstrap.planner_bootstrap.MAX_BYTES):
+                _fail("release preparation current planner exceeds its original bound")
+            # Count this separately held original as well as its wrapped copy
+            # in the policy. The target carries the total forward only once.
+            originals += (template,)
     reserved = (FUTURE_REPRESENTATION_BYTES + 8 * sum(map(len, originals))
         + 8 * execution.startup.MAX_PRIVATE_KEY_BYTES + 8 * 4 * 32)
     if reserved >= MAX_ORIGINAL_BYTES:

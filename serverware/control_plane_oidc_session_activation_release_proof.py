@@ -55,6 +55,7 @@ def _prove_on_permission(permission):
         execution._fail("release proof setup requires actual cold acquisition configuration")
     setup_endpoint = setup_transport._endpoint(setup_policy.endpoint) if setup_policy is not None else None
     setup_original = setup_policy.issuer_policy_bytes if setup_policy is not None else None
+    setup_planner_original = setup_policy.current_activation_planner_bytes if setup_policy is not None else None
     response_pin = owner._response_pin
     planner_original = parent.activation_planning.planner_bootstrap_bytes
     intent_enrollment, intent_scope_original = intent_policy.enrollment_bytes, intent_policy.expected_scope_bytes
@@ -80,7 +81,8 @@ def _prove_on_permission(permission):
                 or parent.release_proof is not policy or parent.release_intent is not intent_policy
                 or parent.release_proof_acquisition is not setup_policy
                 or (setup_policy is not None and (setup_policy.endpoint != setup_endpoint
-                    or setup_policy.issuer_policy_bytes is not setup_original))
+                    or setup_policy.issuer_policy_bytes is not setup_original
+                    or setup_policy.current_activation_planner_bytes is not setup_planner_original))
                 or binding.runtime_root_public_key is not root or policy.endpoint != endpoint
                 or policy.expected_scope_bytes is not scope_original or policy.enrollment_bytes is not enrollment
                 or policy.forbidden_public_keys is not forbidden or policy.proof_public_key is not public_key
@@ -152,8 +154,19 @@ def _prove_on_permission(permission):
     setup_request, setup_budget = None, None
     if setup_policy is not None:
         current()
+        policy_reservation = 0
+        if setup_planner_original is not None:
+            planning._same_bytes(setup_planner_original, planner_original, work,
+                "release proof setup independently current planner")
+            # The versioned original embeds a planner. Reserve its decode and
+            # repeated policy captures before that first new body, not after.
+            policy_reservation = 8 * (len(setup_original) + len(setup_planner_original))
+            reserved += policy_reservation
+            if reserved >= planning.consume.MAX_ORIGINAL_BYTES:
+                execution._fail("versioned proof policy exceeds the original whole-call capacity")
         setup_payload = acquisition._policy_on_work(setup_original, release_intent=intent_policy,
-            release_proof=policy, root_public_key=root, work=work)
+            release_proof=policy, root_public_key=root, work=work,
+            activation_planner_bytes=planner_original, current=current)
         current()
         window, _bound = permission._planning_bounds
         interval = setup_payload["issuedAtEpochNs"], setup_payload["expiresAtEpochNs"]
@@ -164,8 +177,12 @@ def _prove_on_permission(permission):
             (setup_transport.PURPOSE, completed[2], completed[3], original), response=False)
         policy_size, _policy_nodes = work.measure(setup_payload)
         current()
-        reserved += (4 * len(setup_original) + 2 * policy_size + sum(map(len, setup_request))
-            + setup_transport.REQUEST_HEADER_BYTES + setup_transport.RESPONSE_HEADER_BYTES)
+        if setup_planner_original is None:
+            reserved += 4 * len(setup_original) + 2 * policy_size
+        elif 4 * len(setup_original) + 2 * policy_size + 8 * len(setup_planner_original) > policy_reservation:
+            execution._fail("versioned proof policy exceeds its pre-decoding capture reservation")
+        reserved += (sum(map(len, setup_request)) + setup_transport.REQUEST_HEADER_BYTES
+            + setup_transport.RESPONSE_HEADER_BYTES)
         # Reserve outer JSON, decoded originals and both independently admitted
         # nested material graphs before accepting any body. This conservative
         # fixed multiplier also covers simultaneous canonical readback copies.
@@ -202,6 +219,18 @@ def _prove_on_permission(permission):
             execution._fail("release proof setup lacks actual original bootstrap admission")
         guards.append(setup_material.live)
         current()
+        if setup_planner_original is None:
+            if (setup_material.current_activation_planner_bytes is not None
+                    or setup_material.current_activation_planner is not None):
+                execution._fail("legacy proof policy cannot select a versioned setup")
+        else:
+            planning._same_bytes(setup_material.current_activation_planner_bytes,
+                setup_planner_original, work, "release proof setup exact current planner")
+            if type(setup_material.current_activation_planner) is not worker_bootstrap.release_bootstrap.planner_bootstrap._PlannerMaterial:
+                execution._fail("versioned proof setup lacks genuine current planner admission")
+        plan._same(proof.enrollments.keys._spki_on_work(setup_material.completion_material.evidence_root_public_key, work),
+            proof.enrollments.keys._spki_on_work(root, work), work,
+            "ordinary release proof keeps its actual consume root")
         for actual, expected, label in (
                 (setup_material.intent_bytes, original, "intent"),
                 (setup_material.intent_enrollment_bytes, intent_enrollment, "intent enrollment"),
@@ -224,6 +253,15 @@ def _prove_on_permission(permission):
         if type(issued) is not acquisition.issuer._IssuerPolicyMaterial:
             execution._fail("release proof setup requires genuine independent issuer policy admission")
         guards.append(issued.live)
+        if setup_planner_original is None:
+            if issued.current_activation_planner_bytes is not None or issued.current_activation_planner is not None:
+                execution._fail("legacy proof issuer changed its planner profile")
+        else:
+            planning._same_bytes(issued.current_activation_planner_bytes,
+                setup_planner_original, work, "release proof issuer exact current planner")
+            planning._same_bytes(issued.current_activation_planner.bootstrap_bytes,
+                setup_material.current_activation_planner.bootstrap_bytes, work,
+                "release proof issuer and setup genuine current context")
         plan._same(setup_material.launch, issued.proof_launch, work, "release proof setup root launch")
         narrow(issued.live_window[3], issued.live_window[5], issued.live_window[6])
         window, bound = permission._planning_bounds

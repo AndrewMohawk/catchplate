@@ -105,7 +105,7 @@ def _prepare_on_owner(owner, *, request, recovery_bytes, live_window,
                 execution._fail("completion release preparation changed its original actor or work")
             active = _IntentProofAttempt(scope, selected)
             _ACTIVE = active
-            configuration_digest = completion._configuration_digest(scope)
+            configuration_digest = completion._configuration_digest(scope, selected=selected)
             pins = {"finalization_digest": selected.finalization_digest, "phase": "consume",
                 "authorization_digest": selected.authorization_digest,
                 "packet_digest": selected.packet_digest,

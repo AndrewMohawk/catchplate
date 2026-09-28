@@ -28,7 +28,7 @@ STAGING_PATH = "/run/serverware/oidc-session-activation-token-release/proof-boot
 STAGING_NAME = "serverware-oidc-session-activation-release-proof-bootstrap"
 PROOF_NAME = fixed.LISTENER_NAME
 STAGING_UID, STAGING_GID = 0, 65494
-MAX_ROOT_BYTES, MAX_POLICY_BYTES = 16 * 1024, 64 * 1024
+MAX_ROOT_BYTES, MAX_POLICY_BYTES = 16 * 1024, 6 * 1024 * 1024
 MAX_COMPLETION_BYTES, MAX_ENROLLMENT_BYTES = 32 * 1024 * 1024, 16 * 1024
 MAX_ORIGINAL_BYTES = 64 * 1024 * 1024
 PYTHON = "/runtime/python/bin/python3"
@@ -264,13 +264,23 @@ def _material_bytes_on_work(material, work, current):
         completion.planner_history_custody_bytes, completion.receiving_history_custody_bytes,
         completion.authorization_bytes, completion.current_root_enrollment_bytes,
         completion.grant_enrollment_bytes, completion.authorization_enrollment_bytes)
+    graphs = (material.expected_proof_scope, material.expected_release,
+        material.expected_consume_binding, material.launch, completion.receiver_identity,
+        completion.configuration_payload, completion.generation, completion.runtime_role_identities,
+        completion.expectations, completion.tls_files, completion.launch)
+    if material.current_activation_planner_bytes is not None:
+        planner = material.current_activation_planner
+        if type(planner) is not bootstrap.release_bootstrap.planner_bootstrap._PlannerMaterial:
+            raise RuntimeError("dynamic proof lost its genuine current planner template")
+        originals += (material.current_activation_planner_bytes, planner.bootstrap_bytes,
+            planner.state_enrollment_bytes, planner.complete_root_vector_bytes)
+        graphs += (planner.configuration_payload, planner.generation, planner.runtime_role_identities,
+            planner.planner_identity, planner.authn_policy, planner.trust_policy,
+            planner.tls_files, planner.launch)
     # Reserve the actual encoded originals again for their nested verifier
     # snapshots, detached scalar projections and canonical comparison buffers.
     total = 3 * sum(map(len, originals))
-    for graph in (material.expected_proof_scope, material.expected_release,
-            material.expected_consume_binding, material.launch, completion.receiver_identity,
-            completion.configuration_payload, completion.generation, completion.runtime_role_identities,
-            completion.expectations, completion.tls_files, completion.launch):
+    for graph in graphs:
         current()
         measured = bootstrap.completion.configuration._ConfigurationCapture(
             bootstrap.capture._SharedLedger(work), maximum_bytes=MAX_ORIGINAL_BYTES, retain=False)
@@ -294,10 +304,20 @@ def _policy_bytes_on_work(policy, work, current):
         completion.receiving_history_custody_bytes, completion.authorization_bytes,
         completion.current_root_enrollment_bytes, completion.grant_enrollment_bytes,
         completion.authorization_enrollment_bytes)
+    graphs = (policy.payload, policy.proof_scope, policy.proof_launch,
+        completion.receiver_identity, completion.configuration_payload, completion.generation,
+        completion.runtime_role_identities, completion.expectations, completion.tls_files, completion.launch)
+    if policy.current_activation_planner_bytes is not None:
+        planner = policy.current_activation_planner
+        if type(planner) is not issuer.bootstrap.release_bootstrap.planner_bootstrap._PlannerMaterial:
+            raise RuntimeError("dynamic proof policy lost its genuine current planner template")
+        originals += (policy.current_activation_planner_bytes, planner.bootstrap_bytes,
+            planner.state_enrollment_bytes, planner.complete_root_vector_bytes)
+        graphs += (planner.configuration_payload, planner.generation, planner.runtime_role_identities,
+            planner.planner_identity, planner.authn_policy, planner.trust_policy,
+            planner.tls_files, planner.launch)
     total = 3 * sum(map(len, originals))
-    for graph in (policy.payload, policy.proof_scope, policy.proof_launch,
-            completion.receiver_identity, completion.configuration_payload, completion.generation,
-            completion.runtime_role_identities, completion.expectations, completion.tls_files, completion.launch):
+    for graph in graphs:
         current()
         measured = issuer.completion.configuration._ConfigurationCapture(
             issuer.capture._SharedLedger(work), maximum_bytes=MAX_ORIGINAL_BYTES, retain=False)
@@ -360,6 +380,10 @@ def main():
         current()
         if not isinstance(root, Ed25519PublicKey):
             raise RuntimeError("dynamic proof runtime root must be Ed25519")
+        if (sum(map(len, public)) + issuer._cold_reservation_bytes(
+                len(policy_raw), len(completion_raw), len(proof_enrollment), len(intent_enrollment))
+                + transport.MAX_RESPONSE_BYTES >= MAX_ORIGINAL_BYTES):
+            raise RuntimeError("dynamic proof policy admission exceeds its original capacity")
         policy = issuer._verify_on_work(policy_bytes=policy_raw, completion_bootstrap_bytes=completion_raw,
             proof_enrollment_bytes=proof_enrollment, intent_enrollment_bytes=intent_enrollment,
             root_public_key=root, live_window=lifetime.window, transport_deadline_ns=lifetime.bound,

@@ -965,7 +965,8 @@ def _v14_material(payload, expected_digest, root_public_key, work):
     held_acquisition = acquisition._admit_on_work(
         release_proof_acquisition=payload["oidcSessionActivationReleaseProofAcquisition"],
         release_intent=material.release_intent, release_proof=material.release_proof,
-        runtime_root_public_key=root_public_key, work=work)
+        runtime_root_public_key=root_public_key, work=work,
+        activation_planning=material.activation_planning)
     return _EnrollmentMaterial(material.configuration_payload, material.generation,
         material.runtime_role_identities, material.configuration_digest,
         material.issuer_private_key_fd, material.issuer_policy, material.issuer_public_key,

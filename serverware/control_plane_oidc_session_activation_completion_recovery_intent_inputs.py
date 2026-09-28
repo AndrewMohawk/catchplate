@@ -215,30 +215,56 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
         state.shape._digest(reconciliation_digest)
     owner, work, target = actor._owner, actor._work, actor._target
     parent, binding, custody = owner._material, owner._binding, owner._custody
+    activation_authority = target.authority
+    consume_authority = selected.consume_authority
+    evidence_authority = activation_authority if consume_authority is None else consume_authority
     intent_policy, proof_policy, setup_policy = (parent.release_intent,
         parent.release_proof, parent.release_proof_acquisition)
     if (type(intent_policy) is not intent_configuration._ReleaseIntentMaterial
             or type(proof_policy) is not proof_configuration._ReleaseProofMaterial
             or (setup_policy is not None
                 and type(setup_policy) is not setup_configuration._ReleaseProofAcquisitionMaterial)
-            or parent.activation_planning is None or parent.activation_execution is None):
+            or parent.activation_planning is None
+            or type(parent.consume_execution) is not intent_configuration.consume._ConsumeExecutionMaterial
+            or type(activation_authority) is not controls_source.history.historical._SelectedActivationHistory
+            or (consume_authority is not None and type(consume_authority)
+                is not controls_source.consume_history._SelectedConsumeHistory)
+            or selected.authority is not activation_authority):
         _fail("release preparation lacks actual independent parent configuration")
-    policy, planner_policy = parent.activation_execution, parent.activation_planning
+    policy, planner_policy = activation_authority.activation_execution, parent.activation_planning
+    consume_policy, current_policy = evidence_authority.consume_execution, parent.consume_execution
+    if (type(policy) is not intent_configuration.activation._ActivationExecutionMaterial
+            or type(consume_policy) is not intent_configuration.consume._ConsumeExecutionMaterial):
+        _fail("release preparation lacks independently selected original execution policies")
     root, old = binding.runtime_root_public_key, actor._old_token
     if type(old) is not bytes or len(old) != intent.delivery.TOKEN_BYTES:
         _fail("release preparation lost original old-token possession")
     state._public(root)
     config, generation = parent.configuration_digest, parent.generation["digest"]
+    activation_config, activation_root = activation_authority.configuration_digest, activation_authority.root_public_key
+    consume_config, consume_root = evidence_authority.configuration_digest, evidence_authority.root_public_key
+    authority_interval = activation_authority.authority_interval
     finalization, activation_digest = selected.finalization_digest, target.activation_authorization_digest
     intent_scope_original, proof_scope_original = intent_policy.expected_scope_bytes, proof_policy.expected_scope_bytes
     planner_original = planner_policy.planner_bootstrap_bytes
     enrollments = (policy.authorization_enrollment_bytes,
         policy.current_root_enrollment_bytes, policy.grant_enrollment_bytes)
+    state_originals = (consume_policy.current_root_enrollment_bytes, current_policy.current_root_enrollment_bytes)
     # These are fixed source-selected attributes, not a generic graph walk.
     pins = ((owner, "_material", parent), (owner, "_binding", binding), (owner, "_custody", custody),
         (parent, "release_intent", intent_policy), (parent, "release_proof", proof_policy),
-        (parent, "release_proof_acquisition", setup_policy), (parent, "activation_execution", policy),
+        (parent, "release_proof_acquisition", setup_policy), (parent, "consume_execution", current_policy),
         (parent, "activation_planning", planner_policy), (binding, "runtime_root_public_key", root),
+        (target, "authority", activation_authority), (selected, "consume_authority", consume_authority),
+        (activation_authority, "activation_execution", policy),
+        (activation_authority, "root_public_key", activation_root),
+        (activation_authority, "configuration_digest", activation_config),
+        (activation_authority, "authority_interval", authority_interval),
+        (evidence_authority, "consume_execution", consume_policy),
+        (evidence_authority, "root_public_key", consume_root),
+        (evidence_authority, "configuration_digest", consume_config),
+        (consume_policy, "current_root_enrollment_bytes", state_originals[0]),
+        (current_policy, "current_root_enrollment_bytes", state_originals[1]),
         (planner_policy, "planner_bootstrap_bytes", planner_original),
         (intent_policy, "expected_scope_bytes", intent_scope_original),
         (proof_policy, "expected_scope_bytes", proof_scope_original),
@@ -247,7 +273,9 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
         *((intent_policy, name, getattr(intent_policy, name)) for name in
             ("enrollment_bytes", "enrollment_digest", "caller_public_key", "forbidden_public_keys")),
         *((proof_policy, name, getattr(proof_policy, name)) for name in
-            ("enrollment_bytes", "enrollment_digest", "proof_public_key", "forbidden_public_keys", "endpoint")))
+            ("enrollment_bytes", "enrollment_digest", "proof_public_key", "forbidden_public_keys", "endpoint")),
+        *((setup_policy, name, getattr(setup_policy, name)) for name in
+            ("issuer_policy_bytes", "current_activation_planner_bytes") if setup_policy is not None))
     future = actor._future_original_bytes
 
     def identity():
@@ -276,7 +304,7 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
     # Eight original footprints cover read/decode/canonical/signature capture;
     # all fixed projections are reserved before the second selected body read.
     lane_held = (8 * (len(selected.originals[3]) + len(intent_scope_original)
-        + len(proof_scope_original) + sum(map(len, enrollments))
+        + len(proof_scope_original) + sum(map(len, (*enrollments, *state_originals)))
         + records.attempts.MAX_RECORD_BYTES + records._MAX_HEADER_BYTES)
         + 4 * sum(map(len, response_originals)) + 4 * intent.MAX_BYTES + 2 * _METADATA_BYTES)
     allowance = 3 * ((INPUT_RESERVATION_BYTES - lane_held) // 8)
@@ -300,24 +328,47 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
         expected_original, caller.expectations_wire.MAX_BYTES, work), work=work)
     consumed_expected = consume.expectations_wire._capture_on_work(controls_source.history.planning._object(
         selected.originals[3], consume.expectations_wire.MAX_BYTES, work), work=work)
-    for graph, phase in ((expected, "activation"), (consumed_expected, "consume")):
+    for graph, phase, configured in ((expected, "activation", activation_config),
+            (consumed_expected, "consume", consume_config)):
         controls_source._target_arguments(graph, target, phase, work)
-        plan._same(graph["scope"]["configurationDigest"], config, work,
+        plan._same(graph["scope"]["configurationDigest"], configured, work,
             "release preparation original request configuration")
     scope = expected["scope"]
     lifetime.narrow(lifetime.window[3], min(policy.maximum_age_ns, scope["maximumPlanAgeNs"]),
         min(policy.maximum_clock_skew_ns, scope["maximumClockSkewNs"]))
     authenticated = caller._verify_historical_on_work(authorization_bytes=original,
         authorization_enrollment_bytes=enrollments[0], current_root_enrollment_bytes=enrollments[1],
-        grant_enrollment_bytes=enrollments[2], root_public_key=root, configuration_digest=config,
+        grant_enrollment_bytes=enrollments[2], root_public_key=activation_root, configuration_digest=activation_config,
         planner_public_key=policy.planner_public_key, operation_public_key=policy.operation_public_key,
         originals=(signed, cipher), expectations=expected, before_vector_bytes=before,
         live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work,
         _continuity=lifetime.continuity)
     plan._same(authenticated.authorization_digest, activation_digest, work,
         "release preparation genuinely retained activation caller")
+    if not (authority_interval[0] <= authenticated.issued_at_epoch_ns
+            < authenticated.expires_at_epoch_ns <= authority_interval[1]):
+        _fail("release preparation activation caller escapes its original authority interval")
     lifetime.narrow(lifetime.window[3], authenticated.maximum_age_ns, authenticated.maximum_clock_skew_ns)
     lifetime.attach(authenticated.live)
+    # Root rotation is not a state migration: authenticate all three originals
+    # under their independently selected roots, then compare COMPLETE payloads.
+    states = []
+    for original_state, selected_root in ((enrollments[1], activation_root),
+            (state_originals[0], consume_root), (state_originals[1], root)):
+        lifetime.current()
+        states.append(state._admit_enrollment_on_work(enrollment_bytes=original_state,
+            root_public_key=selected_root, work=work))
+        lifetime.current()
+    for original_state in states[:2]:
+        plan._same(original_state.payload, states[2].payload, work,
+            "release preparation unchanged complete state enrollment payload")
+    for actual, wanted in ((activation_authority.generation["digest"], generation),
+            (evidence_authority.generation["digest"], generation),
+            (states[2].payload["generationDigest"], generation),
+            (states[2].payload["databaseId"], selected.marker["database_id"])):
+        plan._same(actual, wanted, work, "release preparation exact original/current state cohort")
+    bookkeeping._same_bytes(selected.enrollment_bytes, state_originals[0], work,
+        "release preparation exact consume state enrollment original")
     activated, consumed = expected["request"], consumed_expected["request"]
     activation_arguments = activation._arguments(activated["arguments"], work)
     arguments = consumption._arguments(consumed["arguments"], work)

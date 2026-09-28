@@ -12,12 +12,24 @@ cannot replace that association.
 
 The helper reselects the original activation claim and prepared raw5 using the
 bounded fixed loader. It historically admits the activation caller, its original
-signed plan and opaque ciphertext commitments against the actual parent's root,
-planner/operation keys and enrollment originals. The eight activation/consume
+signed plan and opaque ciphertext commitments against the genuinely selected
+activation authority (R0), its planner/operation keys, enrollment originals and
+original interval. Independently selected consume authority (R1) supplies the
+consume configuration and retained completion controls. The eight activation/consume
 argument joins include the assertion digest, actual finalization subject,
 credential record and challenge. Existing genuine consume controls and the
 historical receiving guard retain the original signed marker, complete/ACK,
 pending tuple and after-vector bindings. No old interval is renewed.
+
+Fresh intent/proof configuration, signing and setup remain under the current
+parent root R2. The activation and consume expectations are compared to their
+own configuration digests, not relabeled as R2. Before producing a release
+projection, the helper genuinely re-admits all three state-enrollment originals
+under their respective roots and requires equality of their complete payloads,
+database and generation. This is root/configuration rotation, not state
+migration. The current intent/proof scope still comes from independent current
+parent admission; neither an old signature nor a successful consume receipt
+authorizes a fresh signing operation.
 
 Packet/effects, encrypted envelope and original dates from raw6 hints remain
 **expected data**, not proof of committed consumption or private outcome
@@ -65,4 +77,9 @@ root-signed authority: LIVE/checkpoint zero for `release`, or a fresh independen
 RECOVERY/checkpoint-one policy and grants for `retained-release`. These inputs
 select no profile or fallback and create no intent or proof on either read-only
 release path.
+The `.227` source join prepares a new intent only in the original global slot.
+An existing intent or proof signed under a retired, distinct authority is not
+migrated or replaced: current-enrollment re-admission fails closed, and a spent
+claim remains spent. Historical release/retained-release authority is still a
+separate implementation boundary.
 No runtime, resource provisioning or production-readiness evidence is claimed.

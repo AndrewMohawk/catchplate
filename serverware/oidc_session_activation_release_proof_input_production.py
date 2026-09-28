@@ -155,7 +155,9 @@ def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_by
     total = sum(map(len, (*request, policy_raw, completed_raw, proof_enrolled, intent_enrolled, packet_raw)))
     # Reserve decoded packet controls and nested cold originals before either
     # decoder allocates. Later exact output sizing can only tighten this bound.
-    if total + 3 * len(completed_raw) + 2 * len(packet_raw) > maximum:
+    input_reservation = (issuer._cold_reservation_bytes(len(policy_raw), len(completed_raw),
+        len(proof_enrolled), len(intent_enrolled)) + 8 * sum(map(len, request)) + 8 * len(packet_raw))
+    if input_reservation > maximum:
         _fail("proof setup input and decoded-original reservation exceeds 64 MiB")
     capture._SharedLedger(work)
     work.charge(input_bytes=total)
@@ -174,7 +176,9 @@ def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_by
     packet = packets._decode_on_work(packet_raw, expected_packet_digest=material.packet_digest,
         expected_pending_decision_digest=material.current_pending[1], work=work)
     current()
-    acknowledged, after = _completed(packet, request[0], request[1], material, root, current, work)
+    bridged = policy.current_activation_planner_bytes is not None
+    evidence_root = material.evidence_root_public_key if bridged else root
+    acknowledged, after = _completed(packet, request[0], request[1], material, evidence_root, current, work)
     release = _release(packet, material, acknowledged, after, work)
     current()
     signed_intent = intent._read(request[2], work)
@@ -199,14 +203,14 @@ def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_by
     if issued >= expires:
         _fail("proof setup output has no common original interval")
     lifetime.narrow(expires, enrollment["maximumAgeNs"], enrollment["maximumClockSkewNs"])
-    activation = material.custody_material.history.planner
+    activation = (policy.current_activation_planner if bridged else material.custody_material.history.planner)
     common = {"sourceRevision": authority.SOURCE_REVISION, "trustMode": "trusted-host-local",
         "issuedAtEpochNs": issued, "expiresAtEpochNs": expires}
     custody_payload = {**common, "schema": custody.PAYLOAD_SCHEMA, "consumerRole": custody.CONSUMER_ROLE,
         "processMode": custody.PROCESS_MODE, "serviceUid": custody.SERVICE_UID, "serviceGid": custody.SERVICE_GID,
         "receiverIdentity": policy.proof_scope["receiverIdentity"],
-        "configurationDigest": material.configuration_digest, "generationDigest": material.generation_digest,
-        "runtimeClosureDigest": material.runtime_closure_digest, "deliveryKeyDigest": activation.delivery_key_digest,
+        "configurationDigest": activation.configuration_digest, "generationDigest": activation.generation["digest"],
+        "runtimeClosureDigest": activation.runtime_closure_digest, "deliveryKeyDigest": activation.delivery_key_digest,
         "plannerBootstrap": _placeholder(len(activation.bootstrap_bytes)),
         **{name: release[name] for name in ("activationRequestDigest", "activationOperationId",
             "deliveryEnvelopeDigest", "deliveryScope", "consumeRequestDigest")},
@@ -215,26 +219,36 @@ def _derive_on_work(*, request_originals, consume_packet_bytes, issuer_policy_by
     custody_size, custody_nodes = _signed_size(custody_payload, custody.SCHEMA,
         (len(activation.bootstrap_bytes),), work)
     originals = (completed_raw, proof_enrolled, None, request[2], intent_enrolled, request[0], request[1])
+    limits = bootstrap._V2_ORIGINAL_LIMITS if bridged else bootstrap._ORIGINAL_LIMITS
+    proof_schema = bootstrap.V2_SCHEMA if bridged else bootstrap.SCHEMA
+    if bridged:
+        originals += (policy.current_activation_planner_bytes,)
     sizes = tuple(custody_size if raw is None else len(raw) for raw in originals)
-    proof_payload = {**common, "schema": bootstrap.PAYLOAD_SCHEMA, "purpose": bootstrap.PURPOSE,
+    proof_payload = {**common, "schema": bootstrap.V2_PAYLOAD_SCHEMA if bridged else bootstrap.PAYLOAD_SCHEMA,
+        "purpose": bootstrap.PURPOSE,
         "role": bootstrap.ROLE, "proofScope": policy.proof_scope, "expectedRelease": release,
         "callerId": policy.caller_id, "launch": policy.proof_launch,
-        **{name: _placeholder(size) for (name, _maximum), size in zip(bootstrap._ORIGINAL_LIMITS, sizes)}}
-    proof_size, proof_nodes = _signed_size(proof_payload, bootstrap.SCHEMA, sizes, work)
+        **{name: _placeholder(size) for (name, _maximum), size in zip(limits, sizes)}}
+    proof_size, proof_nodes = _signed_size(proof_payload, proof_schema, sizes, work)
     nested = (material.custody_bytes, material.planner_bootstrap_bytes, material.planner_history_custody_bytes,
         material.receiving_history_custody_bytes, material.authorization_bytes, material.current_root_enrollment_bytes,
         material.grant_enrollment_bytes, material.authorization_enrollment_bytes, activation.bootstrap_bytes,
         *packet.originals, packet.enrollment_bytes, packet.grant_enrollment_bytes, packet.grant_bytes,
         packet.reserve_request_bytes, packet.reserve_receipt_bytes, packet.snapshot_bytes,
         packet.authorization_enrollment_bytes, packet.authorization_bytes)
-    held = total + sum(map(len, nested)) + len(after)
+    held = max(input_reservation, total + sum(map(len, nested)) + 8 * len(after))
+    if bridged:
+        # The output verifier independently re-admits its current template and
+        # both state enrollments while the issuer's own policy is still held.
+        held += (8 * len(policy.current_activation_planner_bytes)
+            + 8 * authorization.MAX_ENROLLMENT_BYTES + 64 * 1024)
     if (custody_size > custody.MAX_BYTES or custody_nodes > custody.MAX_NODES
             or proof_size > bootstrap.MAX_BYTES or proof_nodes > bootstrap.MAX_NODES
             or held + 3 * (custody_size + proof_size) + sum(sizes) > maximum):
         _fail("proof setup exact wrapped output and readback reservation exceeds the source inventory")
     current()
     custody_payload["plannerBootstrap"] = bookkeeping._wrapped(activation.bootstrap_bytes, work, current)
-    for (name, _maximum), raw in zip(bootstrap._ORIGINAL_LIMITS, originals):
+    for (name, _maximum), raw in zip(limits, originals):
         if raw is not None:
             proof_payload[name] = bookkeeping._wrapped(raw, work, current)
     current()
@@ -279,6 +293,12 @@ def _produce_on_work(*, request_originals, consume_packet_bytes, issuer_policy_b
     _same_bytes(admitted.completion_bootstrap_bytes, policy.completion_bootstrap_bytes, work,
         "proof setup exact independent completion bootstrap")
     _same_bytes(admitted.release_custody_bytes, custody_raw, work, "proof setup exact signed custody")
+    if policy.current_activation_planner_bytes is None:
+        if admitted.current_activation_planner_bytes is not None:
+            _fail("legacy proof setup changed its original version")
+    else:
+        _same_bytes(admitted.current_activation_planner_bytes, policy.current_activation_planner_bytes,
+            work, "proof setup exact independently current activation planner")
     plan._same(admitted.expected_release, proof_payload["expectedRelease"], work, "proof setup derived release")
     lifetime.attach(admitted.live)
     lifetime.adopt(admitted.live_window, admitted.deadline_ns)

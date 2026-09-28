@@ -37,6 +37,9 @@ RETAINED_DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recove
 CONSUME_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryConsumeIntent/v1"
 CONSUME_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryConsumeOptions/v1"
 CONSUME_PATH = "/api/auth/session/activation/completion/recovery/consume"
+# These two purposes authenticate retained consume originals under independently
+# selected authority. Selection is evidence, not permission to release a token.
+_CONSUME_SELECTION_PURPOSES = frozenset({"completion", "release-intent-proof"})
 
 
 def _configuration(owner, profile):
@@ -90,24 +93,47 @@ def _selected_configuration(target, profile, current, selected_consume=None):
         selected.authorization_digest, selected.current_pending)
 
 
-def _require_current_effect_authority(owner, parent, target):
-    """History cannot silently authorize intent, proof or credential release.
-
-    Fresh consume has an explicit current-root bridge, purpose-specific workers
-    and independently selected original consume authority for later completion.
-    Other effect purposes still require genuine current-mode selection, not
-    coincident keys or matching fields. Completion-only history is no substitute
-    for their separate original-authority joins.
-    """
+def _current_effect_authority(owner, parent, target):
+    """Exact cold current selection, never coincident keys or matching fields."""
     selected = target.authority
-    if (type(selected) is not history.historical._SelectedActivationHistory
-            or selected.configuration_payload is not parent.configuration_payload
-            or selected.configuration_digest != parent.configuration_digest
-            or selected.root_public_key is not owner._binding.runtime_root_public_key
-            or any(getattr(selected, name) is not getattr(parent, name) for name in (
+    return (type(selected) is history.historical._SelectedActivationHistory
+            and selected.configuration_payload is parent.configuration_payload
+            and selected.configuration_digest == parent.configuration_digest
+            and selected.root_public_key is owner._binding.runtime_root_public_key
+            and all(getattr(selected, name) is getattr(parent, name) for name in (
                 "activation_execution", "activation_planning", "consume_execution",
-                "release_intent", "completion_recovery"))):
+                "release_intent", "completion_recovery")))
+
+
+def _require_current_effect_authority(owner, parent, target):
+    """Proof preparation history cannot authorize grant or credential release."""
+    if not _current_effect_authority(owner, parent, target):
         actor._deny("historical completion does not authorize a current effect continuation", 503)
+
+
+def _require_proof_effect_authority(owner, parent, target, selected_consume, work):
+    """Require the explicit current-root bridge before a historical ceremony.
+
+    This cold configuration check is not proof issuance. The actual input,
+    producer and receiver paths still authenticate all R0/R1/R2 originals and
+    preserve the original delivery key, state and expiry before any output.
+    """
+    from serverware import control_plane_oidc_session_activation_release_proof_acquisition_bootstrap as acquisition
+
+    consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
+    selected = selected_consume.authority
+    if (_current_effect_authority(owner, parent, target)
+            and selected.configuration_payload is parent.configuration_payload
+            and selected.root_public_key is owner._binding.runtime_root_public_key
+            and selected.consume_execution is parent.consume_execution
+            and selected.completion_recovery is parent.completion_recovery):
+        return
+    setup, planning = parent.release_proof_acquisition, parent.activation_planning
+    if (type(setup) is not acquisition._ReleaseProofAcquisitionMaterial
+            or planning is None or type(setup.current_activation_planner_bytes) is not bytes):
+        actor._deny("historical proof preparation requires its explicit current-root bridge", 503)
+    history.bookkeeping._same_bytes(setup.current_activation_planner_bytes,
+        planning.planner_bootstrap_bytes, work, "historical proof exact current planner")
 
 
 def _consume_effect_configuration(owner, parent, target, now):
@@ -170,7 +196,7 @@ class _CompletionActorScope(actor._ActorScope):
         self._current_configuration_pin = _configuration_pin(profile, current_configuration)
         self._configuration = self._configuration_seal = configuration
         self._configuration_pin = _configuration_pin(profile, configuration)
-        if profile == "consume" and purpose == "completion":
+        if profile == "consume" and purpose in _CONSUME_SELECTION_PURPOSES:
             consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
         elif selected_consume is not None:
             actor._deny("consume history selection cannot authorize another effect purpose", 503)
@@ -393,7 +419,7 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
     if type(target) is not history._CompletionRecoveryTarget:
         actor._deny("completion recovery original target is unavailable", 503)
     selected_consume = None
-    if profile == "consume" and _purpose == "completion":
+    if profile == "consume" and _purpose in _CONSUME_SELECTION_PURPOSES:
         # The target proves R0 activation/possession. Independently authenticate
         # retained R1 consume controls before binding the new human ceremony.
         # Target accounting already includes held actor and future captures.
@@ -408,7 +434,9 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
                 or not 0 < selected_consume.deadline_ns <= min(target.deadline_ns, selected_window[4])):
             actor._deny("consume completion selection widened the target allowance", 503)
     configuration = _selected_configuration(target, profile, current_configuration, selected_consume)
-    if _purpose not in ("completion", "consume"):
+    if _purpose == "release-intent-proof":
+        _require_proof_effect_authority(owner, parent, target, selected_consume, work)
+    elif _purpose not in ("completion", "consume"):
         _require_current_effect_authority(owner, parent, target)
     window = execution.clock._validate(target.live_window)
     if (window[:3] != owner_scope.window[:3]

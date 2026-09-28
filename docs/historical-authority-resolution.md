@@ -5,7 +5,7 @@ finalization history in `.220`, activation recovery targets in `.221`, and
 activation/consume completion recovery in `.222`, consume-input bridging
 in `.223`, protected consume planning/caller preparation in `.224`, and
 purpose-specific consume worker bridges in `.225`, and independently selected
-consume authority in `.226`:
+consume authority in `.226`, and fresh release-intent/proof preparation in `.227`:
 reuse the existing independently
 root-admitted historical archive and genuine original replay. Do not create a
 second trust catalog, infer retired keys from stored records, or weaken a
@@ -31,9 +31,13 @@ separates its fresh root from both the consume-evidence and activation roots,
 including actual historical ciphertext replay. [Independent consume selection](control-plane-consume-completion-history-selection.md)
 now authenticates the original consume scope before fresh completion approval,
 keeping old activation provenance separate through actual controls and receiving.
-Fresh public consume now connects through its explicit current-root input bridge;
-historical intent, proof, grant and release authorities still need their remaining
-joins. Explicit older-source replay
+Fresh public consume now connects through its explicit current-root input bridge.
+[Fresh release-intent/proof preparation](control-plane-release-proof-history-selection.md)
+separates R0 activation, R1 consume evidence and R2 current signing through explicit
+policy/bootstrap v2 current-planner originals and complete same-state compatibility.
+It preserves the original delivery key; an already retained intent under a retired
+distinct intent authority, historical grant/release authority and key migration
+still need their remaining joins. Explicit older-source replay
 implementations also remain open.
 
 ## Existing components and the actual gap

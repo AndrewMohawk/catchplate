@@ -19,13 +19,39 @@ their exact closed shapes. The new value has exactly:
 - `issuerPolicy`: `{base64Url, byteCount}`, the exact independent root-signed
   policy original, bounded to 64 KiB.
 
-The immutable `_ReleaseProofAcquisitionMaterial` retains only `endpoint` and
-`issuer_policy_bytes`. Genuine cold admission requires the actual existing
+The immutable `_ReleaseProofAcquisitionMaterial` retains `endpoint`,
+`issuer_policy_bytes` and `current_activation_planner_bytes` (None for v1).
+Genuine cold admission requires the actual existing
 intent and proof configurations, verifies the policy signature, and joins its
 proof scope, caller and original enrollment identities. It creates no clock
 window and makes no claim of full live policy admission. The actual FD
 projection keeps the same ten purpose slots; no additional private key and no
 root-signing or proof-signing key is delivered to the public process.
+
+The distinct acquisition `/v2` keeps those same three JSON fields, but requires
+the signed issuer-policy `/v2`. Its wrapped `currentActivationPlanner` original
+must exactly equal the genuinely admitted current parent activation-planning
+original. Parent `_v14_material` supplies that independent source object; the
+request repeats the signature and exact-original check. The embedded planner
+is a configuration template, not renewed activation permission. The signed
+proof bootstrap `/v2` and genuine issuer material must contain that same current
+R2 original, while completion custody `/v2` plus history `/v11` independently
+authenticate R1 consume and R0 activation provenance.
+Both fresh completion-recovery preparation and the ordinary
+`permission.prove_release()` caller repeat these exact v1/v2 joins. The ordinary
+caller still requires its actual current consume root and original target;
+accepting the configured v2 setup does not add a historical fallback. Its v1
+behavior is unchanged.
+
+V1 retains its 64 KiB policy and 128 KiB acquisition limits. V2 permits a
+6 MiB policy inside an 8 MiB-plus-4 KiB wrapper ceiling, but the enclosing
+signed parent remains capped at 4 MiB and the whole call at 64 MiB. Thus these
+per-file maxima do not promise that every maximum-sized policy is admissible.
+The future lane reserves actual policy/template representations before the
+first history body, and the setup response is tightened again before contact.
+The ordinary permission caller also reserves eight actual policy/template
+footprints before decoding v2, checks the measured capture against that
+reservation, and subtracts it before accepting a setup response.
 
 ## Actual continuation and original authority
 
@@ -53,6 +79,16 @@ trusted merely because it arrived in a response. Full policy admission uses
 the actual original window and independent cold enrollments, and the worker's
 launch must equal the policy launch.
 
+The fresh completion-recovery caller additionally joins the setup's consume
+authorization, state enrollment and independently selected R1 root to its
+actual retained controls. Current R2 proof/intent keys remain distinct. Raw
+setup/proof originals are durably retained before semantic interpretation;
+neither version introduces a second claim or a retry after uncertainty. Final
+release custody still uses its existing v1 grammar with the exact current R2
+planner; its delivery key must match the genuinely admitted historical R0
+delivery key. This preparation does not enable historical token delivery or
+migrate a retained intent signed under a retired authority.
+
 Both genuine liveness guards remain in the original proof continuation;
 allowances may only narrow. The later proof response must contain byte-identical
 acquired release custody before the ordinary proof admission proceeds. A
@@ -67,6 +103,14 @@ whole-call inventory after prior held originals, measured policy captures,
 request/framing and subsequent proof-response reservation. The eightfold
 reservation covers nested original/graph and canonical readback copies; it
 does not enlarge transport or processing ceilings.
+
+The completion-recovery caller instead carries its already reserved 8 MiB
+intent/proof lane. Before its setup socket, it subtracts fixed framing, request,
+proof and journal work, then divides the remaining setup/proof representation
+space by 32. It reserves 16 setup footprints plus 16 subsequent proof-response
+footprints and tightens each custody publication to what remains. The added
+R0/R1/R2 state checks fit inside the separate pre-reserved 4 MiB input lane;
+no new allowance is opened by selecting v2.
 
 All network and custody operations retain the same actual guard/work/deadline.
 Missing responses, signature failures, failed retention or cleanup uncertainty

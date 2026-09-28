@@ -37,7 +37,7 @@ ENVIRONMENT = {"PATH": "/runtime/python/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "
     "LD_LIBRARY_PATH": "/runtime/python/lib", "PYTHONDONTWRITEBYTECODE": "1",
     "SERVERWARE_PROCESS_MODE": PROCESS_MODE, ROOT_ENV: str(ROOT_FD), BOOTSTRAP_ENV: str(BOOTSTRAP_FD)}
 MAX_ROOT_BYTES = MAX_BOOTSTRAP_BYTES = MAX_KEY_BYTES = 16 * 1024
-MAX_POLICY_BYTES = 64 * 1024
+MAX_POLICY_BYTES = 6 * 1024 * 1024
 MAX_COMPLETION_BOOTSTRAP_BYTES = 32 * 1024 * 1024
 MAX_PROOF_ENROLLMENT_BYTES = MAX_INTENT_ENROLLMENT_BYTES = 16 * 1024
 MAX_ORIGINAL_BYTES = 64 * 1024 * 1024
@@ -112,7 +112,7 @@ def _open_material(path, maximum, *, work, current, private=False, expected_size
                 or not 2 <= before.st_size <= maximum
                 or stat.S_IMODE(before.st_mode) != (0o400 if private else 0o444)
                 or private and before.st_size != expected_size
-                or retained_bytes + 2 * before.st_size > MAX_ORIGINAL_BYTES):
+                or retained_bytes + (2 if private else 8) * before.st_size > MAX_ORIGINAL_BYTES):
             raise RuntimeError("proof input issuer original protection, size or aggregate differs")
         identity = delivery._material_identity(before)
         if delivery._material_identity(os.stat(os.path.basename(path), dir_fd=parent,
@@ -333,10 +333,17 @@ def _material_bytes_on_work(material, work, current):
         completed.receiving_history_custody_bytes, completed.authorization_bytes,
         completed.current_root_enrollment_bytes, completed.grant_enrollment_bytes,
         completed.authorization_enrollment_bytes)
-    total = 3 * sum(map(len, originals))
-    for graph in (material.launch, policy.payload, policy.proof_scope, policy.proof_launch,
+    graphs = (material.launch, policy.payload, policy.proof_scope, policy.proof_launch,
             completed.receiver_identity, completed.configuration_payload, completed.generation,
-            completed.runtime_role_identities, completed.expectations, completed.tls_files, completed.launch):
+            completed.runtime_role_identities, completed.expectations, completed.tls_files, completed.launch)
+    if policy.current_activation_planner_bytes is not None:
+        selected = policy.current_activation_planner
+        originals += (policy.current_activation_planner_bytes, selected.state_enrollment_bytes,
+            selected.complete_root_vector_bytes)
+        graphs += (selected.configuration_payload, selected.generation, selected.runtime_role_identities,
+            selected.authn_policy, selected.trust_policy, selected.planner_identity, selected.launch)
+    total = 3 * sum(map(len, originals))
+    for graph in graphs:
         current()
         measured = bootstrap.issuer.completion.configuration._ConfigurationCapture(
             bootstrap.capture._SharedLedger(work), maximum_bytes=MAX_ORIGINAL_BYTES, retain=False)
@@ -437,7 +444,7 @@ def main():
         sealed_bytes = 0
         for path, target, maximum in _TRUST_FILES:
             source = _open_material(path, maximum, work=work, current=current,
-                retained_bytes=sealed_bytes + resource_reserve)
+                retained_bytes=8 * sealed_bytes + resource_reserve + 128 * 1024)
             _claim(source, owned)
             sealed_bytes += os.fstat(source).st_size
             _retain(source, target, reservations, owned)
@@ -455,7 +462,7 @@ def main():
         root_raw, original, policy_raw, completed_raw, proof_raw, intent_raw = public
         # Covers these held sealed/read copies plus root-original decoding and
         # nested canonical captures before any policy or private-key callback.
-        if 6 * sum(map(len, public)) + resource_reserve >= MAX_ORIGINAL_BYTES:
+        if 8 * sum(map(len, public)) + resource_reserve + 128 * 1024 >= MAX_ORIGINAL_BYTES:
             raise RuntimeError("proof input issuer cold originals exhaust decoding capacity")
         work.charge(input_bytes=len(root_raw))
         current()

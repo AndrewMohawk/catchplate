@@ -105,13 +105,19 @@ acquisition, issuance, staging and response; it is not a request-time reset.
 ## Capacity and owner obligations
 
 The launch cap is 16 KiB, 256 nodes and depth 6; the signer-original cap is
-16 KiB. Policy is bounded by its actual 64 KiB codec, completion by its actual
-32 MiB codec, and enrollments by their original codecs. Before policy admission,
-the verifier reserves actual cold originals, maximum signer bytes and a
-decoded-completion allowance; it subsequently checks the actual nested
+16 KiB. Policy v1 retains its 64 KiB cap; explicit policy v2 permits at most
+6 MiB for its wrapped current planner. Completion keeps its 32 MiB codec, and
+enrollments retain their original codecs. Before policy admission, the verifier
+reserves eight actual policy/completion/enrollment footprints plus 128 KiB and
+four launch/signer footprints; it subsequently checks the actual nested
 inventory against the same 64 MiB source cap. The resource owner must separately
 account for its root bytes, TLS material, live request, packet and other held
 copies, rather than interpreting this local check as a whole-process quota.
+
+Policy v2 changes no launch schema, role or FD. The actual issuer and independent
+staging receiver genuinely select proof-bootstrap v2 and require the exact
+current planner original. This version is independent of launch v2's older
+two-destination staging choice. Both choices remain explicitly signed.
 
 The cold owner must finish this genuine public admission **before private root
 key access**, then check exact signer bytes and actual key pairing. The issuer

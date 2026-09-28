@@ -28,9 +28,18 @@ No old token is accepted, copied into the output or retained.
 The genuine [issuer policy](oidc-session-activation-release-proof-input-issuer-policy.md)
 verifier authenticates the exact independent completion bootstrap and both
 enrollments, the proof scope, caller and fixed launch. Its actual completion
-material supplies the configuration/generation/runtime identities, original
-activation planner, delivery-key commitment, enrolled state key, typed consume
-expectations, packet identity and pending sequence/head/fence.
+material supplies original evidence, typed consume expectations, packet identity
+and pending sequence/head/fence. V1 retains its same-context derivation. Explicit
+policy v2 independently carries the current R2 activation-planner original and
+emits proof-bootstrap v2 with those exact bytes. Completion/ACK evidence remains
+under its genuinely selected R1 root, with R0 activation history beneath it.
+
+For v2, unchanged release-custody v1 is signed around the CURRENT R2 planner,
+configuration and runtime identities. Its delivery key must equal the genuine
+R0 history key, and the complete R1/R2 signed state payloads must be equal.
+This is a fixed same-key/state compatibility rule, not arbitrary migration.
+The private proof bootstrap re-admits and byte-matches the current template;
+the producer and staging receiver repeat the exact independent-original join.
 
 The supplied packet is decoded only against those independent packet and
 pending identities. Its retained enrollment/caller originals and marker fields
@@ -83,12 +92,13 @@ stable native callbacks, and no generic callback interception is introduced.
 
 ## Remaining acquisition and runtime boundary
 
-The current public permission has SQL response originals and completion/intent
-originals, but **does not hold the consume packet**. A real issuer-side fixed
-reader must acquire that packet against the independently pinned completion
-configuration before calling this producer. That service/acquisition connection
-is still open; the producer neither reads the database nor invents or decrypts
-a public packet.
+The public application **does not hold the consume packet**. The actual
+issuer-side fixed reader acquires that packet against independently pinned
+completion configuration before calling this producer. Its original-only
+worker call and bounded request/packet/output reservations also cover policy
+v2; the producer neither reads the database nor invents a public packet.
+Public historical preparation remains disabled until its complete source
+composition is independently connected; this producer alone cannot enable it.
 
 The subsequent proof worker must still perform genuine private replay and
 commit observation with its separately provisioned resources and current old

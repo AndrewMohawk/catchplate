@@ -26,21 +26,22 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.252` source / 1668574](https://github.com/example/private-deployment)
-connects the [private native egress kernel pipeline](docs/native-egress-kernel.md):
-typed transaction, actual socket backend, exact semantic readback and separate
-SWNEGRS2 raw-original custody through guarded completion. There is no public cold
-configuration/CLI, cross-invocation creation admission, exec/start or network
-attachment; ordinary-auth compatibility is not closed. Prior grant/workload,
-credential-lease, response/preflight and CA-installation source credit remains.
-Provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay
-open. Source is unbuilt, unexecuted and unprovisioned; no build/test/runtime,
+[`.253` source / d9e7d0b](https://github.com/example/private-deployment)
+connects explicit opt-in ordinary [PolicyAware authorization](docs/policy-aware-release-authorization.md)
+across preparation/lifecycle, [credential leases](docs/policy-aware-credential-leases.md)
+and response proofs, with cold signer capabilities and pinned receiving expectations.
+Legacy bytes remain unchanged; Native stays distinct. Prior native installation,
+preflight/leases and private egress kernel source credit remains. Public native-egress
+cold configuration/CLI, durable precreation admission, exec/start/network attachment,
+provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay open.
+Source is unbuilt, unexecuted and unprovisioned; no build/test/runtime, tested pilot,
 NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
 
 - **N04 · Workload identity:** issuance, CLI/portal submission, standard trust
-  publication and native session/issuer verification are source-connected.
+  publication, native session/issuer verification and opt-in ordinary PolicyAware
+  authorization/lease representation are source-connected.
   Production enrollment, native trust authorization, issuer lifecycle,
   authenticated service/sidecar journeys and runtime verification remain open.
 - **H05 · Historical recovery:** [retained intent/proof readmission](docs/control-plane-retained-intent-history.md)
@@ -57,8 +58,9 @@ The four active checkpoints remain partial:
   explicit native response/receipt/binding/lifecycle, signed preparation and
   quoted native credential leases are source-connected. The private egress
   transaction/backend/readback and raw-custody completion are now source-connected,
-  not public configuration, start or runtime proof. Actual CONNECT/provider policy,
-  ordinary-auth compatibility, Kubernetes ownership, scoped proxy/egress/canaries,
+  not public configuration, start or runtime proof. Ordinary PolicyAware compatibility
+  is separately source-connected, not provisioned or runtime-accepted. Actual
+  CONNECT/provider policy, Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
@@ -131,7 +133,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, host CA installation, preflight, response/leases and private egress kernel pipeline source-landed; public invocation/start, auth compatibility, provider/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native installation/preflight/leases, private egress kernel pipeline and separate opt-in ordinary PolicyAware compatibility source-landed; public egress invocation/precreation/start, provider/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

@@ -3906,6 +3906,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_startup_config/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_public_artifacts.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/peer_measurement.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-response-v2-guest-inspector.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/mod.rs \

@@ -12,6 +12,8 @@ pub(crate) mod generation;
 pub(crate) mod guest_delivery;
 #[path = "response_v2/custody/guest_listener.rs"]
 pub(crate) mod guest_listener;
+#[path = "response_v2/custody/guest_public_artifacts.rs"]
+pub(crate) mod guest_public_artifacts;
 #[cfg(target_os = "linux")]
 #[path = "response_v2/custody/guest_inspector/mod.rs"]
 pub(crate) mod guest_inspector;

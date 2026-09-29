@@ -529,6 +529,10 @@ impl RootOwnedResponseObservationV2Config {
     pub(crate) fn generation_activation_context_path(
         &self,
     ) -> Result<PathBuf, V2RuntimeError> {
+        if self.guest_public_artifacts.is_some() {
+            return Ok(super::guest_public_artifacts::checked_directory(self, CustodyServiceRole::StateAuthority)?
+                .join(GENERATION_ACTIVATION_CONTEXT_FILE));
+        }
         let authority =
             self.scoped_service_config(CustodyServiceRole::StateAuthority)?;
         authority
@@ -548,6 +552,10 @@ impl RootOwnedResponseObservationV2Config {
         &self,
         role: CustodyServiceRole,
     ) -> Result<PathBuf, V2RuntimeError> {
+        if self.guest_public_artifacts.is_some() {
+            return Ok(super::guest_public_artifacts::checked_directory(self, role)?
+                .join(GENERATION_ROLE_READINESS_ARTIFACT_FILE));
+        }
         Ok(self
             .scoped_service_config(role)?
             .process
@@ -558,6 +566,10 @@ impl RootOwnedResponseObservationV2Config {
     pub(crate) fn generation_router_topology_attestation_path(
         &self,
     ) -> Result<PathBuf, V2RuntimeError> {
+        if self.guest_public_artifacts.is_some() {
+            return Ok(super::guest_public_artifacts::checked_directory(self, CustodyServiceRole::CustodyRouter)?
+                .join(GENERATION_ROUTER_TOPOLOGY_ATTESTATION_FILE));
+        }
         Ok(self
             .scoped_service_config(CustodyServiceRole::CustodyRouter)?
             .process

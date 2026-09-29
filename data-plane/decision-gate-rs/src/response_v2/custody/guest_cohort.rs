@@ -94,6 +94,7 @@ pub struct StartedGuestCohort {
     roles: Vec<StartedRole>,
     children: Vec<RoleProcess>,
     inspector: Arc<InitializedGuestInspector>,
+    public_artifacts: super::guest_public_artifacts::Owner,
     deadline: u64,
 }
 
@@ -146,6 +147,12 @@ impl StartedGuestCohort {
             pending.push(PendingRole { role, original, bootstrap: image::Sealed::new(&raw, false)?, nonce });
         }
         let router_delivery = configuration.delivery(Role::CustodyRouter)?;
+        // Only public signed generation metadata is shared. Private state and
+        // credential directories keep their existing exact 0700 boundaries.
+        let originals: Vec<_> = pending.iter().map(|entry| &entry.original).collect();
+        let public_artifacts = super::guest_public_artifacts::Owner::prepare(prepared, &originals)
+            .map_err(|e| e.to_string())?;
+        drop(originals);
         let endpoint = inspector.take_router_endpoint()?;
         let inherited = endpoint.inheritance()?;
         inherited.require_delivery(Path::new(&configuration.configuration.path), &configuration.configuration.sha256,
@@ -181,7 +188,7 @@ impl StartedGuestCohort {
         }
         prepared.check()?;
         if kernel::now()? >= startup_deadline { return Err("guest cohort completion exceeded original startup admission".into()); }
-        let result = Arc::new(Self { association, image, roles, inspector, deadline: prepared.deadline(),
+        let result = Arc::new(Self { association, image, roles, inspector, public_artifacts, deadline: prepared.deadline(),
             children: std::mem::take(&mut children.processes) });
         result.check()?;
         Ok(result)
@@ -196,6 +203,7 @@ impl StartedGuestCohort {
         if kernel::now()? >= self.deadline { return Err("guest cohort original serving lifetime expired".into()); }
         self.inspector.check()?;
         self.image.check()?;
+        self.public_artifacts.check().map_err(|e| e.to_string())?;
         for child in &self.children { child.idle()?; }
         for role in &self.roles {
             role.original.check().map_err(|e| e.to_string())?;

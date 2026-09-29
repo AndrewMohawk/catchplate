@@ -23,6 +23,13 @@ Root admission reads only configuration and signed delivery originals. It never
 reads a role seed. The independently admitted worker reads its own role material
 only after its permanent signed UID/GID transition.
 
+The common configuration must explicitly select the
+[public generation artifact layout](response-v2-guest-public-artifacts.md).
+After admitting all seven originals and before launching any role, the factory
+creates only the fresh public directory tree and retains its exact directory
+identities through gate privilege drop. Signed readiness/activation metadata
+becomes readable across role UIDs; private state and raw CAS stay `0700`.
+
 The launcher requires the genuine native privilege-preparation owner, not an
 integer UID or a copied deadline. It retains that owner's private association
 for the later irreversible serving-identity check. The inspector endpoint is
@@ -80,8 +87,8 @@ absolute kernel timer remain effective; a cross-UID signal attempt is not
 assumed to succeed. Only a successful explicit reap before the original bound
 can be reported as timely. Destructor cleanup attempts confer no success claim.
 
-The fresh listener paths are not reused or silently removed. This factory does
-not repair an interrupted generation, provision encrypted role secrets, create
+The fresh listener and public artifact paths are not reused or silently removed.
+This factory does not repair an interrupted generation, provision encrypted role secrets, create
 durable backends or supply independent quote/signing authority. Those inputs,
 native cold-profile integration, EIF artifacts and full frozen runtime/Nitro
 acceptance remain required. No pilot or production readiness follows from these

@@ -352,6 +352,20 @@ fn admission(config_path: &Path, role: CustodyServiceRole, path: &Path, sha256: 
     let envelope: Envelope = crate::decode_canonical_json(&envelope_original.bytes)
         .map_err(|_| fail("invalid closed guest delivery envelope"))?;
     let payload = envelope.payload;
+    if config.guest_public_artifacts.is_some() {
+        let private = super::guest_public_artifacts::require_private_path;
+        private(&config_original.path)?;
+        private(&envelope_original.path)?;
+        private(&payload.credentials.generation_manifest.path)?;
+        private(&payload.credentials.trust_anchor_public_key.path)?;
+        if let Some(bootstrap) = &payload.credentials.bootstrap_manifests {
+            for pin in [&bootstrap.topology_manifest, &bootstrap.role_manifest, &bootstrap.key_manifest] { private(&pin.path)?; }
+        }
+        for key in &payload.credentials.role_keys {
+            private(&key.public_key.path)?;
+            private(&key.secret_key.path)?;
+        }
+    }
     let scoped = config.scoped_service_config(role)?;
     let now = super::recovery::boottime_ns()?;
     let issued = ns(&payload.issued_at_boottime_ns)?;
@@ -494,6 +508,12 @@ impl PreparedRoleDelivery {
     }
     pub(crate) fn scoped(&self) -> &ScopedCustodyServiceConfig { &self.scoped }
     pub(crate) fn configuration_sha256(&self) -> &str { &self.configuration_sha256 }
+    pub(crate) fn require_public_artifacts(&self) -> Result<(), V2RuntimeError> {
+        self.check()?;
+        self.config.guest_public_artifacts.as_ref()
+            .ok_or_else(|| fail("fixed guest cohort requires explicit public generation artifact layout"))?
+            .validate(&self.config)
+    }
     pub(crate) fn delivery_sha256(&self) -> &str { &self.delivery_sha256 }
     pub(crate) fn boot_id(&self) -> &str { &self.payload.boot_id }
     pub(crate) fn startup_deadline_boottime_ns(&self) -> Result<u64,V2RuntimeError> {

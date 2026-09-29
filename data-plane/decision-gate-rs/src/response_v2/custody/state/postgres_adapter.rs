@@ -20,7 +20,7 @@ use super::super::super::state_authority::postgres::statements;
 
 const POSTGRES_PROTOCOL_V3: i32 = 196_608;
 const MAX_POSTGRES_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_EXACT_OBJECT_BYTES: u64 = 34_603_008;
+pub(crate) const MAX_EXACT_OBJECT_BYTES: u64 = 34_603_008;
 const MAX_BOOT_ID_BYTES: usize = 128;
 const MAX_PROC_RECORD_BYTES: usize = 64 * 1024;
 const MAX_CGROUP_EVENTS_BYTES: usize = 4 * 1024;
@@ -1621,7 +1621,7 @@ impl ImmutableObjectStore for LedgerObjectStore {
     }
 }
 
-fn immutable_cas_locator(
+pub(crate) fn immutable_cas_locator(
     generation_id: &Identifier,
     object_id: &Identifier,
     immutable_storage_receipt_sha256: &Digest,

@@ -17,7 +17,8 @@ pub(crate) use postgres::{
     validate_postgres_authority_contract, PostgresAuthorityContractV1,
 };
 pub(crate) use postgres_adapter::{
-    LedgerObjectStore, PostgresUdsBackend,
+    immutable_cas_locator, LedgerObjectStore, PostgresUdsBackend,
+    MAX_EXACT_OBJECT_BYTES,
 };
 
 pub(crate) fn validate_authority_result(

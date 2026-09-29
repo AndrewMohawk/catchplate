@@ -1,0 +1,55 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/response-v2-ledger-exact-read.v1.schema.json",
+  "title":"Purpose-fixed guest ledger exact read",
+  "$ref":"#/$defs/configuration",
+  "$defs":{
+    "configuration":{"type":"object","additionalProperties":false,"required":["apiVersion"],"properties":{"apiVersion":{"const":"serverware.responseV2.ledgerExactRead/v1"}}},
+    "sha256":{"type":"string","pattern":"^sha256:(?!0{64}$)[0-9a-f]{64}$"},
+    "process":{"$ref":"#/$defs/sha256"},
+    "context":{
+      "type":"object","additionalProperties":false,
+      "required":["configurationSha256","generationSha256","generationId","generation","topologySha256","bootId"],
+      "properties":{
+        "configurationSha256":{"$ref":"#/$defs/sha256"},"generationSha256":{"$ref":"#/$defs/sha256"},
+        "generationId":{"type":"string","minLength":1,"maxLength":256},
+        "generation":{"type":"integer","minimum":1,"maximum":9007199254740991},
+        "topologySha256":{"$ref":"#/$defs/sha256"},"bootId":{"type":"string","minLength":1,"maxLength":128}
+      }
+    },
+    "object":{
+      "type":"object","additionalProperties":false,"required":["objectId","receiptSha256","contentSha256","contentLength"],
+      "properties":{"objectId":{"type":"string","minLength":1,"maxLength":128},"receiptSha256":{"$ref":"#/$defs/sha256"},
+        "contentSha256":{"$ref":"#/$defs/sha256"},"contentLength":{"type":"integer","minimum":1,"maximum":34603008}}
+    },
+    "requestBody":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","context","nonce","callerProcessSha256","ledgerProcessSha256","deadlineBoottimeNs","object"],
+      "properties":{
+        "apiVersion":{"const":"serverware.responseV2.ledgerExactReadRequest/v1"},"context":{"$ref":"#/$defs/context"},
+        "nonce":{"$ref":"#/$defs/sha256"},"callerProcessSha256":{"$ref":"#/$defs/process"},"ledgerProcessSha256":{"$ref":"#/$defs/process"},
+        "deadlineBoottimeNs":{"type":"integer","minimum":1000000,"maximum":18446744073709551615,"multipleOf":1000000},
+        "object":{"$ref":"#/$defs/object"}
+      }
+    },
+    "resultBody":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","requestSha256","callerProcessSha256","ledgerProcessSha256","object"],
+      "properties":{
+        "apiVersion":{"const":"serverware.responseV2.ledgerExactReadResult/v1"},"requestSha256":{"$ref":"#/$defs/sha256"},
+        "callerProcessSha256":{"$ref":"#/$defs/process"},"ledgerProcessSha256":{"$ref":"#/$defs/process"},"object":{"$ref":"#/$defs/object"}
+      }
+    },
+    "publicKey":{"type":"string","minLength":44,"maxLength":44,"pattern":"^[A-Za-z0-9+/]{43}=$"},
+    "signature":{"type":"string","minLength":88,"maxLength":88,"pattern":"^[A-Za-z0-9+/]{86}==$"},
+    "request":{
+      "type":"object","additionalProperties":false,"required":["body","publicKeyBase64","signature"],
+      "properties":{"body":{"$ref":"#/$defs/requestBody"},"publicKeyBase64":{"$ref":"#/$defs/publicKey"},"signature":{"$ref":"#/$defs/signature"}}
+    },
+    "result":{
+      "type":"object","additionalProperties":false,"required":["body","publicKeyBase64","signature"],
+      "properties":{"body":{"$ref":"#/$defs/resultBody"},"publicKeyBase64":{"$ref":"#/$defs/publicKey"},"signature":{"$ref":"#/$defs/signature"}}
+    }
+  },
+  "$comment":"The optional ledgerExactRead cold field is this closed configuration; explicit null refuses. Canonical private frames <=16KiB. Request carries no path or descriptor, result exactly one zero-link CLOEXEC mode0400 memfd with all four immutable seals, original length/hash and offset0. Standard padded base64 must round-trip canonically. Request signature covers canonical body with serverware.responseV2.ledgerExactReadRequest/v1 plus NUL; result uses the distinct result domain. Result requestSha256 commits the entire signed request. Keys must equal actual independently assigned state-authority linearizable-store / ledger archive-store SHA pins. Both actual same-guest peers and process bindings, retained full configuration and verified generation/boot, original deadline and current owner are checked. No schema or readiness record grants a read, persistence or release."
+}

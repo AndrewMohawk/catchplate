@@ -98,6 +98,7 @@ pub(crate) struct ServiceRuntime {
     signing_keys: BTreeMap<String, RoleSigningKey>,
     handshake: SignedServiceHandshakeV1,
     readiness_record: CustodyReadinessRecordV1,
+    exact_reads: Option<super::ledger_exact_read::Worker>,
 }
 
 impl ServiceRuntime {
@@ -196,12 +197,16 @@ impl ServiceRuntime {
             signing_keys,
             handshake,
             readiness_record,
+            exact_reads: None,
         })
     }
 
     pub(crate) fn run(mut self) -> Result<(), V2RuntimeError> {
         super::super::guest_delivery::check(&self.config)?;
         let _lease = acquire_service_lease(&self.scoped)?;
+        if self.scoped.role == CustodyServiceRole::ImmutableArtifactLedger {
+            self.exact_reads = super::ledger_exact_read::Worker::start(&self.config)?;
+        }
         let listener = bind_service_socket(
             &self.scoped.process.socket_path,
             self.scoped.process.gid,
@@ -240,6 +245,7 @@ impl ServiceRuntime {
         stream: UnixStream,
     ) -> Result<(), V2RuntimeError> {
         super::super::guest_delivery::check(&self.config)?;
+        if let Some(worker) = &self.exact_reads { worker.check()?; }
         authenticate_peer(&stream, &self.topology)?;
         let handshake_deadline = BootDeadline::new(
             super::super::guest_delivery::bound_deadline_ns(&self.config, boottime_ns()?

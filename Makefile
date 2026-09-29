@@ -3898,6 +3898,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/custody/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/services/common.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/services/mod.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/services/ledger_exact_read.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/services/ledger_exact_read/transport.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/services/ledger_exact_read/wire.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/services/router.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/services/state_authority.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/supervisor.rs \

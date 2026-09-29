@@ -294,6 +294,10 @@ impl Delivery {
         self.check()?;
         self.verified_generation.get().map(String::as_str).ok_or_else(|| fail("signed generation not yet verified"))
     }
+    pub(crate) fn configuration_sha256(&self) -> Result<String, V2RuntimeError> {
+        self.check()?;
+        Ok(digest(&self.config.bytes))
+    }
     pub(crate) fn require_signer(&self, logical_role: &str, key_id: &str, path: &Path) -> Result<(), V2RuntimeError> {
         self.check()?;
         if !self.scoped.process.role_keys.iter().any(|v|

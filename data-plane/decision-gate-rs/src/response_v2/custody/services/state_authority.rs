@@ -586,7 +586,7 @@ impl AuthorityResultSigner for StateResultSigner<'_> {
 type TrustedHostStateAuthority<'a> = StateAuthority<
     PostgresUdsBackend,
     StateResultSigner<'a>,
-    LedgerObjectStore,
+    super::ledger_exact_read::Store<'a>,
     PostgresUdsBackend,
     PostgresUdsBackend,
 >;
@@ -1533,12 +1533,7 @@ fn trusted_host_authority<'a>(
                     .to_vec(),
         },
     };
-    let object_store = LedgerObjectStore::new(
-        ledger.process_state_object_root(),
-        ledger.uid,
-        ledger.gid,
-    )
-    .map_err(authority_error)?;
+    let object_store = super::ledger_exact_read::Store::new(config, signing_key, ledger)?;
     let local_role_id = result_signer.identity.role_id.clone();
     let request_timeout_ms = super::super::guest_delivery::bounded_timeout_ms(config, scoped.process.request_timeout_ms)?;
     StateAuthority::new(

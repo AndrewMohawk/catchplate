@@ -186,6 +186,10 @@ impl RoleSigningKey {
         &self.key_id
     }
 
+    pub(crate) fn public_key_base64(&self) -> String {
+        base64::engine::general_purpose::STANDARD.encode(self.key.verifying_key().as_bytes())
+    }
+
     pub(crate) fn sign<T: Serialize>(
         &self,
         domain: &[u8],

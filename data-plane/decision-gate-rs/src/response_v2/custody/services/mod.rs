@@ -2,6 +2,7 @@ mod cleanup_watchdog;
 mod common;
 mod credential_transport;
 mod immutable_artifact_ledger;
+pub(super) mod ledger_exact_read;
 mod engine;
 mod policy_proof_verifier;
 mod release_attestor_publisher;

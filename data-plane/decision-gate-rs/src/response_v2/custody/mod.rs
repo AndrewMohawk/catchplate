@@ -897,6 +897,8 @@ pub struct RootOwnedResponseObservationV2Config {
     guest_delivery_authority: Option<guest_delivery::Authority>,
     #[serde(default, deserialize_with = "guest_listener::configuration_profile")]
     guest_listener: Option<guest_listener::GuestResponseV2ListenerProfile>,
+    #[serde(default, deserialize_with = "services::ledger_exact_read::configuration_profile")]
+    ledger_exact_read: Option<services::ledger_exact_read::Profile>,
     #[serde(default, deserialize_with = "guest_public_artifacts::configuration_profile")]
     guest_public_artifacts: Option<guest_public_artifacts::Profile>,
     // Only the explicit guest loader can construct this retained authority.
@@ -2789,6 +2791,7 @@ fn validate_config(
     }
     config::validate_signed_topology(config)?;
     if let Some(profile) = &config.guest_listener { profile.validate(config)?; }
+    if let Some(profile) = &config.ledger_exact_read { profile.validate(config)?; }
     if let Some(profile) = &config.guest_public_artifacts { profile.validate(config)?; }
     if let Some(authority) = &config.guest_delivery_authority {
         authority.validate()?;

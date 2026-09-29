@@ -24,12 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.302` source](https://github.com/example/private-deployment) connects
-[protected policy-generation intake](docs/setup-policy-continuation.md): real
-hardware authorization, one native handoff, atomic publication recording and
-outcome lookup. Native canary evidence, later Setup, custody launch/services,
-encrypted key delivery and retired-family succession remain open, alongside
-independent provisioning and end-to-end acceptance.
+Latest [`.303` source](https://github.com/example/private-deployment) adds an
+[independent native Nitro verifier](docs/native-shadow-nitro-verifier.md) and
+connects its signed result to the retained guest key owner. Actual service
+launch/transport, encrypted key delivery, native canary evidence, later Setup
+and retired-family succession remain open, alongside independent provisioning
+and end-to-end acceptance.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

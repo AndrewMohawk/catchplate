@@ -93,6 +93,13 @@ impl AdmissionClock {
         self.valid_until_ms = self.valid_until_ms.min(until_ms);
         self.check(self.deadline).map(|_| ())
     }
+
+    pub(super) fn remaining(&mut self) -> Result<Duration, String> {
+        self.check(self.deadline)?;
+        Ok(Duration::from_nanos(self.deadline.checked_sub(self.last_boot)
+            .filter(|remaining| *remaining > 0)
+            .ok_or("native enrollment original processing window expired")?))
+    }
 }
 
 /// Non-Clone, non-serializable owner borrowing the real request and connection.

@@ -4,8 +4,9 @@
 //! A separate signed delegation binds both scopes; the target proves possession
 //! through its original CSR/request, not an existing certificate or Python DTO.
 //! Packet preparation additionally requires a separate cold setup signature and
-//! actual Snapshot-derived requirements. It creates unsigned original bytes,
-//! not a one-use claim, signing authority, CA issuance, route or installation.
+//! actual Snapshot-derived requirements. Private signing retains actual policy
+//! and runtime owners through a distinct durable claim and completion path.
+//! No HTTP route, CA issuance or installation is enabled by these owners.
 
 use super::*;
 use super::native_enrollment_admission::{self as peer, AdmissionClock,
@@ -222,8 +223,9 @@ fn packet_original(delegation: &[u8], setup: &[u8], target_request: &[u8],
 }
 
 /// No Clone, deserializer or successful-carrier constructor. This owner retains
-/// the real admission and original setup signature while exposing unsigned
-/// packet bytes only. It cannot call the enrollment signer or install trust.
+/// the real admission and original setup signature. Its signing path consumes
+/// this owner and calls only the claimed native bootstrap operation; no general
+/// signer, installation handle or public HTTP route is exposed.
 pub(super) struct PreparedNativeBootstrapPacket<'a> {
     admission: NativeBootstrapAdmission<'a>,
     setup: VerifiedNativeEnrollmentBootstrapSetupV1,
@@ -262,11 +264,88 @@ impl PreparedNativeBootstrapPacket<'_> {
         self.check()?;
         Ok(&self.original)
     }
+
+    /// Consume the actual preparation, not an uploaded packet or successful
+    /// diagnostic. The policy read guard remains held through durable claim,
+    /// key generation, signing, NSM and exact retained-output readback.
+    pub(super) fn sign_once(mut self)
+        -> Result<serverware_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1, String> {
+        self.check()?;
+        let original = {
+            let state = self.admission.state;
+            let active = state.snapshot.try_read()
+                .map_err(|_| "native bootstrap signing policy is unavailable")?;
+            require(Arc::ptr_eq(&active, &self.admission.snapshot)
+                && active.epoch == self.admission.snapshot.epoch,
+                "native bootstrap signing policy differs from its original admission")?;
+            let remaining = self.admission.clock.remaining()?;
+            let _trust_guard = retain_policy_window(state, remaining)?;
+            let roots = self.admission.authorizer.bootstrap_public_originals(&active.policy_verifying_key)?;
+            let DirectProxyStream::MutualTls(tls) = self.admission.stream else {
+                return Err("native bootstrap signing lost its actual caller TLS connection".to_owned());
+            };
+            let ingress = self.admission.configuration.native_owner.as_ref()
+                .ok_or("native bootstrap signing lost its generated ingress owner")?;
+            let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
+                return Err("native bootstrap signing lost its native custody owner".to_owned());
+            };
+            require(signer.key_id == state.response_proof_signing_key_id
+                && signer.public_key_pem == state.response_proof_public_key_pem,
+                "native bootstrap actual custody identity differs")?;
+            self.admission.stream.check_operation_deadline()
+                .map_err(|_| "native bootstrap original stream deadline expired")?;
+            let mut authority = state.mitm_authority.as_ref()
+                .ok_or("native bootstrap signing runtime identity is absent")?
+                .try_lock().map_err(|_| "native bootstrap signing runtime identity is unavailable")?;
+            let MitmAuthority::Native(identity) = &mut *authority else {
+                return Err("native bootstrap signing cannot use an imported runtime identity".to_owned());
+            };
+            require(identity.deadline() == self.admission.lifetime.deadline()
+                && ingress.deadline() == self.admission.lifetime.deadline(),
+                "native bootstrap signing lost its original runtime lifetime")?;
+            self.admission.lifetime.check()?;
+            self.setup.check(self.admission.clock.deadline)?;
+            self.admission.clock.check(self.setup.deadline())?;
+            // Shared ownership is joined using the original cohort lifetime.
+            // Per-request bounds must never shorten the shared native signer.
+            signer.transport.verify_native_identity(identity, self.admission.lifetime.deadline())?;
+            let original = signer.transport.sign_native_bootstrap_enrollment(identity, ingress,
+                &tls.conn, &self.original, roots.delegation_pem, roots.delegation_pem_sha256,
+                roots.setup_pem, roots.setup_pem_sha256, self.admission.challenge,
+                self.admission.clock.deadline)?;
+            self.admission.clock.check(self.setup.deadline())?;
+            self.setup.check(self.admission.clock.deadline)?;
+            self.admission.lifetime.check()?;
+            self.admission.stream.check_operation_deadline()
+                .map_err(|_| "native bootstrap stream expired during signing")?;
+            original
+        };
+        // Release locks before the full admission path reacquires them. A
+        // failure withholds output; the consumed durable claim is never reset.
+        self.check()?;
+        Ok(original)
+    }
+}
+
+fn retain_policy_window(state: &GateState, remaining: Duration)
+    -> Result<Option<std::sync::MutexGuard<'_, Instant>>, String> {
+    require(state.proxy_ingress_attestation.workload_identity_trust.as_ref()
+        .map_or(true, |trust| trust.supports_window(remaining)),
+        "native bootstrap trust cannot cover the original signing window")?;
+    if !matches!(state.policy_trust_root_source, PolicyTrustRootSource::AttestedControlPlane { .. }) {
+        return Ok(None);
+    }
+    let last = state.policy_trust_last_success.try_lock()
+        .map_err(|_| "native bootstrap policy trust clock is unavailable")?;
+    require(last.elapsed().checked_add(remaining).is_some_and(|age| age <= POLICY_TRUST_MAX_AGE),
+        "native bootstrap policy trust expires before the original signing bound")?;
+    Ok(Some(last))
 }
 
 /// The eventual route must begin this deadline before reading any bootstrap
 /// body, including the setup original later supplied to packet preparation.
-/// This private seam has no route or signer caller and grants no CA operation.
+/// This private seam has no route caller and grants no CA operation; signing
+/// requires consuming the subsequently prepared original owner.
 pub(super) fn admit<'a>(state: &'a GateState, head: &'a RequestHead,
     stream: &'a DirectProxyStream, trusted_mtls: &'a TrustedMtlsEvidence,
     proxy_ingress: &'a ProxyIngressConfig, delegation_original: &'a [u8],

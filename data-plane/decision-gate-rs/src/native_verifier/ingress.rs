@@ -228,6 +228,18 @@ fn client_chain(original: &[u8]) -> Result<Vec<Vec<u8>>, String> {
 }
 
 impl VerifiedIngress {
+    /// Original-only membership in the authenticated native DER inventory.
+    /// The bootstrap target has no certificate yet: this is not client-chain
+    /// authentication or CA issuance authority. Its actual CA/CSR profile and
+    /// lifetime are independently checked by the original target-request lane.
+    pub(super) fn require_client_issuer_original(&self, issuer_der: &[u8]) -> Result<(), String> {
+        let inventory = self.client_trust_certificates.as_ref()
+            .ok_or("native bootstrap target issuer requires authenticated v2 trust originals")?;
+        ensure(!issuer_der.is_empty() && issuer_der.len() <= 64 * 1024
+            && inventory.iter().filter(|original| original.as_slice() == issuer_der).count() == 1,
+            "native bootstrap target issuer is not an exact unique authenticated root")
+    }
+
     /// Re-admit public originals, not a copied certificate/verification DTO.
     /// The fixed client owner must have used this exact retained chain and key
     /// for the same ClientConnection already joined by ingress_session.

@@ -3663,7 +3663,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/workload_identity_trust_crypto.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_assignment_v1.rs \
 				data-plane/decision-gate-rs/src/enclave_enrollment_key_v1.rs \
+				data-plane/decision-gate-rs/src/enclave_bootstrap_enrollment_key_v1.rs \
 				data-plane/decision-gate-rs/src/native_verifier/enrollment.rs \
+				data-plane/decision-gate-rs/src/native_verifier/enrollment_bootstrap.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_authorizer.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_admission.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_delegation_v1.rs \
@@ -3672,6 +3674,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_admission.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_policy_requirements.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_setup_v1.rs \
+				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_packet_v2.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_attempt_v1.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
 				ops/systemd/serverware-launch-authority-relay.socket \
@@ -3681,6 +3685,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-proxy-ingress.v2.schema.json \
 				schemas/native-enrollment-assignment.v1.schema.json \
 				schemas/native-enrollment-evidence.v1.schema.json \
+				schemas/native-enrollment-bootstrap-evidence.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \
 				schemas/native-enrollment-bootstrap-delegation.v1.schema.json \

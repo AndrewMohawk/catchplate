@@ -7,7 +7,7 @@
 //! copied result, target certificate, packet, durable claim or signer is input.
 
 use super::assignment;
-use crate::native_workload_bootstrap_request_v1::{decode_canonical, encode_canonical, validate_sans};
+use super::native_workload_bootstrap_request_v1::{decode_canonical, encode_canonical, validate_sans};
 use ed25519_dalek::Signature;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};

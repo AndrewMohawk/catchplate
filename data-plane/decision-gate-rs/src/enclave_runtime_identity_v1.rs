@@ -18,8 +18,14 @@ mod enclave_response_proof_key_v1;
 // inaccessible until the actual policy/route/durable-claim gates are wired.
 #[path = "enclave_enrollment_key_v1.rs"]
 mod enclave_enrollment_key_v1;
+// Separate bootstrap purpose. The only entrypoint replays original authorities
+// and durably claims the actual custody ledger before generating a signing key.
+#[path = "enclave_bootstrap_enrollment_key_v1.rs"]
+mod enclave_bootstrap_enrollment_key_v1;
 
 pub use credential_recipient_v1::CredentialRecipientV1;
+pub use enclave_bootstrap_enrollment_key_v1::BootstrapEnrollmentOriginalV1;
+pub(crate) use enclave_bootstrap_enrollment_key_v1::GeneratedBootstrapEnrollmentV1;
 pub use enclave_response_proof_key_v1::{PendingResponseProofKeyV1, QuotedResponseProofKeyV1};
 pub use tls_authority_v1::{GeneratedMutualTlsV1, TlsAuthorityV1};
 use enclave_nsm_v1::NsmDeviceV1;

@@ -129,6 +129,25 @@ pub(super) fn verify_enrollment_with_challenge(raw: &[u8], scope_raw: &[u8],
     trust_roots_raw: &[u8], challenge: [u8; 32], client: &ClientConnection,
     issuer_der: &[u8], client_certificate_pem: &[u8], deadline: u64)
     -> Result<VerifiedEnrollmentSession, String> {
+    verify_enrollment_originals(raw, scope_raw, trust_roots_raw, challenge, client,
+        issuer_der, client_certificate_pem, None, deadline)
+}
+
+/// Same genuine role3/TLS admission, with an additional target issuer original
+/// checked against the authenticated inventory. The client chain remains the
+/// bootstrap caller's; no target leaf or copied verification result is input.
+pub(super) fn verify_bootstrap_enrollment_with_challenge(raw: &[u8], scope_raw: &[u8],
+    trust_roots_raw: &[u8], challenge: [u8; 32], client: &ClientConnection,
+    caller_issuer_der: &[u8], caller_certificate_pem: &[u8], target_issuer_der: &[u8], deadline: u64)
+    -> Result<VerifiedEnrollmentSession, String> {
+    verify_enrollment_originals(raw, scope_raw, trust_roots_raw, challenge, client,
+        caller_issuer_der, caller_certificate_pem, Some(target_issuer_der), deadline)
+}
+
+fn verify_enrollment_originals(raw: &[u8], scope_raw: &[u8], trust_roots_raw: &[u8],
+    challenge: [u8; 32], client: &ClientConnection, issuer_der: &[u8],
+    client_certificate_pem: &[u8], target_issuer_der: Option<&[u8]>, deadline: u64)
+    -> Result<VerifiedEnrollmentSession, String> {
     let owner_pid = unsafe { libc::getpid() };
     let (wall, boot) = clocks()?;
     ensure(owner_pid > 0 && boot < deadline && challenge != [0; 32],
@@ -137,6 +156,7 @@ pub(super) fn verify_enrollment_with_challenge(raw: &[u8], scope_raw: &[u8],
     let roots = TrustRoots::parse(trust_roots_raw)?;
     let checked = verify_session_original(raw, &scope, &roots, challenge, client,
         Some((issuer_der, client_certificate_pem)))?;
+    if let Some(issuer) = target_issuer_der { checked.ingress.require_client_issuer_original(issuer)?; }
     let workload = checked.workload.ok_or("native enrollment requires original client trust")?;
     let checked_wall = workload.verified_at.checked_mul(1_000_000_000)
         .ok_or("native enrollment session verification time overflow")?;

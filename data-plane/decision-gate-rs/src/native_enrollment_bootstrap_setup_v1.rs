@@ -8,7 +8,7 @@
 //! is accepted or returned here.
 
 use super::{assignment, bootstrap_delegation};
-use crate::native_workload_bootstrap_request_v1::{decode_canonical, encode_canonical};
+use super::native_workload_bootstrap_request_v1::{decode_canonical, encode_canonical};
 use ed25519_dalek::Signature;
 use ipnet::IpNet;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -390,6 +390,12 @@ pub(crate) fn verify_original(setup_original: &[u8], setup_public_pem: &[u8],
 
 impl VerifiedNativeEnrollmentBootstrapSetupV1 {
     pub(crate) fn payload(&self) -> &SetupPayload { &self.payload }
+    /// Read-only access to the actual retained child, never a supplied result.
+    /// Parent checks retain this child's original lifetime before and after use.
+    pub(crate) fn delegation(&self)
+        -> &bootstrap_delegation::VerifiedNativeEnrollmentBootstrapDelegationV1 {
+        &self.delegation
+    }
     pub(crate) fn original_sha256(&self) -> [u8; 32] { self.original_sha256 }
     pub(crate) fn deadline(&self) -> u64 { self.deadline }
 

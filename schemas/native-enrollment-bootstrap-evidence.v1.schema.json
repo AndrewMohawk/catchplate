@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-enrollment-bootstrap-evidence.v1.schema.json",
+  "title": "Native caller-to-target bootstrap enrollment public evidence v1",
+  "description": "Unverified public originals. The complete original is canonical compact sorted ASCII JSON plus exactly one LF, at most 1048576 bytes. Runtime verification separately authenticates independent delegation/setup keys and pins, the actual bootstrap caller TLS session, role3/role5 Nitro originals, the independently expected target request and genuine CSR/PoP. Schema validity is not permission, certificate issuance, installation, policy admission, or a durable claim. Same-target nativeEnrollmentEvidence/v1 is a separate unchanged profile.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "evidenceScope", "okForAction", "packetBase64url",
+    "ingressSessionEvidenceBase64url", "enrollmentSignatureBase64url",
+    "enrollmentPublicKeyBase64url", "enrollmentQuoteBase64url"
+  ],
+  "properties": {
+    "apiVersion": { "const": "serverware.nativeEnrollmentBootstrapEvidence/v1" },
+    "evidenceScope": { "const": "unverified-bootstrap-enrollment-public-material" },
+    "okForAction": { "const": false },
+    "packetBase64url": {
+      "$ref": "#/$defs/originalBase64url",
+      "maxLength": 699051,
+      "description": "Exact seven-field nativeEnrollmentPacket/v2 original, including its one LF, at most 524288 decoded bytes. Its five canonical base64url originals are delegation (32768), setup (32768), target request (65536), target issuer DER (65536), and policy requirements (65536). Decoding is data-only; genuine verification requires independently supplied roots and target expectations."
+    },
+    "ingressSessionEvidenceBase64url": {
+      "$ref": "#/$defs/originalBase64url",
+      "maxLength": 131072,
+      "description": "Exact paired-v2 ingress session evidence including LF, at most 98304 decoded bytes. The retained client chain and issuer describe the existing bootstrap CALLER. The target issuer must separately occur exactly once in the authenticated native DER-root inventory; no target certificate is required."
+    },
+    "enrollmentSignatureBase64url": {
+      "type": "string",
+      "minLength": 86,
+      "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])",
+      "description": "Raw Ed25519 signature64 encoded canonical unpadded base64url. Preimage: NUL-terminated serverware/native-enrollment-bootstrap-packet-signature/v1 domain, exact delegation SHA256 raw32, exact setup SHA256 raw32, packet length u64BE, exact packet bytes including LF. No old assignment-v1 or role4 substitution."
+    },
+    "enrollmentPublicKeyBase64url": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^(?!A{43}(?![\\s\\S]))[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])",
+      "description": "Nonzero raw Ed25519 public key32, not PEM/SPKI or authority supplied by the envelope. Runtime also rejects weak keys and authenticates this key through the genuine fixed-role5 quote."
+    },
+    "enrollmentQuoteBase64url": {
+      "$ref": "#/$defs/originalBase64url",
+      "maxLength": 16384,
+      "description": "Original Nitro COSE role5 evidence, at most 12288 decoded bytes. Genuine verification binds the new bootstrap request domain, delegation/setup/packet digests, actual ingress leaf/native root-set commitment, and the nonce derived from the actual retained TLS exporter and independent challenge."
+    }
+  },
+  "$defs": {
+    "originalBase64url": {
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])"
+    }
+  }
+}

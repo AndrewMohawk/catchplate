@@ -89,6 +89,31 @@ impl CustodySignerTransport {
         Ok(evidence)
     }
 
+    /// Native bootstrap only, over the same actual runtime/ledger owner. The
+    /// caller retains real policy/configuration guards; the library repeats
+    /// original verification and claims durably before generating a key.
+    pub(super) fn sign_native_bootstrap_enrollment(&self,
+        identity: &mut EnclaveRuntimeIdentityV1,
+        ingress: &serverware_decision_gate::enclave_runtime_identity_v1::QuotedMutualTlsIngressV1,
+        connection: &rustls::ServerConnection, packet_original: &[u8],
+        delegation_pem: &[u8], delegation_pem_sha256: &str,
+        setup_pem: &[u8], setup_pem_sha256: &str, challenge: [u8; 32], deadline: u64)
+        -> Result<serverware_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1, String> {
+        let Self::Native(owner) = self else {
+            return Err("bootstrap enrollment requires its actual native custody runtime".to_owned());
+        };
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |active| (active < CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active + 1))
+            .map_err(|_| "native custody concurrency limit reached".to_owned())?;
+        let _permit = NativeOperationPermit(&owner.active);
+        let original = identity.sign_bootstrap_enrollment_once(&owner.runtime, ingress,
+            connection, packet_original, delegation_pem, delegation_pem_sha256,
+            setup_pem, setup_pem_sha256, challenge, deadline)?;
+        self.verify_live()?;
+        Ok(original)
+    }
+
     pub(super) fn manifest(&self) -> Value {
         match self {
             Self::Unix { expected_uid, .. } => json!({

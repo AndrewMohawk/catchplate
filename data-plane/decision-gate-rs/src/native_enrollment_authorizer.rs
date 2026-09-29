@@ -6,6 +6,9 @@
 //! the self-hashed static configuration would create a commitment cycle.
 
 use serverware_decision_gate::{canonical_json_bytes, decode_canonical_json};
+// The same original-only validators also compile privately in the library and
+// standalone receiving binaries. Keep their imports local to each real owner.
+use crate::native_workload_bootstrap_request_v1;
 #[path = "native_enrollment_assignment_v1.rs"]
 mod assignment;
 pub(super) use assignment::VerifiedNativeEnrollmentAssignmentV1;
@@ -33,6 +36,15 @@ struct SetupPublicRoot {
     public_key_pem: Box<[u8]>,
     public_key_pem_sha256: String,
     key_id: [u8; 32],
+}
+
+/// Borrowed public source bytes, not a verification or authorization result.
+/// The actual cold owner remains retained throughout the private signing call.
+pub(super) struct BootstrapPublicOriginals<'a> {
+    pub(super) delegation_pem: &'a [u8],
+    pub(super) delegation_pem_sha256: &'a str,
+    pub(super) setup_pem: &'a [u8],
+    pub(super) setup_pem_sha256: &'a str,
 }
 
 /// No Clone, Debug, deserializer, private key or root-selection callback. Only
@@ -134,6 +146,15 @@ impl NativeEnrollmentAuthorizer {
     pub(super) fn deadline(&self) -> u64 { self.deadline }
     pub(super) fn proxy_endpoint(&self) -> SocketAddr { self.proxy_endpoint }
     pub(super) fn listener_port(&self) -> u32 { self.listener_port }
+
+    pub(super) fn bootstrap_public_originals(&self, actual_policy_key: &VerifyingKey)
+        -> Result<BootstrapPublicOriginals<'_>, String> {
+        self.require_policy_key(actual_policy_key)?;
+        let setup = self.setup.as_ref().ok_or("native enrollment setup root is absent")?;
+        Ok(BootstrapPublicOriginals { delegation_pem: &self.public_key_pem,
+            delegation_pem_sha256: &self.public_key_pem_sha256,
+            setup_pem: &setup.public_key_pem, setup_pem_sha256: &setup.public_key_pem_sha256 })
+    }
 
     /// This is the original service lifetime, not a fresh per-request allowance.
     /// A short assignment request must not shorten the shared owner globally.

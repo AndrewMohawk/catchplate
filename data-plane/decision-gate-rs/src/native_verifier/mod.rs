@@ -18,10 +18,20 @@ mod ingress_config;
 mod ingress_session;
 mod ingress_client;
 mod enrollment;
+mod enrollment_bootstrap;
 // Reuse the assignment parser/signature/lifetime implementation without
 // exporting its private owner as a cross-boundary authorization carrier.
 #[path = "../native_enrollment_assignment_v1.rs"]
 mod native_enrollment_assignment_v1;
+use self::native_enrollment_assignment_v1 as assignment;
+#[path = "../native_workload_bootstrap_request_v1.rs"]
+mod native_workload_bootstrap_request_v1;
+#[path = "../native_enrollment_bootstrap_delegation_v1.rs"]
+mod bootstrap_delegation;
+#[path = "../native_enrollment_bootstrap_setup_v1.rs"]
+mod bootstrap_setup;
+#[path = "../native_enrollment_bootstrap_packet_v2.rs"]
+mod bootstrap_packet;
 
 pub(crate) use ingress_client::IngressClientBootstrap;
 
@@ -104,6 +114,26 @@ pub(crate) fn verify_native_enrollment_on_stream(raw: &[u8], authorizer_pem: &[u
     enrollment::verify(raw, authorizer_pem, expected_authorizer_pem_sha256,
         scope_raw, roots_raw, challenge, &outer.conn, issuer_der,
         client_certificate_pem, expected_principal, endpoint, original_deadline)
+}
+
+/// Explicit caller-to-target bootstrap profile. All public roots, request pins,
+/// and the selected caller certificate chain come from the fixed acquisition
+/// owner, not Python diagnostics or this evidence. That owner retains its
+/// reviewed TLS configuration/key through the complete operation. A target
+/// certificate is neither required nor implied by successful verification.
+pub(crate) fn verify_native_bootstrap_enrollment_on_stream(raw: &[u8],
+    delegation_pem: &[u8], delegation_pem_sha: &str, setup_pem: &[u8], setup_pem_sha: &str,
+    scope_raw: &[u8], roots_raw: &[u8], challenge: [u8; 32],
+    outer: &rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>,
+    caller_issuer_der: &[u8], caller_client_pem: &[u8], expected_caller_principal: &str,
+    expected_target_principal: &str, expected_target_nonce: &str,
+    expected_target_request_sha256: &str, original_deadline: u64) -> Result<Vec<u8>, String> {
+    let endpoint = outer.sock.peer_addr()
+        .map_err(|_| "native bootstrap actual connected endpoint is unavailable")?;
+    enrollment_bootstrap::verify(raw, delegation_pem, delegation_pem_sha, setup_pem, setup_pem_sha,
+        scope_raw, roots_raw, challenge, &outer.conn, caller_issuer_der, caller_client_pem,
+        expected_caller_principal, expected_target_principal, expected_target_nonce,
+        expected_target_request_sha256, endpoint, original_deadline)
 }
 
 pub(super) fn verify_ingress(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])

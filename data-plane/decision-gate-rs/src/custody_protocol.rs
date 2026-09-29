@@ -25,6 +25,14 @@ mod response_observation_v2;
 mod response_observation_v2_api;
 pub mod enclave_runtime_identity_v1;
 mod native_enrollment_assignment_v1;
+use native_enrollment_assignment_v1 as assignment;
+mod native_workload_bootstrap_request_v1;
+#[path = "native_enrollment_bootstrap_delegation_v1.rs"]
+mod bootstrap_delegation;
+#[path = "native_enrollment_bootstrap_setup_v1.rs"]
+mod bootstrap_setup;
+mod native_enrollment_bootstrap_packet_v2;
+mod native_bootstrap_attempt_v1;
 pub mod enclave_bootstrap_v1;
 pub mod enclave_vsock_v1;
 pub mod enclave_loopback_tunnel_v1;
@@ -1176,6 +1184,11 @@ struct AttemptBindingPayload {
     attempt_id: String,
     statement_digest: String,
     retain_until_epoch_ms: u64,
+    // Absent in every legacy record, preserving its canonical bytes/checksum.
+    // Explicit null is invalid, including for legacy profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none",
+        deserialize_with = "native_bootstrap_attempt_v1::deserialize_outcome")]
+    bootstrap_outcome: Option<native_bootstrap_attempt_v1::StoredOutcome>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -2380,6 +2393,7 @@ impl AttemptStatementLedger {
         let mut expiry_index = BTreeSet::new();
         let mut active_accumulator = [0u8; 32];
         let mut stale_paths = Vec::new();
+        let mut bootstrap_count = 0usize;
         for path in binding_paths {
             let record = load_attempt_binding_record(&path)?;
             let filename = path
@@ -2402,6 +2416,15 @@ impl AttemptStatementLedger {
             if record.payload.retain_until_epoch_ms <= manifest.pruned_through_epoch_ms {
                 stale_paths.push(path);
                 continue;
+            }
+            if record.payload.api_version == native_bootstrap_attempt_v1::API_VERSION {
+                bootstrap_count += 1;
+                if bootstrap_count > native_bootstrap_attempt_v1::MAX_ATTEMPTS {
+                    return Err(attempt_ledger_error(
+                        "attempt_statement_capacity_exhausted",
+                        "native bootstrap ledger exceeds its reserved output capacity",
+                    ));
+                }
             }
             if bindings
                 .insert(record.payload.attempt_id.clone(), record.payload.clone())
@@ -2515,6 +2538,11 @@ impl AttemptStatementLedger {
                 )
             })?;
         let reservation_is_fresh = reserved.statement_digest == request_aggregate_digest;
+        if reserved.api_version != ATTEMPT_LEDGER_API_VERSION {
+            return Err(attempt_ledger_error(
+                "attempt_statement_substitution", "attempt belongs to another ledger purpose",
+            ));
+        }
         if !reservation_is_fresh && reserved.statement_digest != statement_digest {
             self.advance_max_observed_time(now_epoch_ms)?;
             return Err(ProtocolError::new(
@@ -2545,6 +2573,7 @@ impl AttemptStatementLedger {
             attempt_id: reservation_ledger_key.to_string(),
             statement_digest: statement_digest.to_string(),
             retain_until_epoch_ms,
+            bootstrap_outcome: None,
         };
         let old_checksum = checksum_payload(&reserved)?;
         let replacement_checksum = checksum_payload(&replacement)?;
@@ -2609,12 +2638,17 @@ impl AttemptStatementLedger {
             ));
         }
         self.prune_expired(now_epoch_ms)?;
-        if let Some(existing_statement_digest) = self
+        if let Some((existing_version, existing_statement_digest)) = self
             .bindings
             .get(attempt_id)
-            .map(|existing| existing.statement_digest.clone())
+            .map(|existing| (existing.api_version.clone(), existing.statement_digest.clone()))
         {
             self.advance_max_observed_time(now_epoch_ms)?;
+            if existing_version != ATTEMPT_LEDGER_API_VERSION {
+                return Err(attempt_ledger_error(
+                    "attempt_statement_substitution", "attempt belongs to another ledger purpose",
+                ));
+            }
             if replay_policy == LedgerClaimReplayPolicy::RejectObservationNonce {
                 return Err(ProtocolError::new(
                     "observation_nonce_replay",
@@ -2649,6 +2683,7 @@ impl AttemptStatementLedger {
             attempt_id: attempt_id.to_string(),
             statement_digest: statement_digest.to_string(),
             retain_until_epoch_ms,
+            bootstrap_outcome: None,
         };
         let checksum = checksum_payload(&payload)?;
         let mut next_manifest = self.manifest.clone();
@@ -2990,7 +3025,7 @@ fn validate_attempt_ledger_manifest_record(
 }
 
 fn load_attempt_binding_record(path: &Path) -> Result<AttemptBindingRecord, ProtocolError> {
-    let bytes = read_attempt_ledger_file(path, MAX_ATTEMPT_LEDGER_RECORD_BYTES)?;
+    let bytes = read_attempt_ledger_file(path, native_bootstrap_attempt_v1::MAX_RECORD_BYTES)?;
     let record: AttemptBindingRecord = decode_canonical_json(&bytes).map_err(|error| {
         attempt_ledger_error(
             "attempt_ledger_corrupt",
@@ -3005,14 +3040,23 @@ fn validate_attempt_binding_record(
     record: &AttemptBindingRecord,
     label: &str,
 ) -> Result<(), ProtocolError> {
-    if record.payload.api_version != ATTEMPT_LEDGER_API_VERSION
-        || record.payload.retain_until_epoch_ms == 0
+    if record.payload.retain_until_epoch_ms == 0
         || record.checksum != checksum_payload(&record.payload)?
     {
         return Err(attempt_ledger_error(
             "attempt_ledger_corrupt",
             format!("binding record {label} is invalid"),
         ));
+    }
+    let size = canonical_json_bytes(record)?.len();
+    if record.payload.api_version == ATTEMPT_LEDGER_API_VERSION {
+        if record.payload.bootstrap_outcome.is_some() || size > MAX_ATTEMPT_LEDGER_RECORD_BYTES {
+            return Err(attempt_ledger_error("attempt_ledger_corrupt", "legacy ledger record shape changed"));
+        }
+    } else if record.payload.api_version == native_bootstrap_attempt_v1::API_VERSION {
+        native_bootstrap_attempt_v1::validate_record(&record.payload, size)?;
+    } else {
+        return Err(attempt_ledger_error("attempt_ledger_corrupt", "unknown ledger record purpose"));
     }
     validate_sha256_digest("ledger attempt_id", &record.payload.attempt_id)
         .map_err(|error| attempt_ledger_error("attempt_ledger_corrupt", error.message))?;
@@ -3121,7 +3165,7 @@ fn remove_orphan_attempt_ledger_temporary(path: &Path) -> Result<(), ProtocolErr
     let opened = validate_attempt_ledger_file_metadata(
         &file,
         path,
-        MAX_ATTEMPT_LEDGER_RECORD_BYTES.max(MAX_ATTEMPT_LEDGER_MANIFEST_BYTES),
+        native_bootstrap_attempt_v1::MAX_RECORD_BYTES.max(MAX_ATTEMPT_LEDGER_MANIFEST_BYTES),
     )?;
     let path_metadata = fs::symlink_metadata(path).map_err(|error| {
         attempt_ledger_error(

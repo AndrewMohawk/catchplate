@@ -14,13 +14,25 @@ from cryptography.x509.oid import ExtendedKeyUsageOID
 from scripts import verify_nitro_tee as nitro
 from serverware import authority_credential_currentness_policy as native
 from serverware import authority_policy_canary as profile
+from serverware import authority_request_commitment as commitment
 
 FIELD = "policyCanaryIntakePolicy"
-SCHEMA = "serverware.policyCanaryIntakeAuthorityPolicy/v1"
+SCHEMA = "serverware.policyCanaryIntakeAuthorityPolicy/v2"
+CONFIGURATION_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
 TRUST_SCHEMA = "serverware.policyCanaryNativeTrustRoots/v1"
-FIELDS = frozenset({"schema", "deploymentId", "controlPlaneConfigurationDigest", "issuedAtEpochNs", "expiresAtEpochNs",
+FIELDS = frozenset({"schema", "deploymentId", "issuedAtEpochNs", "expiresAtEpochNs",
     "operationMaxSeconds", "limits", "trustRoots", "assignments"})
 ASSIGNMENT_FIELDS = native.ASSIGNMENT_FIELDS | {"instanceId", "canaryId", "canaryAssignmentSha256", "canaryBootId", "workloadCaCertificatePem"}
+
+
+def full_configuration_digest(payload):
+    """Hash the full independently admitted payload, without exclusions.
+
+    An embedded purpose cannot contain its own enclosing configuration digest.
+    Runtime/cold pins are made only after the complete signed original exists.
+    """
+    profile.require(type(payload) is dict and payload.get("schema") == CONFIGURATION_SCHEMA)
+    return commitment.framed_digest(CONFIGURATION_SCHEMA, profile.canonical(payload))
 
 
 def trust(value):
@@ -36,7 +48,7 @@ def validate_policy(value, *, payload, root_key=None):
         profile.require(not enabled, "native canary intake requires its separately admitted policy")
         return None
     profile.require(type(value) is dict and set(value) == FIELDS and value["schema"] == SCHEMA)
-    profile.component(value["deploymentId"]); profile.digest(value["controlPlaneConfigurationDigest"])
+    profile.component(value["deploymentId"])
     issued, expires = profile.epoch(value["issuedAtEpochNs"]), profile.epoch(value["expiresAtEpochNs"])
     profile.require(0 < expires - issued <= 86_400_000_000_000 and type(value["operationMaxSeconds"]) is int
         and 1 <= value["operationMaxSeconds"] <= 30 and value["limits"] == profile.LIMITS
@@ -101,7 +113,7 @@ def verify_evidence(operation, batch_original, evidence, configuration_digest, *
         and statement["operation"] == operation and statement["requestId"] == original["requestId"]
         and statement["canaryId"] == original["canaryId"]
         and statement["batchSha256"] == profile.sha256(batch_original.encode("ascii"))
-        and configuration_digest == selected["controlPlaneConfigurationDigest"]
+        and configuration_digest == full_configuration_digest(configuration_payload)
         and statement["deploymentId"] == selected["deploymentId"]
         and selected["issuedAtEpochNs"] <= now_epoch_ns < selected["expiresAtEpochNs"]
         and statement["issuedAtEpochNs"] <= now_epoch_ns < statement["expiresAtEpochNs"] <= selected["expiresAtEpochNs"]

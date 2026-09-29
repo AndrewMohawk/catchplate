@@ -2015,6 +2015,27 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("measured refresh did not return exact request/response originals")
         return originals
 
+    def _request_canary_delivery(self, *, operation, input_value, deadline_ns):
+        """Preserve actual signed delivery originals; no generic proof export."""
+        from serverware import authority_policy_canary_delivery as delivery
+        if operation not in delivery.OPERATIONS or type(deadline_ns) is not int:
+            raise CustodyClientError("canary delivery original custody purpose differs")
+        binding = _snapshot(self)
+        runtime = binding.runtime_client
+        if type(runtime) is not service.AuthorityRuntimeClient:
+            raise CustodyClientError("canary delivery lacks the actual cold runtime client")
+        _receipt_now(binding)
+        originals = service.AuthorityRuntimeClient.request_canary_delivery(runtime,
+            operation=operation, input_value=input_value, deadline_ns=deadline_ns)
+        _process(binding); _receipt_now(binding)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("canary delivery custody changed while receiving originals")
+        journal.CustodyJournal._require_ready(binding.journal)
+        transport._check_deadline(deadline_ns)
+        if type(originals) is not tuple or len(originals) != 2 or any(type(raw) is not bytes for raw in originals):
+            raise CustodyClientError("canary delivery did not return exact request/response originals")
+        return originals
+
     def _request_measured_cleanup(self, *, operation, input_value, deadline_ns):
         """Exact signed originals only for the fixed measured-cleanup family.
 

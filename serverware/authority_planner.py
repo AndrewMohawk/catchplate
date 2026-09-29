@@ -30,6 +30,8 @@ from serverware import authority_policy_candidate as policy_candidate
 from serverware import authority_policy_candidate_inventory
 from serverware import authority_policy_canary
 from serverware import authority_policy_canary_tables
+from serverware import authority_policy_canary_delivery
+from serverware import authority_policy_canary_delivery_policy
 from serverware import authority_complete_query
 from serverware import authority_complete_acquisition
 from serverware import authority_complete_query_batch
@@ -496,6 +498,7 @@ class PlanningState:
     query_reads: tuple[authority_query_reads.QueryRead, ...] = ()
     complete_query_evidence: authority_complete_acquisition.CompleteAcquisitionEvidence | None = None
     rbac_primary_inputs: tuple | None = None
+    canary_delivery_admission: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1358,6 +1361,7 @@ class TypedTransitionPlanningProgram:
                 verified_webauthn_evidence=state.verified_webauthn_evidence,
                 query_reads=state.query_reads,
                 rbac_primary_inputs=state.rbac_primary_inputs,
+                canary_delivery_admission=state.canary_delivery_admission,
             )
             transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
@@ -4045,6 +4049,7 @@ class MeasuredPlanner:
         verifier_public_key: Ed25519PublicKey | None = None,
         verifier_identity: Mapping[str, str] | None = None,
         maximum_assertion_age_ns: int | None = None,
+        canary_delivery_admission=None,
     ) -> None:
         if (
             not read_dsn
@@ -4083,6 +4088,13 @@ class MeasuredPlanner:
             if verifier_identity is not None else None
         )
         self.maximum_assertion_age_ns = maximum_assertion_age_ns
+        if self.enabled_operations & authority_policy_canary_delivery.OPERATIONS:
+            if type(canary_delivery_admission) is not authority_policy_canary_delivery_policy._Admission:
+                raise AuthorityPlannerError("canary delivery planner lacks its actual configuration owner")
+            canary_delivery_admission.check()
+        elif canary_delivery_admission is not None:
+            raise AuthorityPlannerError("canary delivery configuration cannot be supplied to another planner")
+        self.canary_delivery_admission = canary_delivery_admission
 
     def verify_assertion_evidence(
         self, request: Mapping[str, Any]
@@ -4252,6 +4264,10 @@ class MeasuredPlanner:
                         if operation == "rbac.binding.mutate":
                             planning_state = replace(planning_state,
                                 rbac_primary_inputs=(tuple(roots), tuple(authorization_roots), tuple(multiproofs)))
+                        if operation in authority_policy_canary_delivery.OPERATIONS:
+                            self.canary_delivery_admission.verify(operation, request["typedRequest"]["arguments"],
+                                int(planning_state.database_now.timestamp()) * 1_000_000_000 + planning_state.database_now.microsecond * 1000)
+                            planning_state = replace(planning_state, canary_delivery_admission=self.canary_delivery_admission)
                         if operation in {oauth_activation.OP_ACTIVATE, oauth_exchange.OP_PREPARE, oauth_exchange.OP_STAGE,
                                 oauth_measured_exchange.OP_PREPARE, oauth_measured_exchange.OP_STAGE,
                                 "oauth.setup.create", "oauth.setup.activate", "oauth.measured-setup.prepare", "oauth.measured-setup.stage",

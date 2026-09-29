@@ -123,7 +123,7 @@ class SignedOnlyHttpToolsProtocol(HttpToolsProtocol):
         if self.scope["path"] == "/api/data-plane/audit":
             from serverware import control_plane_data_plane_audit as measured_audit
             self.scope["serverware.measured_audit_peer"] = measured_audit.peer_from_transport(self.transport)
-        if self.scope["path"] in {"/api/data-plane/policy-canary/controlled-evidence", "/api/data-plane/policy-canary/controlled-evidence/inspect"}:
+        if self.scope["path"] in {"/api/data-plane/policy-canary/controlled-evidence", "/api/data-plane/policy-canary/controlled-evidence/inspect", "/api/data-plane/policy-canary/delivery"}:
             from serverware import control_plane_policy_canary_startup as policy_canary
             self.scope[policy_canary.PEER_SCOPE] = policy_canary.peer_from_transport(self.transport)
 

@@ -111,11 +111,13 @@ def initialize_from_environment():
             payload = envelope["payload"]; raw_payload = profile.canonical(payload)
             profile.require(payload.get("schema") == AUTHORITY_SCHEMA and payload.get("sourceRevision") == contract.SOURCE_REVISION
                 and type(payload.get("roles")) is dict and {"verifier", "planner"} <= set(payload["roles"])
-                and commitment.framed_digest(AUTHORITY_SCHEMA, raw_payload) == config["authorityConfigurationDigest"])
+                and policy.full_configuration_digest(payload) == config["authorityConfigurationDigest"] == binding.configuration_digest)
             root.verify(profile.decoded(envelope["signature"], 64, length=64),
                 commitment.framed_digest(SIGNED_AUTHORITY_SCHEMA, raw_payload).encode("ascii"))
             selected_policy = policy.validate_policy(payload.get(policy.FIELD), payload=payload, root_key=root)
-            profile.require(selected_policy is not None and selected_policy["controlPlaneConfigurationDigest"] == binding.configuration_digest)
+            from serverware import authority_policy_canary_delivery_policy as delivery_policy
+            selected_delivery = delivery_policy.validate_policy(payload.get(delivery_policy.FIELD), payload=payload, root_key=root)
+            profile.require(selected_policy is not None)
             # enabledOperations belongs to the real planner role. Verifier
             # independently consumes the same signed purpose, not a new field.
             profile.require(profile.OP_INTAKE in payload["roles"]["planner"].get("enabledOperations", ()))
@@ -124,6 +126,7 @@ def initialize_from_environment():
             owner = _Cold()
             owner.custody, owner.binding, owner.configuration_digest = actual, binding, binding.configuration_digest
             owner.originals, owner.payload, owner.root, owner.policy = (config_original, root_original, authority_original), payload, root, selected_policy
+            owner.delivery_policy = selected_delivery
             owner.poisoned, owner.now, owner.mono = False, now, mono
             owner.expires = min(selected_policy["expiresAtEpochNs"], binding.attestation_interval[1])
             owner.deadline = mono + owner.expires - now
@@ -164,8 +167,25 @@ def configure_tls(context):
     profile.require(isinstance(context, ssl.SSLContext), "native canary intake requires actual control-plane TLS")
     context.minimum_version = ssl.TLSVersion.TLSv1_3
     context.load_verify_locations(cadata="".join(item["workloadCaCertificatePem"] for item in _owner.policy["assignments"]))
+    if _owner.delivery_policy is not None:
+        context.load_verify_locations(cadata="".join(item["workloadCaCertificatePem"] for item in _owner.delivery_policy["assignments"]))
     context.verify_mode = ssl.CERT_OPTIONAL
     _owner.check()
+
+
+def delivery_owner():
+    """Same public-original custody, separately signed delivery permission.
+
+    Absence of the delivery purpose does not upgrade an intake assignment.
+    This owner stays private and is never serialized as a verification token.
+    """
+    from serverware import authority_policy_canary_delivery_policy as delivery_policy
+    profile.require(selected() and type(_owner) is _Cold and _owner.delivery_policy is not None)
+    now = _owner.check()
+    chosen = delivery_policy.validate_policy(_owner.payload.get(delivery_policy.FIELD), payload=_owner.payload, root_key=_owner.root)
+    profile.require(chosen == _owner.delivery_policy and policy.full_configuration_digest(_owner.payload) == _owner.configuration_digest
+        and chosen["issuedAtEpochNs"] <= now < chosen["expiresAtEpochNs"])
+    return _owner
 
 
 class _Peer:

@@ -50,16 +50,16 @@
     },
     "policy": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema", "deploymentId", "controlPlaneConfigurationDigest", "issuedAtEpochNs", "expiresAtEpochNs", "operationMaxSeconds", "limits", "trustRoots", "assignments"],
+      "required": ["schema", "deploymentId", "issuedAtEpochNs", "expiresAtEpochNs", "operationMaxSeconds", "limits", "trustRoots", "assignments"],
       "properties": {
-        "schema": {"const": "serverware.policyCanaryIntakeAuthorityPolicy/v1"},
-        "deploymentId": {"$ref": "#/$defs/component"}, "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
+        "schema": {"const": "serverware.policyCanaryIntakeAuthorityPolicy/v2"},
+        "deploymentId": {"$ref": "#/$defs/component"},
         "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"},
         "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
         "limits": {"$ref": "#/$defs/limits"}, "trustRoots": {"$ref": "#/$defs/trustRoots"},
         "assignments": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/assignment"}}
       },
-      "description": "Explicit policyCanaryIntakePolicy in the original root-signed measured authority configuration, independently admitted by verifier and planner. TTL at most 24 hours; sorted unique canary/instance/holder assignments. No old audit/OAuth permission alias."
+      "description": "Explicit closed v2 policyCanaryIntakePolicy in the original root-signed measured authority configuration, independently admitted by verifier and planner. No self-referential configuration digest: runtime arguments bind the digest of the complete admitted configuration, and cold pins are supplied after signing. Old v1 policy bytes are refused rather than reinterpreted. TTL at most 24 hours; sorted unique canary/instance/holder assignments. No old audit/OAuth permission alias."
     },
     "arguments": {
       "type": "object", "additionalProperties": false,

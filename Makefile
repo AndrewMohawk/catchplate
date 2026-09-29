@@ -1419,6 +1419,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_policy_candidate_trust.py \
 	serverware/control_plane_policy_candidate.py \
 	serverware/authority_policy_canary.py \
+	serverware/authority_policy_canary_delivery.py \
+	serverware/authority_policy_canary_delivery_policy.py \
+	serverware/authority_policy_canary_delivery_completion.py \
+	serverware/authority_transition_policy_canary_delivery.py \
+	serverware/control_plane_policy_canary_delivery.py \
 	serverware/authority_policy_canary_evidence.py \
 	serverware/authority_policy_canary_policy.py \
 	serverware/authority_policy_canary_tables.py \
@@ -3894,6 +3899,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_policy_candidate_trust.py \
 				serverware/control_plane_policy_candidate.py \
 				serverware/authority_policy_canary.py \
+				serverware/authority_policy_canary_delivery.py \
+				serverware/authority_policy_canary_delivery_policy.py \
+				serverware/authority_policy_canary_delivery_completion.py \
+				serverware/authority_transition_policy_canary_delivery.py \
+				serverware/control_plane_policy_canary_delivery.py \
 				serverware/authority_policy_canary_evidence.py \
 				serverware/authority_policy_canary_policy.py \
 				serverware/authority_policy_canary_tables.py \
@@ -4474,6 +4484,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \
 				schemas/oauth-measured-reconnect-authority.v1.schema.json \
 				schemas/policy-candidate-generation-intake.v1.schema.json \
+				schemas/policy-canary-controlled-evidence.v1.schema.json \
+				schemas/policy-canary-durable-delivery.v1.schema.json \
+				schemas/native-policy-canary-sender.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \

@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.309"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.310"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -1463,6 +1463,7 @@ PHASE2_STORE_TABLES = tuple(sorted({
     *_PHASE3_ACTIVATION_EVIDENCE,
 }))
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
+    "policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts",
     "policy_shadow_generation_claims",
     "policy_canary_intake_batches",
     *PHASE2_STORE_TABLES,
@@ -1545,6 +1546,7 @@ _PHASE2_MAINTENANCE_OPAQUE_PROOF_SET = (
 
 
 POLICY_CANARY_INTAKE_TABLES = tuple(sorted({
+    "policy_canary_delivery_slots", "policy_canary_delivery_heads",
     "policy_authority_trusted_keys", "policy_authority_trusted_key_heads", "policy_authority_trusted_key_revocations",
     "policy_authority_evidence_verifications", "policy_runtime_attestations", "policy_runtime_role_keys",
     "policy_runtime_role_key_revocations", "policy_runtime_evidence_verifications", "policy_candidate_artifacts",
@@ -1561,6 +1563,7 @@ POLICY_CANARY_INTAKE_TABLES = tuple(sorted({
     "policy_authority_genesis_finalizations", "policy_authority_genesis_preparations",
 }))
 _CANARY_INTAKE_WRITES = (
+    "policy_canary_delivery_slots", "policy_canary_delivery_heads",
     "policy_authority_evidence_verifications", "policy_runtime_attestations", "policy_runtime_role_keys",
     "policy_runtime_evidence_verifications", "policy_canaries", "policy_canary_assignments",
     "policy_canary_assignment_members", "policy_canary_instances", "policy_canary_heads", "policy_canary_revisions",
@@ -1571,14 +1574,28 @@ _CANARY_INTAKE_WRITES = (
     "policy_compiler_authority_analyses", "policy_canary_readiness", "policy_canary_intake_batches",
 ) + _AUDIT
 _CANARY_INTAKE_HEADS = frozenset({"policy_canary_heads", "policy_canary_custody_heads",
-    "policy_canary_instance_heads", "policy_canary_checkpoint_heads"})
+    "policy_canary_instance_heads", "policy_canary_checkpoint_heads", "policy_canary_delivery_heads"})
 
 
 _OPERATIONS = {
+    **{
+        "policy.canary.delivery." + phase: _spec(
+            "serverware_policy_authority_policy_canary_delivery_" + phase,
+            reads=("policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts", "policy_canary_intake_batches"),
+            writes=(("policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts") if phase == "prepare"
+                else ("policy_canary_delivery_slots", "policy_canary_delivery_heads") if phase == "claim" else ()) + _AUDIT,
+            mutation_kinds={**({"policy_canary_delivery_slots": ("INSERT",), "policy_canary_delivery_parts": ("INSERT",),
+                "policy_canary_delivery_heads": ("INSERT", "UPDATE")} if phase == "prepare" else
+                {"policy_canary_delivery_slots": ("UPDATE",), "policy_canary_delivery_heads": ("UPDATE",)} if phase == "claim" else {}),
+                **{table: ("INSERT",) for table in _AUDIT}},
+            proof_primitives=("primary-key-row",), maximum_query_rows=48, maximum_mutations=24, maximum_work_units=8192,
+        ) for phase in ("prepare", "claim", "recover")
+    },
     "policy.canary.evidence-intake": _spec(
         "serverware_policy_authority_policy_canary_evidence_intake",
         reads=POLICY_CANARY_INTAKE_TABLES, writes=_CANARY_INTAKE_WRITES,
-        mutation_kinds={table: (("INSERT", "UPDATE") if table in _CANARY_INTAKE_HEADS else ("INSERT",))
+        mutation_kinds={table: (("UPDATE",) if table == "policy_canary_delivery_slots" else
+            ("INSERT", "UPDATE") if table in _CANARY_INTAKE_HEADS else ("INSERT",))
             for table in _CANARY_INTAKE_WRITES},
         proof_primitives=("primary-key-row", "bounded-limit-plus-one"),
         maximum_query_rows=240, maximum_mutations=96, maximum_work_units=8192,

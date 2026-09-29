@@ -81,6 +81,7 @@ from serverware.portal_oauth_setup import OAUTH_SETUP_HTML, OAUTH_SETUP_SCRIPT
 from serverware.portal_policy_candidate import POLICY_CANDIDATE_HTML, POLICY_CANDIDATE_SCRIPT
 from serverware import control_plane_policy_candidate
 from serverware import control_plane_policy_canary
+from serverware import control_plane_policy_canary_delivery
 from serverware.portal_oauth_reconnect import OAUTH_RECONNECT_HTML, OAUTH_RECONNECT_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
@@ -627,6 +628,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             "/api/policy/authority/candidates/handoff",
             *control_plane_policy_candidate.PATHS,
             *control_plane_policy_canary.PATHS,
+            control_plane_policy_canary_delivery.PATH,
             "/api/data-plane/policy-canary/evidence",
             }
             or setup_canary_request
@@ -656,6 +658,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     request_limit = {
         **{path: control_plane_policy_candidate.MAX_REQUEST for path in control_plane_policy_candidate.PATHS},
         **{path: control_plane_policy_canary.MAX_REQUEST for path in control_plane_policy_canary.PATHS},
+        control_plane_policy_canary_delivery.PATH: control_plane_policy_canary_delivery.MAX_REQUEST,
         **{path: activation_permission_contract.MAX_REQUEST_BYTES for path in activation_permission_routes.PATHS},
         **{path: handoff_contract.MAX_REQUEST_BYTES for path in (
             handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS)},
@@ -11107,6 +11110,17 @@ async def controlled_policy_canary_evidence(request: Request) -> dict[str, Any]:
     except (ValueError, KeyError, TypeError, db.PolicyCandidateAuthorityError, db.MetadataStoreError) as exc:
         raise HTTPException(status_code=409,
             detail="Controlled canary intake unavailable or outcome unknown; inspection is data only and never resend permission") from exc
+
+
+@app.post(control_plane_policy_canary_delivery.PATH)
+async def controlled_policy_canary_delivery(request: Request) -> dict[str, Any]:
+    raw = await request.body()
+    try:
+        return await _run_bounded_blocking(_POLICY_AUTHORITY_HANDOFF_SLOTS,
+            control_plane_policy_canary_delivery.on_request, request, raw)
+    except (ValueError, KeyError, TypeError, db.PolicyCandidateAuthorityError, db.MetadataStoreError) as exc:
+        raise HTTPException(status_code=409,
+            detail="Canary delivery unavailable or outcome unknown; recover exact originals, never repeat a claimed contact") from exc
 
 
 def _policy_shadow_activation_publication_result(

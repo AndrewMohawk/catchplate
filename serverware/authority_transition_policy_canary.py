@@ -15,6 +15,7 @@ from serverware import authority_transition_policy_canary_custody as custody
 from serverware import authority_transition_policy_canary_active as active
 from serverware import authority_transition_policy_canary_shadow as shadow
 from serverware import authority_transition_policy_canary_compiler as compiler
+from serverware import authority_transition_policy_canary_delivery as delivery
 from serverware.authority_transition_policy_canary_state import State
 
 
@@ -26,6 +27,7 @@ def _program(values, database_now, request_digest, snapshot):
     profile.require(signed["issuedAtEpochNs"] <= state.now < signed["expiresAtEpochNs"])
     profile.require(not state.matching(profile.TABLE, request_id=original["requestId"]),
         "native intake identity already exists; exact inspection does not reenter intake")
+    delivery.require_claimed(state, values)
     handlers = {"assignment": membership.assignment, "canary-revision": lifecycle.canary_revision,
         "load-receipt": membership.load_receipt, "runtime-attestation-handoff": handoff.handoff, "custody": custody.custody,
         "ingress": custody.ingress, "active-decision": active.active, "shadow-observation": shadow.shadow,
@@ -67,6 +69,7 @@ def _program(values, database_now, request_digest, snapshot):
         "status": "committed", "result": result, "recordOriginal": record_original})) <= profile.MAX_RESPONSE,
         "complete intake acknowledgement exceeds the original response budget")
     state.put(profile.TABLE, row)
+    delivery.consume(state, values, result, request_digest)
     return state, result
 
 

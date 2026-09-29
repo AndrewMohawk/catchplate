@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "serverware.policyCanaryDurableDelivery/v1",
+  "title": "Purpose-fixed durable canary delivery originals",
+  "$ref": "#/$defs/httpRequest",
+  "$defs": {
+    "digest": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/digest"},
+    "epoch": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/epoch"},
+    "component": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/component"},
+    "uuid": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/statement/properties/requestId"},
+    "bytes32": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/bytes32"},
+    "operation": {"enum": ["policy.canary.delivery.prepare", "policy.canary.delivery.claim", "policy.canary.delivery.recover"]},
+    "limits": {"const": {"httpOriginalBytes": 1245184, "argumentBytes": 3145728, "completionOriginalBytes": 786432,
+      "responseBytes": 6291456, "partBytes": 65536, "parts": 20, "queryRows": 48, "mutations": 24, "workUnits": 8192}},
+    "trustRoots": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url", "nitroCertificateProfile"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyCanaryDeliveryTrustRoots/v1"},
+        "awsNitroRootCertificatesPem": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/trustRoots/properties/awsNitroRootCertificatesPem"},
+        "awsNitroCrlsDerBase64url": {"const": []},
+        "nitroCertificateProfile": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/certificateProfile"}
+      }
+    },
+    "assignment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId", "releaseRecordSha256", "policyHash",
+        "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest", "expectedPcrs", "expectedEif",
+        "expectedModuleId", "maxAgeSeconds", "futureSkewSeconds", "instanceId", "canaryId", "canaryAssignmentSha256", "canaryBootId",
+        "workloadCaCertificatePem", "intakePurposeAssignmentSha256"],
+      "properties": {
+        "holderId": {"$ref": "#/$defs/digest"}, "bootId": {"$ref": "#/$defs/bytes32"}, "keyId": {"$ref": "#/$defs/digest"},
+        "controlPlaneResponseSigningKeyId": {"$ref": "#/$defs/digest"}, "releaseRecordSha256": {"$ref": "#/$defs/digest"},
+        "policyHash": {"$ref": "#/$defs/digest"}, "configurationSha256": {"$ref": "#/$defs/digest"},
+        "caCertificateSha256": {"$ref": "#/$defs/digest"}, "caPublicKeySpkiSha256": {"$ref": "#/$defs/digest"},
+        "expectedBinaryDigest": {"$ref": "#/$defs/digest"},
+        "expectedPcrs": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/expectedPcrs"},
+        "expectedEif": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/sha384"},
+        "expectedModuleId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "maxAgeSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        "futureSkewSeconds": {"type": "integer", "minimum": 0, "maximum": 30},
+        "instanceId": {"$ref": "#/$defs/component"}, "canaryId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "canaryAssignmentSha256": {"$ref": "#/$defs/digest"}, "canaryBootId": {"$ref": "#/$defs/digest"},
+        "workloadCaCertificatePem": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "intakePurposeAssignmentSha256": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Independent delivery permission. The linked intake assignment is necessary for prepare, never permission borrowed from intake. Current and historical inventories are independently root-admitted."
+    },
+    "recoveryAssociation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["historicalAssignmentSha256", "currentAssignmentSha256", "canaryId", "instanceId", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "historicalAssignmentSha256": {"$ref": "#/$defs/digest"}, "currentAssignmentSha256": {"$ref": "#/$defs/digest"},
+        "canaryId": {"type": "string", "minLength": 1, "maxLength": 256}, "instanceId": {"$ref": "#/$defs/component"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"}
+      },
+      "description": "Fresh current permission to observe an exact historical slot. Never transfers old boot/key ownership or claim/contact authority."
+    },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "deploymentId", "issuedAtEpochNs", "expiresAtEpochNs", "operationMaxSeconds", "limits", "trustRoots",
+        "assignments", "historicalTrustRoots", "historicalAssignments", "recoveryAssociations"],
+      "properties": {
+        "schema": {"const": "serverware.policyCanaryDeliveryAuthorityPolicy/v1"}, "deploymentId": {"$ref": "#/$defs/component"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30}, "limits": {"$ref": "#/$defs/limits"},
+        "trustRoots": {"$ref": "#/$defs/trustRoots"}, "historicalTrustRoots": {"$ref": "#/$defs/trustRoots"},
+        "assignments": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/assignment"}},
+        "historicalAssignments": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/assignment"}},
+        "recoveryAssociations": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/recoveryAssociation"}}
+      },
+      "description": "Explicit policyCanaryDeliveryPolicy embedded in the full signed measured authority configuration, with separately enabled fixed operations. TTL at most 24 hours. No embedded self-pin: source-computed full configuration digest binds every runtime argument. No intake, audit or OAuth permission alias."
+    },
+    "statement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "operation", "requestId", "deploymentId", "instanceId", "holderId", "bootId", "keyId",
+        "controlPlaneResponseSigningKeyId", "policyHash", "dataPlaneBinarySha256", "purposeAssignmentSha256", "canaryId",
+        "canaryAssignmentSha256", "canaryBootId", "workloadUri", "clientCertificateSha256", "clientSpkiSha256", "nonce",
+        "issuedAtEpochNs", "expiresAtEpochNs", "slotId", "requestSha256", "httpSha256", "originalExpiresAtEpochNs"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCanaryDeliveryStatement/v1"}, "operation": {"$ref": "#/$defs/operation"},
+        "requestId": {"$ref": "#/$defs/uuid"}, "slotId": {"$ref": "#/$defs/uuid"}, "deploymentId": {"$ref": "#/$defs/component"},
+        "instanceId": {"$ref": "#/$defs/component"}, "holderId": {"$ref": "#/$defs/digest"}, "bootId": {"$ref": "#/$defs/bytes32"},
+        "keyId": {"$ref": "#/$defs/digest"}, "controlPlaneResponseSigningKeyId": {"$ref": "#/$defs/digest"},
+        "policyHash": {"$ref": "#/$defs/digest"}, "dataPlaneBinarySha256": {"$ref": "#/$defs/digest"},
+        "purposeAssignmentSha256": {"$ref": "#/$defs/digest"}, "canaryId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "canaryAssignmentSha256": {"$ref": "#/$defs/digest"}, "canaryBootId": {"$ref": "#/$defs/digest"},
+        "workloadUri": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/statement/properties/workloadUri"},
+        "clientCertificateSha256": {"$ref": "#/$defs/digest"}, "clientSpkiSha256": {"$ref": "#/$defs/digest"},
+        "nonce": {"$ref": "#/$defs/bytes32"}, "requestSha256": {"$ref": "#/$defs/digest"}, "httpSha256": {"$ref": "#/$defs/digest"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "originalExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}
+      },
+      "description": "Exact 25-field phase statement. requestSha256 hashes the complete request object; slotId is the original intake requestId; httpSha256 hashes the exact future canonical ASCII HTTP body. Signature domain is schema + '/' + phase + NUL + full canonical statement. Native NSM nonce uses the separate canary-delivery-PHASE-attestation/v1 domain, nonce32, statement SHA256 and signature64. Original expiry never renews."
+    },
+    "nativeEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["statement", "signature", "nativeKeyEvidence", "clientCertificateDerBase64Url"],
+      "properties": {
+        "statement": {"$ref": "#/$defs/statement"},
+        "signature": {"type": "string", "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"},
+        "nativeKeyEvidence": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/nativeEvidence/properties/nativeKeyEvidence"},
+        "clientCertificateDerBase64Url": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/nativeEvidence/properties/clientCertificateDerBase64Url"}
+      },
+      "description": "Dedicated delivery proof; only scalar native evidence/certificate grammars are reused. Exact TLS peer leaf must match. Canonical evidence at most 128 KiB."
+    },
+    "httpOriginal": {
+      "type": "string", "minLength": 2, "maxLength": 1245184,
+      "description": "Exact canonical Python-ASCII HTTP3 intake body, including original inner batch and native intake proof. Byte spelling is immutable; not merely an equivalent parsed object."
+    },
+    "completionOriginal": {
+      "type": "string", "minLength": 2, "maxLength": 786432,
+      "description": "Canonical ASCII completion wrapper containing exact raw runtime request/response strings. Full wrapper <=768 KiB. Must independently verify signed configuration, verifier response, planner original, executor completion, external witness, complete roots and exact rows; JSON alone is not authority."
+    },
+    "prepareRequest": {
+      "type": "object", "additionalProperties": false, "required": ["httpOriginal", "expectedHeadSha256"],
+      "properties": {"httpOriginal": {"$ref": "#/$defs/httpOriginal"}, "expectedHeadSha256": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}}
+    },
+    "recoverRequest": {
+      "type": "object", "additionalProperties": false, "required": ["slotId", "httpSha256", "partCount"],
+      "properties": {"slotId": {"$ref": "#/$defs/uuid"}, "httpSha256": {"$ref": "#/$defs/digest"},
+        "partCount": {"type": "integer", "minimum": 1, "maximum": 20}}
+    },
+    "claimRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slotId", "httpSha256", "partCount", "slotSha256", "headSha256", "prepareCompletionOriginal", "readCompletionOriginal"],
+      "properties": {
+        "slotId": {"$ref": "#/$defs/uuid"}, "httpSha256": {"$ref": "#/$defs/digest"},
+        "partCount": {"type": "integer", "minimum": 1, "maximum": 20}, "slotSha256": {"$ref": "#/$defs/digest"},
+        "headSha256": {"$ref": "#/$defs/digest"}, "prepareCompletionOriginal": {"$ref": "#/$defs/completionOriginal"},
+        "readCompletionOriginal": {"$ref": "#/$defs/completionOriginal"}
+      },
+      "description": "First original is actual prepare OR explicitly labelled completed recover proving prepared after a lost prepare ACK. Second is completed recover proving the same persisted slot/head/HTTP. Same current boot/assignment and original live expiry required; no relabelling, re-execution or reopening. Combined completion strings <=1536 KiB and whole argument <=3 MiB."
+    },
+    "httpRequest": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "operation", "request", "nativeEvidence"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyCanaryDeliveryRequest/v1"}, "operation": {"$ref": "#/$defs/operation"},
+        "request": {"oneOf": [{"$ref": "#/$defs/prepareRequest"}, {"$ref": "#/$defs/claimRequest"}, {"$ref": "#/$defs/recoverRequest"}]},
+        "nativeEvidence": {"$ref": "#/$defs/nativeEvidence"}
+      },
+      "allOf": [
+        {"if": {"properties": {"operation": {"const": "policy.canary.delivery.prepare"}}}, "then": {"properties": {"request": {"$ref": "#/$defs/prepareRequest"}}}},
+        {"if": {"properties": {"operation": {"const": "policy.canary.delivery.claim"}}}, "then": {"properties": {"request": {"$ref": "#/$defs/claimRequest"}}}},
+        {"if": {"properties": {"operation": {"const": "policy.canary.delivery.recover"}}}, "then": {"properties": {"request": {"$ref": "#/$defs/recoverRequest"}}}}
+      ],
+      "description": "Fixed HTTPS POST /api/data-plane/policy-canary/delivery, actual workload TLS, application/json and Content-Length, no query string. Exact canonical ASCII body <=3 MiB. Evidence operation/request hash must agree."
+    },
+    "arguments": {
+      "type": "object", "additionalProperties": false, "required": ["control_plane_configuration_digest", "request", "native_evidence"],
+      "properties": {
+        "control_plane_configuration_digest": {"$ref": "#/$defs/digest"},
+        "request": {"oneOf": [{"$ref": "#/$defs/prepareRequest"}, {"$ref": "#/$defs/claimRequest"}, {"$ref": "#/$defs/recoverRequest"}]},
+        "native_evidence": {"$ref": "#/$defs/nativeEvidence"}
+      },
+      "description": "Source-fixed authority outer3, built with the actual retained custody configuration digest, never a caller-selected authority root/policy or SQL grant."
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false, "required": ["slotOriginal", "headOriginal", "httpOriginal", "intakeOriginal"],
+      "properties": {
+        "slotOriginal": {"type": ["string", "null"], "maxLength": 1048576},
+        "headOriginal": {"type": ["string", "null"], "maxLength": 1048576},
+        "httpOriginal": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/httpOriginal"}]},
+        "intakeOriginal": {"type": ["string", "null"], "maxLength": 4194304}
+      },
+      "description": "Data until joined to actual signed completion/proof roots. Unknown has null slot/HTTP/intake; head may identify another retained slot and never releases it. Consumed includes the exact committed intake row."
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ok", "operation", "requestDigest", "auditEventDigest", "idempotentReplay", "status", "observation"],
+      "properties": {
+        "ok": {"const": true}, "operation": {"$ref": "#/$defs/operation"}, "requestDigest": {"$ref": "#/$defs/digest"},
+        "auditEventDigest": {"$ref": "#/$defs/digest"}, "idempotentReplay": {"const": false},
+        "status": {"enum": ["unknown", "prepared", "claimed", "consumed"]}, "observation": {"$ref": "#/$defs/observation"}
+      },
+      "description": "Exact controlled result7, canonical <=3 MiB. No result boolean is itself contact permission. Recover has no slot/head business mutations."
+    },
+    "completion": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "requestOriginal", "responseOriginal"],
+      "properties": {
+        "schema": {"const": "serverware.policyCanaryDeliveryCompletionOriginal/v1"},
+        "requestOriginal": {"type": "string", "minLength": 2, "maxLength": 3145728},
+        "responseOriginal": {"type": "string", "minLength": 2, "maxLength": 6291456}
+      },
+      "description": "Exact original strings, not reconstructed equivalents. Full canonical wrapper <=768 KiB when passed into claim. Response is closed policyAuthorityCanaryDeliveryRuntimeResponse/v1: old runtime16 plus authorityConfigurationOriginal and deliveryOriginals4."
+    },
+    "deliveryOriginals": {
+      "type": "object", "additionalProperties": false,
+      "required": ["signedMeasuredPlanOriginal", "executorCompletionOriginal", "witnessRequestOriginal", "witnessResponseOriginal"],
+      "properties": {
+        "signedMeasuredPlanOriginal": {"type": "string", "minLength": 2, "maxLength": 6291456},
+        "executorCompletionOriginal": {"type": "string", "minLength": 2, "maxLength": 6291456},
+        "witnessRequestOriginal": {"type": "string", "minLength": 2, "maxLength": 8192},
+        "witnessResponseOriginal": {"type": "string", "minLength": 2, "maxLength": 8192}
+      },
+      "description": "Actual validated planner/executor/external witness originals retained by the genuine execution owner. Before-root query proofs alone are not post-commit readback. Prepare after-roots and the separate completed recover before-roots must agree on exact persisted rows."
+    },
+    "nullableDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+    "slot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "head_id", "deployment_id", "canary_id", "instance_id", "holder_id", "native_boot_id", "key_id",
+        "delivery_assignment_digest", "intake_assignment_digest", "canary_assignment_digest", "canary_boot_id", "configuration_digest",
+        "http_sha256", "http_byte_count", "part_count", "status", "prepare_request_digest", "prepare_evidence_original",
+        "claim_request_digest", "claim_evidence_original", "prepare_completion_sha256", "read_completion_sha256", "intake_request_digest",
+        "intake_result_sha256", "issued_at_epoch_ns", "expires_at_epoch_ns", "created_at", "updated_at"],
+      "properties": {
+        "id": {"$ref": "#/$defs/uuid"}, "head_id": {"$ref": "#/$defs/digest"}, "deployment_id": {"$ref": "#/$defs/component"},
+        "canary_id": {"type": "string", "minLength": 1, "maxLength": 256}, "instance_id": {"$ref": "#/$defs/component"},
+        "holder_id": {"$ref": "#/$defs/digest"}, "native_boot_id": {"$ref": "#/$defs/bytes32"}, "key_id": {"$ref": "#/$defs/digest"},
+        "delivery_assignment_digest": {"$ref": "#/$defs/digest"}, "intake_assignment_digest": {"$ref": "#/$defs/digest"},
+        "canary_assignment_digest": {"$ref": "#/$defs/digest"}, "canary_boot_id": {"$ref": "#/$defs/digest"},
+        "configuration_digest": {"$ref": "#/$defs/digest"}, "http_sha256": {"$ref": "#/$defs/digest"},
+        "http_byte_count": {"type": "integer", "minimum": 1, "maximum": 1245184},
+        "part_count": {"type": "integer", "minimum": 1, "maximum": 20}, "status": {"enum": ["prepared", "claimed", "consumed"]},
+        "prepare_request_digest": {"$ref": "#/$defs/digest"}, "prepare_evidence_original": {"type": "string", "minLength": 2, "maxLength": 131072},
+        "claim_request_digest": {"$ref": "#/$defs/nullableDigest"}, "claim_evidence_original": {"type": ["string", "null"], "maxLength": 131072},
+        "prepare_completion_sha256": {"$ref": "#/$defs/nullableDigest"}, "read_completion_sha256": {"$ref": "#/$defs/nullableDigest"},
+        "intake_request_digest": {"$ref": "#/$defs/nullableDigest"}, "intake_result_sha256": {"$ref": "#/$defs/nullableDigest"},
+        "issued_at_epoch_ns": {"$ref": "#/$defs/epoch"}, "expires_at_epoch_ns": {"$ref": "#/$defs/epoch"},
+        "created_at": {"type": "string", "minLength": 1, "maxLength": 128}, "updated_at": {"type": "string", "minLength": 1, "maxLength": 128}
+      },
+      "description": "Exact protected row29. Phase nullable fields are coupled by source validator and DDL; original identity/expiry/HTTP never changes. Same original intake window at most30 seconds. Canonical row <=1 MiB."
+    },
+    "head": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "deployment_id", "canary_id", "instance_id", "sequence", "slot_id", "status", "updated_at"],
+      "properties": {
+        "id": {"$ref": "#/$defs/digest"}, "deployment_id": {"$ref": "#/$defs/component"},
+        "canary_id": {"type": "string", "minLength": 1, "maxLength": 256}, "instance_id": {"$ref": "#/$defs/component"},
+        "sequence": {"$ref": "#/$defs/epoch"}, "slot_id": {"$ref": "#/$defs/uuid"},
+        "status": {"enum": ["prepared", "claimed", "consumed"]}, "updated_at": {"type": "string", "minLength": 1, "maxLength": 128}
+      },
+      "description": "Stable deployment/canary/logical-instance key, independent of boot/request/assignment. Current unresolved head cannot reset or expire; replacement requires exact consumed predecessor."
+    },
+    "part": {
+      "type": "object", "additionalProperties": false, "required": ["slot_id", "ordinal", "original", "original_sha256"],
+      "properties": {
+        "slot_id": {"$ref": "#/$defs/uuid"}, "ordinal": {"type": "integer", "minimum": 0, "maximum": 19},
+        "original": {"type": "string", "minLength": 1, "maxLength": 65536}, "original_sha256": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Deterministic ASCII segment, all parts committed atomically with slot/head. Exact contiguous reassembly, hashes and byte count required; never batch/effect splitting."
+    },
+    "runtimeResponse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "requestId", "operation", "configurationDigest", "requestDigest", "issuedAtEpochNs", "deadlineMonotonicNs",
+        "fence", "result", "resultDigest", "commitReceiptDigest", "witnessCommitDigest", "attestationReceiptDigest",
+        "attestationConsumptionReceipt", "attestationConsumptionReceiptDigest", "signature", "authorityConfigurationOriginal", "deliveryOriginals"],
+      "properties": {
+        "schema": {"const": "serverware.policyAuthorityCanaryDeliveryRuntimeResponse/v1"}, "requestId": {"$ref": "#/$defs/digest"},
+        "operation": {"$ref": "#/$defs/operation"}, "configurationDigest": {"$ref": "#/$defs/digest"}, "requestDigest": {"$ref": "#/$defs/digest"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "deadlineMonotonicNs": {"$ref": "#/$defs/epoch"}, "fence": {"$ref": "#/$defs/epoch"},
+        "result": {"$ref": "#/$defs/result"}, "resultDigest": {"$ref": "#/$defs/digest"}, "commitReceiptDigest": {"$ref": "#/$defs/digest"},
+        "witnessCommitDigest": {"$ref": "#/$defs/digest"}, "attestationReceiptDigest": {"$ref": "#/$defs/digest"},
+        "attestationConsumptionReceipt": {"type": "object", "description": "Existing genuine runtime receipt grammar and signature/attestation admission remain mandatory; this data position grants no new receipt authority."},
+        "attestationConsumptionReceiptDigest": {"$ref": "#/$defs/digest"},
+        "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"},
+        "authorityConfigurationOriginal": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 5592406},
+        "deliveryOriginals": {"$ref": "#/$defs/deliveryOriginals"}
+      },
+      "description": "Separate exact18 signed runtime profile, canonical <=6 MiB. Whole future HTTP and claim completion bounds are checked before execution reservation/business effects; original attestation and independent authority-root checks are not replaced by this schema."
+    },
+    "httpResponse": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "requestOriginal", "responseOriginal"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyCanaryDeliveryResponse/v1"},
+        "requestOriginal": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 4194304},
+        "responseOriginal": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 6291456}
+      },
+      "description": "Canonical base64url of actual request/response bytes; complete HTTP response <=6 MiB including both originals. Definite 200 is not sufficient without full native verification. 409, exception, timeout, disconnect, absent response or malformed original are uncertain, never permission to resend intake."
+    }
+  }
+}

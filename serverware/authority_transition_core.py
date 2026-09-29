@@ -637,6 +637,8 @@ class KernelContext:
     # Only the RBAC source program receives these actual admitted originals;
     # they are not arguments or an independently current authority token.
     rbac_primary_inputs: tuple | None = None
+    # Actual independently admitted planner configuration, never request data.
+    canary_delivery_admission: Any = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
         """Return the retained ordered SQL observation, not completeness proof.

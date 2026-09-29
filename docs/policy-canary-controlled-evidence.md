@@ -12,6 +12,17 @@ admits only the independently signed `policyCanaryIntakePolicy` purpose from
 the actual measured authority configuration. The paired schema is
 `schemas/policy-canary-controlled-evidence.v1.schema.json`.
 
+The embedded intake policy is explicitly
+`serverware.policyCanaryIntakeAuthorityPolicy/v2`, with eight fields. It does
+not contain a self-pin to the enclosing configuration. The previous nine-field
+v1 shape is refused, not silently reinterpreted: that self-pin required a hash
+fixed point because the runtime custody digest is the full authority payload
+digest. Verifier and planner now compare the runtime argument against the hash
+of their independently admitted complete payload, without excluding any policy
+or changing the authority configuration signature/digest recipe. The separate
+cold receiver pins are created after that complete signed original exists.
+Native statement, assignment, signature, HTTP and operation bytes are unchanged.
+
 The native sender uses these fixed HTTPS POST paths:
 
 - `/api/data-plane/policy-canary/controlled-evidence` consumes an intake proof.
@@ -58,8 +69,9 @@ pathname or private authority key.
 
 The exact nine-field receiver configuration independently pins both the root
 original hash/SPKI and the original signed authority configuration hash/domain
-digest. Its control-plane configuration digest is separately compared with the
-actual retained custody binding. A custody digest is not policy bytes. The
+digest. Both its authority configuration digest and control-plane configuration
+digest must equal the actual retained custody binding and the computed digest
+of the complete admitted payload. A custody digest is not policy bytes. The
 receiver validates the original v6 authority root signature and the explicit
 canary purpose; it does not impersonate a private authority role or replace
 that role's genuine current generation/admission checks. No silent reload,
@@ -84,9 +96,11 @@ nullable fields null. `unknown`, absence, timeout, or an expired statement
 never authorizes resend, splitting, re-signing, or a new effect.
 
 The batch row is an atomic known-commit original/result store. It is NOT a
-pre-contact durable sender journal. The required successor is a protected
-delivery slot plus a current-slot head per admitted assignment/canary/sender.
-Separate closed prepare, claim and recovery purposes must persist the exact
+pre-contact durable sender journal. The protected delivery successor in
+`policy-canary-durable-delivery.md` adds a slot and a stable current-slot head
+per deployment/canary/logical sender; assignment and boot are retained in the
+slot and cannot bypass an unresolved head. Separate closed prepare, claim and
+recovery purposes persist the exact
 future HTTP original before effects, retain definite writer completion and
 authenticated writer-read-proof originals, and atomically bind the prior
 claimed slot/head when intake commits. A fresh request ID or expired claim
@@ -94,7 +108,7 @@ must not bypass an unresolved earlier slot. One irreversible claim admits one
 contact; loss, timeout and inspection are never permission to send again.
 The original absolute deadline cannot be renewed. New-boot recovery needs its
 own independently admitted historical/current association, not reconstructed
-native ownership. These slot and native contact/exporter owners are required
+native ownership. The native contact/exporter owners remain required
 follow-on source work, not operational provisioning. An in-memory pending
 object or ordinary SELECT cannot close the boundary.
 The outer sender's permission authenticates authorship only; each inner record
@@ -178,7 +192,7 @@ original absolute deadline. Explicit original/argument/query/mutation/work and
 complete-table capacity bounds refuse before any effect, never truncate,
 prune, reset replay history or pretend larger populations are absent. Capacity
 lifecycle/scaling and deployment acceptance remain separate requirements.
-The current source profile caps each of 44 retained relations at 32 rows and
+The current source profile caps each of 46 retained relations at 32 rows and
 the complete batch at 240 selected rows (including absence proofs), 96 business
 mutations and 8192 kernel work units. The batch is at most 1 MiB, arguments at
 most 3 MiB, HTTP body at most 1 MiB + 192 KiB, and response at most 4 MiB.

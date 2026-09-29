@@ -201,6 +201,8 @@ def main() -> None:
                  "native_oauth_cleanup.py", "native_oauth_cleanup_receipts.py", "native_oauth_cleanup_owner.py",
                  "native_oauth_pending_retirement.py", "native_oauth_pending_retirement_receipts.py", "native_oauth_pending_retirement_owner.py",
                  "oauth_retirement_values.py", "native_oauth_capture_retirement.py", "native_oauth_capture_retirement_receipts.py", "native_oauth_capture_retirement_owner.py",
+                 "oauth_retirement_policy_values.py", "oauth_pending_retirement_values.py",
+                 "oauth_capture_retirement_policy.py", "oauth_pending_retirement_policy.py",
                  "native_oauth_reconnect.py", "native_oauth_reconnect_rows.py", "native_oauth_reconnect_receipts.py", "native_oauth_reconnect_tls.py", "native_oauth_reconnect_owner.py"):
         closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
     closure.add(SOURCE / "serverware/native_secret_broker_helper.py", HELPER)

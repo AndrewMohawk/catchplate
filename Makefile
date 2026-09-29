@@ -1373,6 +1373,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oauth_measured_capture_retirement.py \
 	serverware/native_oauth_capture_retirement.py \
 	serverware/oauth_retirement_values.py \
+	serverware/oauth_retirement_policy_values.py \
+	serverware/oauth_pending_retirement_values.py \
+	serverware/oauth_capture_retirement_policy.py \
+	serverware/oauth_pending_retirement_policy.py \
 	serverware/native_oauth_capture_retirement_owner.py \
 	serverware/native_oauth_capture_retirement_receipts.py \
 	serverware/authority_oauth_reconnect.py \
@@ -3826,6 +3830,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oauth_measured_capture_retirement.py \
 				serverware/native_oauth_capture_retirement.py \
 				serverware/oauth_retirement_values.py \
+				serverware/oauth_retirement_policy_values.py \
+				serverware/oauth_pending_retirement_values.py \
+				serverware/oauth_capture_retirement_policy.py \
+				serverware/oauth_pending_retirement_policy.py \
 				serverware/native_oauth_capture_retirement_owner.py \
 				serverware/native_oauth_capture_retirement_receipts.py \
 				serverware/authority_oauth_reconnect.py \

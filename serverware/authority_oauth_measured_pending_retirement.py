@@ -91,16 +91,8 @@ def _uuid(value):
 
 
 def lineages(values):
-    require(type(values) is list and len(values) <= MAX_AFFECTED_LINEAGES)
-    ids = []
-    for item in values:
-        require(type(item) is dict and set(item) == LINEAGE_FIELDS)
-        ids.append(_uuid(item["credentialId"]))
-        refresh._version(item["credentialVersion"])
-        for name in ("credentialRowSha256", "generationRowSha256"):
-            digest(item[name]); require(item[name] != "sha256:" + "0" * 64)
-    require(ids == sorted(set(ids)))
-    return values
+    from serverware import oauth_pending_retirement_values as portable
+    return portable.lineages(values)
 
 
 def barriers(values, affected):
@@ -116,33 +108,13 @@ def barriers(values, affected):
 
 
 def payload(value):
-    require(type(value) is dict and set(value) == GRANT_FIELDS and value["schema"] == GRANT_SCHEMA
-        and value["purpose"] == PURPOSE and value["reason"] in {"cancelled", "expired", "rejected"})
-    # Common endpoint/scalar validation only: no retained-exchange permission is
-    # accepted or translated. Signature verification uses this original domain.
-    common = {name: value[name] for name in retained.GRANT_FIELDS - {"schema", "purpose", "workRowSha256"}}
-    retained.payload({**common, "schema": retained.GRANT_SCHEMA, "purpose": "retained-oauth-revocation",
-        "workRowSha256": value["currentPendingRowSha256"]})
-    _uuid(value["pendingId"])
-    for name in ("custodyRowSha256", "initialPendingRowSha256", "currentPendingRowSha256", "stageArgumentsSha256",
-            "applicationMaterialSha256", "providerTlsRootSha256", "holderId"):
-        digest(value[name]); require(value[name] != "sha256:" + "0" * 64)
-    scope = value["familyScope"]
-    require(type(scope) is dict and set(scope) == {"profile", "familyId", "providerSubject", "providerAccount",
-        "externalFamilyRetirementAuthorized"} and scope["profile"] == "provider-family-retirement-v1"
-        and scope["externalFamilyRetirementAuthorized"] is True)
-    for name in ("familyId", "providerSubject", "providerAccount"):
-        retained.text(scope[name], 512)
-    lineages(value["affectedLineages"])
-    require(len(canonical(value)) <= MAX_GRANT_BYTES - 512)
-    return value
+    from serverware import oauth_pending_retirement_values as portable
+    return portable.payload(value)
 
 
 def grant_document(raw):
-    value = document(raw, MAX_GRANT_BYTES)
-    require(set(value) == {"schema", "payload", "signatureBase64Url"} and value["schema"] == SIGNED_GRANT_SCHEMA)
-    payload(value["payload"]); require(len(unb64(value["signatureBase64Url"], 64)) == 64)
-    return value
+    from serverware import oauth_pending_retirement_values as portable
+    return portable.grant_document(raw)
 
 
 def sign_authorization(value, signing_key):

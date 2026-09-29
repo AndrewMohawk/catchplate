@@ -66,14 +66,18 @@ delegate to those same predicates: exact fields, UUID/digest spelling, text
 bounds, provider URLs, token purposes, original time windows and envelope limits
 are unchanged. Native signed purposes and assignment checks are not translated.
 This removes control-plane policy/storage imports from those scalar/envelope
-validation paths. It does not yet close the actual receipt-verification call
-graph: capture retirement's `policy_key` and `verify_grant` still import
-control-plane policy modules outside this image. Those exact predicates must
-be made portable, and pending-retirement helper validation must share the full
-strict control-plane predicates, before the helper runtime is ready to freeze.
-No missing authority check may be skipped or replaced with a successful marker.
-The new data-grammar regression script is listed in the isolated no-build lane;
-it is authored but has not been executed.
+validation paths. The actual capture and pending receipt `policy_key` and
+`verify_grant` callers now use [shared portable policy validators](native-retirement-portable-policy.md),
+included in this image's explicit module allowlist. They preserve distinct
+purposes, historical signing roots, full strict assignment/trust/enrollment
+checks and original time bounds; no successful marker replaces a missing check.
+The pending helper's existing mandatory policy key and narrower 32 KiB enrollment
+bound remain additional requirements. Actual quote verification remains in the
+control-plane verifier, not in this data/signature dependency extraction.
+The isolated no-build lane includes authored data-grammar tests plus a fresh
+interpreter import/refusal probe of both actual receipt entrypoints. This probe
+is not valid signed admission or complete image/runtime verification. No test
+or image build has been executed.
 
 The [shadow-key helper](native-shadow-encrypted-keys.md#real-process-and-packaging-contract)
 has a separate offline packager and image identity. Sharing the bounded copier

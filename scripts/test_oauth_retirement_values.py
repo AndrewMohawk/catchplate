@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 
@@ -41,6 +42,52 @@ def envelope():
 
 
 class RetirementValuesTests(unittest.TestCase):
+    def test_actual_native_receipt_policy_entrypoints_do_not_import_control_plane(self):
+        # A fresh isolated interpreter prevents this process's module cache from
+        # concealing a lazy control-plane import at the actual receipt seam.
+        # This proves import separation/refusal only, not valid signed admission.
+        worker = r'''
+import builtins
+import sys
+sys.path.insert(0, sys.argv[1])
+original_import = builtins.__import__
+def isolated_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name.startswith("serverware.authority_") or (name == "serverware" and any(
+            item.startswith("authority_") for item in (fromlist or ()))):
+        raise AssertionError("native receipt imported control-plane authority")
+    return original_import(name, globals, locals, fromlist, level)
+builtins.__import__ = isolated_import
+from serverware import native_oauth_capture_retirement, native_oauth_pending_retirement
+for wire, claim_operation in (
+        (native_oauth_capture_retirement, "oauth.measured-capture-retirement.claim"),
+        (native_oauth_pending_retirement, "oauth.measured-pending-retirement.claim")):
+    try:
+        absent = wire.policy_key(None, {"roles": {"verifier": {"enabledOperations": []}}}, None)
+    except ValueError:
+        if wire is native_oauth_capture_retirement:
+            raise
+    else:
+        assert wire is native_oauth_capture_retirement and absent is None
+    try:
+        wire.policy_key(None, {"roles": {"verifier": {"enabledOperations": [claim_operation]}}}, None)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("enabled retirement accepted missing policy")
+    try:
+        wire.verify_grant({}, key=None, configuration_digest="sha256:" + "1" * 64,
+            source_revision="synthetic-source", deployment_id="synthetic", now_epoch_ns=1)
+    except (ValueError, KeyError):
+        pass
+    else:
+        raise AssertionError("missing grant accepted")
+'''
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", worker,
+            str(Path(__file__).resolve().parents[1])], stdin=subprocess.DEVNULL,
+            capture_output=True, timeout=10, check=False, env={"LC_ALL": "C"})
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertEqual(result.stdout, b"")
+
     def test_known_data_is_preserved_without_mutation(self):
         original = grant()
         snapshot = copy.deepcopy(original)

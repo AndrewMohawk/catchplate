@@ -280,10 +280,10 @@ class Contact(_Contact):
 def policy_key(policy, payload, root):
     # Both enclave receipt consumer and measured verifier/planner use this
     # exact independently signed purpose block, never the old cleanup policy.
-    from serverware import authority_oauth_measured_capture_retirement_policy as admission
+    from serverware import oauth_capture_retirement_policy as admission
     return admission.validate_policy(policy, payload=payload, root_key=root)
 
 
 def verify_grant(values, **kwargs):
-    from serverware import authority_oauth_measured_capture_retirement_policy as admission
+    from serverware import oauth_capture_retirement_policy as admission
     return admission.verify_grant(values, **kwargs)

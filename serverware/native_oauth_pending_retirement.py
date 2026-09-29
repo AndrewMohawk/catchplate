@@ -40,16 +40,8 @@ def identifier(value):
 
 
 def lineages(values):
-    m.require(type(values) is list and len(values) <= MAX_AFFECTED_LINEAGES)
-    ids = []
-    for entry in values:
-        m.require(type(entry) is dict and set(entry) == {"credentialId", "credentialVersion", "credentialRowSha256", "generationRowSha256"})
-        ids.append(identifier(entry["credentialId"]))
-        m.integer(entry["credentialVersion"], maximum=2**63 - 1); m.require(entry["credentialVersion"] > 0)
-        for name in ("credentialRowSha256", "generationRowSha256"):
-            m.digest(entry[name]); m.require(entry[name] != "sha256:" + "0" * 64)
-    m.require(ids == sorted(set(ids)))
-    return values
+    from serverware import oauth_pending_retirement_values as portable
+    return portable.lineages(values)
 
 
 def barriers(values, affected):
@@ -64,31 +56,8 @@ def barriers(values, affected):
 
 
 def grant_document(raw):
-    value = m.document(raw, MAX_GRANT_BYTES)
-    m.require(set(value) == {"schema", "payload", "signatureBase64Url"} and value["schema"] == SIGNED_GRANT)
-    grant = value["payload"]
-    m.require(type(grant) is dict and set(grant) == GRANT_FIELDS and grant["schema"] == GRANT_SCHEMA
-        and grant["purpose"] == "measured-oauth-staged-pending-family-retirement"
-        and grant["reason"] in {"cancelled", "expired", "rejected"} and grant["providerId"] in ENDPOINTS
-        and grant["tokenPurposes"] in [["access_token"], ["refresh_token"], ["access_token", "refresh_token"]])
-    for name, item in grant.items():
-        if name.endswith("Sha256") or name in {"configurationDigest", "holderId"}:
-            m.digest(item); m.require(item != "sha256:" + "0" * 64)
-    for name in ("authorizationId", "exchangeId", "pendingId"):
-        identifier(grant[name])
-    for name in ("issuedAtEpochNs", "expiresAtEpochNs"):
-        m.integer(grant[name])
-    m.require(0 < grant["expiresAtEpochNs"] - grant["issuedAtEpochNs"] <= 300_000_000_000)
-    if grant["providerId"] == "google":
-        m.require(len(grant["tokenPurposes"]) == 1)
-    scope = grant["familyScope"]
-    m.require(type(scope) is dict and set(scope) == {"profile", "familyId", "providerSubject", "providerAccount", "externalFamilyRetirementAuthorized"}
-        and scope["profile"] == "provider-family-retirement-v1" and scope["externalFamilyRetirementAuthorized"] is True)
-    for name in ("familyId", "providerSubject", "providerAccount"):
-        m.text(scope[name], 512)
-    lineages(grant["affectedLineages"])
-    m.decoded(value["signatureBase64Url"], 64, 64)
-    return value
+    from serverware import oauth_pending_retirement_values as portable
+    return portable.grant_document(raw)
 
 
 def _spki(key):
@@ -96,41 +65,19 @@ def _spki(key):
 
 
 def policy_key(policy, payload, root):
-    m.require(type(policy) is dict and set(policy) == {"schema", "grantRootPublicKeyBase64Url", "grantRootSpkiSha256",
-        "controlPlaneConfigurationDigest", "deploymentId", "trustRoots", "assignments"} and policy["schema"] == POLICY)
-    key = Ed25519PublicKey.from_public_bytes(m.decoded(policy["grantRootPublicKeyBase64Url"], 32, 32))
-    pin = _spki(key)
-    m.require(pin == policy["grantRootSpkiSha256"] and pin != _spki(root)
-        and type(policy["assignments"]) is list and 1 <= len(policy["assignments"]) <= 32)
-    for role in payload["roles"].values():
-        m.require(pin not in role.values())
-    for name, other in payload.items():
-        if name != POLICY_FIELD and type(other) is dict:
-            m.require(pin not in other.values())
+    from serverware import oauth_pending_retirement_policy as admission
+    key = admission.validate_policy(policy, payload=payload, root_key=root)
+    m.require(key is not None)
     return key
 
 
 def verify_grant(values, *, key, configuration_digest, source_revision, deployment_id, now_epoch_ns, historical=False):
-    signed = grant_document(m.decoded(values["authorization_original"], MAX_GRANT_BYTES)); grant = signed["payload"]
-    m.require(grant["deploymentId"] == deployment_id)
-    if not historical:
-        m.require(grant["configurationDigest"] == configuration_digest and grant["sourceRevision"] == source_revision
-            and grant["issuedAtEpochNs"] <= now_epoch_ns < grant["expiresAtEpochNs"])
-    key.verify(m.decoded(signed["signatureBase64Url"], 64, 64), GRANT_SCHEMA.encode("ascii") + b"\0" + m.canonical(grant))
-    root_raw = m.decoded(values["historical_root_original"], 4096)
-    historical_key = serialization.load_pem_public_key(root_raw)
-    m.require(isinstance(historical_key, Ed25519PublicKey) and historical_key.public_bytes(serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo) == root_raw and _spki(historical_key) == grant["historicalEnrollmentRootSpkiSha256"]
-        and _spki(historical_key) != _spki(key))
-    enrollment_raw = m.decoded(values["enrollment_original"], 32768)
-    original = m.document(enrollment_raw, 32768, exact=False); application = original["payload"]
-    m.require(m.sha(enrollment_raw) == grant["enrollmentSha256"] and application["deploymentId"] == grant["deploymentId"]
-        and application["providerId"] == grant["providerId"] and application["clientId"] == grant["clientId"]
-        and application["clientMaterialSha256"] == grant["clientMaterialSha256"]
-        and application["providerConfigurationSha256"] == m.sha(m.canonical(grant["providerConfiguration"])))
-    historical_key.verify(m.decoded(original["signatureBase64Url"], 64, 64),
-        b"serverware.oauthApplicationEnrollment/v1\0" + m.canonical(application))
-    return grant, application
+    from serverware import oauth_pending_retirement_policy as admission
+    # Keep the native receipt's original narrower enrollment bound; the CP
+    # shared verifier independently retains its existing 64 KiB maximum.
+    m.decoded(values["enrollment_original"], 32768)
+    return admission.verify_grant(values, key=key, configuration_digest=configuration_digest,
+        source_revision=source_revision, deployment_id=deployment_id, now_epoch_ns=now_epoch_ns, historical=historical)
 
 
 def _row(row, fields, maximum, nullable=()):

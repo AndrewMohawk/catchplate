@@ -26,16 +26,16 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.251` source / e8a923c](https://github.com/example/private-deployment)
-adds an [internal native egress foundation](docs/native-egress-installation.md):
-separate signed grant, actual pre-exec workload owner, purpose-specific journal
-and genuine retained guard. There is no public configuration/CLI, firewall
-installer, kernel effect/readback or workload-start path. Cross-invocation launch
-admission and exact transaction/readback custody remain open. Prior credential
-leases, response/preflight and protected CA installation retain source credit;
-legacy profiles stay unchanged. Provider/egress/canaries, Kubernetes, lifecycle
-and independent acceptance stay open. No build, test, runtime, NSM or AWS/spend
-acceptance is claimed.
+[`.252` source / 1668574](https://github.com/example/private-deployment)
+connects the [private native egress kernel pipeline](docs/native-egress-kernel.md):
+typed transaction, actual socket backend, exact semantic readback and separate
+SWNEGRS2 raw-original custody through guarded completion. There is no public cold
+configuration/CLI, cross-invocation creation admission, exec/start or network
+attachment; ordinary-auth compatibility is not closed. Prior grant/workload,
+credential-lease, response/preflight and CA-installation source credit remains.
+Provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay
+open. Source is unbuilt, unexecuted and unprovisioned; no build/test/runtime,
+NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
 
@@ -55,9 +55,10 @@ The four active checkpoints remain partial:
   reservation/token/destination ownership. Quote-bound target-principal preflight
   now retains actual source/header/token/mTLS admission on the CONNECT transport;
   explicit native response/receipt/binding/lifecycle, signed preparation and
-  quoted native credential leases are source-connected. Internal egress grant,
-  pre-exec owner, journal and guard are source foundations, not a firewall/start
-  path. Actual CONNECT/provider policy, Kubernetes ownership, scoped proxy/egress/canaries,
+  quoted native credential leases are source-connected. The private egress
+  transaction/backend/readback and raw-custody completion are now source-connected,
+  not public configuration, start or runtime proof. Actual CONNECT/provider policy,
+  ordinary-auth compatibility, Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
@@ -130,7 +131,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, host CA installation, preflight, response/leases and internal egress foundation source-landed; kernel effect/readback/start, provider/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, host CA installation, preflight, response/leases and private egress kernel pipeline source-landed; public invocation/start, auth compatibility, provider/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

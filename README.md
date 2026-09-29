@@ -24,16 +24,17 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 4 active and 7 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05 and O04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: historical authority and protected operations
+### Current work: historical recovery and native execution prerequisites
 
-[`.256` source / 43cea25](https://github.com/example/private-deployment)
-connects [current-authority LIVE delivery over retained RI originals](docs/control-plane-current-authority-retained-ri-delivery.md)
-and [durable generated-admin-token publication](docs/control-plane-approval-verification.md#protected-generated-admin-token-publication).
-Historical evidence custody stays distinct from fresh delivery authority;
-uncertain publication grants no retry. Prior [`.255` native attachment](https://github.com/example/private-deployment)
-and ordinary PolicyAware source credit remains. Recovery outcome-root history,
-migration/older-source adapters, provider effects, authorized journal recovery,
-multi-host coordination, native start/supervision and independent acceptance stay open.
+[`.257` source / 8af9c50](https://github.com/example/private-deployment)
+connects [current-authority recovery of retained outcomes](docs/control-plane-retained-outcome-root-history.md)
+and private [immutable filesystem/ELF admission](docs/native-execution-filesystem-admission.md)
+with separate [signed start constraints and protected preparation](docs/native-workload-start-admission.md).
+Static and dynamic ELF are explicit admission cases, not observed application execution.
+There is no public start configuration, executable child, start permit/journal,
+cgroup/guardian or supervision closure. Prior `.256` [admin-token publication](docs/control-plane-approval-verification.md#protected-generated-admin-token-publication)
+and native attachment credit remain. Migration/configuration transitions,
+older-source adapters, provider effects and independent acceptance stay open.
 Source is unbuilt, unexecuted and unprovisioned; no build/test/runtime, tested pilot,
 NSM or AWS/spend acceptance is claimed.
 
@@ -44,30 +45,21 @@ The four active checkpoints remain partial:
   authorization/lease representation are source-connected.
   Production enrollment, native trust authorization, issuer lifecycle,
   authenticated service/sidecar journeys and runtime verification remain open.
-- **H05 · Historical recovery:** retained intent/proof readmission now joins
-  [fresh current-authority LIVE grants and delivery](docs/control-plane-current-authority-retained-ri-delivery.md),
-  without retired signing or expiry renewal. Retained-outcome-root recovery,
-  migration and older-source replay remain open.
-- **N05 · Native enrollment:** cold authority, caller policy/TLS admission,
-  target CSR/possession, separate setup permission, current policy requirements
-  and packet originals now connect to durable role-5 signing, fixed POST/full
-  evidence assembly, guarded diagnostic acquisition and independently authorized
-  native CA-worker issuance. Cold-selected native options/submission and retained-key
-  SDK leaf/chain publication now connect to independently authorized host CA
-  installation with actual native CA/host-namespace admission and protected local
-  reservation/token/destination ownership. Quote-bound target-principal preflight
-  now retains actual source/header/token/mTLS admission on the CONNECT transport;
-  explicit native response/receipt/binding/lifecycle, signed preparation and
-  quoted native credential leases are source-connected. Separate creation,
-  kernel and attachment authority now reach fixed dual-stack veth/address/route
-  installation and exact original-bound readback through client/capture v4,
-  observing state before teardown, not workload start or persistent deployment.
-  Ordinary PolicyAware compatibility
-  is separately source-connected, not provisioned or runtime-accepted. Actual
-  execution, persistent supervision, combined CA+egress,
-  CONNECT/provider policy, Kubernetes ownership, scoped proxy/egress/canaries,
-  lifecycle/cross-session recovery, off-host rollback witnessing and independent
-  service/exact-source verification remain open.
+- **H05 · Historical recovery:** current-authority LIVE delivery now has a
+  [retained-outcome recovery counterpart](docs/control-plane-retained-outcome-root-history.md):
+  fresh actor/current issuer, exact checkpoint-one readback and independent
+  receiving, without retired signing or expiry renewal. Migration,
+  configuration transitions and older-source replay remain open.
+- **N05 · Native enrollment:** acquisition/issuance, retained-key publication,
+  protected host CA installation, principal preflight, response/lease authority
+  and separately authorized dual-stack attachment retain source credit.
+  Client/capture v4 remains an observation before teardown. New immutable
+  filesystem/ELF admission and `PreparedStart` are private preparation only;
+  old never-exec diagnostics and static-launcher constraints are unchanged.
+  Public start orchestration, executable child, start claims, cgroup/guardian,
+  supervision and combined CA+egress remain open, alongside actual
+  CONNECT/provider/canary, Kubernetes, lifecycle/recovery/off-host rollback and
+  independent service/exact-source acceptance.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
   now joins [durable admin-token publication](docs/control-plane-approval-verification.md#protected-generated-admin-token-publication),
   exact file readback and read-only interruption inspection. Other provider/filesystem

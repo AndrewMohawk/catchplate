@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/setup-policy-candidate-http.v1.schema.json",
+  "title": "Owner-authorized protected Setup candidate association HTTP",
+  "description": "Exact originals remain strings, preserving nanosecond integers. Neither a draft nor a stored continuation is policy loading, Setup completion, retry permission or proxy readiness. Complete requests <=4227072 bytes and responses <=5242880 bytes; individual limits never enlarge those bounds.",
+  "anyOf": [{"$ref": "#/$defs/draftRequest"}, {"$ref": "#/$defs/draftResponse"}, {"$ref": "#/$defs/optionsRequest"},
+    {"$ref": "#/$defs/optionsResponse"}, {"$ref": "#/$defs/bindRequest"}, {"$ref": "#/$defs/bindResponse"},
+    {"$ref": "#/$defs/lookupRequest"}, {"$ref": "#/$defs/observation"}, {"$ref": "#/$defs/authorityPolicy"}],
+  "$defs": {
+    "authorityPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "controlPlaneConfigurationDigest", "credentialPolicy", "operationMaxSeconds", "maximumArgumentBytes"],
+      "properties": {
+        "schema": {"const": "serverware.setupPolicyContinuationAuthorityPolicy/v1"},
+        "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
+        "credentialPolicy": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/credentialPolicy"},
+        "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
+        "maximumArgumentBytes": {"const": 2097152}
+      }
+    },
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "argumentsOriginal": {"type": "string", "minLength": 2, "maxLength": 2097152},
+    "continuationOriginal": {"type": "string", "minLength": 2, "maxLength": 2170880},
+    "draftRequest": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId", "expectedRevision", "generationRequestId"],
+      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"},
+        "expectedRevision": {"const": 3}, "generationRequestId": {"$ref": "#/$defs/uuid"}}
+    },
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["principalId", "routeId", "credentialId", "credentialVersion", "policyHash", "routePolicyDigest", "assignmentDigest", "sessionId", "setupRevision", "continuationRevision", "ownerId", "generationRequestId", "generationPublicationDigest", "candidateId", "canaryId", "expiresAtEpochNs"],
+      "properties": {
+        "principalId": {"$ref": "#/$defs/id"}, "routeId": {"$ref": "#/$defs/id"}, "credentialId": {"$ref": "#/$defs/uuid"},
+        "credentialVersion": {"const": 1}, "policyHash": {"$ref": "#/$defs/digest"}, "routePolicyDigest": {"$ref": "#/$defs/digest"},
+        "assignmentDigest": {"$ref": "#/$defs/digest"}, "sessionId": {"$ref": "#/$defs/uuid"}, "setupRevision": {"const": 3},
+        "continuationRevision": {"const": 0}, "ownerId": {"type": "string", "pattern": "^oidc:", "maxLength": 1024},
+        "generationRequestId": {"$ref": "#/$defs/uuid"}, "generationPublicationDigest": {"$ref": "#/$defs/digest"},
+        "candidateId": {"$ref": "#/$defs/id"}, "canaryId": {"$ref": "#/$defs/id"},
+        "expiresAtEpochNs": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
+      }
+    },
+    "draftResponse": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "okForAction", "argumentsOriginal", "review"],
+      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateRequest/v1"}, "okForAction": {"const": false},
+        "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}, "review": {"$ref": "#/$defs/review"}}
+    },
+    "optionsRequest": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "argumentsOriginal"],
+      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}}
+    },
+    "optionsResponse": {
+      "type": "object", "additionalProperties": false, "required": ["publicKey", "serverware"],
+      "properties": {
+        "publicKey": {"$ref": "policy-candidate-generation-intake.v1.schema.json#/$defs/optionsResponse/properties/publicKey"},
+        "serverware": {
+          "type": "object", "additionalProperties": false, "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest", "expiresAt"],
+          "properties": {"schema": {"const": "serverware.setupPolicyCandidateOptions/v1"}, "operation": {"const": "setup.policy.bind-candidate"},
+            "operationId": {"$ref": "#/$defs/digest"}, "challengeId": {"$ref": "#/$defs/digest"}, "credentialRecordId": {"$ref": "#/$defs/id"},
+            "payloadDigest": {"$ref": "#/$defs/digest"}, "expiresAt": {"type": "string", "minLength": 1, "maxLength": 128}}
+        }
+      }
+    },
+    "bindRequest": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "argumentsOriginal", "mfa"],
+      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"},
+        "mfa": {"type": "object", "additionalProperties": false, "required": ["setupPolicyProfile", "assertion"],
+          "properties": {"setupPolicyProfile": {"const": "serverware.setupPolicyCandidateOptions/v1"},
+            "assertion": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/assertion"}}}}
+    },
+    "bindResponse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ok", "operation", "requestDigest", "auditEventDigest", "idempotentReplay", "continuationOriginal"],
+      "properties": {"ok": {"const": true}, "operation": {"const": "setup.policy.bind-candidate"},
+        "requestDigest": {"$ref": "#/$defs/digest"}, "auditEventDigest": {"$ref": "#/$defs/digest"},
+        "idempotentReplay": {"const": false}, "continuationOriginal": {"$ref": "#/$defs/continuationOriginal"}}
+    },
+    "lookupRequest": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId"],
+      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"}}
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "continuationOriginal"],
+      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateObservation/v1"}, "okForAction": {"const": false},
+        "automaticRetryAllowed": {"const": false}, "continuationOriginal": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/continuationOriginal"}]}}
+    }
+  }
+}

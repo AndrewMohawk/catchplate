@@ -151,7 +151,14 @@ class Originals:
             p.require(len(set(identities)) == 3)
             owner.config_raw = owner.config_original.read()
             owner.configuration = p.document(owner.config_raw, p.MAX_CONFIG)
-            p.fields(owner.configuration, p.CONFIG_FIELDS)
+            if owner.configuration.get("apiVersion") == "serverware.nativeShadowNitroVerifierConfiguration/v2":
+                from serverware import native_shadow_key_admission_profile as admission
+                p.fields(owner.configuration, admission.CONFIG_FIELDS)
+                scope_name = "expectedScope"
+            else:
+                p.require(owner.configuration.get("apiVersion") == "serverware.nativeShadowNitroVerifierConfiguration/v1")
+                p.fields(owner.configuration, p.CONFIG_FIELDS)
+                scope_name = "expectedStatement"
             p.require(p.integer(owner.configuration["uid"], maximum=(1 << 32) - 2) == owner.uid
                 and p.integer(owner.configuration["gid"], maximum=(1 << 32) - 2) == owner.gid)
             operation = p.fields(owner.configuration["operation"], ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
@@ -165,8 +172,8 @@ class Originals:
             owner.check()
             owner.request_raw = owner.request_original.read()
             owner.request = p.document(owner.request_raw, p.MAX_REQUEST)
-            p.require(owner.uid != owner.configuration["expectedStatement"]["guest"]["uid"]
-                and owner.gid != owner.configuration["expectedStatement"]["guest"]["gid"])
+            p.require(owner.uid != owner.configuration[scope_name]["guest"]["uid"]
+                and owner.gid != owner.configuration[scope_name]["guest"]["gid"])
             owner.check()
             return owner
         except BaseException:

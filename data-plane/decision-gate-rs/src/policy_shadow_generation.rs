@@ -3069,6 +3069,22 @@ impl PolicyShadowGenerationControl {
         })
     }
 
+    pub(crate) fn native_opening(&self, admission:&super::policy_shadow::PersistedIngressAdmission)
+        ->Result<super::policy_shadow::native_opening::Opening,String> {
+        if !self.is_production || self.native_workers.is_none() {
+            return Err("native opening requires the actual native custody generation owner".into());
+        }
+        let _installation=self.installation_lock.try_lock().map_err(|_|"opening generation installation is busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"opening retained generation is busy")?;
+        let retained=retained.as_ref().ok_or("opening has no successfully installed generation")?;
+        self.key_trust.authorize_at(retained.trusted_time.now_unix_nanos().map_err(|error|error.to_string())?)?;
+        let configuration=retained.custody.production_configuration_binding_sha256()
+            .ok_or("opening custody lacks its production configuration")?;
+        super::policy_shadow::native_opening::Opening::from_admission(admission,&retained.generation_identity,
+            &retained.assignment,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+            &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|error|error.to_string())
+    }
+
     pub(crate) fn install(
         &self,
         state: &GateState,

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-policy-canary-opening.v1.schema.json",
+  "title": "Actual native custody opening, not terminal canary evidence",
+  "$comment": "One custody event in one existing batch. Exact raw opening and dedicated assignment-bound CustodyIngressAdmission signature; protected prerequisite lookup and complete prior-batch proof are mandatory. Schema alone grants no admission, physical storage proof or contact authority. Canonical record limit 65536 bytes. The complete signed native assignment16 is not projected into a new record or re-admitted.",
+  "$ref": "#/$defs/record",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "nonnegative": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "opening_receipt", "signing_public_key_base64url"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCustodyOpening/v1"},
+        "canary_id": {"$ref": "#/$defs/sha256"},
+        "instance_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "boot_id": {"$ref": "#/$defs/sha256"},
+        "assignment_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "assignment_payload_digest": {"$ref": "#/$defs/sha256"},
+        "load_receipt_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "publication_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "opening_receipt": {"$ref": "#/$defs/receipt"},
+        "signing_public_key_base64url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"}
+      }
+    },
+    "receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation_id", "ingress_sequence", "request_binding_sha256", "request_commitment_sha256", "event_ordinal", "event_phase", "disposition", "event_sha256", "canonical_event_bytes", "predecessor_event_ordinal", "predecessor_head_sha256", "resulting_head_sha256", "trusted_observed_at_unix_nanos", "trusted_time_checkpoint_sha256", "persistence_receipt_sha256", "retrieval_id_sha256", "retrieval_proof_sha256", "signing_key_id", "signing_key_spki_sha256", "signature", "signed_receipt_sha256"],
+      "properties": {
+        "generation_id": {"$ref": "#/$defs/sha256"},
+        "ingress_sequence": {"$ref": "#/$defs/positive"},
+        "request_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "request_commitment_sha256": {"$ref": "#/$defs/sha256"},
+        "event_ordinal": {"$ref": "#/$defs/positive"},
+        "event_phase": {"const": "ingress-open"},
+        "disposition": {"const": "appended"},
+        "event_sha256": {"$ref": "#/$defs/sha256"},
+        "canonical_event_bytes": {"type": "array", "minItems": 1, "maxItems": 16384, "items": {"type": "integer", "minimum": 0, "maximum": 255}},
+        "predecessor_event_ordinal": {"$ref": "#/$defs/nonnegative"},
+        "predecessor_head_sha256": {"$ref": "#/$defs/sha256"},
+        "resulting_head_sha256": {"$ref": "#/$defs/sha256"},
+        "trusted_observed_at_unix_nanos": {"$ref": "#/$defs/positive"},
+        "trusted_time_checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+        "persistence_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "retrieval_id_sha256": {"$ref": "#/$defs/sha256"},
+        "retrieval_proof_sha256": {"$ref": "#/$defs/sha256"},
+        "signing_key_id": {"$ref": "#/$defs/sha256"},
+        "signing_key_spki_sha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"},
+        "signed_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "event": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "record"],
+      "properties": {"kind": {"const": "custody"}, "record": {"$ref": "#/$defs/record"}}
+    },
+    "batch": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "requestId", "canaryId", "events"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyCanaryEvidenceOriginal/v1"},
+        "requestId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+        "canaryId": {"$ref": "#/$defs/sha256"},
+        "events": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/event"}}
+      }
+    }
+  }
+}

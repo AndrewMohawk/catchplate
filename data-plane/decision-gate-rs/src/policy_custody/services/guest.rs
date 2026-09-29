@@ -4,6 +4,8 @@ use super::guest_original::{fail, Original, Parent, Process};
 use std::path::Path;
 #[path="native_keys.rs"]
 pub(crate) mod native_keys;
+#[path="native_guest/mod.rs"]
+pub(crate) mod native_guest;
 
 const SIGNATURE_DOMAIN: &[u8] = b"serverware.policyCustodyGuestDelivery.signature/v1\0";
 const MAX_DELIVERY: usize = 64 * 1024;

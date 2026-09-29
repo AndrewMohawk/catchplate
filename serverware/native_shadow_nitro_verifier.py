@@ -170,4 +170,7 @@ def _result(originals):
 def run():
     from serverware.native_shadow_nitro_originals import Originals
     with Originals.open() as originals:
+        if originals.configuration["apiVersion"] == "serverware.nativeShadowNitroVerifierConfiguration/v2":
+            from serverware.native_shadow_key_admission_verifier import result
+            return result(originals)
         return _result(originals)

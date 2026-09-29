@@ -217,6 +217,55 @@ impl DeviceOriginals {
     }
 }
 
+/// Separate pre-key time-sampling purpose. The actual guest caller holds its
+/// C9 preparation, creates the one-use ephemeral key and signs the measured
+/// bracket. This fixed mechanism returns UNVERIFIED COSE, not a trusted clock.
+pub struct ShadowTimeNsmV1 { originals:DeviceOriginals,process:Process,startup:u64,attempted:bool }
+impl ShadowTimeNsmV1 {
+    pub fn open(startup:u64)->Result<Self,String> {
+        let process=Process::current();
+        if process.uid!=0 || process.euid!=0 || process.gid!=0 || process.egid!=0 {
+            return Err("shadow time NSM requires original root preparation".into());
+        }
+        let owner=Self {originals:DeviceOriginals::open(startup)?,process,startup,attempted:false};
+        owner.check()?;Ok(owner)
+    }
+    fn check(&self)->Result<(),String> {
+        if Process::current()!=self.process {return Err("shadow time process changed".into());}
+        self.originals.verify(self.startup)
+    }
+    pub fn quote(&mut self,statement_sha256:[u8;32],ephemeral_public:[u8;32],nonce:[u8;32])
+        ->Result<Vec<u8>,String> {
+        if self.attempted {return Err("shadow time sample is one-shot".into());}
+        self.attempted=true;self.check()?;
+        if [statement_sha256,ephemeral_public,nonce].contains(&[0;32]) {
+            return Err("shadow time binding is absent".into());
+        }
+        let mut user_data=b"serverware/native-shadow-guest-time-evidence/v1\0".to_vec();
+        user_data.extend_from_slice(&statement_sha256);
+        let request=attestation_request(&ephemeral_public,&nonce,&user_data)?;
+        let mut response=[0u8;MAX_RESPONSE_BYTES];
+        let request_address=request.as_ptr() as usize as u64;
+        let response_address=response.as_mut_ptr() as usize as u64;
+        let mut raw=NsmRaw {request:NsmIovec{addr:request_address,len:request.len() as u64},
+            response:NsmIovec{addr:response_address,len:MAX_RESPONSE_BYTES as u64}};
+        self.check()?;
+        // The original caller's kernel kill timer is already armed. Late
+        // rejection alone is not cancellation of a blocking driver ioctl.
+        if unsafe{libc::ioctl(self.originals.device.as_raw_fd(),NSM_IOCTL_RAW as _,&mut raw)}!=0 {
+            return Err("shadow time NSM ioctl failed; no retry".into());
+        }
+        self.check()?;
+        if raw.request.addr!=request_address || raw.request.len!=request.len() as u64
+            || raw.response.addr!=response_address || raw.response.len==0
+            || raw.response.len>MAX_RESPONSE_BYTES as u64 {
+            return Err("shadow time NSM buffer original changed".into());
+        }
+        let document=attestation_document(&response[..raw.response.len as usize])?;
+        self.check()?;Ok(document)
+    }
+}
+
 /// Fixed shadow-key mechanism only. Its caller must retain actual independent
 /// guest delivery/closure authority; this object never establishes admission.
 pub struct PreparedShadowNsmV1 {
@@ -277,13 +326,25 @@ impl ShadowNsmV1 {
     /// explicit local key-set commitment, NOT a KMS/asymmetric recipient key.
     pub fn quote_role_keys(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
         possession_sha256:[u8;32],nonce:[u8;32],deadline:u64)->Result<ShadowRoleKeyQuoteV1,String> {
+        self.quote_keys_fixed(statement_sha256,full_key_set,local_key_set,possession_sha256,nonce,deadline,
+            b"serverware/native-shadow-role-key-evidence/v1\0")
+    }
+    /// Mutually exclusive admission-only purpose. It shares the same one-shot
+    /// latch and cannot reset or convert admission into settlement evidence.
+    pub fn quote_key_admission(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
+        possession_sha256:[u8;32],nonce:[u8;32],deadline:u64)->Result<ShadowRoleKeyQuoteV1,String> {
+        self.quote_keys_fixed(statement_sha256,full_key_set,local_key_set,possession_sha256,nonce,deadline,
+            b"serverware/native-shadow-key-admission-evidence/v1\0")
+    }
+    fn quote_keys_fixed(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
+        possession_sha256:[u8;32],nonce:[u8;32],deadline:u64,prefix:&'static[u8])->Result<ShadowRoleKeyQuoteV1,String> {
         if self.attempted || (self.recipient_attempted&&!self.recipient_complete) {
             return Err("shadow NSM attempt cannot be replayed or follow a failed recipient".into());}
         self.attempted=true;self.check(deadline)?;
         if [statement_sha256,full_key_set,local_key_set,possession_sha256,nonce].contains(&[0;32]) {
             return Err("shadow NSM binding is absent".into());
         }
-        let mut user_data=b"serverware/native-shadow-role-key-evidence/v1\0".to_vec();
+        let mut user_data=prefix.to_vec();
         for field in [statement_sha256,full_key_set,local_key_set,possession_sha256] {user_data.extend_from_slice(&field);}
         let request=attestation_request(&local_key_set,&nonce,&user_data)?;
         let mut response=[0u8;MAX_RESPONSE_BYTES];

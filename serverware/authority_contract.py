@@ -11,7 +11,7 @@ from serverware import authority_oauth_retirement_succession_catalog as retireme
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.313"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.314"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -262,6 +262,7 @@ VERIFIER_READ_TABLES = frozenset({
     "policy_authority_consumed_envelopes",
 })
 _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
+    "setup.policy.bind-candidate",
     "policy.candidate.generation-claim", "policy.candidate.generation-publish",
     "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
     "rbac.binding.mutate", "control-approval.request", "control-approval.decide",
@@ -1466,6 +1467,7 @@ PHASE2_STORE_TABLES = tuple(sorted({
     *_PHASE3_ACTIVATION_EVIDENCE,
 }))
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
+    "setup_policy_continuations",
     "policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts",
     "policy_shadow_generation_claims",
     "policy_canary_intake_batches",
@@ -1582,6 +1584,22 @@ _CANARY_INTAKE_HEADS = frozenset({"policy_canary_heads", "policy_canary_custody_
 
 
 _OPERATIONS = {
+    "setup.policy.bind-candidate": _spec(
+        "serverware_policy_authority_setup_policy_bind_candidate",
+        reads=("setup_policy_continuations", "setup_sessions", "setup_session_events", "oauth_setup_audit_links",
+            "credentials", "credential_generations", "credential_currentness_roots", "metadata_audit_outbox",
+            "policy_candidate_artifacts", "policy_canary_assignments", "policy_canary_assignment_members",
+            "policy_canary_load_receipts", "policy_shadow_runtime_attestation_handoffs", "policy_runtime_attestations",
+            "policy_runtime_role_keys", "policy_runtime_role_key_revocations", "policy_authority_trusted_keys",
+            "policy_authority_trusted_key_revocations", "policy_authority_evidence_verifications", "policy_canary_heads",
+            "policy_high_water", "rbac_role_bindings", "policy_shadow_generation_claims", "policy_shadow_generation_publications")
+            + _PHASE2_AGGREGATE,
+        writes=("setup_policy_continuations", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+        mutation_kinds={"setup_policy_continuations": ("INSERT",)},
+        webauthn="bound-verified-assertion-receipt",
+        proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+        maximum_query_rows=240, maximum_mutations=12, maximum_work_units=8192,
+    ),
     **{
         "policy.canary.delivery." + phase: _spec(
             "serverware_policy_authority_policy_canary_delivery_" + phase,

@@ -117,10 +117,23 @@ fn collect(owner: &RunningRuntime, input: &inputs::Inputs, pipe: RawFd,
         }
     }
 }
-fn result_shape(raw: &[u8]) -> Result<(), String> {
+fn result_shape(raw: &[u8],purpose:crate::native_shadow_verifier_runtime_v1::ResultPurpose) -> Result<(), String> {
     let value = json::parse(raw,MAX_RESULT)?;
     ensure(canonical_ascii_bytes(&value)? == raw, "verifier output is not original canonical ASCII")?;
     let outer = value.as_object().ok_or("verifier output is not an object")?;
+    if purpose==crate::native_shadow_verifier_runtime_v1::ResultPurpose::KeyAdmission {
+        ensure(outer.len()==3 && value["apiVersion"]=="serverware.nativeShadowKeyAdmissionVerifierResult/v1"
+            && value["signature"].is_string(),"verifier admission output purpose differs")?;
+        let payload=value["payload"].as_object().ok_or("verifier admission payload absent")?;
+        let names=["apiVersion","purpose","statementSha256","quoteSha256","nativeContextSha256","admissionAuthorizationSha256",
+            "keyAuthorizationSha256","fullKeySetRootSha256","localKeySetRootSha256","measurementSha256","endorsementEvidenceSha256",
+            "endorsementRootSha256","collateralPolicySha256","revocationSourceSha256","collateralRevocationGeneration",
+            "collateralRevocationRootSha256","trustCheckpointId","trustRevocationGeneration","trustRevocationRootSha256",
+            "verifiedAtUnixNanos","expiresAtUnixNanos","signingKeyId","signingKeySpkiSha256"];
+        return ensure(payload.len()==names.len() && names.iter().all(|name|payload.contains_key(*name))
+            && value["payload"]["apiVersion"]=="serverware.nativeShadowKeyAdmissionResult/v1"
+            && value["payload"]["purpose"]=="native-shadow-key-admission","verifier admission fields differ");
+    }
     ensure(outer.len() == 2 && value["apiVersion"] == "serverware.nativeShadowNitroVerifierResult/v1",
         "verifier output purpose differs")?;
     let result = value["result"].as_object().ok_or("verifier result is not an object")?;
@@ -182,6 +195,7 @@ fn execute(admission: RuntimeAdmission, inputs: &inputs::Inputs, watch: &Watchdo
     -> Result<Vec<u8>, String> {
     // The same protected admission survives across watchdog arming. No copied
     // deadline/configuration can create a fresh image/root operation.
+    let purpose=admission.result_purpose()?;
     let mut runtime = admission.prepare()?;
     watch.check()?; runtime.check()?; inputs.check()?;
     let (result_read,result_write) = pipe()?;
@@ -208,7 +222,7 @@ fn execute(admission: RuntimeAdmission, inputs: &inputs::Inputs, watch: &Watchdo
         release_gate(gate_write.as_raw_fd(),watch)?;
         drop(gate_write);
         let raw = collect(&owner,inputs,result_read.as_raw_fd(),watch)?;
-        result_shape(&raw)?;
+        result_shape(&raw,purpose)?;
         owner.check_after_exit()?; inputs.check()?; watch.check()?;
         Ok::<_,String>(raw)
     })();

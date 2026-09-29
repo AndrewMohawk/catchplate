@@ -54,7 +54,7 @@ def main():
         require(len(extensions) == 1, "verifier requires one pinned native extension per package")
         closure.add(extensions[0], SITE / extensions[0].name)
     for name in ("__init__.py", "native_shadow_nitro_profile.py", "native_shadow_nitro_originals.py",
-                 "native_shadow_nitro_verifier.py"):
+                 "native_shadow_nitro_verifier.py", "native_shadow_key_admission_profile.py", "native_shadow_key_admission_verifier.py"):
         closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
     # scripts is deliberately a namespace package, as in the admitted source.
     # No other scripts or authority/store modules enter its isolated search path.
@@ -69,6 +69,7 @@ def main():
         "import cbor2,cffi,pycparser,cryptography; import _cbor2,_cffi_backend; "
         "import scripts.verify_nitro_tee; import serverware.native_shadow_nitro_profile; "
         "import serverware.native_shadow_nitro_originals; import serverware.native_shadow_nitro_verifier; "
+        "import serverware.native_shadow_key_admission_profile; import serverware.native_shadow_key_admission_verifier; "
         "import sys; from importlib.metadata import version; assert sys.prefix == '/usr/local'; "
         "assert cryptography.__version__ == '50.0.0'; assert version('cbor2') == '5.9.0'"],
         env=ENV, check=True, timeout=30)

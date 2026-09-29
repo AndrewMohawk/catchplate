@@ -25,6 +25,34 @@ impl Identity {
 
 pub(super) struct Original { file: File, identity: Identity, sha256: Sha256Digest }
 impl Original {
+    /// The one fixed native entry's independently installed cold original.
+    /// A hash derived here is consistency only; protected provisioning is the
+    /// trust boundary. There is no unpinned caller-selected path constructor.
+    pub(super) fn native_launch() -> Result<Self, Error> {
+        const PATH: &str = "/etc/serverware/native-shadow-guest-launch.json";
+        let mut file = File::open("/")?;
+        for name in ["etc", "serverware", "native-shadow-guest-launch.json"] {
+            let parent = file.metadata()?;
+            if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {
+                return Err(fail("native guest launch ancestor is not protected"));
+            }
+            let name = std::ffi::CString::new(name).map_err(|_| fail("invalid fixed launch name"))?;
+            let raw = unsafe { libc::openat(file.as_raw_fd(), name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK) };
+            if raw < 0 { return Err(std::io::Error::last_os_error().into()); }
+            file = unsafe { File::from_raw_fd(raw) };
+        }
+        let m = file.metadata()?;
+        if !m.is_file() || m.uid() != 0 || m.gid() != 0 || m.mode() & 0o7777 != 0o400
+            || m.nlink() != 1 || m.len() == 0 || m.len() > 32768 {
+            return Err(fail(PATH));
+        }
+        let identity = Identity::of(&m);
+        let mut bytes = vec![0; m.len() as usize];
+        file.read_exact_at(&mut bytes, 0)?;
+        if Identity::of(&file.metadata()?) != identity { return Err(fail("native launch changed")); }
+        Ok(Self { file, identity, sha256: Sha256Digest::compute(&bytes) })
+    }
     // Admission opens seeds but does not read their contents before final-UID checks.
     pub(super) fn open(path: &Path, uid: u32, gid: u32, maximum: usize,
         sha256: Sha256Digest) -> Result<Self, Error> {
@@ -119,6 +147,11 @@ impl Process {
         Ok(())
     }
     pub(super) fn domain(&self) -> BoottimeDomain { self.domain }
+    pub(super) fn native_binding(&self) -> Result<(i32,u64,u64), Error> {
+        self.check()?;
+        let stat = super::descriptor_stat(self.pidfd.as_fd())?;
+        Ok((self.pid,self.start,stat.st_ino))
+    }
 }
 pub(super) struct Parent { socket: OwnedFd, pidfd: OwnedFd, pid: i32, start: u64, stat: (u64,u64) }
 impl Parent {
@@ -169,6 +202,11 @@ impl Parent {
         Ok(())
     }
     pub(super) fn identity(&self) -> (u64,u64) { self.stat }
+    pub(super) fn native_binding(&self) -> Result<(i32,u64,u64), Error> {
+        self.check()?;
+        let stat = super::descriptor_stat(self.pidfd.as_fd())?;
+        Ok((self.pid,self.start,stat.st_ino))
+    }
     pub(super) fn send(&self, bytes:&[u8], deadline:u64) -> Result<(), Error> {
         self.check()?;
         super::send_packet_until(self.socket.as_raw_fd(),bytes,&[],Some(deadline))?;

@@ -20,6 +20,7 @@ from serverware import authority_webauthn_enrollment_policy as enrollment_policy
 from serverware import authority_oauth_activation_policy as oauth_activation_policy
 from serverware import authority_oauth_exchange_policy as oauth_exchange_policy
 from serverware import authority_policy_candidate_policy as policy_candidate_policy
+from serverware import authority_setup_policy_admission as setup_policy_admission
 from serverware import authority_policy_canary_policy as policy_canary_policy
 from serverware import authority_policy_canary_delivery_policy as canary_delivery_policy
 from serverware import authority_oauth_measured_exchange_policy as oauth_measured_exchange_policy
@@ -709,7 +710,7 @@ def _validate_configuration_document(
         expected_payload_schema = SERVICE_CONFIGURATION_PAYLOAD_SCHEMA
         expected_fields = SERVICE_CONFIGURATION_FIELDS
         if isinstance(envelope["payload"], Mapping):
-            for optional_field in (evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, policy_canary_policy.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD):
+            for optional_field in (evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD):
                 if optional_field in envelope["payload"]:
                     expected_fields = expected_fields | {optional_field}
     payload = _closed(
@@ -930,6 +931,7 @@ def _validate_configuration_document(
             oauth_activation_policy.validate_policy(payload.get(oauth_activation_policy.FIELD), payload=payload)
             oauth_exchange_policy.validate_policy(payload.get(oauth_exchange_policy.FIELD), payload=payload)
             policy_candidate_policy.validate_policy(payload.get(policy_candidate_policy.FIELD), payload=payload)
+            setup_policy_admission.validate_policy(payload.get(setup_policy_admission.FIELD), payload=payload)
             policy_canary_policy.validate_policy(payload.get(policy_canary_policy.FIELD), payload=payload)
             canary_delivery_policy.validate_policy(payload.get(canary_delivery_policy.FIELD), payload=payload)
             oauth_measured_exchange_policy.validate_policy(payload.get(oauth_measured_exchange_policy.FIELD), payload=payload)

@@ -146,7 +146,7 @@ impl PendingExchange {
         let names = ["apiVersion","statement","possession","attestationDocumentBase64url",
             "userDataBase64url","publicKeyBase64url","nonceBase64url"];
         ensure(fields.len() == names.len() && names.iter().all(|name| fields.contains_key(*name))
-            && value["apiVersion"] == "serverware.nativeShadowRoleKeyEvidence/v1"
+            && value["apiVersion"] == admission.evidence_api()?
             && canonical_ascii_bytes(&value)? == bytes, "verifier transport evidence framing differs")?;
         exchange.ready = true;
         exchange.check(watch)?; admission.check()?;

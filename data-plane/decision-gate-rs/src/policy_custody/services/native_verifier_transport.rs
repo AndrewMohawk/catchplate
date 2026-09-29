@@ -63,8 +63,8 @@ impl Configuration {
             && p.trust_checkpoint_id == k.trust_checkpoint_id
             && p.revocation_generation == k.revocation_generation
             && p.revocation_root_sha256 == k.revocation_root_sha256)?;
-        validate_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,
-            time.now_unix_nanos()?,MAX_ENVELOPE_AGE_NANOS)?;
+        validate_trusted_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,
+            time,MAX_ENVELOPE_AGE_NANOS)?;
         let verifier = a.authority_key_independence.binding(AuthorityRole::CustodyAttestationVerifier,&a.assignment_id)?;
         require(verifier.key_id == p.verifier_key_id
             && verifier.key_spki_sha256 == p.verifier_key_spki_sha256
@@ -89,6 +89,31 @@ impl Configuration {
 
 pub(super) struct PreparedTransport { original: Original, configuration: Configuration }
 impl PreparedTransport {
+    /// Same fixed public framing, but only the real explicit admission owner
+    /// supplies its original quote. This cannot construct a production result.
+    pub(super) fn exchange_admission(&self,owner:&admission::AdmittedKeys,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Vec<u8>,ShadowError> {
+        owner.check_transport(self,trust,time)?;
+        let evidence=owner.original_evidence()?;
+        require(!evidence.is_empty() && evidence.len()<=MAX_EVIDENCE)?;
+        let deadline=owner.original_deadline();
+        let mut stream=VsockStreamV1::connect_parent(self.configuration.authorization.payload.parent_port,deadline).map_err(fail)?;
+        let result=(||{
+            owner.check_transport(self,trust,time)?;stream.verify_connected_original(deadline).map_err(fail)?;
+            stream.write_all(REQUEST_MAGIC).map_err(fail)?;
+            stream.write_all(&(evidence.len() as u32).to_be_bytes()).map_err(fail)?;
+            stream.write_all(&evidence).map_err(fail)?;
+            owner.check_transport(self,trust,time)?;
+            let mut header=[0;12];stream.read_exact(&mut header).map_err(fail)?;
+            require(&header[..8]==RESULT_MAGIC)?;
+            let count=u32::from_be_bytes(header[8..].try_into().map_err(fail)?) as usize;
+            require(count>0 && count<=MAX_RESULT)?;
+            let mut raw=vec![0;count];stream.read_exact(&mut raw).map_err(fail)?;
+            let mut extra=[0;1];require(stream.read(&mut extra).map_err(fail)?==0)?;
+            owner.check_transport(self,trust,time)?;Ok(raw)
+        })();
+        let closed=stream.shutdown().map_err(fail);let raw=result?;closed?;Ok(raw)
+    }
     pub(super) fn check(&self, keys: &NativeCustodyKeyConfiguration, assignment: &VerifiedAssignment,
         association: &GuestClosureAssociation, trust: &dyn EnvelopeKeyTrust,
         time: &dyn TrustedTime) -> Result<(),ShadowError> {

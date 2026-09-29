@@ -6,6 +6,43 @@ from serverware.authority_store.v9_schema_source import authority_v9_schema_sour
 
 def metadata_base_schema_source() -> str:
     return """
+            CREATE TABLE IF NOT EXISTS setup_policy_continuations (
+                session_id TEXT PRIMARY KEY,
+                revision BIGINT NOT NULL,
+                phase TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                setup_original TEXT NOT NULL,
+                setup_sha256 TEXT NOT NULL,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                generation_request_id TEXT NOT NULL,
+                generation_claim_sha256 TEXT NOT NULL,
+                generation_publication_digest TEXT NOT NULL,
+                candidate_id TEXT NOT NULL,
+                canary_id TEXT NOT NULL,
+                artifact_envelope_digest TEXT NOT NULL,
+                assignment_envelope_digest TEXT NOT NULL,
+                policy_hash TEXT NOT NULL,
+                route_policy_digest TEXT NOT NULL,
+                assignment_digest TEXT NOT NULL,
+                request_original TEXT NOT NULL,
+                request_digest TEXT NOT NULL UNIQUE,
+                configuration_digest TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                CHECK (length(session_id) = 36 AND length(credential_id) = 36 AND length(generation_request_id) = 36),
+                CHECK (revision = 0 AND phase = 'candidate_bound' AND credential_version = 1),
+                CHECK (length(owner_id) BETWEEN 1 AND 1024),
+                CHECK (length(setup_original) BETWEEN 2 AND 65536),
+                CHECK (length(request_original) BETWEEN 2 AND 2097152),
+                CHECK (length(setup_sha256) = 71 AND length(generation_claim_sha256) = 71),
+                CHECK (length(generation_publication_digest) = 71 AND length(artifact_envelope_digest) = 71),
+                CHECK (length(assignment_envelope_digest) = 71 AND length(policy_hash) = 71),
+                CHECK (length(route_policy_digest) = 71 AND length(assignment_digest) = 71),
+                CHECK (length(request_digest) = 71 AND length(configuration_digest) = 71),
+                CHECK (length(candidate_id) BETWEEN 1 AND 256 AND length(canary_id) BETWEEN 1 AND 256)
+            );
+
             CREATE TABLE IF NOT EXISTS policy_canary_delivery_slots (
                 id TEXT PRIMARY KEY,
                 head_id TEXT NOT NULL,

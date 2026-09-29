@@ -56,19 +56,27 @@ struct Operation {
     boot_id_base64url: String, time_namespace_device: u64, time_namespace_inode: u64,
     issued_at_boottime_ns: String, deadline_boottime_ns: String,
 }
-struct Policy { uid: u32, gid: u32, issued: u64, deadline: u64 }
+#[derive(Clone,Copy,PartialEq,Eq)]
+pub(crate) enum ResultPurpose { Production, KeyAdmission }
+struct Policy { uid: u32, gid: u32, issued: u64, deadline: u64, purpose:ResultPurpose }
 fn policy(value: &Value, origin: &Origin) -> Result<Policy, String> {
     let fields = value.as_object().ok_or("verifier policy is not an object")?;
-    let expected = ["apiVersion", "uid", "gid", "operation", "authorization", "expectedStatement", "authorityKeys",
-        "trustCheckpoint", "nitro", "collateralRevocation", "expectedAttestation", "maximumResultAgeNanos"];
-    ensure(fields.len() == expected.len() && expected.iter().all(|name| fields.contains_key(*name))
-        && value["apiVersion"] == "serverware.nativeShadowNitroVerifierConfiguration/v1", "verifier original policy shape differs")?;
+    let (purpose,scope,expected):(_,_,&[&str])=match value["apiVersion"].as_str() {
+        Some("serverware.nativeShadowNitroVerifierConfiguration/v1")=>(ResultPurpose::Production,"expectedStatement",
+            &["apiVersion","uid","gid","operation","authorization","expectedStatement","authorityKeys",
+                "trustCheckpoint","nitro","collateralRevocation","expectedAttestation","maximumResultAgeNanos"]),
+        Some("serverware.nativeShadowNitroVerifierConfiguration/v2")=>(ResultPurpose::KeyAdmission,"expectedScope",
+            &["apiVersion","uid","gid","operation","authorization","expectedScope","authorityKeys",
+                "trustCheckpoint","nitro","collateralRevocation","expectedAttestation","maximumResultAgeNanos","admissionAuthorization"]),
+        _=>return Err("verifier original policy purpose differs".into()),
+    };
+    ensure(fields.len()==expected.len() && expected.iter().all(|name|fields.contains_key(*name)),"verifier original policy shape differs")?;
     let uid = value["uid"].as_u64().and_then(|v| u32::try_from(v).ok()).ok_or("verifier UID invalid")?;
     let gid = value["gid"].as_u64().and_then(|v| u32::try_from(v).ok()).ok_or("verifier GID invalid")?;
     ensure([uid,gid].iter().all(|value| *value > 0 && *value < u32::MAX
         && ![64988,64989,64990,65534].contains(value))
-        && value["expectedStatement"]["guest"]["uid"].as_u64().is_some_and(|id| id != uid as u64)
-        && value["expectedStatement"]["guest"]["gid"].as_u64().is_some_and(|id| id != gid as u64),
+        && value[scope]["guest"]["uid"].as_u64().is_some_and(|id| id != uid as u64)
+        && value[scope]["guest"]["gid"].as_u64().is_some_and(|id| id != gid as u64),
         "verifier final identity aliases a claimant/reserved identity")?;
     let op: Operation = serde_json::from_value(value["operation"].clone()).map_err(|_| "verifier operation original is not closed")?;
     ensure(op.boot_id_base64url == origin.boot && origin.time_identity()? == (op.time_namespace_device, op.time_namespace_inode)
@@ -76,7 +84,7 @@ fn policy(value: &Value, origin: &Origin) -> Result<Policy, String> {
     let issued = decimal(&op.issued_at_boottime_ns)?; let deadline = decimal(&op.deadline_boottime_ns)?;
     ensure(deadline.checked_sub(issued).is_some_and(|window| window > 0 && window <= 30_000_000_000),
         "verifier original operation interval differs")?;
-    Ok(Policy { uid, gid, issued, deadline })
+    Ok(Policy { uid, gid, issued, deadline, purpose })
 }
 
 enum Phase { Prepared, Exported, Reaped }
@@ -129,6 +137,13 @@ impl RuntimeAdmission {
         let pins = (hash(&self.launch.bytes), hash(&self.configuration.bytes));
         self.check()?;
         Ok(pins)
+    }
+    pub(crate) fn result_purpose(&self)->Result<ResultPurpose,String> {self.check()?;Ok(self.policy.purpose)}
+    pub(crate) fn evidence_api(&self)->Result<&'static str,String> {
+        Ok(match self.result_purpose()? {
+            ResultPurpose::Production=>"serverware.nativeShadowRoleKeyEvidence/v1",
+            ResultPurpose::KeyAdmission=>"serverware.nativeShadowKeyAdmissionEvidence/v1",
+        })
     }
     pub(crate) fn prepare(self) -> Result<PreparedRuntime, String> {
         self.check()?;

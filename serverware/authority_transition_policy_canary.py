@@ -16,6 +16,8 @@ from serverware import authority_transition_policy_canary_active as active
 from serverware import authority_transition_policy_canary_shadow as shadow
 from serverware import authority_transition_policy_canary_compiler as compiler
 from serverware import authority_transition_policy_canary_delivery as delivery
+from serverware import authority_transition_policy_canary_native_opening as native_opening
+from serverware import authority_policy_canary_native_opening as opening_profile
 from serverware.authority_transition_policy_canary_state import State
 
 
@@ -38,7 +40,10 @@ def _program(values, database_now, request_digest, snapshot):
         for field, expected in (("instance_id", signed["instanceId"]), ("boot_id", signed["canaryBootId"]),
                 ("assignment_envelope_digest", signed["canaryAssignmentSha256"])):
             profile.require(field not in item or item[field] == expected, "native sender cannot select another assigned evidence lane")
-        if kind == "checkpoint":
+        if kind == "custody" and item.get("apiVersion") == opening_profile.SCHEMA:
+            profile.require(len(original["events"]) == 1, "native opening owns one indivisible original batch")
+            stored = native_opening.apply(state, item)
+        elif kind == "checkpoint":
             stored = db.stage_policy_canary_checkpoint(item, _controlled_state=state)
         elif kind == "readiness":
             stored = db.stage_policy_canary_readiness(item, _controlled_state=state)

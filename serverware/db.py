@@ -45107,11 +45107,8 @@ def stage_policy_canary_readiness(
             raise PolicyCandidateAuthorityConflictError(
                 "readiness does not bind the recomputed sealed fleet aggregate"
             )
-        assignment_payload = _candidate_authority_strict_object(
-            "readiness assignment payload",
-            loads(assignment["assignment_payload_json"], None),
-            _POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS["canary_assignment"],
-        )
+        from serverware.authority_policy_canary_native_opening import assignment_payload as admitted_assignment_payload
+        assignment_payload = admitted_assignment_payload(loads(assignment["assignment_payload_json"], None))
         compiler_payload = _candidate_authority_strict_object(
             "readiness compiler payload",
             loads(compiler["analysis_payload_json"], None),
@@ -50391,11 +50388,8 @@ def _reverify_policy_readiness_derived_contract(
             }
         ),
     )
-    assignment_payload = _candidate_authority_strict_object(
-        "activation readiness assignment payload",
-        loads(assignment["assignment_payload_json"], None),
-        _POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS["canary_assignment"],
-    )
+    from serverware.authority_policy_canary_native_opening import assignment_payload as admitted_assignment_payload
+    assignment_payload = admitted_assignment_payload(loads(assignment["assignment_payload_json"], None))
     compiler_payload = _candidate_authority_strict_object(
         "activation readiness compiler payload",
         loads(compiler["analysis_payload_json"], None),

@@ -88,7 +88,7 @@ class State:
         self.put("policy_authority_transition_audits", stage["transition"])
         return stage["transition"]["transition_digest"]
 
-    def static(self, kind, item, prefix, binding, *, historical=False):
+    def static(self, kind, item, prefix, binding, *, historical=False, persist=True):
         inputs = evidence_inputs(item, prefix, binding)
         revoked = self.rows("policy_authority_trusted_key_revocations")
         profile.require(not any(row["evidence_kind"] == kind and row["signing_key_id"] == item["signing_key_id"] for row in revoked),
@@ -115,6 +115,8 @@ class State:
         if historical:
             profile.require(computed == receipt, "historical static signature/receipt changed")
             return receipt
+        if not persist:
+            return computed
         existing = self.matching("policy_authority_evidence_verifications", signature_digest=computed["signature_digest"],
             record_binding_digest=computed["record_binding_digest"])
         profile.require(len(existing) <= 1)

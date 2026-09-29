@@ -4,6 +4,15 @@ The required source order is candidate intake, then Setup association. The
 measured OAuth Setup profile ends at `credential_activated`, revision 3. Its
 four-event observation and OAuth mutation profiles are not widened here.
 
+The explicit [owner candidate association](setup-policy-candidate-portal.md)
+now joins the real activated session, completed activation audit, active
+credential/currentness root and protected native generation into one immutable
+successor row. It includes the actual review/passkey/bind/lookup portal and
+purpose-specific controlled writer. Policy-file materialization, current loader
+evidence and later enrollment/runtime/final-receipt continuation remain required.
+The historical dependency description below is not a claim that those later
+producers or runtime acceptance are complete.
+
 The existing portal hands a signed candidate to the native generation owner,
 collects candidate-bound shadow evidence, executes authority preparation/audit
 inclusion/finalization, and then calls legacy Setup row mutations. Generation

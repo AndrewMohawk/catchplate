@@ -8965,6 +8965,8 @@ pub(crate) struct ShadowRuntime {
     installation_in_progress: AtomicBool,
     publication_reconciliation_required: AtomicBool,
     authoritative_publication_revision: AtomicU64,
+    native_opening_gate: Mutex<()>,
+    native_opening_failed: AtomicBool,
     activation_publication_gate:
         RwLock<Option<ShadowActivationPublicationGate>>,
     #[cfg(test)]
@@ -9003,6 +9005,8 @@ impl ShadowRuntime {
             installation_in_progress: AtomicBool::new(false),
             publication_reconciliation_required: AtomicBool::new(true),
             authoritative_publication_revision: AtomicU64::new(0),
+            native_opening_gate: Mutex::new(()),
+            native_opening_failed: AtomicBool::new(false),
             activation_publication_gate: RwLock::new(None),
             #[cfg(test)]
             inactive_for_forwarding_tests: false,
@@ -9804,7 +9808,40 @@ impl ShadowRuntime {
         true
     }
 
-    pub(crate) fn capture(
+    /// Production request entry. The real custody admission is exported before
+    /// request facts/effects proceed; uncertainty fences this boot's owner.
+    pub(crate) fn capture_for_gate(
+        &self, state:&GateState, snapshot:&Arc<Snapshot>, request:&DecisionRequest,
+        authenticated_principal_id:Option<&str>, ingress:ShadowIngressKind,
+        captured_at_epoch_ms:u128, raw_body:Option<&[u8]>,
+    )->ShadowAdmission {
+        if state.measured_canary_delivery.is_none() || !ingress.is_shadow_coverage() {
+            return self.capture_inner(snapshot,request,authenticated_principal_id,ingress,captured_at_epoch_ms,raw_body,None);
+        }
+        let binding=request_binding(snapshot,request,authenticated_principal_id);
+        let fail=||ShadowAdmission::custody_fail_closed(snapshot,binding.clone(),ingress,
+            PolicyShadowTerminalReason::AccountingCustodyUnavailable);
+        let Ok(_serial)=self.native_opening_gate.try_lock() else {return fail();};
+        if self.native_opening_failed.load(Ordering::Acquire) {return fail();}
+        let deadline=match super::native_canary_opening::deadline(state) {
+            Ok(value)=>value,Err(_)=>return fail(),
+        };
+        let exported=std::cell::Cell::new(false);
+        let result=self.capture_inner(snapshot,request,authenticated_principal_id,ingress,captured_at_epoch_ms,raw_body,Some((state,deadline,&exported)));
+        if !exported.get() {
+            self.native_opening_failed.store(true,Ordering::Release);
+            self.ledger.mark_hard_unready();
+        }
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capture(&self,snapshot:&Arc<Snapshot>,request:&DecisionRequest,
+        authenticated_principal_id:Option<&str>,ingress:ShadowIngressKind,captured_at_epoch_ms:u128,raw_body:Option<&[u8]>) ->ShadowAdmission {
+        self.capture_inner(snapshot,request,authenticated_principal_id,ingress,captured_at_epoch_ms,raw_body,None)
+    }
+
+    fn capture_inner(
         &self,
         snapshot: &Arc<Snapshot>,
         request: &DecisionRequest,
@@ -9812,6 +9849,7 @@ impl ShadowRuntime {
         ingress: ShadowIngressKind,
         _captured_at_epoch_ms: u128,
         raw_body: Option<&[u8]>,
+        native_export: Option<(&GateState,u64,&std::cell::Cell<bool>)>,
     ) -> ShadowAdmission {
         #[cfg(test)]
         if self.inactive_for_forwarding_tests {
@@ -9888,6 +9926,17 @@ impl ShadowRuntime {
                 }
             };
         let generation = Arc::clone(&published.generation);
+        if let Some((state,deadline,exported))=native_export {
+            if super::native_canary_opening::submit(state,&custody_admission,deadline).is_err() {
+                self.native_opening_failed.store(true,Ordering::Release);
+                self.ledger.mark_hard_unready();
+                let _=self.record_ingress_event(&custody_admission,ShadowRuntimeEvent::Failure(
+                    PolicyShadowTerminalReason::AccountingCustodyUnavailable),None);
+                return ShadowAdmission::custody_fail_closed(snapshot,binding,ingress,
+                    PolicyShadowTerminalReason::AccountingCustodyUnavailable);
+            }
+            exported.set(true);
+        }
         if !generation.matches_active_snapshot(snapshot) {
             let accounted = self.record_ingress_event(
                 &custody_admission,

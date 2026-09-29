@@ -40,7 +40,7 @@ impl NativeShadowEncryptedKeysConfiguration {
         let bindings=full_bindings(assignment)?;
         let local:BTreeMap<_,_>=k.local_roles.iter().map(|role|(*role,bindings[role].clone())).collect();
         require(production_custody_key_set_root(&local)?==p.local_key_set_root_sha256)?;
-        validate_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,time.now_unix_nanos()?,MAX_ENVELOPE_AGE_NANOS)?;
+        validate_trusted_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,time,MAX_ENVELOPE_AGE_NANOS)?;
         p.transport.validate().map_err(fail)?;
         let (entry,_)=association.owner.credentials.get(CREDENTIAL).ok_or(ShadowError::CustodyUnavailable)?;
         require(entry.signing.is_none()&&entry.length>0&&entry.length<=32768
@@ -106,11 +106,29 @@ impl Prepared {
         association:&GuestClosureAssociation,closure:&NativeCustodyClosureOwner,production:&ProductionCustodyConfiguration,
         nsm:&mut ShadowNsmV1,checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
         ->Result<(BTreeMap<AuthorityRole,LocalKey>,NativeShadowEncryptedKeysConfiguration),ShadowError> {
+        let bindings=full_bindings(assignment)?;
+        for (role,binding) in &bindings {require(production.authority_binding(*role)?==binding)?;}
+        self.bind_keys(key_configuration,assignment,association,closure,&bindings,nsm,checkpoint,trust,time)
+    }
+    pub(super) fn bind_admission(self,key_configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,
+        association:&GuestClosureAssociation,closure:&NativeCustodyClosureOwner,nsm:&mut ShadowNsmV1,
+        checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
+        ->Result<(BTreeMap<AuthorityRole,LocalKey>,NativeShadowEncryptedKeysConfiguration),ShadowError> {
+        // Actual independently verified assignment, not a production driver or
+        // caller-provided authority map. Admission exposes no service signing.
+        let bindings=full_bindings(assignment)?;
+        self.bind_keys(key_configuration,assignment,association,closure,&bindings,nsm,checkpoint,trust,time)
+    }
+    fn bind_keys(self,key_configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,
+        association:&GuestClosureAssociation,closure:&NativeCustodyClosureOwner,
+        bindings:&BTreeMap<AuthorityRole,ProductionCustodyKeyBinding>,nsm:&mut ShadowNsmV1,
+        checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
+        ->Result<(BTreeMap<AuthorityRole,LocalKey>,NativeShadowEncryptedKeysConfiguration),ShadowError> {
         association.check_startup().map_err(fail)?;closure.require_origin(association)?;
         self.configuration.verify(key_configuration,assignment,association,checkpoint,trust,time)?;
         let mut public_keys=Vec::new();
         for role in &key_configuration.authorization.payload.local_roles {
-            let b=production.authority_binding(*role)?;
+            let b=bindings.get(role).ok_or(ShadowError::SignerBindingMismatch)?;
             let key=trust.resolve_ed25519_key(checkpoint,authority_role_signature_domain(*role),b.key_id(),b.key_spki_sha256())?;
             require(ed25519_public_key_material_sha256(&key)==*b.key_material_sha256())?;
             public_keys.push(PublicKey{role:*role,key_id:b.key_id().clone(),key_spki_sha256:b.key_spki_sha256().clone(),
@@ -161,7 +179,7 @@ impl Prepared {
             let seed=Zeroizing::new(<[u8;32]>::try_from(bytes.as_slice()).map_err(fail)?);
             let key=SigningKey::from_bytes(&seed);let public=key.verifying_key();
             require(URL_SAFE_NO_PAD.encode(public.to_bytes())==expected.public_key_base64url)?;
-            keys.insert(expected.role,LocalKey{key,binding:production.authority_binding(expected.role)?.clone(),public:public.to_bytes()});
+            keys.insert(expected.role,LocalKey{key,binding:bindings.get(&expected.role).ok_or(ShadowError::SignerBindingMismatch)?.clone(),public:public.to_bytes()});
         }
         association.check_startup().map_err(fail)?;closure.require_origin(association)?;
         self.configuration.verify(key_configuration,assignment,association,checkpoint,trust,time)?;

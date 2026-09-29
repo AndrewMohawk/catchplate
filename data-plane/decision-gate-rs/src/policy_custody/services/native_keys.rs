@@ -13,6 +13,8 @@ mod verifier_transport;
 pub(crate) use verifier_transport::NativeVerifierTransportPin;
 #[path="native_key_delivery.rs"]
 mod encrypted;
+#[path="native_guest/admission.rs"]
+pub(crate) mod admission;
 pub(crate) use encrypted::NativeShadowEncryptedKeysConfiguration;
 
 const PROFILE:&str="preassigned-final-role-originals-v1";
@@ -91,7 +93,7 @@ fn verify(configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssig
     revalidate_verified_at_checkpoint(assignment,checkpoint,trust,MAX_ENVELOPE_AGE_NANOS)?;
     verify_assignment_authority_key_material_at_checkpoint(assignment,checkpoint,trust)?;
     require(production_custody_key_set_root(&full_bindings(assignment)?)?==p.full_key_set_root_sha256)?;
-    validate_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,time.now_unix_nanos()?,MAX_ENVELOPE_AGE_NANOS)?;
+    validate_trusted_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,time,MAX_ENVELOPE_AGE_NANOS)?;
     let b=a.authority_key_independence.binding(AuthorityRole::CustodySupervisorCapability,&a.assignment_id)?;
     require(b.key_id==p.signing_key_id && b.key_spki_sha256==p.signing_key_spki_sha256)?;
     let key=trust.resolve_ed25519_key(checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),&b.key_id,&b.key_spki_sha256)?;
@@ -210,7 +212,7 @@ impl NativeCustodyKeys {
                 value.verify(&self.configuration,&self.assignment,&self.association,&checkpoint,trust,time)?;
             }
             self.production.revalidate_retained_assignment_at_checkpoint(&checkpoint,trust)?;
-            self.closure.freshness(time.now_unix_nanos()?)
+            self.closure.trusted_freshness(time)
         })();
         if result.is_err() {self.poisoned.store(true,Ordering::Release);}result
     }

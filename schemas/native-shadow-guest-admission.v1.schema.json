@@ -1,0 +1,766 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-guest-admission.v1.schema.json",
+  "$ref": "#/$defs/launch",
+  "$defs": {
+    "sha256": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/sha256"
+    },
+    "positive": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/positive"
+    },
+    "ns": {
+      "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns"
+    },
+    "guest": {
+      "$ref": "native-custody-closure.v1.schema.json#/$defs/guest"
+    },
+    "signature": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/signature"
+    },
+    "pin": {
+      "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin"
+    },
+    "launch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "deliveryConfiguration",
+        "delivery",
+        "trust",
+        "timeBootstrap",
+        "assignment",
+        "closure",
+        "keys",
+        "encryptedKeys",
+        "admission",
+        "verifierTransport"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowGuestLaunch/v1"
+        },
+        "deliveryConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "delivery": {
+          "$ref": "#/$defs/pin"
+        },
+        "trust": {
+          "$ref": "#/$defs/pin"
+        },
+        "timeBootstrap": {
+          "$ref": "#/$defs/pin"
+        },
+        "assignment": {
+          "$ref": "#/$defs/pin"
+        },
+        "closure": {
+          "$ref": "#/$defs/pin"
+        },
+        "keys": {
+          "$ref": "#/$defs/pin"
+        },
+        "encryptedKeys": {
+          "$ref": "#/$defs/pin"
+        },
+        "admission": {
+          "$ref": "#/$defs/pin"
+        },
+        "verifierTransport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "const": "/etc/serverware/native-shadow-public-exchange.json"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "publicKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keyId",
+        "keySpkiSha256",
+        "publicKeyBase64url",
+        "notBeforeUnixNanos",
+        "notAfterUnixNanos"
+      ],
+      "properties": {
+        "keyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "keySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "publicKeyBase64url": {
+          "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32"
+        },
+        "notBeforeUnixNanos": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "notAfterUnixNanos": {
+          "$ref": "#/$defs/positive"
+        }
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "checkpoint",
+        "assignmentKey",
+        "timeKey",
+        "roleKeys",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowGuestTrust/v1"
+        },
+        "checkpoint": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/checkpoint"
+        },
+        "assignmentKey": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "timeKey": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "roleKeys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "role",
+              "key"
+            ],
+            "properties": {
+              "role": {
+                "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/authorityRoleKeyBinding/properties/role"
+              },
+              "key": {
+                "$ref": "#/$defs/publicKey"
+              }
+            }
+          }
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "#/$defs/positive"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/positive"
+        }
+      }
+    },
+    "timeBootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "guest",
+        "signingKeyId",
+        "parentPort",
+        "maximumBracketNanos",
+        "timestampErrorNanos",
+        "maximumClockRateErrorPpm"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowGuestTimeBootstrap/v1"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "parentPort": {
+          "type": "integer", "minimum": 1024, "maximum": 4294967294
+        },
+        "maximumBracketNanos": {
+          "type": "string", "pattern": "^([1-9][0-9]{0,8}|1000000000)$"
+        },
+        "timestampErrorNanos": {
+          "type": "integer", "minimum": 0, "maximum": 1000000000
+        },
+        "maximumClockRateErrorPpm": {
+          "type": "integer", "minimum": 0, "maximum": 10000
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "timeChallenge": { "$ref": "native-shadow-guest-time-issuer.v1.schema.json#/$defs/challenge" },
+    "timeEvidence": { "$ref": "native-shadow-guest-time-issuer.v1.schema.json#/$defs/evidence" },
+    "timeAnchor": { "$ref": "native-shadow-guest-time-issuer.v1.schema.json#/$defs/anchor" },
+    "admissionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "keyAuthorizationSha256",
+        "guest",
+        "executionClosureManifestSha256",
+        "fullKeySetRootSha256",
+        "localKeySetRootSha256",
+        "challengeBase64url",
+        "trustCheckpointId",
+        "revocationGeneration",
+        "revocationRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowKeyAdmissionAssignment/v1"
+        },
+        "purpose": {
+          "const": "native-shadow-key-admission"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentRevision": {
+          "$ref": "#/$defs/positive"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "executionClosureManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fullKeySetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "localKeySetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "challengeBase64url": {
+          "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/challenge"
+        },
+        "trustCheckpointId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationGeneration": {
+          "$ref": "#/$defs/positive"
+        },
+        "revocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "#/$defs/positive"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/positive"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "admissionAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/admissionPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "profile",
+        "guestSha256",
+        "executionClosureManifestSha256",
+        "processId",
+        "processStartTicks",
+        "pidfdInode",
+        "parentProcessId",
+        "parentStartTicks",
+        "parentPidfdInode",
+        "cgroupSha256",
+        "rootDevice",
+        "rootInode",
+        "observedAtBoottimeNs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowKeyAdmissionContext/v1"
+        },
+        "profile": {
+          "const": "same-process-native-originals-v1"
+        },
+        "guestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionClosureManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "processId": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 2147483647
+        },
+        "processStartTicks": {
+          "$ref": "#/$defs/uint64"
+        },
+        "pidfdInode": {
+          "$ref": "#/$defs/uint64"
+        },
+        "parentProcessId": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 2147483647
+        },
+        "parentStartTicks": {
+          "$ref": "#/$defs/uint64"
+        },
+        "parentPidfdInode": {
+          "$ref": "#/$defs/uint64"
+        },
+        "cgroupSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rootDevice": {
+          "$ref": "#/$defs/uint64"
+        },
+        "rootInode": {
+          "$ref": "#/$defs/uint64"
+        },
+        "observedAtBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        }
+      }
+    },
+    "uint64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "assignmentId",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "keyAuthorizationSha256",
+        "admissionAuthorizationSha256",
+        "guest",
+        "executionClosureManifestSha256",
+        "structurallyVerifiedSeccompPolicySha256",
+        "workerExecutableSha256",
+        "fullKeySetRootSha256",
+        "localKeySetRootSha256",
+        "localKeys",
+        "challengeBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowKeyAdmissionScope/v1"
+        },
+        "purpose": {
+          "const": "native-shadow-key-admission"
+        },
+        "assignmentId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentRevision": {
+          "$ref": "#/$defs/positive"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "admissionAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "executionClosureManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "structurallyVerifiedSeccompPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workerExecutableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fullKeySetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "localKeySetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "localKeys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/publicKey"
+          }
+        },
+        "challengeBase64url": {
+          "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/challenge"
+        }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "assignmentId",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "keyAuthorizationSha256",
+        "admissionAuthorizationSha256",
+        "guest",
+        "executionClosureManifestSha256",
+        "structurallyVerifiedSeccompPolicySha256",
+        "workerExecutableSha256",
+        "fullKeySetRootSha256",
+        "localKeySetRootSha256",
+        "localKeys",
+        "challengeBase64url",
+        "nativeContext",
+        "nativeContextSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowKeyAdmissionStatement/v1"
+        },
+        "purpose": {
+          "const": "native-shadow-key-admission"
+        },
+        "assignmentId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentRevision": {
+          "$ref": "#/$defs/positive"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "admissionAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "executionClosureManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "structurallyVerifiedSeccompPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workerExecutableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fullKeySetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "localKeySetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "localKeys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/publicKey"
+          }
+        },
+        "challengeBase64url": {
+          "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/challenge"
+        },
+        "nativeContext": {
+          "$ref": "#/$defs/context"
+        },
+        "nativeContextSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "statement",
+        "possession",
+        "attestationDocumentBase64url",
+        "userDataBase64url",
+        "publicKeyBase64url",
+        "nonceBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowKeyAdmissionEvidence/v1"
+        },
+        "statement": {
+          "$ref": "#/$defs/statement"
+        },
+        "possession": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/possession"
+          }
+        },
+        "attestationDocumentBase64url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 21846,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "userDataBase64url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1366,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "publicKeyBase64url": {
+          "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32"
+        },
+        "nonceBase64url": {
+          "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/challenge"
+        }
+      }
+    },
+    "verifierConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "uid",
+        "gid",
+        "operation",
+        "authorization",
+        "expectedScope",
+        "authorityKeys",
+        "trustCheckpoint",
+        "nitro",
+        "collateralRevocation",
+        "expectedAttestation",
+        "maximumResultAgeNanos",
+        "admissionAuthorization"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowNitroVerifierConfiguration/v2"
+        },
+        "uid": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/uid"
+        },
+        "gid": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/uid"
+        },
+        "operation": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/operation"
+        },
+        "authorization": {
+          "$ref": "native-shadow-encrypted-keys.v1.schema.json#/$defs/keyAuthorizationV2"
+        },
+        "expectedScope": {
+          "$ref": "#/$defs/scope"
+        },
+        "authorityKeys": {
+          "type": "array",
+          "minItems": 18,
+          "maxItems": 18,
+          "items": {
+            "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/authorityKey"
+          }
+        },
+        "trustCheckpoint": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/checkpoint"
+        },
+        "nitro": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/nitro"
+        },
+        "collateralRevocation": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/revocation"
+        },
+        "expectedAttestation": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/expectedAttestation"
+        },
+        "maximumResultAgeNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000000000
+        },
+        "admissionAuthorization": {
+          "$ref": "#/$defs/admissionAuthorization"
+        }
+      }
+    },
+    "resultPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "statementSha256",
+        "quoteSha256",
+        "nativeContextSha256",
+        "admissionAuthorizationSha256",
+        "keyAuthorizationSha256",
+        "fullKeySetRootSha256",
+        "localKeySetRootSha256",
+        "measurementSha256",
+        "endorsementEvidenceSha256",
+        "endorsementRootSha256",
+        "collateralPolicySha256",
+        "revocationSourceSha256",
+        "collateralRevocationGeneration",
+        "collateralRevocationRootSha256",
+        "trustCheckpointId",
+        "trustRevocationGeneration",
+        "trustRevocationRootSha256",
+        "verifiedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowKeyAdmissionResult/v1"
+        },
+        "purpose": {
+          "const": "native-shadow-key-admission"
+        },
+        "statementSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "quoteSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nativeContextSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "admissionAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fullKeySetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "localKeySetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "measurementSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "endorsementEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "endorsementRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "collateralPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationSourceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "collateralRevocationGeneration": {
+          "$ref": "#/$defs/positive"
+        },
+        "collateralRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustCheckpointId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustRevocationGeneration": {
+          "$ref": "#/$defs/positive"
+        },
+        "trustRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verifiedAtUnixNanos": {
+          "$ref": "#/$defs/positive"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/positive"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowKeyAdmissionVerifierResult/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/resultPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    }
+  }
+}

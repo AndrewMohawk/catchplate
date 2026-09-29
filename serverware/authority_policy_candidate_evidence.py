@@ -62,7 +62,12 @@ def verify_static_original(*, evidence_kind, envelope_json, envelope_digest,
     bound = dict(record_binding)
     db._candidate_authority_json_value("signed record binding", bound)
     if direct:
-        require(type(payload) is dict and set(payload) == db._POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS[evidence_kind],
+        if evidence_kind == "canary_assignment":
+            from serverware.authority_policy_canary_native_opening import assignment_fields
+            expected_fields = assignment_fields(payload)
+        else:
+            expected_fields = db._POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS[evidence_kind]
+        require(type(payload) is dict and set(payload) == expected_fields,
             "candidate direct evidence payload is not closed")
         db._policy_shadow_assert_direct_record_binding(evidence_kind=evidence_kind, payload=payload, record_binding=bound)
         issued, expires = payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"]

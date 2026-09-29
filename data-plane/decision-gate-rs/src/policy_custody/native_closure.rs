@@ -126,6 +126,34 @@ fn check_root(image:&ShadowImage)->Result<(),ShadowError> {
         && m.dev()==original.st_dev && m.ino()==original.st_ino)
 }
 
+/// Pre-key consistency with an independently protected cold original only.
+/// This is not the epoch-dependent closure assignment or an installed image.
+/// The later full closure constructor still verifies all authority and bytes.
+pub(in crate::policy_shadow) struct PrekeyExecutable {
+    executable:File,identity:ExecutableIdentity,association:GuestClosureAssociation,
+}
+impl PrekeyExecutable {
+    pub(in crate::policy_shadow) fn open(configuration:&Configuration,delivery:&PreparedGuestServiceDelivery)
+        ->Result<Self,ShadowError> {
+        let association=delivery.closure_association().map_err(unavailable)?;
+        association.check_preparation().map_err(unavailable)?;
+        require(configuration.api_version=="serverware.nativeCustodyClosure/v1")?;
+        configuration.manifest.validate()?;
+        require(configuration.manifest.runtime_configuration_sha256==association.binding().runtime_configuration_sha256)?;
+        let executable=File::open("/proc/self/exe").map_err(unavailable)?;
+        let identity=executable_identity(&executable)?;
+        let bytes=read(&executable,128*1024*1024)?;
+        require(Sha256Digest::compute(&bytes)==configuration.manifest.worker_executable_sha256)?;
+        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(unavailable)?;
+        let owner=Self{executable,identity,association};owner.check()?;Ok(owner)
+    }
+    pub(in crate::policy_shadow) fn check(&self)->Result<(),ShadowError> {
+        self.association.check_preparation().map_err(unavailable)?;
+        require(executable_identity(&self.executable)?==self.identity && status_number("Threads:")?==1)?;
+        check_current_executable(&self.identity)
+    }
+}
+
 /// Constructed only in the same root process as admitted guest delivery.
 /// It may be borrowed for the root's real chroot setup but cannot cross exec.
 pub(in crate::policy_shadow) struct PreparedNativeCustodyClosure {
@@ -133,6 +161,10 @@ pub(in crate::policy_shadow) struct PreparedNativeCustodyClosure {
     executable:File,executable_identity:ExecutableIdentity,checkpoint:AtomicTrustCheckpoint,
 }
 impl PreparedNativeCustodyClosure {
+    pub(in crate::policy_shadow) fn require_prekey(&self,original:&PrekeyExecutable)->Result<(),ShadowError> {
+        original.check()?;self.association.check_preparation().map_err(unavailable)?;
+        require(self.association.same_origin(&original.association) && self.executable_identity==original.identity)
+    }
     pub(in crate::policy_shadow) fn open(configuration:Configuration,assignment:&VerifiedAssignment,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(unavailable)?;association.check_preparation().map_err(unavailable)?;
@@ -143,7 +175,7 @@ impl PreparedNativeCustodyClosure {
             && p.revocation_root_sha256==checkpoint.revocation_root_sha256)?;
         verify_assignment(&configuration.authorization,&configuration.manifest,&association.binding(),assignment,
             &checkpoint,trust)?;
-        validate_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,time.now_unix_nanos()?,MAX_ENVELOPE_AGE_NANOS)?;
+        validate_trusted_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,time,MAX_ENVELOPE_AGE_NANOS)?;
         let m=&configuration.manifest;let b=&m.build_provenance;
         let image=ShadowImage::open(m.image_sha256.as_str(),m.worker_executable_sha256.as_str(),[
             m.seccomp_policy.raw_bpf_sha256().as_str(),m.runtime_configuration_sha256.as_str(),
@@ -215,9 +247,14 @@ impl NativeCustodyClosureOwner {
         self.check()?;let p=&self.0.prepared.configuration.authorization.payload;
         validate_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,now,MAX_ENVELOPE_AGE_NANOS)
     }
+    pub(super) fn trusted_freshness(&self,time:&dyn TrustedTime)->Result<(),ShadowError> {
+        self.check()?;let p=&self.0.prepared.configuration.authorization.payload;
+        validate_trusted_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,time,MAX_ENVELOPE_AGE_NANOS)?;
+        Ok(())
+    }
     pub(super) fn require_assignment(&self,assignment:&VerifiedAssignment,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,
         supervisor_instance:&Sha256Digest,supervisor_boot:&Sha256Digest)->Result<(),ShadowError> {
-        let checkpoint=trust.current_checkpoint()?;self.verify_current(assignment,&checkpoint,trust)?;self.freshness(time.now_unix_nanos()?)?;
+        let checkpoint=trust.current_checkpoint()?;self.verify_current(assignment,&checkpoint,trust)?;self.trusted_freshness(time)?;
         let binding=self.0.prepared.association.binding();
         let raw=URL_SAFE_NO_PAD.decode(&binding.boot_id_base64url).map_err(unavailable)?;
         require(&Sha256Digest::compute(&raw)==supervisor_boot

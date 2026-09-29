@@ -78,6 +78,8 @@ from serverware.portal_oauth_measured_consent import (
 )
 from serverware.portal_oauth_activation import OAUTH_ACTIVATION_HTML, OAUTH_ACTIVATION_SCRIPT
 from serverware.portal_oauth_setup import OAUTH_SETUP_HTML, OAUTH_SETUP_SCRIPT
+from serverware.portal_setup_policy import SETUP_POLICY_HTML, SETUP_POLICY_SCRIPT
+from serverware import control_plane_setup_policy
 from serverware.portal_policy_candidate import POLICY_CANDIDATE_HTML, POLICY_CANDIDATE_SCRIPT
 from serverware import control_plane_policy_candidate
 from serverware import control_plane_policy_canary
@@ -628,6 +630,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             "/api/policy/authority/candidates/package",
             "/api/policy/authority/candidates/handoff",
             *control_plane_policy_candidate.PATHS,
+            *control_plane_setup_policy.PATHS,
             *control_plane_policy_canary.PATHS,
             control_plane_policy_canary_delivery.PATH,
             "/api/data-plane/policy-canary/evidence",
@@ -658,6 +661,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             )
     request_limit = {
         **{path: control_plane_policy_candidate.MAX_REQUEST for path in control_plane_policy_candidate.PATHS},
+        **{path: control_plane_setup_policy.MAX_REQUEST for path in control_plane_setup_policy.PATHS},
         **{path: control_plane_policy_canary.MAX_REQUEST for path in control_plane_policy_canary.PATHS},
         control_plane_policy_canary_delivery.PATH: control_plane_policy_canary_delivery.MAX_REQUEST,
         **{path: activation_permission_contract.MAX_REQUEST_BYTES for path in activation_permission_routes.PATHS},
@@ -11085,6 +11089,20 @@ async def policy_authority_candidate_handoff(
         publication,
         recovered=False,
     )
+
+
+@app.post(control_plane_setup_policy.PREFIX + "/draft")
+@app.post(control_plane_setup_policy.PREFIX + "/options")
+@app.post(control_plane_setup_policy.PREFIX + "/bind")
+@app.post(control_plane_setup_policy.PREFIX + "/lookup")
+async def controlled_setup_policy_candidate(request: Request) -> dict[str, Any]:
+    raw = await request.body()
+    try:
+        return await _run_bounded_blocking(_POLICY_AUTHORITY_HANDOFF_SLOTS,
+            control_plane_setup_policy.on_request, request, raw)
+    except control_plane_setup_policy.ERRORS as exc:
+        raise HTTPException(status_code=409,
+            detail="Setup candidate association unavailable or outcome unknown; check completed activation audit and retained originals, then inspect without retry") from exc
 
 
 @app.post(control_plane_policy_candidate.PREFIX + "/draft")
@@ -22852,6 +22870,7 @@ UI_HTML = r"""
           __SERVERWARE_OAUTH_CONSENT_HTML__
           __SERVERWARE_MEASURED_OAUTH_CONSENT_HTML__
           __SERVERWARE_OAUTH_SETUP_HTML__
+          __SERVERWARE_SETUP_POLICY_HTML__
           __SERVERWARE_OAUTH_RECONNECT_HTML__
           __SERVERWARE_OAUTH_SUCCESSION_HTML__
           <div id="oauth-connected-section" class="pending-oauth-list connected-oauth-list" hidden>
@@ -26550,6 +26569,7 @@ UI_HTML = r"""
     __SERVERWARE_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_OAUTH_SETUP_SCRIPT__
+    __SERVERWARE_SETUP_POLICY_SCRIPT__
     __SERVERWARE_POLICY_CANDIDATE_SCRIPT__
     __SERVERWARE_OAUTH_RECONNECT_SCRIPT__
     __SERVERWARE_OAUTH_SUCCESSION_SCRIPT__
@@ -26635,6 +26655,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__", MEASURED_OAUTH_CONSENT_SCRIPT),
     ("__SERVERWARE_OAUTH_SETUP_HTML__", OAUTH_SETUP_HTML),
     ("__SERVERWARE_OAUTH_SETUP_SCRIPT__", OAUTH_SETUP_SCRIPT),
+    ("__SERVERWARE_SETUP_POLICY_HTML__", SETUP_POLICY_HTML),
+    ("__SERVERWARE_SETUP_POLICY_SCRIPT__", SETUP_POLICY_SCRIPT),
     ("__SERVERWARE_POLICY_CANDIDATE_HTML__", POLICY_CANDIDATE_HTML),
     ("__SERVERWARE_POLICY_CANDIDATE_SCRIPT__", POLICY_CANDIDATE_SCRIPT),
     ("__SERVERWARE_OAUTH_RECONNECT_HTML__", OAUTH_RECONNECT_HTML),

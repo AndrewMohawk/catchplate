@@ -4,6 +4,7 @@
 mod policy_core;
 mod policy_shadow;
 mod policy_shadow_generation;
+mod native_canary_opening;
 mod response_v2;
 mod gate_state_init;
 mod control_plane_client_config;
@@ -34535,7 +34536,7 @@ fn decide_internal_for_forward_with_shadow<'a>(
     shadow_admission: Option<ShadowAdmission>,
 ) -> (Value, Option<ReleaseAuthorizationGuard<'a>>) {
     let shadow_admission = shadow_admission.unwrap_or_else(|| {
-        state.policy_shadow.capture(
+        state.policy_shadow.capture_for_gate(state,
             snapshot,
             &req,
             authenticated_principal_id,
@@ -34567,7 +34568,7 @@ fn decide_internal_with_mode<'a>(
     preview: bool,
     accepted_release_output: Option<&mut Option<ReleaseAuthorizationGuard<'a>>>,
 ) -> Value {
-    let shadow_admission = state.policy_shadow.capture(
+    let shadow_admission = state.policy_shadow.capture_for_gate(state,
         snapshot,
         &req,
         authenticated_principal_id,
@@ -34605,7 +34606,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
     let started = Instant::now();
     let shadow_admission = match precomputed_shadow_admission {
         Some(admission) if admission.matches(snapshot, &req, authenticated_principal_id) => admission,
-        Some(_) => state.policy_shadow.capture(
+        Some(_) => state.policy_shadow.capture_for_gate(state,
             snapshot,
             &req,
             authenticated_principal_id,
@@ -34617,7 +34618,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
             now_epoch_ms(),
             None,
         ),
-        None => state.policy_shadow.capture(
+        None => state.policy_shadow.capture_for_gate(state,
             snapshot,
             &req,
             authenticated_principal_id,
@@ -45294,7 +45295,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         buffered_forward_decision_request(&request, client_request_digest)
     });
     let shadow_admission = shadow_admission.unwrap_or_else(|| {
-        state.policy_shadow.capture(
+        state.policy_shadow.capture_for_gate(state,
             snapshot,
             &decision_request,
             authenticated_principal_id,
@@ -46130,7 +46131,7 @@ fn forward_absolute_request_inner<'a>(
     };
     let decision_request =
         buffered_forward_decision_request(&request, client_request_digest);
-    let shadow_admission = state.policy_shadow.capture(
+    let shadow_admission = state.policy_shadow.capture_for_gate(state,
         snapshot,
         &decision_request,
         authenticated_principal_id,
@@ -46262,7 +46263,7 @@ fn forward_absolute_streaming_request_to(
         gmail_proofs: Vec::new(),
         client_request_digest: None,
     };
-    let shadow_admission = state.policy_shadow.capture(
+    let shadow_admission = state.policy_shadow.capture_for_gate(state,
         snapshot,
         &decision_request,
         authenticated_principal_id,
@@ -46917,7 +46918,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         gmail_proofs: Vec::new(),
         client_request_digest: None,
     };
-    let shadow_admission = state.policy_shadow.capture(
+    let shadow_admission = state.policy_shadow.capture_for_gate(state,
         snapshot,
         &decision_request,
         authenticated_principal_id,
@@ -47659,7 +47660,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             Err(_) => {
                 let malformed_decision_request =
                     buffered_forward_decision_request(&request, None);
-                let _ = state.policy_shadow.capture(
+                let _ = state.policy_shadow.capture_for_gate(state,
                     snapshot,
                     &malformed_decision_request,
                     authenticated_principal_id,
@@ -47702,7 +47703,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     };
     let decision_request =
         buffered_forward_decision_request(&request, client_request_digest.as_deref());
-    let shadow_admission = state.policy_shadow.capture(
+    let shadow_admission = state.policy_shadow.capture_for_gate(state,
         snapshot,
         &decision_request,
         authenticated_principal_id,

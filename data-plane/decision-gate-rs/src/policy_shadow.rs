@@ -34,6 +34,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "policy_shadow_opening.rs"]
+pub(crate) mod native_opening;
+
 #[cfg(target_os = "linux")]
 #[path = "policy_custody/mod.rs"]
 mod policy_custody;
@@ -41,6 +44,11 @@ mod policy_custody;
 #[cfg(target_os = "linux")]
 #[path = "policy_custody/native_closure.rs"]
 pub(in crate::policy_shadow) mod native_custody_closure;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn run_native_shadow_guest()->! {
+    policy_custody::services::guest::native_guest::run()
+}
 
 #[cfg(target_os = "linux")]
 pub(crate) use policy_custody::{
@@ -543,6 +551,12 @@ pub(crate) struct ExpectedSigner<'a> {
 
 pub(crate) trait TrustedTime {
     fn now_unix_nanos(&self) -> Result<i64, ShadowError>;
+    /// Exact clocks retain their old semantics. An uncertain native clock
+    /// overrides this with one sampled conservative [earliest, latest] pair.
+    fn now_interval_unix_nanos(&self) -> Result<(i64, i64), ShadowError> {
+        let now = self.now_unix_nanos()?;
+        Ok((now, now))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1083,11 +1097,10 @@ pub(crate) fn verify_envelope<T: EnvelopePayload>(
         return Err(ShadowError::SignerBindingMismatch);
     }
     envelope.payload.validate_intrinsic()?;
-    let now = trusted_time.now_unix_nanos()?;
-    validate_freshness(
+    let now = validate_trusted_freshness(
         envelope.payload.issued_at_unix_nanos(),
         envelope.payload.expires_at_unix_nanos(),
-        now,
+        trusted_time,
         maximum_age_nanos,
     )?;
     let canonical_payload = canonical_json_bytes(&envelope.payload)?;
@@ -1146,6 +1159,15 @@ fn validate_freshness(
     Ok(())
 }
 
+fn validate_trusted_freshness(issued_at: i64, expires_at: i64,
+    time: &dyn TrustedTime, maximum_age_nanos: i64) -> Result<i64, ShadowError> {
+    let (earliest, latest) = time.now_interval_unix_nanos()?;
+    if earliest > latest { return Err(ShadowError::TrustedTimeUnavailable); }
+    validate_freshness(issued_at, expires_at, earliest, maximum_age_nanos)?;
+    validate_freshness(issued_at, expires_at, latest, maximum_age_nanos)?;
+    Ok(latest)
+}
+
 pub(crate) fn revalidate_verified_freshness<T: EnvelopePayload>(
     evidence: &VerifiedSignedEnvelope<T>,
     key_trust: &dyn EnvelopeKeyTrust,
@@ -1169,11 +1191,10 @@ pub(crate) fn revalidate_verified_freshness<T: EnvelopePayload>(
     if current_checkpoint != post_resolution_checkpoint {
         return Err(ShadowError::TrustResolutionFailed);
     }
-    let now = trusted_time.now_unix_nanos()?;
-    validate_freshness(
+    let now = validate_trusted_freshness(
         evidence.payload().issued_at_unix_nanos(),
         evidence.payload().expires_at_unix_nanos(),
-        now,
+        trusted_time,
         maximum_age_nanos,
     )?;
     Ok(now)

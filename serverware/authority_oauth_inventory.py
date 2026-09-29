@@ -26,6 +26,10 @@ def tables_for(operation):
         return ("oauth_exchange_reservations", "oauth_revocation_work", "pending_oauth_credentials")
     if operation == "oauth.refresh.claim":
         return ("oauth_refresh_reservations", "oauth_revocation_work", "oauth_family_retirements")
+    if operation == "oauth.measured-refresh.claim":
+        return ("oauth_refresh_reservations", "oauth_measured_refresh_custody", "oauth_revocation_work", "oauth_family_retirements")
+    if operation in {"oauth.measured-refresh.inspect", "oauth.measured-refresh.capture", "oauth.measured-refresh.commit", "oauth.measured-refresh.recover"}:
+        return ("oauth_family_retirements",)
     if operation in {"oauth.refresh.retain", "oauth.refresh.commit"}:
         return ("oauth_family_retirements",)
     if operation == "credential.currentness.challenge":

@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from serverware.native_kms_cms import unwrap_broker_kek
 from serverware import native_service_tokens
+from serverware import native_oauth_refresh_owner
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
 _WORK = "serverware.nativeBrokerOpenCredential/v1"
@@ -175,23 +176,23 @@ class _Channel:
         self.last = now
         self.socket.settimeout(min(0.25, (min(self.deadline, deadline or self.deadline) - now) / 1e9))
 
-    def _read(self, length):
+    def _read(self, length, deadline=None):
         chunks = bytearray()
         while len(chunks) < length:
-            self.check()
+            self.check(deadline)
             try:
                 chunk = self.socket.recv(min(65536, length - len(chunks)))
             except socket.timeout:
                 continue
             _require(bool(chunk))
             chunks.extend(chunk)
-        self.check()
+        self.check(deadline)
         return bytes(chunks)
 
-    def receive(self):
-        length = int.from_bytes(self._read(4), "big")
+    def receive(self, deadline=None):
+        length = int.from_bytes(self._read(4, deadline), "big")
         _require(1 <= length <= _MAX)
-        return _document(self._read(length))
+        return _document(self._read(length, deadline))
 
     def send(self, value, deadline=None):
         original = _canonical(value)
@@ -229,6 +230,7 @@ class _Broker:
             "recipientPublicKey": _encoded(public), "recipientPublicKeySha256": self.public_digest})
         self.kek, self.operations = None, set()
         self.service_tokens_opened = False
+        self.refresh_owner = None
 
     def provision(self, value):
         _require(self.kek is None and self.rsa is not None
@@ -354,9 +356,17 @@ def main():
         broker = _Broker(channel, channel.receive())
         broker.provision(channel.receive())
         while True:
-            value = channel.receive()
+            refresh_operation = None if broker.refresh_owner is None else broker.refresh_owner.operation
+            value = channel.receive(None if refresh_operation is None else refresh_operation.deadline)
             if value.get("apiVersion") == _SERVICE_WORK:
                 broker.open_service_tokens(value)
+            elif value.get("apiVersion") == native_oauth_refresh_owner.CHANNEL:
+                if value.get("phase") == "configure":
+                    _require(broker.refresh_owner is None)
+                    broker.refresh_owner = native_oauth_refresh_owner.Owner(broker, value)
+                else:
+                    _require(broker.refresh_owner is not None)
+                    broker.refresh_owner.handle(value)
             else:
                 broker.open_credential(value)
     finally:

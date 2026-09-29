@@ -326,6 +326,17 @@ def admit_refresh_barrier(opening, credential_row, generation_row):
     return _coordinate(owner, credential_row, generation_row, opening)
 
 
+def admit_measured_refresh_barrier(opening, credential_row, generation_row):
+    from serverware.control_plane_oauth_measured_refresh import Opening
+    from serverware.authority_oauth_measured_refresh import OP_INSPECT
+    profile.require(type(opening) is Opening and opening.dispatched and opening.operation == OP_INSPECT
+        and opening.arguments["request"]["recoveryVersion"] is None)
+    opening.check()
+    owner = _Owner(deadline=opening.deadline, expires=opening.expires)
+    profile.require(opening.custody is owner.custody and opening.binding is owner.binding)
+    return _coordinate(owner, credential_row, generation_row, opening)
+
+
 def admit_cleanup_barrier(operation):
     from serverware.control_plane_oauth_refresh_cleanup import _Operation
     profile.require(type(operation) is _Operation)

@@ -53,6 +53,8 @@ from serverware import authority_oauth_exchange as oauth_exchange
 from serverware import authority_oauth_exchange_policy as oauth_exchange_policy
 from serverware import authority_oauth_refresh as oauth_refresh
 from serverware import authority_oauth_refresh_policy as oauth_refresh_policy
+from serverware import authority_oauth_measured_refresh as oauth_measured_refresh
+from serverware import authority_oauth_measured_refresh_policy as oauth_measured_refresh_policy
 from serverware import authority_credential_currentness as credential_currentness
 from serverware import authority_credential_currentness_policy as credential_currentness_policy
 from serverware import authority_oauth_revocation as oauth_revocation
@@ -100,6 +102,7 @@ ATTESTATION_SCHEMA = (
 )
 RUNTIME_REQUEST_SCHEMA = authority_contract.REQUEST_SCHEMA
 RUNTIME_RESPONSE_SCHEMA = authority_contract.RESULT_SCHEMA
+MEASURED_REFRESH_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredRefreshRuntimeResponse/v1"
 INTERNAL_ENVELOPE_SCHEMA = authority_contract.INTERNAL_ENVELOPE_SCHEMA
 RUNTIME_TRUST_SCHEMA = "serverware.policyAuthorityRuntimeTrust/v1"
 SIGNED_RUNTIME_TRUST_SCHEMA = (
@@ -1090,6 +1093,7 @@ class MeasuredConfiguration:
     runtime_role_identities: dict[str, Any] | None = None
     attestation_cohort_bytes: bytes | None = None
     history_archive: Any | None = None
+    original_bytes: bytes | None = None
 
     @classmethod
     def load(cls, *, role: str) -> "MeasuredConfiguration":
@@ -1162,7 +1166,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1217,6 +1221,7 @@ class MeasuredConfiguration:
             digest=_domain_digest(CONFIG_SCHEMA, payload_bytes),
             root_key=root_key,
             file_digest=file_digest,
+            original_bytes=bytes(config_value),
         )
         configuration._verify_generation_binding()
         configuration._verify_role_topology()
@@ -1257,6 +1262,10 @@ class MeasuredConfiguration:
             oauth_refresh_policy.validate_policy(payload.get(oauth_refresh_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority OAuth due-refresh policy is invalid") from exc
+        try:
+            oauth_measured_refresh_policy.validate_policy(payload.get(oauth_measured_refresh_policy.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority measured OAuth refresh policy is invalid") from exc
         try:
             credential_currentness_policy.validate_policy(payload.get(credential_currentness_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
@@ -2121,7 +2130,10 @@ def _socket_request(
     expected_peer_uid: int,
     expected_peer_gid: int,
     deadline_ns: int | None = None,
+    measured_refresh_response: bool = False,
 ) -> dict[str, Any]:
+    if measured_refresh_response and (value.get("operation") not in oauth_measured_refresh.OPERATIONS or deadline_ns is None):
+        raise AuthorityServiceError("expanded response custody requires the fixed measured-refresh purpose")
     if deadline_ns is not None:
         timeout_seconds = min(timeout_seconds, writer_transport._check_deadline(deadline_ns) / 1_000_000_000)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -2141,7 +2153,8 @@ def _socket_request(
             return _recv_message(connection)
         _send_message_until(connection, value, deadline_ns=deadline_ns)
         size = int.from_bytes(writer_transport._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big")
-        if not 2 <= size <= 128 * 1024:
+        maximum = 6 * 1024 * 1024 if measured_refresh_response else 128 * 1024
+        if not 2 <= size <= maximum:
             raise AuthorityServiceError("publication authority response exceeds its fixed bound")
         raw = writer_transport._recv_exact_until(connection, size, deadline_ns=deadline_ns)
         response = json.loads(raw)
@@ -2973,6 +2986,20 @@ class AuthorityRuntimeClient:
     def request(
         self, *, operation: str, input_value: Mapping[str, Any], deadline_ns: int | None = None
     ) -> Any:
+        return self._request_result(operation=operation, input_value=input_value, deadline_ns=deadline_ns,
+            measured_originals=False)
+
+    def request_measured_refresh(self, *, operation, input_value, deadline_ns):
+        if operation not in oauth_measured_refresh.OPERATIONS or type(deadline_ns) is not int:
+            raise AuthorityServiceError("raw response custody is restricted to measured refresh")
+        return self._request_result(operation=operation, input_value=input_value, deadline_ns=deadline_ns,
+            measured_originals=True)
+
+    def _request_result(self, *, operation, input_value, deadline_ns, measured_originals):
+        measured = operation in oauth_measured_refresh.OPERATIONS
+        if measured_originals and not measured or measured and type(deadline_ns) is not int:
+            raise AuthorityServiceError("generic authority original export is unavailable")
+        response_schema = MEASURED_REFRESH_RESPONSE_SCHEMA if measured else RUNTIME_RESPONSE_SCHEMA
         if (
             operation
             not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
@@ -3012,6 +3039,7 @@ class AuthorityRuntimeClient:
             expected_peer_uid=self.server_uid,
             expected_peer_gid=self.server_gid,
             deadline_ns=deadline_monotonic_ns if deadline_ns is not None else None,
+            measured_refresh_response=measured,
         )
         signature = _b64url_decode(response.get("signature"), size=64)
         unsigned = dict(response)
@@ -3049,8 +3077,8 @@ class AuthorityRuntimeClient:
                 "attestationConsumptionReceipt",
                 "attestationConsumptionReceiptDigest",
                 "signature",
-            }
-            or response.get("schema") != RUNTIME_RESPONSE_SCHEMA
+            } | ({"authorityConfigurationOriginal"} if measured else set())
+            or response.get("schema") != response_schema
             or response.get("requestId") != request_id
             or response.get("operation") != operation
             or response.get("configurationDigest")
@@ -3078,7 +3106,7 @@ class AuthorityRuntimeClient:
             self.response_key.verify(
                 signature,
                 _domain_digest(
-                    RUNTIME_RESPONSE_SCHEMA, _canonical(unsigned)
+                    response_schema, _canonical(unsigned)
                 ).encode("ascii"),
             )
         except InvalidSignature as exc:
@@ -3094,6 +3122,18 @@ class AuthorityRuntimeClient:
             for field in ("commitReceiptDigest", "witnessCommitDigest"):
                 _require_digest(response[field], "publication authority committed result")
             writer_transport._check_deadline(deadline_ns)
+        if measured:
+            original = oauth_measured_refresh.decoded(response["authorityConfigurationOriginal"], 1024 * 1024)
+            configuration = json.loads(original)
+            if (type(configuration) is not dict or set(configuration) != {"schema", "payload", "signature"}
+                    or configuration["schema"] != SIGNED_CONFIG_SCHEMA or self.runtime_root_public_key is None
+                    or _domain_digest(CONFIG_SCHEMA, _canonical(configuration["payload"])) != self.configuration_digest):
+                raise AuthorityServiceError("measured refresh issuer configuration original differs")
+            self.runtime_root_public_key.verify(_b64url_decode(configuration["signature"], size=64),
+                _domain_digest(SIGNED_CONFIG_SCHEMA, _canonical(configuration["payload"])).encode("ascii"))
+            writer_transport._check_deadline(deadline_ns)
+        if measured_originals:
+            return (_canonical(request), _canonical(response))
         return response["result"]
 
 
@@ -6189,6 +6229,15 @@ class AuthorityProcess:
                     ),
                 ),
         }
+        response_schema = RUNTIME_RESPONSE_SCHEMA
+        if operation in oauth_measured_refresh.OPERATIONS:
+            original = self.configuration.original_bytes
+            if (type(original) is not bytes or not 0 < len(original) <= 1024 * 1024
+                    or _sha256(original) != self.configuration.file_digest):
+                raise AuthorityServiceError("measured refresh requires the actual admitted configuration original")
+            response_schema = MEASURED_REFRESH_RESPONSE_SCHEMA
+            unsigned["schema"] = response_schema
+            unsigned["authorityConfigurationOriginal"] = _b64url_encode(original)
         if self.signing_key is None:
             raise AuthorityServiceError("verifier signer is unavailable")
         return {
@@ -6196,7 +6245,7 @@ class AuthorityProcess:
             "signature": _b64url_encode(
                 self.signing_key.sign(
                     _domain_digest(
-                        RUNTIME_RESPONSE_SCHEMA, _canonical(unsigned)
+                        response_schema, _canonical(unsigned)
                     ).encode("ascii")
                 )
             ),
@@ -8275,6 +8324,12 @@ class AuthorityProcess:
                 now_epoch_ns=time.time_ns())
             if oauth_refresh.request_digest(operation, arguments) != request_digest:
                 raise AuthorityServiceError("OAuth refresh original commitment differs from actual authority recipe")
+        if operation in oauth_measured_refresh.OPERATIONS:
+            oauth_measured_refresh_policy.verify_original(operation, arguments,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                now_epoch_ns=time.time_ns())
+            if oauth_measured_refresh.request_digest(operation, arguments) != request_digest:
+                raise AuthorityServiceError("measured OAuth refresh request commitment differs")
         if operation in credential_currentness.OPERATIONS:
             credential_currentness_policy.verify_original(operation, arguments,
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
@@ -8796,6 +8851,10 @@ class AuthorityProcess:
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_refresh.OPERATIONS:
             oauth_refresh_policy.verify_original(planner_request["operation"],
+                planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
+                root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in oauth_measured_refresh.OPERATIONS:
+            oauth_measured_refresh_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in credential_currentness.OPERATIONS:

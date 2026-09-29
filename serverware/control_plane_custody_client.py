@@ -1990,6 +1990,31 @@ class ControlPlaneCustodyClient:
             transport._check_deadline(deadline_ns)
         return result
 
+    def _request_measured_refresh(self, *, operation, input_value, deadline_ns):
+        """Exact signed originals only for the fixed measured-refresh family.
+
+        This is not generic signing/export, a retained-result verdict, or a
+        retry permit. The actual admitted runtime client verifies the result.
+        """
+        from serverware import authority_oauth_measured_refresh as refresh
+        if operation not in refresh.OPERATIONS or type(deadline_ns) is not int:
+            raise CustodyClientError("measured refresh original custody purpose differs")
+        binding = _snapshot(self)
+        runtime = binding.runtime_client
+        if type(runtime) is not service.AuthorityRuntimeClient:
+            raise CustodyClientError("measured refresh lacks the actual cold runtime client")
+        _receipt_now(binding)
+        originals = service.AuthorityRuntimeClient.request_measured_refresh(runtime,
+            operation=operation, input_value=input_value, deadline_ns=deadline_ns)
+        _process(binding); _receipt_now(binding)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("measured refresh custody changed while receiving originals")
+        journal.CustodyJournal._require_ready(binding.journal)
+        transport._check_deadline(deadline_ns)
+        if type(originals) is not tuple or len(originals) != 2 or any(type(raw) is not bytes for raw in originals):
+            raise CustodyClientError("measured refresh did not return exact request/response originals")
+        return originals
+
     def forward_once(self, localdigest, *, deadline_ns=None):
         """Claim one durable attempt, then make one fixed relay exchange.
 

@@ -190,7 +190,8 @@ def main() -> None:
     backends = sorted(Path("/deps").glob("_cffi_backend*.so"))
     require(len(backends) == 1, "broker requires exactly one pinned CFFI extension")
     closure.add(backends[0], SITE / backends[0].name)
-    for name in ("__init__.py", "native_kms_cms.py", "native_service_tokens.py", "native_secret_broker_helper.py"):
+    for name in ("__init__.py", "native_kms_cms.py", "native_service_tokens.py", "native_secret_broker_helper.py",
+                 "native_oauth_refresh.py", "native_oauth_refresh_receipts.py", "native_oauth_refresh_tls.py", "native_oauth_refresh_owner.py"):
         closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
     closure.add(SOURCE / "serverware/native_secret_broker_helper.py", HELPER)
     closure.libraries()

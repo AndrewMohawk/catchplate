@@ -22,6 +22,7 @@ pub(super) struct GateStateInputs {
     pub(super) native_serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
     pub(super) prepared_secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::PreparedBroker>,
     pub(super) secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
+    pub(super) measured_refresh: Option<serverware_decision_gate::native_oauth_refresh_v1::Configuration>,
     pub(super) measured_audit: Option<super::native_audit_transport::Configuration>,
     pub(super) credential_currentness: Option<serverware_decision_gate::native_currentness_v1::Configuration>,
     pub(super) policy_shadow_generation_control: Option<Arc<PolicyShadowGenerationControl>>,
@@ -83,6 +84,7 @@ impl GateStateInputs {
         Ok(GateState {
             native_serving_privileges: self.native_serving_privileges,
             native_secret_broker: None,
+            measured_refresh: None,
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
             credential_currentness: super::credential_currentness::LocalHolder::new(self.credential_currentness),
             #[cfg(test)]

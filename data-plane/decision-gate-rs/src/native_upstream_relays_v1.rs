@@ -150,6 +150,19 @@ impl NativeUpstreamRelaysV1 {
         self.proxy_for(&host, endpoint)
     }
 
+    /// Opaque TLS records only, selected by a fixed refresh provider purpose.
+    /// The helper owns TLS/hostname/root verification; the parent port merely
+    /// carries bytes to its independently configured literal destination.
+    pub fn refresh_stream(&self, provider: &str, deadline: u64)
+        -> Result<crate::enclave_vsock_v1::VsockStreamV1, String> {
+        let url = match provider { "google" => "https://oauth2.googleapis.com/token",
+            "x" => "https://api.twitter.com/2/oauth2/token", _ => return Err("refresh provider is not fixed".to_owned()) };
+        let (_, endpoint, parent) = self.unique_service_origin(url)?;
+        if endpoint.port() != 443 { return Err("refresh relay port differs".to_owned()); }
+        crate::enclave_vsock_v1::VsockStreamV1::connect_parent(parent, deadline.min(self.deadline))
+            .map_err(|_| "fixed refresh TLS relay unavailable".to_owned())
+    }
+
     fn unique_service_origin(&self, raw_url: &str) -> Result<(String, SocketAddr, u32), String> {
         self.remaining()?;
         if raw_url.len() > 4096 {

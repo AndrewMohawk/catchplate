@@ -394,6 +394,21 @@ def reject_authoritative_input(value: Any, *, path: str = "input") -> None:
         reject_authoritative_input(item, path=f"{path}.{key}")
 
 
+def reject_typed_authoritative_input(operation: str, value: Mapping[str, Any]) -> None:
+    if operation.startswith("oauth.measured-refresh."):
+        from serverware import authority_oauth_measured_refresh as measured
+        measured.arguments(operation, value, typed=True)
+        # This exact field is a bounded original COSE byte string, not an
+        # attestation verdict. Both actual authority roles independently verify
+        # it. Keep every other input under the unchanged authority-name guard.
+        evidence = dict(value["evidence"])
+        evidence["nativeKeyEvidence"] = {name: item for name, item in evidence["nativeKeyEvidence"].items()
+            if name != "attestationDocumentB64"}
+        reject_authoritative_input({**value, "evidence": evidence})
+    else:
+        reject_authoritative_input(value)
+
+
 @dataclass(frozen=True, slots=True)
 class PlannerIdentity:
     database_role: str
@@ -3610,7 +3625,7 @@ def validate_planner_request(request: Mapping[str, Any]) -> None:
         raise AuthorityPlannerError(
             "planner WebAuthn evidence requirement changed"
         )
-    reject_authoritative_input(typed_request)
+    reject_typed_authoritative_input(str(request["operation"]), typed_request)
 
 
 def measured_plan_signature_message(payload: Mapping[str, Any]) -> bytes:
@@ -3766,7 +3781,7 @@ def validate_measured_plan_payload(
             measured_plan[field],
             f"measured plan {field}",
         )
-    reject_authoritative_input(typed_request)
+    reject_typed_authoritative_input(operation, typed_request)
     try:
         authority_audit_capacity.validate_capacity_transition(
             operation=operation, selected_rows=selected, mutations=mutations,
@@ -4202,6 +4217,8 @@ class MeasuredPlanner:
                                 rbac_primary_inputs=(tuple(roots), tuple(authorization_roots), tuple(multiproofs)))
                         if operation in {oauth_activation.OP_ACTIVATE, oauth_exchange.OP_PREPARE, oauth_exchange.OP_STAGE,
                                 "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
+                                "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
+                                "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",
                                 "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce", "credential.currentness.admit",
                                 "oauth.refresh-cleanup.claim", "oauth.refresh-cleanup.contact", "oauth.refresh-cleanup.finish"}:
                             authority_oauth_inventory.require_complete_populations(

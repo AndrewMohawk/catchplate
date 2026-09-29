@@ -3,6 +3,7 @@
 mod process;
 mod image;
 pub mod service_tokens;
+mod refresh;
 #[path = "native_verifier/json.rs"]
 mod json;
 
@@ -179,7 +180,7 @@ impl PendingBroker {
         Ok(Owner { process: self.process, deadline: self.deadline,
             owner_ca: self.owner_ca.ok_or("native broker CA association absent")?,
             secret_kek_id: self.config.secret_kek_id, service_phase_closed: false,
-            poisoned: false, _quote: quote, serving: None })
+            poisoned: false, _quote: quote, serving: None, refresh_configuration: None })
     }
 }
 
@@ -189,6 +190,7 @@ pub struct Owner {
     process: process::Process, deadline: u64, owner_ca: [u8; 32], secret_kek_id: String,
     service_phase_closed: bool, poisoned: bool, _quote: RuntimeKeyQuoteV1,
     serving: Option<Arc<native_serving_privileges::Owner>>,
+    refresh_configuration: Option<crate::native_oauth_refresh_v1::Configuration>,
 }
 
 /// Privileged image/child setup only. The helper is already unprivileged; no

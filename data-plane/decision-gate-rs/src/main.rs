@@ -11,6 +11,7 @@ mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
 mod native_secret_broker;
+mod native_oauth_refresh;
 mod native_gate_inputs;
 mod native_service_tokens;
 mod native_proof_signer;
@@ -2565,6 +2566,7 @@ impl MitmAuthority {
 struct GateState {
     native_serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
     native_secret_broker: Option<Mutex<serverware_decision_gate::native_secret_broker_v1::Owner>>,
+    measured_refresh: Option<Mutex<native_oauth_refresh::Owner>>,
     upstream_dispatch_authority: UpstreamDispatchAuthority,
     credential_currentness: credential_currentness::LocalHolder,
     #[cfg(test)]
@@ -21138,6 +21140,11 @@ fn fetch_scoped_credential_lease_on_deadline(
         None
     };
     check_credential_operation_deadline(deadline)?;
+    if purpose == CredentialLeasePurpose::GenerationMetadata && state.measured_refresh.is_some() {
+        native_oauth_refresh::before_generation(state, &scope.credential_id,
+            deadline.ok_or("measured refresh requires the original credential operation")?)?;
+        check_credential_operation_deadline(deadline)?;
+    }
     let request_url = state
         .credential_lease_url
         .as_deref()
@@ -51874,6 +51881,7 @@ fn main() -> Result<(), String> {
         native_serving_privileges: None,
         prepared_secret_broker: None,
         secret_broker: None,
+        measured_refresh: None,
         measured_audit: None,
         credential_currentness: None,
         policy_shadow_generation_control,
@@ -53214,6 +53222,7 @@ mod tests {
         GateState {
             native_serving_privileges: None,
             native_secret_broker: None,
+            measured_refresh: None,
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
             credential_currentness: credential_currentness::LocalHolder::new(None),
             upstream_send_credential_lock_contentions: AtomicU64::new(0),

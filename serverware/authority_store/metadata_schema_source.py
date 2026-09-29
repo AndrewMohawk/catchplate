@@ -420,6 +420,34 @@ def metadata_base_schema_source() -> str:
                 CHECK (status IN ('claimed', 'retained', 'committed'))
             );
 
+            CREATE TABLE IF NOT EXISTS oauth_measured_refresh_custody (
+                id TEXT PRIMARY KEY,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                enrollment_original TEXT NOT NULL,
+                assignment_original_json TEXT NOT NULL,
+                claim_evidence_original_json TEXT NOT NULL,
+                claim_request_json TEXT NOT NULL,
+                capture_evidence_original_json TEXT,
+                capture_request_json TEXT,
+                commit_evidence_original_json TEXT,
+                commit_request_json TEXT,
+                recovery_request_digest TEXT,
+                recovery_expires_at_epoch_ns BIGINT,
+                recovery_evidence_original_json TEXT,
+                recovery_owner_nonce_sha256 TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (credential_id, credential_version),
+                CHECK (status IN ('claimed', 'captured', 'committed')),
+                CHECK ((capture_request_json IS NULL) = (capture_evidence_original_json IS NULL)),
+                CHECK ((commit_request_json IS NULL) = (commit_evidence_original_json IS NULL)),
+                CHECK ((recovery_request_digest IS NULL) = (recovery_expires_at_epoch_ns IS NULL)
+                    AND (recovery_request_digest IS NULL) = (recovery_evidence_original_json IS NULL)
+                    AND (recovery_request_digest IS NULL) = (recovery_owner_nonce_sha256 IS NULL))
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_revocation_reservations (
                 id TEXT PRIMARY KEY,
                 authorization_original TEXT NOT NULL,

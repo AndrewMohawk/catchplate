@@ -1281,6 +1281,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oauth_revocation.py \
 	serverware/authority_oauth_refresh.py \
 	serverware/authority_oauth_refresh_policy.py \
+	serverware/authority_oauth_measured_refresh.py \
+	serverware/authority_oauth_measured_refresh_policy.py \
+	serverware/authority_transition_oauth_measured_refresh.py \
+	serverware/control_plane_oauth_measured_refresh.py \
 	serverware/authority_transition_oauth_refresh.py \
 	serverware/control_plane_oauth_refresh.py \
 	serverware/authority_credential_currentness.py \
@@ -1328,6 +1332,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_data_plane_audit.py \
 	serverware/native_kms_cms.py \
 	serverware/native_secret_broker_helper.py \
+	serverware/native_oauth_refresh.py \
+	serverware/native_oauth_refresh_owner.py \
+	serverware/native_oauth_refresh_receipts.py \
+	serverware/native_oauth_refresh_tls.py \
 	serverware/native_service_tokens.py \
 	serverware/response_v2_guest_delivery.py \
 	scripts/native_broker_kms_parent.py \
@@ -3642,6 +3650,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oauth_revocation.py \
 				serverware/authority_oauth_refresh.py \
 				serverware/authority_oauth_refresh_policy.py \
+				serverware/authority_oauth_measured_refresh.py \
+				serverware/authority_oauth_measured_refresh_policy.py \
+				serverware/authority_transition_oauth_measured_refresh.py \
+				serverware/control_plane_oauth_measured_refresh.py \
 				serverware/authority_transition_oauth_refresh.py \
 				serverware/control_plane_oauth_refresh.py \
 				serverware/authority_credential_currentness.py \
@@ -3689,6 +3701,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_data_plane_audit.py \
 				serverware/native_kms_cms.py \
 				serverware/native_secret_broker_helper.py \
+				serverware/native_oauth_refresh.py \
+				serverware/native_oauth_refresh_owner.py \
+				serverware/native_oauth_refresh_receipts.py \
+				serverware/native_oauth_refresh_tls.py \
 				serverware/native_service_tokens.py \
 				serverware/response_v2_guest_delivery.py \
 				scripts/native_broker_kms_parent.py \
@@ -3897,6 +3913,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/image.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/process.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/service_tokens.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/refresh.rs \
+				data-plane/decision-gate-rs/src/native_oauth_refresh_v1.rs \
+				data-plane/decision-gate-rs/src/native_oauth_refresh.rs \
 				data-plane/decision-gate-rs/src/credential_currentness.rs \
 				data-plane/decision-gate-rs/src/native_currentness_v1.rs \
 				data-plane/decision-gate-rs/src/erofs_loop_v1.rs \
@@ -4117,6 +4136,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-secret-broker.v1.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \
 				schemas/native-startup-configuration.v6.schema.json \
+				schemas/native-startup-configuration.v7.schema.json \
+				schemas/native-oauth-measured-refresh.v1.schema.json \
 				schemas/native-service-tokens.v1.schema.json \
 				schemas/native-startup-configuration.v4.schema.json \
 				schemas/oauth-refresh-cleanup-authority.v1.schema.json \

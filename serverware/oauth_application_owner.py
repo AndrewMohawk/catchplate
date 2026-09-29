@@ -20,6 +20,7 @@ import time
 
 
 STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v1"
+MEASURED_STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v2"
 ENVELOPE_SCHEMA = "serverware.signedOAuthApplicationEnrollment/v1"
 ENROLLMENT_SCHEMA = "serverware.oauthApplicationEnrollment/v1"
 CLIENT_SCHEMA = "serverware.oauthClientMaterial/v1"
@@ -28,6 +29,7 @@ CONFIG_FD_ENVIRONMENT = "SERVERWARE_OAUTH_APPLICATION_CONFIG_FD"
 ASSOCIATION_KEY = "oauth_application_owner"
 MAX_CONFIG_BYTES = 64 * 1024
 MAX_CLIENT_BYTES = 32 * 1024
+MAX_ENCRYPTED_CLIENT_BYTES = 64 * 1024
 MAX_ROOT_BYTES = 4096
 MAX_OPERATION_NS = 30_000_000_000
 _PREFIX = "SERVERWARE_OAUTH_APPLICATION_"
@@ -226,7 +228,7 @@ def provider_configuration(provider):
 
 class OAuthApplicationOwner:
     __slots__ = ("_custody", "_binding", "_originals", "_applications", "_identity", "_poisoned", "_closed",
-        "_epoch", "_mono", "_deadline", "_expires")
+        "_epoch", "_mono", "_deadline", "_expires", "_measured")
 
     def __init__(self):
         raise OAuthApplicationError("OAuth owner requires fixed cold admission")
@@ -254,8 +256,12 @@ class OAuthApplicationOwner:
                 for payload, envelope, material, association in self._applications.values():
                     _require(payload["issuedAtEpochNs"] <= now < payload["expiresAtEpochNs"]
                         and canonical(payload) == canonical(_json(envelope, MAX_CONFIG_BYTES)["payload"])
-                        and _sha(material.raw) == payload["clientMaterialSha256"]
                         and canonical(_association(payload, envelope)) == association)
+                    if self._measured:
+                        from serverware import native_oauth_refresh as confidential
+                        confidential.application_header(_json(material.raw, MAX_ENCRYPTED_CLIENT_BYTES), payload, _sha(envelope))
+                    else:
+                        _require(_sha(material.raw) == payload["clientMaterialSha256"])
                 closing = client._receipt_now(self._binding)
                 closing_mono = time.monotonic_ns()
                 _require(now <= closing < self._expires and mono <= closing_mono < self._deadline)
@@ -270,6 +276,10 @@ class OAuthApplicationOwner:
         item = self._applications.get(provider_id)
         if item is None:
             return "", "", ""
+        if self._measured:
+            # Public source configuration only. Empty is NOT a synthetic
+            # credential; all parent token-form/contact paths refuse below.
+            return item[0]["clientId"], "", item[0]["redirectUri"]
         value = _json(item[2].raw, MAX_CLIENT_BYTES)
         return value["clientId"], value["clientSecret"], value["redirectUri"]
 
@@ -328,6 +338,10 @@ class _Operation:
         self.check()
         return self.owner._custody
 
+    def require_parent_material(self):
+        self.check()
+        _require(not self.owner._measured)
+
     def require_association(self, value):
         self.check()
         validate_association(value)
@@ -380,7 +394,7 @@ def initialize_from_environment():
             config = _json(config_original.raw, MAX_CONFIG_BYTES)
             _require(type(config) is dict and set(config) == {"schema", "sourceRevision", "configurationDigest",
                 "authorityRootFd", "authorityRootSha256", "applications"}
-                and config["schema"] == STARTUP_SCHEMA and config["sourceRevision"] == authority_contract.SOURCE_REVISION
+                and config["schema"] in {STARTUP_SCHEMA, MEASURED_STARTUP_SCHEMA} and config["sourceRevision"] == authority_contract.SOURCE_REVISION
                 and config["configurationDigest"] == binding.configuration_digest
                 and type(config["applications"]) is list and len(config["applications"]) <= 2)
             originals, applications, used = [config_original], {}, {descriptor}
@@ -421,15 +435,20 @@ def initialize_from_environment():
                 material_fd = _fd(item["clientMaterialFd"])
                 _require(material_fd not in used and material_fd in binding.inherited_descriptors)
                 used.add(material_fd)
-                material = _Original(material_fd, MAX_CLIENT_BYTES, True)
+                measured = config["schema"] == MEASURED_STARTUP_SCHEMA
+                material = _Original(material_fd, MAX_ENCRYPTED_CLIENT_BYTES if measured else MAX_CLIENT_BYTES, True)
                 originals.append(material)
-                _require(_sha(material.raw) == payload["clientMaterialSha256"])
-                value = _json(material.raw, MAX_CLIENT_BYTES)
-                _require(type(value) is dict and set(value) == {"schema", "providerId", "clientId", "clientSecret", "redirectUri"}
-                    and value["schema"] == CLIENT_SCHEMA and value["providerId"] == payload["providerId"]
-                    and value["clientId"] == payload["clientId"] and value["redirectUri"] == payload["redirectUri"])
-                _text(value["clientSecret"], 8192)
                 raw_envelope = canonical(envelope)
+                if measured:
+                    from serverware import native_oauth_refresh as confidential
+                    confidential.application_header(_json(material.raw, MAX_ENCRYPTED_CLIENT_BYTES), payload, _sha(raw_envelope))
+                else:
+                    _require(_sha(material.raw) == payload["clientMaterialSha256"])
+                    value = _json(material.raw, MAX_CLIENT_BYTES)
+                    _require(type(value) is dict and set(value) == {"schema", "providerId", "clientId", "clientSecret", "redirectUri"}
+                        and value["schema"] == CLIENT_SCHEMA and value["providerId"] == payload["providerId"]
+                        and value["clientId"] == payload["clientId"] and value["redirectUri"] == payload["redirectUri"])
+                    _text(value["clientSecret"], 8192)
                 association = _association(payload, raw_envelope)
                 validate_association(association)
                 applications[payload["providerId"]] = (payload, raw_envelope, material, canonical(association))
@@ -438,6 +457,7 @@ def initialize_from_environment():
             value = object.__new__(OAuthApplicationOwner)
             value._custody, value._binding = actual, binding
             value._originals, value._applications = tuple(originals), applications
+            value._measured = config["schema"] == MEASURED_STARTUP_SCHEMA
             value._identity = os.geteuid(), os.getegid()
             value._expires = min([binding.attestation_interval[1]]
                 + [entry[0]["expiresAtEpochNs"] for entry in applications.values()])
@@ -465,6 +485,18 @@ def require_started():
         _require(_state == "started" and type(_owner) is OAuthApplicationOwner)
         _owner.check()
         return _owner
+
+
+def measured_selected(provider_id):
+    owner = require_started()
+    if owner is None:
+        return False
+    owner.check()
+    return owner._measured and provider_id in owner._applications
+
+
+def require_parent_material(provider_id):
+    _require(not measured_selected(provider_id))
 
 
 def parameters(provider_id, legacy):

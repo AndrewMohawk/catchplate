@@ -33,6 +33,9 @@ def verify_original(operation, arguments, *, configuration_payload, root_key, no
     key = validate_policy(policy, payload=configuration_payload, root_key=root_key)
     profile.require(key is not None)
     raw = profile.enrollment_bytes(values["enrollment_original"])
+    from serverware import authority_oauth_measured_refresh_policy as measured
+    profile.require(not measured.owns_enrollment(configuration_payload.get(measured.FIELD), raw),
+        "measured application custody cannot fall back to parent-held refresh")
     signed = enrollment.enrollment_document(raw)
     original = signed["payload"]
     profile.require(type(now_epoch_ns) is int and original["issuedAtEpochNs"] <= now_epoch_ns < original["expiresAtEpochNs"]

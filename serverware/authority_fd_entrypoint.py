@@ -521,7 +521,7 @@ def _open_oauth_application_material(config_fd, *, occupied_descriptors):
     config = json.loads(raw.decode("ascii"), object_pairs_hook=pairs)
     if (type(config) is not dict or set(config) != {"schema", "sourceRevision", "configurationDigest",
             "authorityRootFd", "authorityRootSha256", "applications"}
-            or config["schema"] != "serverware.oauthApplicationStartup/v1"
+            or config["schema"] not in {"serverware.oauthApplicationStartup/v1", "serverware.oauthApplicationStartup/v2"}
             or json.dumps(config, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii") != raw
             or type(config["applications"]) is not list or len(config["applications"]) > 2):
         raise RuntimeError("OAuth application startup shape is not exact")
@@ -543,7 +543,9 @@ def _open_oauth_application_material(config_fd, *, occupied_descriptors):
         if provider not in {"google", "x"} or provider in providers:
             raise RuntimeError("OAuth provider delivery is not unique")
         providers.add(provider)
-        selected.append((entry["clientMaterialFd"], "/run/secrets/serverware-oauth-" + provider + "-client", 32 * 1024, True))
+        measured = config["schema"] == "serverware.oauthApplicationStartup/v2"
+        selected.append((entry["clientMaterialFd"], "/run/secrets/serverware-oauth-" + provider
+            + ("-client-ciphertext" if measured else "-client"), (64 if measured else 32) * 1024, True))
     targets = [item[0] for item in selected]
     if (any(type(target) is not int or not 32 <= target <= 1023 for target in targets)
             or len(set(targets)) != len(targets) or set(targets) & set(occupied_descriptors)):

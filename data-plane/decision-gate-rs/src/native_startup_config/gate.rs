@@ -97,6 +97,7 @@ impl GateConfigV1 {
     pub(super) fn into_inputs(self,
         secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
         measured_audit: Option<super::super::native_audit_transport::Configuration>,
+        measured_refresh: Option<serverware_decision_gate::native_oauth_refresh_v1::Configuration>,
         service_tokens: super::super::native_service_tokens::Source)
         -> Result<(GateStateInputs, ControlPlaneClientConfig), String>
     {
@@ -159,6 +160,7 @@ impl GateConfigV1 {
             native_serving_privileges: None,
             prepared_secret_broker: None,
             secret_broker,
+            measured_refresh,
             measured_audit,
             credential_currentness: None,
             policy_shadow_generation_control: None,

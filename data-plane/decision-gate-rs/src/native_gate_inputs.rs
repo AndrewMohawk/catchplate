@@ -72,6 +72,12 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
     }
     if let Some(config) = &inputs.secret_broker { config.validate()?; }
     let pending_tokens = super::native_service_tokens::pending(inputs)?;
+    if let Some(refresh) = &inputs.measured_refresh {
+        refresh.validate()?;
+        if !pending_tokens || inputs.credential_currentness.is_none() || !measured {
+            return Err("native measured refresh requires the explicit encrypted v7 cold profile".to_owned());
+        }
+    }
     if !inputs.is_production {
         return Err("native bootstrap requires production configuration".to_owned());
     }

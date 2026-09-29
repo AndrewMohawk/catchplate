@@ -36,7 +36,7 @@ def _public(row):
         "contactExpiresAtEpochNs": row["contact_expires_at_epoch_ns"], "retentionExpiresAtEpochNs": row["retention_expires_at_epoch_ns"]}
 
 
-def _heads(context, values):
+def _heads(context, values, *, require_live_enrollment=True):
     credential_selected = context.exact("credentials", {"id": values["credential_id"]})
     generation_selected = context.exact("credential_generations", {"credential_id": values["credential_id"]})
     credential = shared._row(credential_selected, "current OAuth credential")
@@ -53,7 +53,7 @@ def _heads(context, values):
     raw = profile.enrollment_bytes(values["enrollment_original"])
     payload = enrollment.enrollment_document(raw)["payload"]
     now = shared._database_epoch_ns(context.database_now)
-    if not payload["issuedAtEpochNs"] <= now < payload["expiresAtEpochNs"]:
+    if require_live_enrollment and not payload["issuedAtEpochNs"] <= now < payload["expiresAtEpochNs"]:
         raise core.TransitionKernelError("OAuth refresh original application interval expired")
     metadata = _json(credential["metadata"], "current OAuth metadata")
     if (metadata.get("oauth") is not True or metadata.get("provider_identity_verified") is not True

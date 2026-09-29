@@ -166,6 +166,7 @@ class LeaseOpening:
             material._epoch(metadata.get("expires_at_epoch_ms"))
             token = None
         else:
+            self.operation.require_parent_material()
             token, admitted_metadata = material.current(row)
             profile.require(admitted_metadata == metadata)
         self.check()
@@ -213,6 +214,7 @@ class LeaseOpening:
 
 class _Refresh:
     def __init__(self, opening, row, head, token, metadata):
+        opening.operation.require_parent_material()
         self.opening, self.row, self.head, self.token, self.metadata = opening, row, head, token, metadata
         self.operation, self.provider = opening.operation, opening.operation.provider
         self.version, self.credential_id = row["credential_version"], row["id"]

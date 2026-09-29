@@ -131,6 +131,12 @@ pub(super) fn prepare_native_tls_gate_state(
             &binary_digest, &snapshot.hash, deadline)?;
     }
     native_service_tokens::ready(&inputs)?;
+    let measured_refresh = match inputs.measured_refresh.take() {
+        Some(config) => Some(native_oauth_refresh::prepare(config, &inputs,
+            secret_broker.as_mut().ok_or("native refresh broker absent")?, &mut identity,
+            signer, &binary_digest, deadline)?),
+        None => None,
+    };
     let measured_audit = match inputs.measured_audit.take() {
         Some(config) => Some(native_audit_transport::prepare(config, control_plane_config, &relays,
             inputs.audit_url.as_deref().ok_or("native measured audit URL absent")?, &mut identity, deadline)?),
@@ -146,8 +152,10 @@ pub(super) fn prepare_native_tls_gate_state(
     state.native_policy_bytes = Some(Arc::from(policy_bytes));
     state.native_upstream_relays = Some(held_relays);
     state.native_secret_broker = secret_broker.map(Mutex::new);
+    state.measured_refresh = measured_refresh.map(Mutex::new);
     state.measured_audit = measured_audit.map(Mutex::new);
     if state.measured_audit.is_some() { native_audit_owner::initialize(&state)?; }
+    if state.measured_refresh.is_some() { native_oauth_refresh::initialize(&state)?; }
     ingress.verify_live(deadline)?;
     native_service_remaining(&state)?;
     Ok(NativeTlsGateV1 { state: Arc::new(state), ingress, deadline })

@@ -524,6 +524,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_registration_finalization_completion_http as finalization_completion_contract
     from serverware import control_plane_oidc_session_activation_permission_routes as activation_permission_routes
     from serverware import control_plane_oidc_session_activation_permission_http as activation_permission_contract
+    from serverware import control_plane_oauth_measured_refresh as measured_refresh_contract
 
     request_path = request.scope.get("path")
     handoff_request = (request.method == "POST" and request_path in (
@@ -652,6 +653,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/authority/control-plane/custody/reconcile": 256,
         "/api/policy/file-publication/genesis-materialize": 24 * 1024 * 1024,
+        "/api/data-plane/oauth-refresh": measured_refresh_contract.MAX_REQUEST,
         "/api/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/auth/session/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/webauthn/register/prepare-execution": _REGISTRATION_PREPARATION_MAX_BYTES,
@@ -18792,6 +18794,28 @@ def data_plane_credential_currentness(
         raise HTTPException(status_code=503, detail="credential currentness is unavailable") from exc
     # The existing ASGI response signer binds the actual nonce, request and
     # final body. An observation never substitutes for a dispatch capability.
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/data-plane/oauth-refresh")
+async def data_plane_measured_oauth_refresh(request: Request) -> Response:
+    from serverware import control_plane_oauth_measured_refresh as measured
+    _require_data_plane_token(request.headers.get("X-Serverware-Data-Plane-Token"), DATA_PLANE_CREDENTIAL_LEASE_TOKEN)
+    if request.query_params or request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=400, detail="measured refresh requires its fixed JSON original")
+    original = bytearray()
+    async for chunk in request.stream():
+        original.extend(chunk)
+        if len(original) > measured.MAX_REQUEST:
+            raise HTTPException(status_code=413, detail="measured refresh request exceeds its bound")
+    try:
+        # Opening/dispatch stay on one actual worker thread. This route never
+        # decrypts credentials or acquires an ambient runtime SQL writer.
+        from starlette.concurrency import run_in_threadpool
+        result = await run_in_threadpool(measured.on_request, request, bytes(original))
+        body = _canonical_json(result).encode("utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="measured refresh is unavailable; no retry is authorized") from exc
     return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 

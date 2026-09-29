@@ -336,6 +336,19 @@ impl EnclaveRuntimeIdentityV1 {
 
     pub fn ca_certificate_der(&self) -> &[u8] { self.authority.certificate_der() }
 
+    /// Public commitments from this live original only. Used by the dedicated
+    /// measured-refresh broker; it exports no key or signing capability.
+    pub fn refresh_scope(&mut self, deadline: u64) -> Result<serde_json::Value, String> {
+        self.verify_live(deadline)?;
+        Ok(serde_json::json!({
+            "releaseRecordSha256":format!("sha256:{}",hex::encode(self.scope.release_record)),
+            "policyHash":format!("sha256:{}",hex::encode(self.scope.policy)),
+            "configurationSha256":format!("sha256:{}",hex::encode(self.scope.configuration)),
+            "caCertificateSha256":format!("sha256:{}",hex::encode(Sha256::digest(self.authority.certificate_der()))),
+            "caPublicKeySpkiSha256":format!("sha256:{}",hex::encode(Sha256::digest(self.authority.public_key_spki_der())))
+        }))
+    }
+
     /// Compare assignment inputs to this actual runtime and retained ingress.
     /// This read-only check performs no NSM operation or signing and returns no
     /// permission carrier. Invalid request pins cannot poison the shared key

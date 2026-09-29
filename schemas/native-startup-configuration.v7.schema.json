@@ -1,0 +1,24 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-startup-configuration.v7.schema.json",
+  "title":"Cold native measured due-refresh with encrypted service and application material",
+  "$comment":"Explicit --native-measured-refresh-startup only; v1-v6 contracts remain unchanged. Actual encrypted service-token Pending->Installed owner, native KMS broker, same-boot role4 key, permanent serving privileges and all-holder currentness are required. <=16MiB independently admitted original. This is neither a release signature nor current issuance permission.",
+  "type":"object","additionalProperties":false,
+  "required":["apiVersion","gate","native","shadow","responseObservationV2","policy","enrollmentAuthorizer","enrollmentSetupAuthorizer","enrollmentProxyEndpoint","credentialCurrentness","secretBroker","measuredAudit","encryptedServiceTokens","measuredRefresh"],
+  "properties":{
+    "apiVersion":{"const":"serverware.nativeStartupConfiguration/v7"},
+    "gate":{"$ref":"native-startup-configuration.v6.schema.json#/$defs/gate"},
+    "native":{"$ref":"native-startup-configuration.v4.schema.json#/$defs/native"},
+    "shadow":{"$ref":"native-startup-configuration.v4.schema.json#/$defs/shadow"},
+    "responseObservationV2":{"$ref":"native-startup-configuration.v6.schema.json#/properties/responseObservationV2"},
+    "policy":{"$ref":"native-startup-configuration.v4.schema.json#/$defs/artifact"},
+    "enrollmentAuthorizer":{"$ref":"native-enrollment-authorizer.v1.schema.json"},
+    "enrollmentSetupAuthorizer":{"$ref":"native-enrollment-setup-authorizer.v1.schema.json"},
+    "enrollmentProxyEndpoint":{"type":"string","minLength":1,"maxLength":4096},
+    "credentialCurrentness":{"$ref":"native-startup-configuration.v4.schema.json#/properties/credentialCurrentness"},
+    "secretBroker":{"$ref":"native-secret-broker.v1.schema.json#/$defs/configuration"},
+    "measuredAudit":{"$ref":"measured-data-plane-audit.v1.schema.json#/$defs/nativeConfiguration"},
+    "encryptedServiceTokens":{"$ref":"native-service-tokens.v1.schema.json#/$defs/envelope"},
+    "measuredRefresh":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/configuration"}
+  }
+}

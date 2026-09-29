@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.281"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.282"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -269,6 +269,8 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "oauth-activation-approval.request", "oauth-activation-approval.decide", "oauth.pending.activate",
     "oauth.exchange.prepare", "oauth.exchange.claim", "oauth.exchange.retain", "oauth.pending.stage",
     "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
+    "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
+    "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",
     "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce",
     "credential.currentness.ack", "credential.currentness.admit",
     "oauth.revocation.claim", "oauth.revocation.contact", "oauth.revocation.finish",
@@ -1455,6 +1457,7 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     "credential_currentness_challenges",
     "credential_currentness_barriers",
     "oauth_refresh_reservations",
+    "oauth_measured_refresh_custody",
     "oauth_revocation_reservations",
     "oauth_revocation_attempts",
     "oauth_refresh_cleanup_reservations",
@@ -1848,6 +1851,26 @@ _OPERATIONS = {
             ("oauth.refresh.claim", "serverware_policy_authority_oauth_refresh_claim"),
             ("oauth.refresh.retain", "serverware_policy_authority_oauth_refresh_retain"),
             ("oauth.refresh.commit", "serverware_policy_authority_oauth_refresh_commit"),
+        )
+    },
+    **{
+        operation: _spec(
+            handler,
+            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_measured_refresh_custody",
+                "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements") + _PHASE2_AGGREGATE,
+            writes=("metadata_audit_outbox",) + (() if operation == "oauth.measured-refresh.inspect" else
+                ("oauth_measured_refresh_custody", "oauth_refresh_reservations", "oauth_revocation_work")) +
+                (("credentials", "credential_generations", "credential_currentness_roots") if operation == "oauth.measured-refresh.commit" else ()) +
+                (("credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.measured-refresh.claim" else ()) + _PHASE2_AGGREGATE,
+            webauthn="not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=256, maximum_mutations=16, maximum_work_units=4096,
+        ) for operation, handler in (
+            ("oauth.measured-refresh.inspect", "serverware_policy_authority_oauth_measured_refresh_inspect"),
+            ("oauth.measured-refresh.claim", "serverware_policy_authority_oauth_measured_refresh_claim"),
+            ("oauth.measured-refresh.capture", "serverware_policy_authority_oauth_measured_refresh_capture"),
+            ("oauth.measured-refresh.commit", "serverware_policy_authority_oauth_measured_refresh_commit"),
+            ("oauth.measured-refresh.recover", "serverware_policy_authority_oauth_measured_refresh_recover"),
         )
     },
     **{

@@ -106,7 +106,7 @@ def _providers() -> dict[str, OAuthProvider]:
         redirect_uri=x_redirect,
         default_scopes=("tweet.read", "users.read", "offline.access"),
         token_response_scope_optional=True,
-        token_auth="basic" if x_secret else "none",
+        token_auth="basic" if x_secret or application_owner.measured_selected("x") else "none",
         auth_params={},
         metadata_provider="x.oauth2",
     )
@@ -564,6 +564,7 @@ def consume_state(
 
 
 def _token_request_headers(provider: OAuthProvider) -> dict[str, str]:
+    application_owner.require_parent_material(provider.id)
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
@@ -577,6 +578,7 @@ def _token_request_headers(provider: OAuthProvider) -> dict[str, str]:
 def _token_request_body(
     provider: OAuthProvider, record: dict[str, Any], code: str
 ) -> dict[str, str]:
+    application_owner.require_parent_material(provider.id)
     body = {
         "grant_type": "authorization_code",
         "code": code,
@@ -592,6 +594,7 @@ def _token_request_body(
 def _refresh_token_request_body(
     provider: OAuthProvider, refresh_token: str
 ) -> dict[str, str]:
+    application_owner.require_parent_material(provider.id)
     body = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -606,6 +609,7 @@ def _refresh_token_request_body(
 def _post_token_request(
     provider: OAuthProvider, body: dict[str, str], headers: dict[str, str], *, operation=None
 ) -> dict[str, Any]:
+    application_owner.require_parent_material(provider.id)
     encoded = urllib.parse.urlencode(body).encode("utf-8")
     request = urllib.request.Request(
         provider.token_url, data=encoded, headers=headers, method="POST"

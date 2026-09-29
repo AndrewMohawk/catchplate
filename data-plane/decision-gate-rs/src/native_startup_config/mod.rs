@@ -161,9 +161,29 @@ struct ConfigurationV6 {
     encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfigurationV7 {
+    api_version: String,
+    gate: gate::GateConfigV1,
+    native: parameters::NativeSettingsV1,
+    shadow: shadow::ShadowConfigV1,
+    response_observation_v2: NativeResponseObservationV2ConfigV1,
+    policy: ArtifactV1,
+    enrollment_authorizer: EnrollmentAuthorizerV1,
+    enrollment_setup_authorizer: EnrollmentAuthorizerV1,
+    enrollment_proxy_endpoint: String,
+    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    measured_audit: super::native_audit_transport::Configuration,
+    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
+}
+
 // This is only a source-local decomposition after exact version-specific
 // decoding. It is never accepted as configuration or verification authority.
 struct ConfigurationParts {
+    measured_refresh: Option<serverware_decision_gate::native_oauth_refresh_v1::Configuration>,
     service_tokens: super::native_service_tokens::Source,
     secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
     measured_audit: Option<super::native_audit_transport::Configuration>,
@@ -180,9 +200,10 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
     let value = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
     let version = value.get("apiVersion").and_then(Value::as_str);
     ensure(match mode {
-        cli::Mode::Legacy => version != Some("serverware.nativeStartupConfiguration/v6"),
+        cli::Mode::Legacy => !matches!(version, Some("serverware.nativeStartupConfiguration/v6" | "serverware.nativeStartupConfiguration/v7")),
         cli::Mode::EnclaveV5 => version == Some("serverware.nativeStartupConfiguration/v5"),
         cli::Mode::EncryptedV6 => version == Some("serverware.nativeStartupConfiguration/v6"),
+        cli::Mode::MeasuredRefreshV7 => version == Some("serverware.nativeStartupConfiguration/v7"),
     }, "native startup mode does not admit this configuration version")?;
     match value.get("apiVersion").and_then(Value::as_str) {
         Some("serverware.nativeStartupConfiguration/v1") => {
@@ -190,7 +211,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 .map_err(|_| "native v1 configuration violates its closed contract")?;
             ensure(original.api_version == "serverware.nativeStartupConfiguration/v1",
                 "native startup v1 configuration version differs")?;
-            Ok(ConfigurationParts { service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy, enrollment: None })
@@ -201,7 +222,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             ensure(original.api_version == "serverware.nativeStartupConfiguration/v2"
                 && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1",
                 "native startup v2 authorizer version differs")?;
-            Ok(ConfigurationParts { service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
@@ -215,7 +236,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
                 && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v3 authorizer version differs")?;
-            Ok(ConfigurationParts { service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
@@ -231,7 +252,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v4 authorizer version differs")?;
             original.credential_currentness.validate()?;
-            Ok(ConfigurationParts { service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: Some(original.credential_currentness),
                 gate: original.gate, native: original.native, shadow: original.shadow,
                 response_observation_v2: original.response_observation_v2, policy: original.policy,
@@ -248,7 +269,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 "native startup v5 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
-            Ok(ConfigurationParts { service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: Some(original.secret_broker), measured_audit: Some(original.measured_audit),
                 credential_currentness: Some(original.credential_currentness),
                 gate: original.gate, native: original.native, shadow: original.shadow,
@@ -256,6 +277,26 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
+        },
+        Some("serverware.nativeStartupConfiguration/v7") => {
+            let gate = value.get("gate").and_then(Value::as_object).ok_or("native v7 gate must be closed")?;
+            for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
+                "releaseAuthorizationToken", "managementToken", "auditToken"] {
+                ensure(gate.get(name) == Some(&Value::Null), "native v7 requires explicit null plaintext bearer slots")?;
+            }
+            let original: ConfigurationV7 = serde_json::from_value(value).map_err(|_|"native v7 configuration violates its closed contract")?;
+            ensure(original.api_version == "serverware.nativeStartupConfiguration/v7"
+                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+                "native v7 authorizer version differs")?;
+            original.credential_currentness.validate()?; original.secret_broker.validate()?; original.measured_refresh.validate()?;
+            Ok(ConfigurationParts { measured_refresh: Some(original.measured_refresh),
+                service_tokens: super::native_service_tokens::Source::Pending(original.encrypted_service_tokens),
+                secret_broker: Some(original.secret_broker), measured_audit: Some(original.measured_audit),
+                credential_currentness: Some(original.credential_currentness), gate: original.gate, native: original.native,
+                shadow: original.shadow, response_observation_v2: original.response_observation_v2, policy: original.policy,
+                enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
+                    endpoint: original.enrollment_proxy_endpoint, setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
         Some("serverware.nativeStartupConfiguration/v6") => {
             let gate = value.get("gate").and_then(Value::as_object)
@@ -274,6 +315,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
             Ok(ConfigurationParts {
+                measured_refresh: None,
                 service_tokens: super::native_service_tokens::Source::Pending(original.encrypted_service_tokens),
                 secret_broker: Some(original.secret_broker), measured_audit: Some(original.measured_audit),
                 credential_currentness: Some(original.credential_currentness),
@@ -308,7 +350,7 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     let lifetime = NativeRuntimeLifetimeV1::new(launch.deadline_boottime_ns)?;
     let allow_guest_listener = matches!(&configuration.service_tokens, super::native_service_tokens::Source::Pending(_));
     let (mut inputs, control_plane_tls) = configuration.gate.into_inputs(configuration.secret_broker,
-        configuration.measured_audit, configuration.service_tokens)?;
+        configuration.measured_audit, configuration.measured_refresh, configuration.service_tokens)?;
     inputs.credential_currentness = configuration.credential_currentness;
     let v2 = configuration.response_observation_v2.into_config(allow_guest_listener)?;
     let shadow = configuration.shadow.into_config()?;

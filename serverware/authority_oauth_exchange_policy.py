@@ -47,6 +47,9 @@ def verify_original(operation, arguments, *, configuration_payload, root_key, no
     key = validate_policy(policy, payload=configuration_payload, root_key=root_key)
     profile.require(key is not None, "OAuth exchange enrollment authority is disabled")
     raw = profile.enrollment_bytes(values["enrollment_original"])
+    from serverware import authority_oauth_measured_exchange_policy as measured
+    profile.require(not measured.owns_enrollment(configuration_payload.get(measured.FIELD), raw),
+        "measured initial issuance cannot use the parent-plaintext exchange profile")
     envelope = enrollment.enrollment_document(raw)
     payload = envelope["payload"]
     profile.require(type(now_epoch_ns) is int and payload["issuedAtEpochNs"] <= now_epoch_ns < payload["expiresAtEpochNs"]

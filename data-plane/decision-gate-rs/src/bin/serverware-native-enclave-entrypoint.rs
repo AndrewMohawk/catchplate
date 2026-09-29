@@ -48,6 +48,8 @@ fn main() -> Result<(), String> {
     let mode = match arguments.first().and_then(|v| v.to_str()) {
         Some("--measured-refresh-v7") => { arguments.remove(0); "--native-measured-refresh-startup" },
         Some("--guest-inspector-v8") => { arguments.remove(0); "--native-startup-inspector-v8" },
+        Some("--measured-issuance-v9") => { arguments.remove(0); "--native-measured-issuance-startup-v9" },
+        Some("--guest-cohort-v10") => { arguments.remove(0); "--native-guest-cohort-startup-v10" },
         _ => "--native-encrypted-startup",
     };
     if arguments.is_empty() || arguments.len() > 9 {

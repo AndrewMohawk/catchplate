@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.287"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.288"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -268,6 +268,8 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "publication-approval.consume", "publication-approval.settle",
     "oauth-activation-approval.request", "oauth-activation-approval.decide", "oauth.pending.activate",
     "oauth.exchange.prepare", "oauth.exchange.claim", "oauth.exchange.retain", "oauth.pending.stage",
+    "oauth.measured-exchange.prepare", "oauth.measured-exchange.claim", "oauth.measured-exchange.capture",
+    "oauth.measured-exchange.stage", "oauth.measured-exchange.recover", "oauth.measured-exchange.cancel",
     "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
     "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
     "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",
@@ -1452,6 +1454,7 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     SUCCESSOR_EXECUTION_CUSTODY_TABLE,
     "credential_generations",
     "oauth_exchange_reservations",
+    "oauth_measured_exchange_custody",
     "credential_currentness_roots",
     "credential_currentness_holders",
     "credential_currentness_challenges",
@@ -1836,6 +1839,21 @@ _OPERATIONS = {
             ("oauth.exchange.retain", "serverware_policy_authority_oauth_exchange_retain"),
             ("oauth.pending.stage", "serverware_policy_authority_oauth_pending_stage"),
         )
+    },
+    **{
+        operation: _spec(
+            "serverware_policy_authority_" + operation.replace(".", "_").replace("-", "_"),
+            reads=("oauth_exchange_reservations", "oauth_measured_exchange_custody", "oauth_revocation_work", "rbac_role_bindings") +
+                (("pending_oauth_credentials",) if operation in {"oauth.measured-exchange.prepare", "oauth.measured-exchange.recover"} else ()) +
+                (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions", "oauth_family_retirements")
+                    if operation == "oauth.measured-exchange.stage" else ()) + _PHASE2_AGGREGATE,
+            writes=("oauth_exchange_reservations", "oauth_measured_exchange_custody", "oauth_revocation_work", "metadata_audit_outbox") +
+                (("pending_oauth_credentials",) if operation == "oauth.measured-exchange.stage" else ()) + _PHASE2_AGGREGATE,
+            webauthn="bound-verified-assertion-receipt" if operation == "oauth.measured-exchange.prepare" else "not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=256, maximum_mutations=72, maximum_work_units=4096,
+        ) for operation in ("oauth.measured-exchange.prepare", "oauth.measured-exchange.claim", "oauth.measured-exchange.capture",
+            "oauth.measured-exchange.stage", "oauth.measured-exchange.recover", "oauth.measured-exchange.cancel")
     },
     **{
         operation: _spec(

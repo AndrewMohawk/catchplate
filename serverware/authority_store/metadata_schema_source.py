@@ -420,6 +420,34 @@ def metadata_base_schema_source() -> str:
                 CHECK (status IN ('claimed', 'retained', 'committed'))
             );
 
+            CREATE TABLE IF NOT EXISTS oauth_measured_exchange_custody (
+                id TEXT PRIMARY KEY,
+                prepare_request_digest TEXT NOT NULL,
+                preparation_arguments_json TEXT NOT NULL,
+                claim_arguments_json TEXT,
+                capture_arguments_json TEXT,
+                stage_arguments_json TEXT,
+                cancel_arguments_json TEXT,
+                owner_nonce_sha256 TEXT,
+                received_at_epoch_ns BIGINT,
+                recovery_request_digest TEXT,
+                recovery_expires_at_epoch_ns BIGINT,
+                recovery_arguments_json TEXT,
+                recovery_owner_nonce_sha256 TEXT,
+                pending_original_json TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('prepared', 'claimed', 'captured', 'staged', 'cancelled')),
+                CHECK ((claim_arguments_json IS NULL) = (owner_nonce_sha256 IS NULL)),
+                CHECK ((capture_arguments_json IS NULL) = (received_at_epoch_ns IS NULL)),
+                CHECK ((stage_arguments_json IS NULL) = (pending_original_json IS NULL)),
+                CHECK ((recovery_request_digest IS NULL) = (recovery_expires_at_epoch_ns IS NULL)
+                    AND (recovery_request_digest IS NULL) = (recovery_arguments_json IS NULL)
+                    AND (recovery_request_digest IS NULL) = (recovery_owner_nonce_sha256 IS NULL)),
+                CHECK (cancel_arguments_json IS NULL OR claim_arguments_json IS NULL)
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_measured_refresh_custody (
                 id TEXT PRIMARY KEY,
                 credential_id TEXT NOT NULL,

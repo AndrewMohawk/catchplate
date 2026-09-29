@@ -146,6 +146,25 @@ impl TlsAuthorityV1 {
         Ok(Arc::new(config))
     }
 
+    /// A distinct browser server, never an unauthenticated workload fallback.
+    /// Only the actual enclave identity constructor can retain this result.
+    pub(crate) fn browser_server_config(&self, host: &str, not_before: OffsetDateTime, not_after: OffsetDateTime)
+        -> Result<(Arc<ServerConfig>, Vec<u8>, Vec<u8>), String> {
+        if self.generated_validity.is_none() {
+            return Err("browser ingress requires the actual generated CA".to_owned());
+        }
+        let leaf = self.issue_leaf(host, None, not_before, not_after)?;
+        let der = leaf.certificate_chain.first().ok_or("browser leaf absent")?.clone();
+        let (rest, certificate) = x509_parser::parse_x509_certificate(&der).map_err(|_|"browser leaf DER")?;
+        if !rest.is_empty() { return Err("browser leaf trailing DER".to_owned()); }
+        let spki = certificate.public_key().raw.to_vec();
+        let chain = leaf.certificate_chain.into_iter().map(CertificateDer::from).collect();
+        let mut config = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_no_client_auth().with_single_cert(chain, leaf.private_key).map_err(|_|"native browser TLS configuration")?;
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        Ok((Arc::new(config), der, spki))
+    }
+
     /// Issue a fresh outer-server key/certificate from this generated CA only.
     /// Exact DER parsing and WebPKI trust-anchor construction do not admit root
     /// provenance, enrollment, revocation policy or the supplied wall-clock

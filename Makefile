@@ -1336,6 +1336,15 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_oauth_refresh_owner.py \
 	serverware/native_oauth_refresh_receipts.py \
 	serverware/native_oauth_refresh_tls.py \
+	serverware/native_oauth_exchange.py \
+	serverware/authority_oauth_measured_exchange.py \
+	serverware/authority_oauth_measured_exchange_policy.py \
+	serverware/authority_transition_oauth_measured_exchange.py \
+	serverware/native_oauth_exchange_receipts.py \
+	serverware/native_oauth_exchange_tls.py \
+	serverware/native_oauth_exchange_owner.py \
+	serverware/control_plane_oauth_measured_exchange.py \
+	serverware/portal_oauth_measured_consent.py \
 	serverware/native_service_tokens.py \
 	serverware/response_v2_guest_delivery.py \
 	scripts/native_broker_kms_parent.py \
@@ -3705,6 +3714,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_oauth_refresh_owner.py \
 				serverware/native_oauth_refresh_receipts.py \
 				serverware/native_oauth_refresh_tls.py \
+				serverware/native_oauth_exchange.py \
+				serverware/authority_oauth_measured_exchange.py \
+				serverware/authority_oauth_measured_exchange_policy.py \
+				serverware/authority_transition_oauth_measured_exchange.py \
+				serverware/native_oauth_exchange_receipts.py \
+				serverware/native_oauth_exchange_tls.py \
+				serverware/native_oauth_exchange_owner.py \
+				serverware/control_plane_oauth_measured_exchange.py \
+				serverware/portal_oauth_measured_consent.py \
 				serverware/native_service_tokens.py \
 				serverware/response_v2_guest_delivery.py \
 				scripts/native_broker_kms_parent.py \
@@ -3933,6 +3951,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/refresh.rs \
 				data-plane/decision-gate-rs/src/native_oauth_refresh_v1.rs \
 				data-plane/decision-gate-rs/src/native_oauth_refresh.rs \
+				data-plane/decision-gate-rs/src/native_oauth_exchange_v1.rs \
+				data-plane/decision-gate-rs/src/native_oauth_browser_v1.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/exchange.rs \
+				data-plane/decision-gate-rs/src/native_oauth_browser_pages.rs \
+				data-plane/decision-gate-rs/src/native_oauth_exchange.rs \
 				data-plane/decision-gate-rs/src/credential_currentness.rs \
 				data-plane/decision-gate-rs/src/native_currentness_v1.rs \
 				data-plane/decision-gate-rs/src/erofs_loop_v1.rs \
@@ -4157,6 +4180,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v6.schema.json \
 				schemas/native-startup-configuration.v7.schema.json \
 				schemas/native-startup-configuration.v8.schema.json \
+				schemas/native-startup-configuration.v9.schema.json \
+				schemas/native-startup-configuration.v10.schema.json \
+				schemas/native-oauth-measured-exchange.v1.schema.json \
 				schemas/native-guest-cohort.v1.schema.json \
 				schemas/native-oauth-measured-refresh.v1.schema.json \
 				schemas/native-service-tokens.v1.schema.json \

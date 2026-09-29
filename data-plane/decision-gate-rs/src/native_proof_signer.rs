@@ -128,6 +128,18 @@ impl CustodySignerTransport {
         self.verify_live()?; Ok(result)
     }
 
+    pub(super) fn exchange_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        prepared: &serverware_decision_gate::native_oauth_exchange_v1::Prepared,
+        binary: &str, deadline: u64) -> Result<Value,String> {
+        let Self::Native(owner) = self else { return Err("initial issuance refuses unmeasured custody".to_owned()); };
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |active| (active < CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active + 1)).map_err(|_|"initial custody concurrency")?;
+        let _permit = NativeOperationPermit(&owner.active);
+        let result = owner.runtime.sign_native_exchange(identity, prepared, binary, deadline).map_err(|error|error.to_string())?;
+        self.verify_live()?; Ok(result)
+    }
+
     pub(super) fn currentness_lease(&self, prepared: &credential_currentness::PreparedLease<'_>) -> Result<String, String> {
         let Self::Native(owner) = self else { return Err("currentness refuses unmeasured UDS custody".to_owned()); };
         self.verify_live()?;

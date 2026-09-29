@@ -129,6 +129,7 @@ fn run_owned(listener: VsockListenerV1, prepared: NativeTlsGateV1,
             native_background_workers::start(scope, Arc::clone(&state), Arc::clone(&lifetime),
                 settings.policy_interval, settings.audit_interval)?;
             native_lease_renewal::start(scope, Arc::clone(&state), Arc::clone(&lifetime))?;
+            native_oauth_exchange::start(scope, Arc::clone(&state), Arc::clone(&lifetime))?;
             wait_for_hot_generations(&state, &lifetime)?;
             ingress.verify_live(deadline)?;
             lifetime.check()?;

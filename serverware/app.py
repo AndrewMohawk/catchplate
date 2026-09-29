@@ -73,6 +73,9 @@ from serverware.portal_admin_token_publication import (
 )
 from serverware.portal_public_revocation import PUBLIC_REVOCATION_HTML, PUBLIC_REVOCATION_SCRIPT
 from serverware.portal_oauth_consent import OAUTH_CONSENT_HTML, OAUTH_CONSENT_SCRIPT, enrolled_oauth_profile
+from serverware.portal_oauth_measured_consent import (
+    MEASURED_OAUTH_CONSENT_HTML, MEASURED_OAUTH_CONSENT_SCRIPT, provider_status_with_custody,
+)
 from serverware.portal_oauth_activation import OAUTH_ACTIVATION_HTML, OAUTH_ACTIVATION_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
@@ -527,6 +530,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_oauth_measured_refresh as measured_refresh_contract
 
     request_path = request.scope.get("path")
+    from serverware import control_plane_oauth_measured_exchange as native_issuance_contract
     handoff_request = (request.method == "POST" and request_path in (
         handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS))
     handoff_completion = request_path in handoff_routes.COMPLETE_PATHS
@@ -670,6 +674,9 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             _POLICY_AUTHORITY_HANDOFF_REQUEST_MAX_BYTES,
         "/api/data-plane/policy-canary/evidence":
             _POLICY_CANARY_EVIDENCE_REQUEST_MAX_BYTES,
+        **{path: native_issuance_contract.MAX_REQUEST for path in native_issuance_contract.HUMAN_PATHS},
+        native_issuance_contract.MACHINE_PATH: native_issuance_contract.MAX_REQUEST,
+        native_issuance_contract.RECOVERY_PATH: 1024,
     }.get(
         request_path,
         (
@@ -5239,6 +5246,11 @@ def _reconcile_oauth_revocations(
                 for name in counts:
                     counts[name] += observed[name]
         return counts
+    from serverware import oauth_application_owner
+    if any(oauth_application_owner.measured_selected(provider) for provider in ("google", "x")):
+        # A cold encrypted application never lends its work to the legacy
+        # expiry/decrypt/retry worker, even in an otherwise development setup.
+        raise OAuthError("measured OAuth cleanup requires its independent controlled purpose")
     worker_id = f"oauth-reconciler-{os.getpid()}-{secrets.token_hex(8)}"
     claimed = db.claim_oauth_revocations(worker_id=worker_id, limit=limit)
     revoked = 0
@@ -7512,7 +7524,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "policy_path": str(POLICY_BUNDLE_PATH),
         "publicUrl": canonical_control_plane_url(PUBLIC_URL),
         "policyPrincipals": policy_principals,
-        "oauthProviders": provider_status() if can_view_credentials else [],
+        "oauthProviders": provider_status_with_custody() if can_view_credentials else [],
         "currentUserId": identity.user_id,
         "currentUserRoles": sorted(identity.roles),
         "webauthnCredentialCount": webauthn_credential_count,
@@ -14438,7 +14450,7 @@ def oauth_providers(
         require_role("admin", "policy_author", "credential_owner")
     ),
 ) -> dict[str, Any]:
-    return {"providers": provider_status()}
+    return {"providers": provider_status_with_custody()}
 
 
 def _canonical_oauth_granted_scopes(
@@ -14792,6 +14804,39 @@ def _oauth_activation_payload_digest(
             + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
         }
     )
+
+
+async def _native_oauth_original(request: Request, maximum: int) -> bytes:
+    if (request.query_params or request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json"
+            or request.headers.getlist("content-encoding") or request.headers.getlist("transfer-encoding")):
+        raise HTTPException(status_code=400, detail="native OAuth requires its fixed JSON original")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(chunk) > maximum - len(body):
+            raise HTTPException(status_code=413, detail="native OAuth original exceeds its bound")
+        body.extend(chunk)
+    return bytes(body)
+
+
+@app.post("/api/oauth/native/intent")
+@app.post("/api/oauth/native/options")
+@app.post("/api/oauth/native/consent")
+async def native_oauth_consent(request: Request) -> Response:
+    from serverware import control_plane_oauth_measured_exchange as native
+    from starlette.concurrency import run_in_threadpool
+    raw = await _native_oauth_original(request, native.MAX_REQUEST)
+    try:
+        handler = {"/api/oauth/native/intent": native.intent_on_request,
+            "/api/oauth/native/options": native.options_on_request, "/api/oauth/native/consent": native.consent_on_request}[request.url.path]
+        # The retained helper repeats actual OIDC cookie, Origin, CSRF,
+        # credential_owner and current physical-authenticator requirements.
+        result = await run_in_threadpool(handler, request, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > native.MAX_RESPONSE:
+            raise ValueError("bounded native response")
+    except Exception:
+        raise HTTPException(status_code=409, detail="native OAuth consent unavailable or uncertain; no automatic retry") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/oauth/consent/options")
@@ -18819,6 +18864,24 @@ async def data_plane_measured_oauth_refresh(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/data-plane/oauth-issuance")
+@app.post("/api/data-plane/oauth-issuance/original")
+async def data_plane_measured_oauth_issuance(request: Request) -> Response:
+    from serverware import control_plane_oauth_measured_exchange as native
+    from starlette.concurrency import run_in_threadpool
+    _require_data_plane_token(request.headers.get("X-Serverware-Data-Plane-Token"), DATA_PLANE_CREDENTIAL_LEASE_TOKEN)
+    raw = await _native_oauth_original(request, 1024 if request.url.path == native.RECOVERY_PATH else native.MAX_REQUEST)
+    try:
+        handler = native.recovery_original_on_request if request.url.path == native.RECOVERY_PATH else native.on_request
+        result = await run_in_threadpool(handler, request, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > native.MAX_RESPONSE:
+            raise ValueError("bounded native response")
+    except Exception:
+        raise HTTPException(status_code=503, detail="native OAuth issuance unavailable or uncertain; no retry authorized") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/data-plane/credential-leases")
 def data_plane_credential_leases(
     request: Request,
@@ -22445,6 +22508,7 @@ UI_HTML = r"""
             <button id="oauth-submit" type="submit">Connect with OAuth</button>
           </form>
           __SERVERWARE_OAUTH_CONSENT_HTML__
+          __SERVERWARE_MEASURED_OAUTH_CONSENT_HTML__
           <div id="oauth-connected-section" class="pending-oauth-list connected-oauth-list" hidden>
             <h3>Connected provider accounts</h3>
             <div id="oauth-connected-accounts"></div>
@@ -25301,7 +25365,8 @@ UI_HTML = r"""
     $('oauth-form').addEventListener('submit', (event) => {
       event.preventDefault();
       if (enrolledOAuthProfile !== 'development') {
-        if (enrolledOAuthProfile === 'enrolled-new-credential-v1') void oauthConsentPrepare();
+        if (enrolledOAuthProfile === 'enrolled-new-credential-v1' && nativeOAuthSelected()) void nativeOAuthBegin();
+        else if (enrolledOAuthProfile === 'enrolled-new-credential-v1') void oauthConsentPrepare();
         else { oauthConsentMessage('Cold ownership is unavailable. No fallback request was sent.', true); renderOAuthConsent(); }
         return;
       }
@@ -26131,6 +26196,7 @@ UI_HTML = r"""
     __SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__
     __SERVERWARE_PUBLIC_REVOCATION_SCRIPT__
     __SERVERWARE_OAUTH_CONSENT_SCRIPT__
+    __SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
@@ -26140,6 +26206,7 @@ UI_HTML = r"""
     initAdminPublication();
     initPublicRevocation();
     initOAuthConsent();
+    initNativeOAuth();
     initOAuthActivation();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
@@ -26207,6 +26274,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_PUBLIC_REVOCATION_SCRIPT__", PUBLIC_REVOCATION_SCRIPT),
     ("__SERVERWARE_OAUTH_CONSENT_HTML__", OAUTH_CONSENT_HTML),
     ("__SERVERWARE_OAUTH_CONSENT_SCRIPT__", OAUTH_CONSENT_SCRIPT),
+    ("__SERVERWARE_MEASURED_OAUTH_CONSENT_HTML__", MEASURED_OAUTH_CONSENT_HTML),
+    ("__SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__", MEASURED_OAUTH_CONSENT_SCRIPT),
     ("__SERVERWARE_OAUTH_ACTIVATION_HTML__", OAUTH_ACTIVATION_HTML),
     ("__SERVERWARE_OAUTH_ACTIVATION_SCRIPT__", OAUTH_ACTIVATION_SCRIPT),
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),

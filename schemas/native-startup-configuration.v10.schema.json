@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v10.schema.json",
+  "title": "Native measured issuance with owned seven-role guest cohort",
+  "$comment": "Explicit --native-guest-cohort-startup-v10 only, or the fixed image entrypoint --guest-cohort-v10. Exact v9 plus required guestCohort. Closed <=16MiB independently pinned original; no incoming-request or environment selection. The same actual root preparation launches inspector and signed role children before permanent privilege drop; real response-client readiness remains mandatory. Configuration and passive child progress are not generation, quote, key-provisioning or backend authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "gate", "native", "shadow", "responseObservationV2", "policy", "enrollmentAuthorizer", "enrollmentSetupAuthorizer", "enrollmentProxyEndpoint", "credentialCurrentness", "secretBroker", "measuredAudit", "encryptedServiceTokens", "measuredRefresh", "guestInspector", "measuredIssuance", "guestCohort"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v10"},
+    "gate": {"$ref": "native-startup-configuration.v9.schema.json#/properties/gate"},
+    "native": {"$ref": "native-startup-configuration.v9.schema.json#/properties/native"},
+    "shadow": {"$ref": "native-startup-configuration.v9.schema.json#/properties/shadow"},
+    "responseObservationV2": {"$ref": "response-v2-guest-listener.v1.schema.json#/$defs/nativeClient"},
+    "policy": {"$ref": "native-startup-configuration.v9.schema.json#/properties/policy"},
+    "enrollmentAuthorizer": {"$ref": "native-startup-configuration.v9.schema.json#/properties/enrollmentAuthorizer"},
+    "enrollmentSetupAuthorizer": {"$ref": "native-startup-configuration.v9.schema.json#/properties/enrollmentSetupAuthorizer"},
+    "enrollmentProxyEndpoint": {"$ref": "native-startup-configuration.v9.schema.json#/properties/enrollmentProxyEndpoint"},
+    "credentialCurrentness": {"$ref": "native-startup-configuration.v9.schema.json#/properties/credentialCurrentness"},
+    "secretBroker": {"$ref": "native-startup-configuration.v9.schema.json#/properties/secretBroker"},
+    "measuredAudit": {"$ref": "native-startup-configuration.v9.schema.json#/properties/measuredAudit"},
+    "encryptedServiceTokens": {"$ref": "native-startup-configuration.v9.schema.json#/properties/encryptedServiceTokens"},
+    "measuredRefresh": {"$ref": "native-startup-configuration.v9.schema.json#/properties/measuredRefresh"},
+    "guestInspector": {"$ref": "native-startup-configuration.v9.schema.json#/properties/guestInspector"},
+    "measuredIssuance": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/configuration"},
+    "guestCohort": {"$ref": "native-guest-cohort.v1.schema.json"}
+  }
+}

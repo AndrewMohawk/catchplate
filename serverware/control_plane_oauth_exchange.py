@@ -286,6 +286,7 @@ def _set_cookie(response, state, nonce):
 
 
 def options_on_request(request, response, payload):
+    profile.require(not applications.measured_selected(payload.provider), "measured consent requires the native browser ingress")
     owner = _Owner(request, payload.provider)
     profile.require(payload.mfa is None and payload.credential_id is None
         and payload.setup_session_id is None and payload.setup_revision is None)
@@ -348,6 +349,7 @@ def options_on_request(request, response, payload):
 
 def start_on_request(request, response, payload):
     consent = profile.request_binding(profile.OP_PREPARE, payload.request_binding)
+    profile.require(not applications.measured_selected(consent["providerId"]), "parent-terminated consent cannot be promoted to measured issuance")
     owner = _Owner(request, consent["providerId"])
     profile.require(payload.api_version == profile.OPTIONS_SCHEMA)
     private = _json(_decrypted(profile.artifact_id(consent["exchangeId"], "state"), consent["stateEnvelope"]), 64 * 1024)
@@ -368,6 +370,7 @@ def start_on_request(request, response, payload):
 
 
 def callback_on_request(request, provider_id, *, code, state, error, error_description):
+    profile.require(not applications.measured_selected(provider_id), "measured OAuth callbacks terminate only at the enclave HTTPS origin")
     owner = _Owner(request, provider_id, callback=True)
     pairs = list(request.query_params.multi_items())
     profile.require(len(pairs) == len({key for key, _ in pairs}) and set(dict(pairs)) <= {"code", "state", "error", "error_description"}

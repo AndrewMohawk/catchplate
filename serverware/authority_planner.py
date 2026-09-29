@@ -24,6 +24,7 @@ from serverware import authority_publication_approval as publication_approval
 from serverware import authority_public_revocation_approval as public_revocation_approval
 from serverware import authority_oauth_activation as oauth_activation
 from serverware import authority_oauth_exchange as oauth_exchange
+from serverware import authority_oauth_measured_exchange as oauth_measured_exchange
 from serverware import authority_oauth_inventory
 from serverware import authority_complete_query
 from serverware import authority_complete_acquisition
@@ -395,7 +396,13 @@ def reject_authoritative_input(value: Any, *, path: str = "input") -> None:
 
 
 def reject_typed_authoritative_input(operation: str, value: Mapping[str, Any]) -> None:
-    if operation.startswith("oauth.measured-refresh."):
+    if operation in oauth_measured_exchange.OPERATIONS:
+        oauth_measured_exchange.arguments(operation, value, typed=True)
+        evidence = dict(value["native_evidence"])
+        evidence["nativeKeyEvidence"] = {name: item for name, item in evidence["nativeKeyEvidence"].items()
+            if name != "attestationDocumentB64"}
+        reject_authoritative_input({**value, "native_evidence": evidence})
+    elif operation.startswith("oauth.measured-refresh."):
         from serverware import authority_oauth_measured_refresh as measured
         measured.arguments(operation, value, typed=True)
         # This exact field is a bounded original COSE byte string, not an
@@ -757,7 +764,7 @@ class TypedTransitionPlanningProgram:
             )
         _business_intent(request, operation=self.operation)
         try:
-            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
+            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
                 query_program = getattr(self.kernel, "queries_with_evidence", None)
                 if not callable(query_program) or verified_webauthn_evidence is None:
                     raise AuthorityPlannerError(
@@ -1318,7 +1325,7 @@ class TypedTransitionPlanningProgram:
             or self.kernel.program_id
                 != authority_contract.transition_program_id(operation)
             or state.database_now is None
-            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS))
+            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS))
                 != (state.verified_webauthn_evidence is not None)
         ):
             raise AuthorityPlannerError(
@@ -4035,7 +4042,7 @@ class MeasuredPlanner:
         self.connect_timeout_seconds = connect_timeout_seconds
         self.enabled_operations = frozenset(enabled_operations)
         self.programs = dict(programs)
-        if ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS) & self.enabled_operations:
+        if ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS) & self.enabled_operations:
             if (
                 not isinstance(verifier_public_key, Ed25519PublicKey)
                 or not isinstance(verifier_identity, Mapping)
@@ -4059,7 +4066,7 @@ class MeasuredPlanner:
         self, request: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:
         verified_webauthn_evidence = None
-        if request.get("operation") in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
+        if request.get("operation") in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
             # Independently pinned receipt verification precedes any proof SQL;
             # current hardware/trust/actor and raw challenge joins are repeated
             # by the purpose kernel over genuine selected originals.
@@ -4216,6 +4223,7 @@ class MeasuredPlanner:
                             planning_state = replace(planning_state,
                                 rbac_primary_inputs=(tuple(roots), tuple(authorization_roots), tuple(multiproofs)))
                         if operation in {oauth_activation.OP_ACTIVATE, oauth_exchange.OP_PREPARE, oauth_exchange.OP_STAGE,
+                                oauth_measured_exchange.OP_PREPARE, oauth_measured_exchange.OP_STAGE,
                                 "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
                                 "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
                                 "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",

@@ -349,6 +349,30 @@ impl EnclaveRuntimeIdentityV1 {
         }))
     }
 
+    pub fn prepare_browser_ingress(&mut self, origin: &str, now: OffsetDateTime, deadline: u64)
+        -> Result<Arc<crate::native_oauth_exchange_v1::BrowserTls>, String> {
+        let deadline = self.begin(deadline)?;
+        self.require_tls_time(now)?;
+        let parsed = crate::native_oauth_exchange_v1::origin(origin)?;
+        let (config, certificate, spki) = self.authority.browser_server_config(parsed.host_str().ok_or("browser TLS host")?,
+            self.ca_not_before, self.ca_not_after)?;
+        self.finish(deadline)?;
+        Ok(Arc::new(crate::native_oauth_exchange_v1::BrowserTls { config, origin: origin.to_owned(),
+            certificate_sha: format!("sha256:{}",hex::encode(Sha256::digest(certificate))),
+            spki_sha: format!("sha256:{}",hex::encode(Sha256::digest(spki))),
+            ca_sha: Sha256::digest(self.authority.certificate_der()).into(), deadline: self.deadline, pid: self.owner_pid }))
+    }
+
+    pub(crate) fn verify_browser_ingress(&mut self, ingress: &crate::native_oauth_exchange_v1::BrowserTls, deadline: u64) -> Result<(),String> {
+        self.verify_live(deadline)?;
+        ingress.check(deadline)?;
+        if ingress.deadline != self.deadline || ingress.pid != self.owner_pid
+            || ingress.ca_sha != <[u8;32]>::from(Sha256::digest(self.authority.certificate_der())) {
+            return Err("browser ingress lost its actual native CA owner".to_owned());
+        }
+        Ok(())
+    }
+
     /// Compare assignment inputs to this actual runtime and retained ingress.
     /// This read-only check performs no NSM operation or signing and returns no
     /// permission carrier. Invalid request pins cannot poison the shared key

@@ -1,0 +1,126 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-oauth-measured-exchange.v1.schema.json",
+  "title":"Native initial OAuth issuance data contracts",
+  "$comment":"Data-only projections. Runtime additionally authenticates independent current purpose, original native role-4 COSE/signature/PCR/scope, actual same-owner TLS/browser correlation, genuine requester hardware assertion, protected complete populations, exact digest/byte/interval joins and definite durable receipts. No field or schema grants provider contact or recovers an unknown outcome.",
+  "oneOf":[{"$ref":"#/$defs/configuration"},{"$ref":"#/$defs/policy"},{"$ref":"#/$defs/evidence"},{"$ref":"#/$defs/httpRequest"},{"$ref":"#/$defs/httpResponse"},{"$ref":"#/$defs/consentRequest"},{"$ref":"#/$defs/recoveryOriginalRequest"},{"$ref":"#/$defs/recoveryOriginalResponse"}],
+  "$defs":{
+    "digest":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/digest"},
+    "encoded":{"type":"string","minLength":1,"pattern":"^[A-Za-z0-9_-]+$"},
+    "origin":{"type":"string","minLength":9,"maxLength":2048,"pattern":"^https://[^/?#@]+$","$comment":"Runtime requires canonical lowercase exact HTTPS authority and default443 only, no userinfo/path/query/fragment."},
+    "uuid":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/uuid"},
+    "epoch":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/epoch"},
+    "bytes32":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},
+    "provider":{"enum":["google","x"]},
+    "nullableDigest":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/digest"}]},
+    "envelope":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/envelope"},
+    "nullableEnvelope":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/envelope"}]},
+    "limits":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/limits"},
+    "credentialPolicy":{"$ref":"oauth-activation-authority.v1.schema.json#/$defs/credentialPolicy"},
+    "enrollmentOriginal":{"$ref":"#/$defs/encoded","maxLength":43691},
+    "assignment":{
+      "type":"object","additionalProperties":false,
+      "required":["holderId","bootId","keyId","controlPlaneResponseSigningKeyId","releaseRecordSha256","policyHash","configurationSha256","caCertificateSha256","caPublicKeySpkiSha256","expectedBinaryDigest","expectedPcrs","expectedEif","expectedModuleId","maxAgeSeconds","futureSkewSeconds","instanceId","providerId","enrollmentSha256","applicationMaterialSha256","secretKekId","providerTlsRootSha256","portalOrigin","callbackOrigin"],
+      "properties":{
+        "holderId":{"$ref":"#/$defs/digest"},"bootId":{"$ref":"#/$defs/bytes32"},"keyId":{"$ref":"#/$defs/digest"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},
+        "releaseRecordSha256":{"$ref":"#/$defs/digest"},"policyHash":{"$ref":"#/$defs/digest"},"configurationSha256":{"$ref":"#/$defs/digest"},
+        "caCertificateSha256":{"$ref":"#/$defs/digest"},"caPublicKeySpkiSha256":{"$ref":"#/$defs/digest"},"expectedBinaryDigest":{"$ref":"#/$defs/digest"},
+        "expectedPcrs":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/expectedPcrs"},
+        "expectedEif":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/sha384"},"expectedModuleId":{"type":"string","minLength":1,"maxLength":256},
+        "maxAgeSeconds":{"type":"integer","minimum":1,"maximum":300},"futureSkewSeconds":{"type":"integer","minimum":0,"maximum":30},
+        "instanceId":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/instance"},"providerId":{"$ref":"#/$defs/provider"},"enrollmentSha256":{"$ref":"#/$defs/digest"},
+        "applicationMaterialSha256":{"$ref":"#/$defs/digest"},"secretKekId":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/kek"},"providerTlsRootSha256":{"$ref":"#/$defs/digest"},
+        "portalOrigin":{"$ref":"#/$defs/origin"},"callbackOrigin":{"$ref":"#/$defs/origin"}
+      }
+    },
+    "policy":{
+      "type":"object","additionalProperties":false,
+      "required":["schema","enrollmentRootPublicKeyBase64Url","enrollmentRootSpkiSha256","controlPlaneConfigurationDigest","deploymentId","pendingCapacity","revocationCapacity","contactMaxSeconds","retentionMaxSeconds","pendingMaxSeconds","operationMaxSeconds","recoveryMaxSeconds","trustRoots","assignments"],
+      "properties":{
+        "schema":{"const":"serverware.oauthMeasuredExchangeAuthorityPolicy/v1"},"enrollmentRootPublicKeyBase64Url":{"$ref":"#/$defs/bytes32"},
+        "enrollmentRootSpkiSha256":{"$ref":"#/$defs/digest"},"controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/identifier"},
+        "pendingCapacity":{"type":"integer","minimum":1,"maximum":64},"revocationCapacity":{"type":"integer","minimum":1,"maximum":64},
+        "contactMaxSeconds":{"type":"integer","minimum":1,"maximum":600},"retentionMaxSeconds":{"type":"integer","minimum":1,"maximum":600},
+        "pendingMaxSeconds":{"type":"integer","minimum":1,"maximum":3600},"operationMaxSeconds":{"type":"integer","minimum":1,"maximum":30},"recoveryMaxSeconds":{"type":"integer","minimum":1,"maximum":30},
+        "trustRoots":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/trustRoots"},"assignments":{"type":"array","minItems":1,"maxItems":32,"items":{"$ref":"#/$defs/assignment"}}
+      },
+      "$comment":"Purpose block inside the actual root-signed authority configuration/v6 and enabled fixed operations. Native configuration has equal source-fixed capacities/windows; no caller expansion. Assignment list sorted unique by holder and enrollment; enrollment root independently pinned and separated from runtime/config keys."
+    },
+    "statement":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","phase","holderId","bootId","keyId","controlPlaneResponseSigningKeyId","deploymentId","instanceId","providerId","enrollmentSha256","exchangeId","inputSha256","challenge","policyHash","dataPlaneBinarySha256","callbackOrigin","portalOrigin","ingressLeafCertificateSha256","ingressLeafSpkiSha256","issuedAtEpochNs","expiresAtEpochNs"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeOAuthExchangeStatement/v1"},"phase":{"enum":["draft","claim","capture","stage","recover","cancel"]},
+        "holderId":{"$ref":"#/$defs/digest"},"bootId":{"$ref":"#/$defs/bytes32"},"keyId":{"$ref":"#/$defs/digest"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},
+        "deploymentId":{"type":"string","minLength":1,"maxLength":128},"instanceId":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/instance"},
+        "providerId":{"$ref":"#/$defs/provider"},"enrollmentSha256":{"$ref":"#/$defs/digest"},"exchangeId":{"$ref":"#/$defs/uuid"},"inputSha256":{"$ref":"#/$defs/digest"},
+        "challenge":{"$ref":"#/$defs/bytes32"},"policyHash":{"$ref":"#/$defs/digest"},"dataPlaneBinarySha256":{"$ref":"#/$defs/digest"},
+        "callbackOrigin":{"$ref":"#/$defs/origin"},"portalOrigin":{"$ref":"#/$defs/origin"},"ingressLeafCertificateSha256":{"$ref":"#/$defs/digest"},"ingressLeafSpkiSha256":{"$ref":"#/$defs/digest"},
+        "issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"}
+      },
+      "$comment":"Dedicated nativeOAuthExchange.sign/v1, not a response/refresh alias. Ed25519 preimage is schema+NUL+canonical Python-ASCII statement. Original role4 NSM nonce is SHA256(serverware/native-oauth-exchange-attestation/v1+NUL || challenge32 || SHA256(statement) || signature64). Generated browser leaf and actual listener retain the same CA owner."
+    },
+    "evidence":{"type":"object","additionalProperties":false,"required":["statement","signature","nativeKeyEvidence"],"properties":{"statement":{"$ref":"#/$defs/statement"},"signature":{"type":"string","pattern":"^ed25519:[A-Za-z0-9_-]{86}$"},"nativeKeyEvidence":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/nativeKeyEvidence"}}},
+    "prepare":{
+      "type":"object","additionalProperties":false,
+      "required":["exchangeId","stateSha256","browserNonceSha256","pkceVerifierSha256","stateOriginalSha256","stateEnvelope","reservedEnvelope","providerId","redirectUri","credentialName","scopes","metadata","issuedAtEpochNs","contactExpiresAtEpochNs","retentionExpiresAtEpochNs","pendingExpiresAtEpochNs","enrollmentSha256","limits","pkceChallenge","portalOrigin","callbackOrigin"],
+      "properties":{
+        "exchangeId":{"$ref":"#/$defs/uuid"},"stateSha256":{"$ref":"#/$defs/digest"},"browserNonceSha256":{"$ref":"#/$defs/digest"},"pkceVerifierSha256":{"$ref":"#/$defs/digest"},"stateOriginalSha256":{"$ref":"#/$defs/digest"},
+        "stateEnvelope":{"$ref":"#/$defs/envelope"},"reservedEnvelope":{"$ref":"#/$defs/envelope"},"providerId":{"$ref":"#/$defs/provider"},
+        "redirectUri":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/prepare/properties/redirectUri"},"credentialName":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/prepare/properties/credentialName"},
+        "scopes":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/prepare/properties/scopes"},"metadata":{"type":"object"},
+        "issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"contactExpiresAtEpochNs":{"$ref":"#/$defs/epoch"},"retentionExpiresAtEpochNs":{"$ref":"#/$defs/epoch"},"pendingExpiresAtEpochNs":{"$ref":"#/$defs/epoch"},
+        "enrollmentSha256":{"$ref":"#/$defs/digest"},"limits":{"$ref":"#/$defs/limits"},"pkceChallenge":{"$ref":"#/$defs/bytes32"},"portalOrigin":{"$ref":"#/$defs/origin"},"callbackOrigin":{"$ref":"#/$defs/origin"}
+      }
+    },
+    "claim":{"type":"object","additionalProperties":false,"required":["exchangeId","exchangeRowSha256","ownerNonceSha256","callbackSha256","callbackEnvelope","codeSha256","contactRequestSha256","limits"],"properties":{"exchangeId":{"$ref":"#/$defs/uuid"},"exchangeRowSha256":{"$ref":"#/$defs/digest"},"ownerNonceSha256":{"$ref":"#/$defs/digest"},"callbackSha256":{"$ref":"#/$defs/digest"},"callbackEnvelope":{"$ref":"#/$defs/envelope"},"codeSha256":{"$ref":"#/$defs/digest"},"contactRequestSha256":{"$ref":"#/$defs/digest"},"limits":{"$ref":"#/$defs/limits"}}},
+    "capture":{"type":"object","additionalProperties":false,"required":["exchangeId","exchangeRowSha256","ownerNonce","rawResponseSha256","rawResponseEnvelope","issuedMaterialSha256","issuedMaterialEnvelope","receivedAtEpochNs","limits"],"properties":{"exchangeId":{"$ref":"#/$defs/uuid"},"exchangeRowSha256":{"$ref":"#/$defs/digest"},"ownerNonce":{"$ref":"#/$defs/bytes32"},"rawResponseSha256":{"$ref":"#/$defs/digest"},"rawResponseEnvelope":{"$ref":"#/$defs/envelope"},"issuedMaterialSha256":{"$ref":"#/$defs/nullableDigest"},"issuedMaterialEnvelope":{"$ref":"#/$defs/nullableEnvelope"},"receivedAtEpochNs":{"$ref":"#/$defs/epoch"},"limits":{"$ref":"#/$defs/limits"}},"allOf":[{"if":{"properties":{"issuedMaterialEnvelope":{"type":"null"}}},"then":{"properties":{"issuedMaterialSha256":{"type":"null"}}},"else":{"properties":{"issuedMaterialSha256":{"$ref":"#/$defs/digest"}}}}]},
+    "stage":{"type":"object","additionalProperties":false,"required":["exchangeId","exchangeRowSha256","ownerNonce","tokenSecretSha256","tokenEnvelope","identityRawSha256","identityRawEnvelope","metadata","review","payloadDigest","recoveryRequestDigest","limits"],"properties":{"exchangeId":{"$ref":"#/$defs/uuid"},"exchangeRowSha256":{"$ref":"#/$defs/digest"},"ownerNonce":{"$ref":"#/$defs/bytes32"},"tokenSecretSha256":{"$ref":"#/$defs/digest"},"tokenEnvelope":{"$ref":"#/$defs/envelope"},"identityRawSha256":{"$ref":"#/$defs/digest"},"identityRawEnvelope":{"$ref":"#/$defs/envelope"},"metadata":{"type":"object"},"review":{"type":"object"},"payloadDigest":{"$ref":"#/$defs/digest"},"recoveryRequestDigest":{"$ref":"#/$defs/nullableDigest"},"limits":{"$ref":"#/$defs/limits"}}},
+    "recover":{"type":"object","additionalProperties":false,"required":["exchangeId","custodyRowSha256","captureInputSha256","ownerNonceSha256","issuedAtEpochNs","expiresAtEpochNs","limits"],"properties":{"exchangeId":{"$ref":"#/$defs/uuid"},"custodyRowSha256":{"$ref":"#/$defs/digest"},"captureInputSha256":{"$ref":"#/$defs/digest"},"ownerNonceSha256":{"$ref":"#/$defs/digest"},"issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"},"limits":{"$ref":"#/$defs/limits"}}},
+    "cancel":{"type":"object","additionalProperties":false,"required":["exchangeId","exchangeRowSha256","callbackSha256","callbackEnvelope","limits"],"properties":{"exchangeId":{"$ref":"#/$defs/uuid"},"exchangeRowSha256":{"$ref":"#/$defs/digest"},"callbackSha256":{"$ref":"#/$defs/digest"},"callbackEnvelope":{"$ref":"#/$defs/envelope"},"limits":{"$ref":"#/$defs/limits"}}},
+    "arguments":{
+      "type":"object","additionalProperties":false,"required":["action","resource_id","payload_digest","actor_id","request","approval_id","credential_policy","enrollment_original","control_plane_configuration_digest","assignment_original","native_evidence"],
+      "properties":{
+        "action":{"const":"credential.oauth.measured-consent"},"resource_id":{"$ref":"#/$defs/uuid"},"payload_digest":{"$ref":"#/$defs/digest"},"actor_id":{"type":"string","pattern":"^oidc:","maxLength":512},
+        "request":{"oneOf":[{"$ref":"#/$defs/prepare"},{"$ref":"#/$defs/claim"},{"$ref":"#/$defs/capture"},{"$ref":"#/$defs/stage"},{"$ref":"#/$defs/recover"},{"$ref":"#/$defs/cancel"}]},
+        "approval_id":{"type":"null"},"credential_policy":{"$ref":"#/$defs/credentialPolicy"},"enrollment_original":{"$ref":"#/$defs/enrollmentOriginal"},
+        "control_plane_configuration_digest":{"$ref":"#/$defs/digest"},"assignment_original":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/assignment"}]},"native_evidence":{"$ref":"#/$defs/evidence"}
+      },"$comment":"Canonical <=2MiB. Prepare assignment null; all other phases equal the independently current assigned original. Resource and input hashes, actor, exact protected state and phase-specific shape are runtime joined."
+    },
+    "httpRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","operation","arguments"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthExchangeRequest/v1"},"operation":{"enum":["oauth.measured-exchange.claim","oauth.measured-exchange.capture","oauth.measured-exchange.stage","oauth.measured-exchange.recover","oauth.measured-exchange.cancel"]},"arguments":{"$ref":"#/$defs/arguments"}},"$comment":"Machine route never accepts prepare. Exact operation selects matching nested request; POST body<=3MiB."},
+    "httpResponse":{"type":"object","additionalProperties":false,"required":["apiVersion","requestOriginal","responseOriginal"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthExchangeResponse/v1"},"requestOriginal":{"$ref":"#/$defs/encoded","maxLength":4194304},"responseOriginal":{"$ref":"#/$defs/encoded","maxLength":8388608}},"$comment":"Combined<=8MiB. Actual verifier-signed policyAuthorityMeasuredExchangeRuntimeResponse/v1 includes actual root-signed configuration and exact committed result/row originals. Not an HTTP caller success verdict."},
+    "mfa":{"type":"object","additionalProperties":false,"required":["nativeOAuthConsentProfile","assertion"],"properties":{"nativeOAuthConsentProfile":{"const":"serverware.nativeOAuthConsentOptions/v1"},"assertion":{"type":"object"}},"$comment":"Genuine raw assertion, current hardware/UP/UV credential and independent trust provenance verified by actual fixed writer. Aggregate<=16KiB."},
+    "consentRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","arguments","mfa"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthConsentOptions/v1"},"arguments":{"$ref":"#/$defs/arguments"},"mfa":{"$ref":"#/$defs/mfa"}}},
+    "recoveryOriginalRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","exchangeId"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthRecoveryOriginalRequest/v1"},"exchangeId":{"$ref":"#/$defs/uuid"}}},
+    "recoveryOriginalResponse":{"type":"object","additionalProperties":false,"required":["apiVersion","okForAction","exchangeOriginal","custodyOriginal"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthRecoveryOriginalResponse/v1"},"okForAction":{"const":false},"exchangeOriginal":{"type":"string","minLength":1,"maxLength":1048576},"custodyOriginal":{"type":"string","minLength":1,"maxLength":4194304}},"$comment":"SELECT-only encrypted data. Cannot decrypt, contact or re-stage until fresh actual recover commit is verified by the helper. No signature over outcome is invented."},
+    "application":{
+      "type":"object","additionalProperties":false,"required":["enrollmentOriginal","material","tlsRootsPem"],
+      "properties":{
+        "enrollmentOriginal":{"$ref":"#/$defs/encoded","maxLength":43691},
+        "material":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/applicationMaterial"},
+        "tlsRootsPem":{"type":"string","minLength":1,"maxLength":131072}
+      }
+    },
+    "configuration":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","sourceRevision","authorityRootPublicKey","authorityRootSpkiSha256","authorityConfigurationOriginal","controlPlaneConfigurationDigest","deploymentId","instanceId","limits","windows","applications","recoveryTargets","callbackOrigin","portalOrigin","browserVsockPort"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeOAuthExchangeConfiguration/v1"},
+        "sourceRevision":{"type":"string","minLength":1,"maxLength":256},
+        "authorityRootPublicKey":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},
+        "authorityRootSpkiSha256":{"$ref":"#/$defs/digest"},
+        "authorityConfigurationOriginal":{"$ref":"#/$defs/encoded","maxLength":1398102},
+        "controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},
+        "deploymentId":{"type":"string","minLength":1,"maxLength":128},
+        "instanceId":{"type":"string","minLength":1,"maxLength":4096,"pattern":"^spiffe://"},
+        "limits":{"const":{"pendingCapacity":64,"revocationCapacity":64}},
+        "windows":{"const":{"contactMaxSeconds":600,"retentionMaxSeconds":600,"pendingMaxSeconds":3600,"operationMaxSeconds":30,"recoveryMaxSeconds":30}},
+        "applications":{"type":"object","additionalProperties":false,"minProperties":1,"maxProperties":2,"properties":{"google":{"$ref":"#/$defs/application"},"x":{"$ref":"#/$defs/application"}}},
+        "recoveryTargets":{"type":"array","maxItems":64,"uniqueItems":true,"items":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/uuid"}},
+        "callbackOrigin":{"$ref":"#/$defs/origin"},"portalOrigin":{"$ref":"#/$defs/origin"},
+        "browserVsockPort":{"type":"integer","minimum":1024,"maximum":4294967294}
+      },
+      "$comment":"Canonical original<=2MiB. Callback origin differs from portal and exact signed enrollment redirect is callbackOrigin+/oauth/callback/provider. Recovery targets sorted, current purpose root/config independent, all original joins verified at runtime. Port differs from actual workload ingress. Private identity/leaf commitments are added only by the actual native owner, never accepted in cold JSON."
+    }
+  }
+}

@@ -472,6 +472,17 @@ impl VsockStreamV1 {
         Ok(())
     }
 
+    /// Consume only part of the retained socket interval; never renew an IO
+    /// timeout by converting a fresh duration on each TLS read/write.
+    pub(crate) fn narrow_deadline(&mut self, deadline: u64) -> io::Result<()> {
+        self.verify_connected_original(deadline)?;
+        if deadline > self.deadline {
+            return Err(error(io::ErrorKind::InvalidInput, "vsock deadline cannot be extended"));
+        }
+        self.deadline = deadline;
+        self.check(deadline)
+    }
+
     fn operation_deadline(&self, timeout: &AtomicU64) -> io::Result<u64> {
         self.check(self.deadline)?;
         let duration = timeout.load(Ordering::Acquire);

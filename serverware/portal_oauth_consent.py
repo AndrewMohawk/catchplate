@@ -39,8 +39,9 @@ OAUTH_CONSENT_SCRIPT = r"""
     }
     // Keep numeric tokens and the exact top-level request span. Epoch ns never
     // pass through Number, JSON.stringify, storage, logs or rendered review.
-    function oauthConsentParse(text) {
-      oauthConsentNeed(typeof text === 'string' && new TextEncoder().encode(text).byteLength <= 768 * 1024);
+    function oauthConsentParse(text, maximum = 768 * 1024) {
+      oauthConsentNeed(Number.isSafeInteger(maximum) && maximum > 0 && maximum <= 8 * 1024 * 1024
+        && typeof text === 'string' && new TextEncoder().encode(text).byteLength <= maximum);
       let offset = 0, nodes = 0, requestOriginal = null;
       const white = () => { while (/[\x20\t\r\n]/.test(text[offset] || '\0')) offset++; };
       function string() {
@@ -143,6 +144,7 @@ OAUTH_CONSENT_SCRIPT = r"""
       if (enrolledOAuthProfile === 'unavailable') oauthConsentMessage('Cold OAuth ownership is unavailable. No development fallback or request is allowed.', true);
       else if (state.oauthSetupSessionId) oauthConsentMessage('Controlled setup consent is not implemented. This form cannot silently create an unrelated credential.', true);
       else if (adminToken()) oauthConsentMessage('Clear the entered bearer credential yourself, then refresh the active OIDC cookie status.', true);
+      renderNativeOAuth();
     }
     function oauthConsentBegin() {
       oauthConsentNeed(!oauthConsentBusy && !oauthConsentBlocked);

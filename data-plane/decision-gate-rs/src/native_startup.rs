@@ -133,11 +133,33 @@ fn validate_parameters(parameters: &NativeStartupParametersV1) -> Result<(), Str
 }
 
 pub(super) fn run(
+    inputs: GateStateInputs,
+    parameters: NativeStartupParametersV1,
+    shadow_config: PolicyShadowGenerationConfig,
+    v2_config: ResponseObservationV2ClientConfig,
+    guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
+    guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
+    public_identity_stdout: bool,
+) -> Result<(), String> {
+    // Retain the original unshared lifetime through every cold error as well
+    // as serving. Attachments finish before any Arc clone is given to runtime.
+    let mut startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
+    let result = run_owned(&mut startup, inputs, parameters, shadow_config, v2_config,
+        guest_inspector, guest_cohort, public_identity_stdout);
+    startup.stop();
+    let cleanup = startup.finish_guest_inspector();
+    result?;
+    cleanup
+}
+
+fn run_owned(
+    startup: &mut Arc<NativeRuntimeLifetimeV1>,
     mut inputs: GateStateInputs,
     mut parameters: NativeStartupParametersV1,
     shadow_config: PolicyShadowGenerationConfig,
     v2_config: ResponseObservationV2ClientConfig,
     guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
+    guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
     public_identity_stdout: bool,
 ) -> Result<(), String> {
     // This guard starts no tasks and grants no new interval. Runtime serving
@@ -145,7 +167,6 @@ pub(super) fn run(
     if env::var_os(RESPONSE_PROOF_RELEASE_PROFILE_ENV).is_some() {
         return Err("ordinary response release profile cannot override native startup".to_owned());
     }
-    let mut startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
     if inputs.policy_shadow_generation_control.is_some()
         || inputs.response_observation_v2_client.is_some()
         || inputs.native_serving_privileges.is_some() || inputs.prepared_secret_broker.is_some()
@@ -183,6 +204,9 @@ pub(super) fn run(
     if guest_inspector.is_some() && (inputs.secret_broker.is_none() || v2_config.guest_listener.is_none()) {
         return Err("native inspector requires the encrypted native broker and explicit guest response listener".into());
     }
+    if guest_cohort.is_some() && guest_inspector.is_none() {
+        return Err("native guest cohort requires the actual cold inspector owner".into());
+    }
     let prepared_device = if let Some(config) = inputs.secret_broker.take() {
         use serverware_decision_gate::{native_serving_privileges,
             native_secret_broker_v1::PreparedBroker,
@@ -190,13 +214,18 @@ pub(super) fn run(
         let privileged = native_serving_privileges::Prepared::open(parameters.deadline_boottime_ns)?;
         if let Some(configuration) = guest_inspector {
             let inspector = serverware_decision_gate::PreparedGuestInspector::launch(configuration, &privileged)?;
+            NativeRuntimeLifetimeV1::bind_guest_inspector(startup, Arc::clone(&inspector))?;
             inspector.require_response_client(&v2_config.generation_id, v2_config.expected_uid)?;
-            NativeRuntimeLifetimeV1::bind_guest_inspector(&mut startup, inspector)?;
+            if let Some(configuration) = guest_cohort {
+                let cohort = serverware_decision_gate::StartedGuestCohort::launch(configuration,
+                    &privileged, inspector)?;
+                NativeRuntimeLifetimeV1::bind_guest_cohort(startup, cohort)?;
+            }
         }
         let device = PreparedNativeDeviceV1::open(&privileged)?;
         let mut broker = PreparedBroker::open(config, &privileged)?;
         let owner = privileged.drop_permanently()?;
-        NativeRuntimeLifetimeV1::bind_serving_privileges(&mut startup, Arc::clone(&owner))?;
+        NativeRuntimeLifetimeV1::bind_serving_privileges(startup, Arc::clone(&owner))?;
         broker.check(&owner)?;
         inputs.native_serving_privileges = Some(owner);
         inputs.prepared_secret_broker = Some(broker);
@@ -282,5 +311,5 @@ pub(super) fn run(
         parameters.deadline_boottime_ns)
         .map_err(|_| "native startup fixed-parent listener bind failed".to_owned())?;
     startup.check()?;
-    super::native_runtime::run_with_lifetime(listener, prepared, parameters.runtime, startup)
+    super::native_runtime::run_with_lifetime(listener, prepared, parameters.runtime, Arc::clone(startup))
 }

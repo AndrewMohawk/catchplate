@@ -163,6 +163,23 @@ impl NativeUpstreamRelaysV1 {
             .map_err(|_| "fixed refresh TLS relay unavailable".to_owned())
     }
 
+    /// Initial issuance has separate fixed token and identity purposes. Only
+    /// opaque helper-owned TLS records traverse these parent transports.
+    pub fn exchange_stream(&self, provider: &str, purpose: &str, deadline: u64)
+        -> Result<crate::enclave_vsock_v1::VsockStreamV1, String> {
+        let url = match (provider,purpose) {
+            ("google","token") => "https://oauth2.googleapis.com/token",
+            ("x","token") => "https://api.twitter.com/2/oauth2/token",
+            ("google","identity") => "https://openidconnect.googleapis.com/v1/userinfo",
+            ("x","identity") => "https://api.x.com/2/users/me",
+            _ => return Err("initial issuance relay purpose is not fixed".to_owned()),
+        };
+        let (_,endpoint,parent)=self.unique_service_origin(url)?;
+        if endpoint.port()!=443 {return Err("initial issuance relay port differs".to_owned());}
+        crate::enclave_vsock_v1::VsockStreamV1::connect_parent(parent,deadline.min(self.deadline))
+            .map_err(|_|"fixed initial issuance TLS relay unavailable".to_owned())
+    }
+
     fn unique_service_origin(&self, raw_url: &str) -> Result<(String, SocketAddr, u32), String> {
         self.remaining()?;
         if raw_url.len() > 4096 {

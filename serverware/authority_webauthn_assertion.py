@@ -18,6 +18,7 @@ from serverware import authority_contract
 from serverware import authority_publication_approval as publication_approval
 from serverware import authority_oauth_activation as oauth_activation
 from serverware import authority_oauth_exchange as oauth_exchange
+from serverware import authority_oauth_measured_exchange as oauth_measured_exchange
 from serverware import authority_transition_core as core
 from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
@@ -143,7 +144,7 @@ def _canonical(value: Any, *, work: _ReceiptWork | None) -> bytes:
 def _operation_digest(request_digest: str, *, work: _ReceiptWork | None,
                       operation: str = OPERATION) -> str:
     from serverware import authority_public_revocation_approval as public_revocation_approval
-    if type(operation) is not str or operation not in ({OPERATION, STAGE_OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
+    if type(operation) is not str or operation not in ({OPERATION, STAGE_OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
         raise AssertionEvidenceError("assertion operation has no fixed receipt consumer")
     if work is not None:
         work.shared.prepare_utf8(operation)
@@ -318,7 +319,7 @@ def _verify_operation_assertion_evidence(
     """
     _require_work(work)
     from serverware import authority_public_revocation_approval as public_revocation_approval
-    if type(operation) is not str or operation not in ({OPERATION, STAGE_OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
+    if type(operation) is not str or operation not in ({OPERATION, STAGE_OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
         raise AssertionEvidenceError("assertion operation has no fixed receipt consumer")
     if work is not None and (
         type(evidence) is not dict or len(evidence) != len(EVIDENCE_FIELDS)

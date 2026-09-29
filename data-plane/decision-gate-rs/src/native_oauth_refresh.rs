@@ -32,6 +32,9 @@ pub(super) fn prepare(config: Configuration, inputs: &gate_state_init::GateState
 
 fn execute(state: &GateState, owner: &mut Owner, credential: &str, recovery: Option<u64>, deadline: Instant) -> Result<(), String> {
     if owner.poisoned || !owner.config.contains(credential) { return Err("refresh owner unavailable or credential unassigned".to_owned()); }
+    // Only one private OAuth contact/capture protocol owns the helper at a
+    // time. This is not the broker or send-drain lock; currentness can drain.
+    let _serial = state.native_oauth_serial.try_lock().map_err(|_|"another original OAuth operation is live")?;
     let result = (|| {
         let opening = broker::now()?;
         let remaining = custody_deadline_remaining(deadline, "measured refresh original")?;

@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from serverware.native_kms_cms import unwrap_broker_kek
 from serverware import native_service_tokens
 from serverware import native_oauth_refresh_owner
+from serverware import native_oauth_exchange_owner
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
 _WORK = "serverware.nativeBrokerOpenCredential/v1"
@@ -231,6 +232,7 @@ class _Broker:
         self.kek, self.operations = None, set()
         self.service_tokens_opened = False
         self.refresh_owner = None
+        self.exchange_owner = None
 
     def provision(self, value):
         _require(self.kek is None and self.rsa is not None
@@ -357,17 +359,30 @@ def main():
         broker.provision(channel.receive())
         while True:
             refresh_operation = None if broker.refresh_owner is None else broker.refresh_owner.operation
-            value = channel.receive(None if refresh_operation is None else refresh_operation.deadline)
+            exchange_operation = None if broker.exchange_owner is None else broker.exchange_owner.operation
+            _require(refresh_operation is None or exchange_operation is None)
+            active_operation = refresh_operation if refresh_operation is not None else exchange_operation
+            value = channel.receive(None if active_operation is None else active_operation.deadline)
             if value.get("apiVersion") == _SERVICE_WORK:
                 broker.open_service_tokens(value)
             elif value.get("apiVersion") == native_oauth_refresh_owner.CHANNEL:
+                _require(exchange_operation is None)
                 if value.get("phase") == "configure":
                     _require(broker.refresh_owner is None)
                     broker.refresh_owner = native_oauth_refresh_owner.Owner(broker, value)
                 else:
                     _require(broker.refresh_owner is not None)
                     broker.refresh_owner.handle(value)
+            elif value.get("apiVersion") == native_oauth_exchange_owner.CHANNEL:
+                _require(refresh_operation is None)
+                if value.get("phase") == "configure":
+                    _require(broker.exchange_owner is None)
+                    broker.exchange_owner = native_oauth_exchange_owner.Owner(broker, value)
+                else:
+                    _require(broker.exchange_owner is not None)
+                    broker.exchange_owner.handle(value)
             else:
+                _require(active_operation is None)
                 broker.open_credential(value)
     finally:
         channel.socket.close()

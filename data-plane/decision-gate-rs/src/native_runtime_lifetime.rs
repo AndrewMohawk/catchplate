@@ -26,6 +26,8 @@ pub(super) struct NativeRuntimeLifetimeV1 {
     wake: Condvar,
     serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
     guest_inspector: Option<Arc<serverware_decision_gate::InitializedGuestInspector>>,
+    guest_cohort: Option<Arc<serverware_decision_gate::StartedGuestCohort>>,
+    guest_cleanup: Mutex<Option<Result<(), String>>>,
 }
 
 fn now() -> Result<u64, &'static str> {
@@ -58,6 +60,8 @@ impl NativeRuntimeLifetimeV1 {
             state: Mutex::new(State { failure: None }), wake: Condvar::new(),
             serving_privileges: None,
             guest_inspector: None,
+            guest_cohort: None,
+            guest_cleanup: Mutex::new(None),
         }))
     }
 
@@ -70,6 +74,7 @@ impl NativeRuntimeLifetimeV1 {
             return Err("native lifetime privilege owner or original deadline differs".to_owned());
         }
         if let Some(inspector) = &actual.guest_inspector { inspector.require_serving(&privileges)?; }
+        if let Some(cohort) = &actual.guest_cohort { cohort.require_serving(&privileges)?; }
         actual.serving_privileges = Some(privileges);
         actual.require_creator()
     }
@@ -79,14 +84,30 @@ impl NativeRuntimeLifetimeV1 {
     pub(super) fn bind_guest_inspector(owner: &mut Arc<Self>,
         inspector: Arc<serverware_decision_gate::InitializedGuestInspector>) -> Result<(), String> {
         owner.require_creator()?;
-        inspector.check()?;
         let actual = Arc::get_mut(owner).ok_or("native lifetime shared before inspector attachment")?;
         if actual.guest_inspector.is_some() || actual.serving_privileges.is_some()
             || actual.deadline != inspector.deadline_boottime_ns() {
             return Err("native inspector lost its original pre-drop lifetime".into());
         }
         actual.guest_inspector = Some(inspector);
-        Ok(())
+        actual.guest_inspector.as_ref().ok_or("native inspector attachment absent")?.check()
+    }
+
+    pub(super) fn bind_guest_cohort(owner: &mut Arc<Self>,
+        cohort: Arc<serverware_decision_gate::StartedGuestCohort>) -> Result<(), String> {
+        // Store the returned real owner before inspecting the other child's
+        // liveness: an elapsed inspector/lifetime must not discard this cohort
+        // before the outer cold-error path can explicitly stop and reap it.
+        if unsafe { libc::getpid() } != owner.creator_pid {
+            return Err("native cohort attachment crossed creator".into());
+        }
+        let actual = Arc::get_mut(owner).ok_or("native lifetime shared before cohort attachment")?;
+        if actual.guest_cohort.is_some() || actual.guest_inspector.is_none()
+            || actual.serving_privileges.is_some() || actual.deadline != cohort.deadline_boottime_ns() {
+            return Err("native guest cohort lost its original pre-drop lifetime".into());
+        }
+        actual.guest_cohort = Some(cohort);
+        actual.require_creator()
     }
 
     pub(super) fn require_serving_privileges(&self,
@@ -94,14 +115,33 @@ impl NativeRuntimeLifetimeV1 {
         self.check()?;
         match (&self.serving_privileges, owner) {
             (Some(held), Some(actual)) if Arc::ptr_eq(held, actual) => Ok(()),
-            (None, None) if self.guest_inspector.is_none() => Ok(()),
+            (None, None) if self.guest_inspector.is_none() && self.guest_cohort.is_none() => Ok(()),
             _ => Err("native serving lifetime privilege owner differs".into()),
         }
     }
 
     pub(super) fn finish_guest_inspector(&self) -> Result<(), String> {
-        if unsafe { libc::getpid() } != self.creator_pid { return Err("inspector finish crossed creator".into()); }
-        match &self.guest_inspector { Some(owner) => owner.stop_and_reap(), None => Ok(()) }
+        if unsafe { libc::getpid() } != self.creator_pid { return Err("guest cleanup crossed creator".into()); }
+        // Existing runtime hook now drains the complete owned cohort first.
+        // Cache the one observed outcome; outer cold/error cleanup must not
+        // manufacture a second allowance or reinterpret a late reap as timely.
+        let mut recorded = self.guest_cleanup.lock().map_err(|_|"native guest cleanup owner poisoned")?;
+        if let Some(result) = recorded.as_ref() { return result.clone(); }
+        self.stop();
+        let roles = match &self.guest_cohort { Some(owner) => owner.stop_and_reap(), None => Ok(()) };
+        // Attempt inspector cleanup even when role reaping failed. Success
+        // still requires both real reaps under their original owner bounds.
+        let inspector = match &self.guest_inspector { Some(owner) => owner.stop_and_reap(), None => Ok(()) };
+        let result = roles.and(inspector);
+        *recorded = Some(result.clone());
+        result
+    }
+
+    fn request_guest_stop(&self) {
+        // Keep the inspector available while roles drain. The explicit finish
+        // hook stops/reaps it after the cohort's own complete cleanup attempt.
+        if let Some(cohort) = &self.guest_cohort { cohort.request_stop(); }
+        else if let Some(inspector) = &self.guest_inspector { inspector.request_stop(); }
     }
 
     // Do not touch an inherited Mutex/Condvar after fork: another thread may
@@ -114,7 +154,7 @@ impl NativeRuntimeLifetimeV1 {
         if let Some(owner) = &self.serving_privileges {
             if let Err(error) = owner.check() {
                 self.stopped.store(true, Ordering::Release);
-                if let Some(inspector) = &self.guest_inspector { inspector.request_stop(); }
+                self.request_guest_stop();
                 return Err(error);
             }
         }
@@ -125,7 +165,18 @@ impl NativeRuntimeLifetimeV1 {
                 if let Ok(mut state) = self.lock() {
                     self.fail_locked(&mut state, "native guest inspector lifetime failed");
                 }
-                inspector.request_stop();
+                self.request_guest_stop();
+                return Err(error);
+            }
+        }
+        if let Some(cohort) = &self.guest_cohort {
+            if self.stopped.load(Ordering::Acquire) { return Ok(()); }
+            if let Err(error) = cohort.check() {
+                if self.stopped.load(Ordering::Acquire) { return Ok(()); }
+                if let Ok(mut state) = self.lock() {
+                    self.fail_locked(&mut state, "native guest cohort lifetime failed");
+                }
+                self.request_guest_stop();
                 return Err(error);
             }
         }
@@ -146,6 +197,7 @@ impl NativeRuntimeLifetimeV1 {
     fn fail_locked(&self, state: &mut State, reason: &str) {
         if state.failure.is_none() { state.failure = Some(bounded_failure(reason)); }
         self.stopped.store(true, Ordering::Release);
+        self.request_guest_stop();
         self.wake.notify_all();
     }
 
@@ -189,7 +241,7 @@ impl NativeRuntimeLifetimeV1 {
         // Emergency cancellation is not conditional on unexpired admission.
         if unsafe { libc::getpid() } != self.creator_pid { return; }
         self.stopped.store(true, Ordering::Release);
-        if let Some(inspector) = &self.guest_inspector { inspector.request_stop(); }
+        self.request_guest_stop();
         if let Ok(_state) = self.lock() {
             // The same mutex guards wait's condition, preventing a lost wake.
             self.stopped.store(true, Ordering::Release);
@@ -244,7 +296,7 @@ impl NativeRuntimeLifetimeV1 {
 impl Drop for NativeRuntimeLifetimeV1 {
     fn drop(&mut self) {
         if unsafe { libc::getpid() } == self.creator_pid {
-            if let Some(inspector) = &self.guest_inspector { inspector.request_stop(); }
+            self.request_guest_stop();
         }
     }
 }

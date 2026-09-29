@@ -24,12 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.288` source](https://github.com/example/private-deployment) connects
-[measured OAuth onboarding](docs/native-oauth-measured-exchange.md) and
-[native guest startup/lifetime](docs/native-guest-cohort-lifetime.md). Code/PKCE
-handling stays inside the enclave path; portal approval and captured recovery
-use separate authority. Boot-time keys, upstream response capture/persistence,
-measured cleanup, broader lifecycle and end-to-end verification remain open.
+Latest [`.289` source](https://github.com/example/private-deployment) adds
+[measured refresh-family cleanup](docs/native-oauth-measured-cleanup.md): separate
+retirement permission, actual holder drain, one-shot provider contact and
+retained-outcome recovery. It preserves measured onboarding and native startup.
+Boot-time keys, upstream response capture/persistence, initial-issued-token
+cleanup, broader lifecycle and end-to-end verification remain open.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot
